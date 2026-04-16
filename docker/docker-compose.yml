@@ -1,0 +1,37 @@
+services:
+  app:
+    env_file:
+      - .env
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ${PROJECT_NAME:-dev-container}
+    # Initialize config (run entrypoint as root on first start)
+    user: "0:0"
+    environment:
+      # Zhipu AI config (from .env)
+      - ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5.1
+      - ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5.1
+      - ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.1
+      - API_TIMEOUT_MS=3000000
+      - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+      # GitHub Token (from .env)
+      - GITHUB_TOKEN=${GITHUB_PERSONAL_ACCESS_TOKEN:-}
+      # Network proxy (optional)
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=localhost,127.0.0.1
+    volumes:
+      # Project directory (two-way sync)
+      - ..:/home/app/project
+      # Obsidian vault (Claude Code notes)
+      - ../../../Obsidian:/home/app/obsidian
+      # Config directories (Docker Volumes, isolated from host)
+      - claude-config:/home/app/.claude
+      - opencode-config:/home/app/.config/opencode
+
+volumes:
+  claude-config:
+  opencode-config:

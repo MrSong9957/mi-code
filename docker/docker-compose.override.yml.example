@@ -1,0 +1,14 @@
+# docker-compose.override.yml 模板
+# 复制并按本机环境修改：
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+
+services:
+  app:
+    extra_hosts:
+      # Linux/WSL2 需要此配置以访问宿主机；macOS/Windows Docker Desktop 可删除
+      - "host.docker.internal:host-gateway"
+    environment:
+      # 网络代理（不需要代理的机器留空即可）
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - NO_PROXY=localhost,127.0.0.1

@@ -1,0 +1,27 @@
+# 环境与密钥
+.env
+docker/.env
+docker/docker-compose.override.yml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# 测试与工具缓存
+.pytest_cache/
+.playwright-mcp/
+
+# Claude Code / GSD / mi-code 运行时
+.claude/
+.planning/
+.mi-code/
+
+# IDE
+.vscode/
+.idea/
+
+# 临时 / 原型输出
+Files/
+CLI/Python/HTML/
