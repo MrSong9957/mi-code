@@ -157,16 +157,33 @@ class SkillManager:
         }
 
     def _scan_skills(self) -> list[dict]:
-        """扫描目录，返回所有技能的 [{name, description}]。不含 body。"""
+        """遍历 skills/ 下子目录，读每个 SKILL.md 的元数据。返回 [{name, description}]。"""
         if not self._dir.is_dir():
             return []
         results = []
-        for f in sorted(self._dir.iterdir()):
-            if not f.is_file():
+        for d in sorted(self._dir.iterdir()):
+            if not d.is_dir():
                 continue
-            skill = self._parse_skill_file(f)
+            skill_file = d / "SKILL.md"
+            if not skill_file.is_file():
+                continue
+            skill = self._parse_skill_file(skill_file)
             if skill is not None:
                 results.append({"name": skill["name"], "description": skill["description"]})
+        return results
+
+    def _scan_aux_files(self, skill_dir: Path) -> list[dict]:
+        """非递归扫描技能目录下除 SKILL.md 外的文件，取前 30 行预览。"""
+        results = []
+        for f in sorted(skill_dir.iterdir()):
+            if not f.is_file() or f.name == "SKILL.md":
+                continue
+            try:
+                lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+                preview = "\n".join(lines[:30])
+                results.append({"filename": f.name, "preview": preview})
+            except Exception:
+                continue
         return results
 
     def list_skills(self) -> str:
@@ -180,17 +197,27 @@ class SkillManager:
         return "\n".join(lines)
 
     def load(self, name: str) -> str:
-        """按 name 加载技能完整内容（name + description + body）。"""
+        """按 name 加载技能：SKILL.md 全文 + 辅助文件前 30 行预览。"""
         if not self._dir.is_dir():
             return "错误：skills/ 目录不存在"
-        for f in sorted(self._dir.iterdir()):
-            if not f.is_file():
+        for d in sorted(self._dir.iterdir()):
+            if not d.is_dir():
                 continue
-            skill = self._parse_skill_file(f)
+            skill_file = d / "SKILL.md"
+            if not skill_file.is_file():
+                continue
+            skill = self._parse_skill_file(skill_file)
             if skill is not None and skill["name"] == name:
                 parts = [f"技能：{skill['name']}", f"描述：{skill['description']}"]
                 if skill["body"]:
                     parts.append(f"\n{skill['body']}")
+                # 附加辅助文件预览
+                aux = self._scan_aux_files(d)
+                if aux:
+                    parts.append("\n辅助文件：")
+                    for a in aux:
+                        parts.append(f"  - {a['filename']}（前30行）：")
+                        parts.append(f"    {a['preview'].replace(chr(10), chr(10) + '    ')}")
                 return "\n".join(parts)
         skills = self._scan_skills()
         if skills:

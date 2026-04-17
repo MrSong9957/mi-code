@@ -1,0 +1,13 @@
+---
+name: commit-message-template
+description: 提交信息模板文件
+---
+
+类型：简述
+
+详细说明（可选）：
+
+Breaking Changes:
+- （如有不兼容变更）
+
+Refs: #（关联 Issue）
