@@ -36,6 +36,7 @@ MAX_SEARCH_RESULTS = 50
 MAX_TIMEOUT = 120  # 单次命令最大超时秒数
 MAX_SUB_AGENT_ITERATIONS = 50  # 子代理最大循环次数
 WORKDIR = Path.cwd()
+SKILLS_DIR = WORKDIR / "skills"
 
 
 def truncate(text: str, limit: int, label: str = "已截断") -> str:
@@ -73,7 +74,11 @@ SYSTEM_PROMPT = """你是一个终端里的 AI 编程助手。你可以读取文
 - 简单任务（1-2 步）不需要创建待办事项，直接执行即可
 - 执行流程：todo_start(任务ID) → 执行实际工作 → todo_complete(任务ID) → todo_start(下一个)
 - 同一时间只能有一个任务处于"正在进行"状态
-- 如果执行中发现遗漏的步骤，用 todo_add 追加"""
+- 如果执行中发现遗漏的步骤，用 todo_add 追加
+
+技能系统：skills/ 目录中存放技能提示。使用流程：
+1. 调用 list_skills() 查看可用技能列表
+2. 根据任务需要，调用 load_skill(name="技能名") 加载技能全文，按其说明执行"""
 
 SUB_AGENT_SYSTEM = "你是一个子智能体，负责完成父智能体分配的子任务。使用可用工具完成工作，完成后给出结果摘要。用中文回复。"
 
@@ -108,6 +113,90 @@ def sanitize_text(text: str) -> str:
         return text  # 快速路径：无 surrogate，原样返回
     except UnicodeEncodeError:
         return text.encode("utf-8", errors="replace").decode("utf-8")
+
+
+# ─── 技能管理器 ─────────────────────────────────────────────────────
+
+class SkillManager:
+    """技能管理器：扫描 skills/ 目录，解析 YAML frontmatter，提供注册表和加载功能。"""
+
+    def __init__(self, skills_dir: Path):
+        self._dir = skills_dir
+
+    def _parse_skill_file(self, path: Path) -> dict | None:
+        """解析单个技能文件，返回 {name, description, body}。解析失败返回 None。"""
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            return None
+
+        lines = text.split("\n")
+        if not lines or lines[0].strip() != "---":
+            return None
+
+        frontmatter = {}
+        end_idx = None
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                end_idx = i
+                break
+            line = lines[i].strip()
+            if line.startswith("name:"):
+                frontmatter["name"] = line[len("name:"):].strip()
+            elif line.startswith("description:"):
+                frontmatter["description"] = line[len("description:"):].strip()
+
+        if end_idx is None or "name" not in frontmatter:
+            return None
+
+        body = "\n".join(lines[end_idx + 1:]).strip()
+        return {
+            "name": frontmatter["name"],
+            "description": frontmatter.get("description", ""),
+            "body": body,
+        }
+
+    def _scan_skills(self) -> list[dict]:
+        """扫描目录，返回所有技能的 [{name, description}]。不含 body。"""
+        if not self._dir.is_dir():
+            return []
+        results = []
+        for f in sorted(self._dir.iterdir()):
+            if not f.is_file():
+                continue
+            skill = self._parse_skill_file(f)
+            if skill is not None:
+                results.append({"name": skill["name"], "description": skill["description"]})
+        return results
+
+    def list_skills(self) -> str:
+        """列出所有可用技能（name + description）。供模型浏览注册表。"""
+        skills = self._scan_skills()
+        if not skills:
+            return "skills/ 目录为空或不存在"
+        lines = ["可用技能："]
+        for s in skills:
+            lines.append(f"  - {s['name']}: {s['description']}")
+        return "\n".join(lines)
+
+    def load(self, name: str) -> str:
+        """按 name 加载技能完整内容（name + description + body）。"""
+        if not self._dir.is_dir():
+            return "错误：skills/ 目录不存在"
+        for f in sorted(self._dir.iterdir()):
+            if not f.is_file():
+                continue
+            skill = self._parse_skill_file(f)
+            if skill is not None and skill["name"] == name:
+                parts = [f"技能：{skill['name']}", f"描述：{skill['description']}"]
+                if skill["body"]:
+                    parts.append(f"\n{skill['body']}")
+                return "\n".join(parts)
+        skills = self._scan_skills()
+        if skills:
+            available = ", ".join(s["name"] for s in skills)
+            return f"错误：未找到技能 '{name}'。可用技能：{available}"
+        return f"错误：未找到技能 '{name}'"
 
 
 
@@ -565,7 +654,48 @@ def todo_list(args: dict) -> str:
     return _todo_mgr.list_tasks(args)
 
 
-# 子代理工具集（此时 _TOOL_SCHEMAS 只含基础工具，无需过滤）
+# ─── 技能工具 ──────────────────────────────────────────────────────
+
+_skill_mgr: SkillManager | None = None
+
+
+@tool({
+    "name": "list_skills",
+    "description": "列出所有可用技能的名称和描述。用于浏览技能注册表，选择合适的技能。",
+    "input_schema": {
+        "type": "object",
+        "properties": {},
+    },
+})
+def list_skills_tool(args: dict) -> str:
+    """列出所有可用技能的名称和描述。"""
+    if _skill_mgr is None:
+        return "错误：技能系统未初始化"
+    return _skill_mgr.list_skills()
+
+
+@tool({
+    "name": "load_skill",
+    "description": "加载指定技能的完整内容（名称、描述、正文）。加载后按技能说明执行。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "要加载的技能名称",
+            }
+        },
+        "required": ["name"],
+    },
+})
+def load_skill(args: dict) -> str:
+    """加载指定技能的完整内容。"""
+    if _skill_mgr is None:
+        return "错误：技能系统未初始化"
+    return _skill_mgr.load(args["name"])
+
+
+# 子代理工具集（此时 _TOOL_SCHEMAS 含基础工具 + 技能工具，无需过滤）
 _SUB_TOOLS = list(_TOOL_SCHEMAS)
 _SUB_HANDLERS = dict(_TOOL_HANDLERS)
 
@@ -742,6 +872,10 @@ def main():
     ))
     global _todo_mgr
     _todo_mgr = TodoManager(todo_path)
+
+    # 初始化技能管理器
+    global _skill_mgr
+    _skill_mgr = SkillManager(SKILLS_DIR)
 
     print("=" * 60)
     print("  mi-code Agent Loop")
