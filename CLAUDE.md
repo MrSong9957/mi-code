@@ -102,6 +102,12 @@ Python 3.13+ asyncio | anthropic SDK | prompt-toolkit + Rich | pydantic 2 | diff
 单文件原型 `CLI/Python/agent_loop.py`，数据流：
 `main() → REPL → run_agent_loop() → client.messages.create() → 解析 stop_reason → 工具调用循环`
 
+## Git 配置
+
+- 身份信息从 `git log --format='%an <%ae>' -1` 获取（与历史提交一致）
+- API token 在 `docker/.env`（GITHUB_TOKEN）
+- 提交时使用 `-c user.name=... -c user.email=...` 避免修改全局配置
+
 ## 编码规范
 
 - 节分隔符：`# --- 名称 ---`
