@@ -25,3 +25,6 @@ __pycache__/
 # 临时 / 原型输出
 Files/
 CLI/Python/HTML/
+
+# Skills 目录（本地运行时生成）
+cli/python/skills/
