@@ -17,6 +17,7 @@ import subprocess
 import sys
 import json
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -46,6 +47,93 @@ def truncate(text: str, limit: int, label: str = "已截断") -> str:
     return text
 
 
+class ContextManager:
+    """四层上下文压缩：截断+落盘 → micro_compact → auto_compact → manual compact"""
+
+    KEEP_RECENT = 3          # micro_compact 保留最近 N 个 tool_result
+    TOKEN_THRESHOLD = 50000  # auto_compact 触发阈值（估算 token 数）
+    CHARS_PER_TOKEN = 4      # 估算比例：4 字符 ≈ 1 token
+    PREVIEW_LINES = 20       # 截断+落盘时保留的前 N 行预览
+
+    def __init__(self, workdir: Path):
+        self.transcript_dir = workdir / ".transcripts"
+        self.transcript_dir.mkdir(exist_ok=True)
+
+    # --- Layer 0: 截断+落盘 ---
+    def truncate_and_save(self, content: str, tool_name: str) -> str:
+        """超大结果写到磁盘，返回预览 + 文件路径。不大则原样返回。"""
+        if len(content) <= MAX_TOOL_OUTPUT:
+            return content
+        filename = f"{tool_name}_{int(time.time())}.txt"
+        filepath = self.transcript_dir / filename
+        filepath.write_text(content, encoding="utf-8")
+        preview = "\n".join(content.splitlines()[:self.PREVIEW_LINES])
+        return f"{preview}\n\n... (完整结果已保存到 {filepath})"
+
+    # --- Layer 1: micro_compact ---
+    def micro_compact(self, messages: list) -> None:
+        """将超过 KEEP_RECENT 的旧 tool_result 替换为占位符。原地修改。"""
+        tool_results = []
+        for i, msg in enumerate(messages):
+            if msg["role"] == "user" and isinstance(msg.get("content"), list):
+                for j, part in enumerate(msg["content"]):
+                    if isinstance(part, dict) and part.get("type") == "tool_result":
+                        tool_results.append((i, j, part))
+        if len(tool_results) <= self.KEEP_RECENT:
+            return
+        for _, _, part in tool_results[:-self.KEEP_RECENT]:
+            if len(part.get("content", "")) > 100:
+                part["content"] = "[Previous tool result compacted]"
+
+    # --- Layer 2 & 3: auto_compact / manual compact ---
+    def auto_compact(self, messages: list, client) -> None:
+        """保存完整对话到磁盘，用 LLM 摘要替换 messages。原地修改。"""
+        self._save_transcript(messages)
+        summary = self._summarize(messages, client)
+        messages.clear()
+        messages.append({"role": "user", "content": f"[会话摘要]\n\n{summary}"})
+        messages.append({"role": "assistant", "content": "了解，继续工作。"})
+
+    def estimate_tokens(self, messages: list) -> int:
+        """简单估算 messages 的 token 数。"""
+        total = 0
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total += len(content) // self.CHARS_PER_TOKEN
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        total += len(str(part.get("content", ""))) // self.CHARS_PER_TOKEN
+        return total
+
+    def should_compact(self, messages: list) -> bool:
+        return self.estimate_tokens(messages) > self.TOKEN_THRESHOLD
+
+    def _save_transcript(self, messages: list) -> Path:
+        """保存完整对话到 .transcripts/ 目录。"""
+        filepath = self.transcript_dir / f"transcript_{int(time.time())}.jsonl"
+        with open(filepath, "w", encoding="utf-8") as f:
+            for msg in messages:
+                f.write(json.dumps(msg, default=str, ensure_ascii=False) + "\n")
+        return filepath
+
+    def _summarize(self, messages: list, client) -> str:
+        """调用 LLM 对对话做摘要。"""
+        conversation = json.dumps(messages, default=str, ensure_ascii=False)
+        if len(conversation) > 80000:
+            conversation = conversation[:80000] + "\n...(已截断)"
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=2000,
+            messages=[{
+                "role": "user",
+                "content": f"请用中文为以下对话生成一份简洁的摘要，保留关键决策、已完成的操作和待办事项：\n\n{conversation}"
+            }],
+        )
+        return response.content[0].text
+
+
 def is_ignored(path: str) -> bool:
     """判断路径是否应被排除（匹配路径组件，非子字符串）。"""
     return any(d in Path(path).parts for d in EXCLUDE_DIRS)
@@ -65,6 +153,8 @@ def safe_path(path: str) -> Path:
 
 
 _client = None  # 由 main() 设置，供 task 工具访问
+_ctx_manager = None  # 由 run_agent_loop 设置，供 compact 工具访问
+_messages = None  # 由 run_agent_loop 设置，供 compact 工具访问
 
 SYSTEM_PROMPT = """你是一个终端里的 AI 编程助手。你可以读取文件、列出目录、搜索代码来帮助用户完成任务。
 请用中文回答。在调用工具之前，先简要说明你打算做什么。
@@ -722,6 +812,21 @@ def load_skill(args: dict) -> str:
     return _skill_mgr.load(args["name"])
 
 
+# ─── 上下文压缩工具 ────────────────────────────────────────────────────
+
+@tool({
+    "name": "compact",
+    "description": "手动压缩当前对话上下文。当上下文过长或感觉模型开始遗忘早期信息时使用。",
+    "input_schema": {"type": "object", "properties": {}},
+})
+def compact_tool(args: dict) -> str:
+    """手动触发上下文压缩（Layer 3）。"""
+    if _ctx_manager is None or _messages is None or _client is None:
+        return "错误：系统未初始化"
+    _ctx_manager.auto_compact(_messages, _client)
+    return "上下文已压缩。完整对话已保存到 .transcripts/ 目录。"
+
+
 # 子代理工具集（此时 _TOOL_SCHEMAS 含基础工具 + 技能工具，无需过滤）
 _SUB_TOOLS = list(_TOOL_SCHEMAS)
 _SUB_HANDLERS = dict(_TOOL_HANDLERS)
@@ -776,7 +881,7 @@ _MAIN_HANDLERS = dict(_TOOL_HANDLERS)
 
 # ─── Agent Loop ─────────────────────────────────────────────────────
 
-def _agent_step(client, messages, tools, tool_handlers, system, quiet):
+def _agent_step(client, messages, tools, tool_handlers, system, quiet, ctx_mgr=None):
     """执行一次 agent 循环迭代。
     返回 str 表示最终结果（循环结束），返回 None 表示需要继续迭代。
     """
@@ -819,7 +924,7 @@ def _agent_step(client, messages, tools, tool_handlers, system, quiet):
             else:
                 result = sanitize_text(handler(block.input))
 
-            result = truncate(result, MAX_TOOL_OUTPUT, "结果过长，已截断")
+            result = truncate(result, MAX_TOOL_OUTPUT, "结果过长，已截断") if ctx_mgr is None else ctx_mgr.truncate_and_save(result, block.name)
 
             if not quiet:
                 print(f"   → {result[:200]}{'...' if len(result) > 200 else ''}")
@@ -847,12 +952,21 @@ def run_agent_loop(client, user_message, *, tools=None, tool_handlers=None, syst
     主 agent（max_iterations=0）：while 无限循环，支持长任务
     子代理（max_iterations>0）：for 循环，结构上保证不会无限循环
     """
+    global _ctx_manager, _messages
+
     tools = tools or _MAIN_TOOLS
     tool_handlers = tool_handlers or _MAIN_HANDLERS
     system = system or SYSTEM_PROMPT
 
+    ctx_mgr = ContextManager(WORKDIR)
     messages = [{"role": "user", "content": user_message}]
-    step = lambda: _agent_step(client, messages, tools, tool_handlers, system, quiet)
+
+    # 供 compact 工具访问
+    if not max_iterations:
+        _ctx_manager = ctx_mgr
+        _messages = messages
+
+    step = lambda: _agent_step(client, messages, tools, tool_handlers, system, quiet, ctx_mgr)
 
     if max_iterations:
         # 子代理：for 循环，硬性上限防卡死
@@ -864,6 +978,9 @@ def run_agent_loop(client, user_message, *, tools=None, tool_handlers=None, syst
     else:
         # 主 agent：while 无限循环，无次数限制
         while True:
+            ctx_mgr.micro_compact(messages)
+            if ctx_mgr.should_compact(messages):
+                ctx_mgr.auto_compact(messages, client)
             result = step()
             if result is not None:
                 return result
