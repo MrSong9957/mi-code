@@ -11,14 +11,18 @@ mi-code Agent Loop — AI 编程助手的核心循环
 API: Anthropic 兼容接口 (Zhipu AI GLM)
 """
 
+import fnmatch
 import glob
 import os
+import re
 import subprocess
 import sys
 import json
 import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 import anthropic
@@ -36,8 +40,56 @@ MAX_TOOL_OUTPUT = 5_000
 MAX_SEARCH_RESULTS = 50
 MAX_TIMEOUT = 120  # 单次命令最大超时秒数
 MAX_SUB_AGENT_ITERATIONS = 50  # 子代理最大循环次数
+MAX_CONSECUTIVE_DENIES = 5  # 连续权限拒绝上限，超过强制停止
 WORKDIR = Path.cwd()
 SKILLS_DIR = WORKDIR / "skills"
+
+# ─── 权限数据结构 ──────────────────────────────────────────────────
+
+class DecisionType(Enum):
+    ALLOW = "allow"
+    DENY = "deny"
+    ASK = "ask"
+
+@dataclass
+class PermissionDecision:
+    decision: DecisionType
+    reason: str = ""
+    tool_name: str = ""
+    tool_input: dict = field(default_factory=dict)
+
+    @property
+    def allowed(self) -> bool:
+        return self.decision == DecisionType.ALLOW
+
+class AgentMode(Enum):
+    ASK = "ask"      # 只读问答
+    PLAN = "plan"    # 只读 + 可写 .md
+    EDIT = "edit"    # 读写，需确认
+    AUTO = "auto"    # 全自动
+
+# 全局状态
+_current_mode: AgentMode = AgentMode.ASK
+_consecutive_denies: int = 0
+
+# 工具分类
+READ_TOOLS = frozenset({"read_file", "list_files", "search_content", "list_skills", "load_skill", "todo_list"})
+WRITE_TOOLS = frozenset({"write_file", "edit_file", "run_bash", "todo_create", "todo_start", "todo_complete", "todo_add", "compact", "task"})
+ALWAYS_SAFE_TOOLS = frozenset({"read_file", "list_files", "search_content", "list_skills", "load_skill", "todo_list"})
+
+# Layer 1: bash 黑名单模式
+BASH_DENY_PATTERNS = (
+    "sudo*", "rm -rf*", "rm -r *", "chmod 777*",
+    "curl *| sh", "curl *| bash", "wget *| sh", "wget *| bash",
+    "dd if=*", "mkfs*", "git push --force*", "git push -f *",
+)
+
+# Layer 3: bash 只读安全前缀
+BASH_READONLY_PREFIXES = (
+    "ls", "cat ", "git status", "git log", "git diff", "git branch",
+    "pwd", "echo ", "head ", "tail ", "find ", "grep ",
+    "wc ", "which ", "type ", "file ", "stat ", "du ", "df ",
+)
 
 
 def truncate(text: str, limit: int, label: str = "已截断") -> str:
@@ -172,6 +224,30 @@ SYSTEM_PROMPT = """你是一个终端里的 AI 编程助手。你可以读取文
 
 SUB_AGENT_SYSTEM = "你是一个子智能体，负责完成父智能体分配的子任务。使用可用工具完成工作，完成后给出结果摘要。用中文回复。"
 
+# 模式工具限制说明，注入系统提示词
+_MODE_DESCRIPTIONS = {
+    AgentMode.ASK: (
+        "\n\n【当前模式：ask（只读）】你可以读取文件、搜索代码，但禁止写入文件、编辑文件或执行 bash 命令。"
+        "如果用户需要修改操作，提示他们用 /mode edit 或 /mode auto 切换模式。"
+    ),
+    AgentMode.PLAN: (
+        "\n\n【当前模式：plan（规划）】你可以读取文件、搜索代码，也可以写入/编辑 .md 文件（如计划文档）。"
+        "但禁止写入/编辑非 .md 文件，也禁止执行 bash 命令。"
+        "如果用户需要修改代码或执行命令，提示他们用 /mode edit 或 /mode auto 切换模式。"
+    ),
+    AgentMode.EDIT: (
+        "\n\n【当前模式：edit（编辑）】你可以读写文件、执行 bash 命令，写操作会请求用户确认。"
+    ),
+    AgentMode.AUTO: (
+        "\n\n【当前模式：auto（全自动）】你可以读写文件、执行 bash 命令，无需确认。"
+    ),
+}
+
+
+def _build_system_prompt(base: str, mode: AgentMode) -> str:
+    """在基础系统提示词后追加当前模式的工具限制说明。"""
+    return base + _MODE_DESCRIPTIONS.get(mode, "")
+
 
 # ─── 工具注册表 ─────────────────────────────────────────────────────
 # 声明即注册：@tool(schema) 同时注册 schema（给模型看）和 handler（给分发用）。
@@ -188,6 +264,100 @@ def tool(schema: dict):
         _TOOL_HANDLERS[name] = func
         return func
     return decorator
+
+
+# ─── 权限流水线 ───────────────────────────────────────────────────
+
+def check_permission(tool_name: str, tool_input: dict, mode: AgentMode) -> PermissionDecision:
+    """四层权限漏斗：deny → mode → allow → ask。纯函数。"""
+
+    # --- Layer 1: 黑名单 ---
+
+    # bash 危险命令
+    if tool_name == "run_bash":
+        command = tool_input.get("command", "")
+        # 先对完整命令匹配含管道的模式（curl *| sh 等），再逐段匹配
+        for pattern in BASH_DENY_PATTERNS:
+            if fnmatch.fnmatch(command, pattern) or fnmatch.fnmatch(command.lower(), pattern.lower()):
+                return PermissionDecision(DecisionType.DENY, f"危险命令: 匹配 '{pattern}'", tool_name, tool_input)
+        # 分割复合命令（&& || ; |），逐段匹配
+        for seg in re.split(r'[;&|]', command):
+            seg = seg.strip()
+            for pattern in BASH_DENY_PATTERNS:
+                if fnmatch.fnmatch(seg, pattern) or fnmatch.fnmatch(seg.lower(), pattern.lower()):
+                    return PermissionDecision(DecisionType.DENY, f"危险命令: 匹配 '{pattern}'", tool_name, tool_input)
+        # 重定向到系统路径
+        for dangerous in ("> /etc/", ">> /etc/", "> ~/.ssh/", ">> ~/.ssh/"):
+            if dangerous in command:
+                return PermissionDecision(DecisionType.DENY, "系统路径写入被拒绝", tool_name, tool_input)
+
+    # 文件路径越界
+    if tool_name in ("write_file", "edit_file"):
+        path = tool_input.get("path", "")
+        try:
+            resolved = (WORKDIR / path).resolve()
+            if not resolved.is_relative_to(WORKDIR):
+                return PermissionDecision(DecisionType.DENY, f"路径越界: '{path}'", tool_name, tool_input)
+        except Exception:
+            return PermissionDecision(DecisionType.DENY, f"路径解析失败: '{path}'", tool_name, tool_input)
+
+    # --- Layer 2: 模式检查 ---
+
+    if mode == AgentMode.AUTO:
+        return PermissionDecision(DecisionType.ALLOW)  # auto 只受 Layer 1 限制
+
+    if mode == AgentMode.ASK:
+        if tool_name not in READ_TOOLS:
+            return PermissionDecision(DecisionType.DENY, f"ask 模式只允许只读操作，'{tool_name}' 是写操作", tool_name, tool_input)
+
+    if mode == AgentMode.PLAN:
+        if tool_name in READ_TOOLS:
+            pass  # 继续
+        elif tool_name in ("write_file", "edit_file"):
+            path = tool_input.get("path", "")
+            if not path.endswith(".md"):
+                return PermissionDecision(DecisionType.DENY, f"plan 模式只能写 .md 文件，当前: '{path}'", tool_name, tool_input)
+        else:
+            return PermissionDecision(DecisionType.DENY, f"plan 模式不允许 '{tool_name}'", tool_name, tool_input)
+
+    # edit 模式：所有工具放行到下一层
+
+    # --- Layer 3: 白名单 ---
+
+    if tool_name in ALWAYS_SAFE_TOOLS:
+        return PermissionDecision(DecisionType.ALLOW)
+
+    if tool_name == "run_bash":
+        command = tool_input.get("command", "").strip()
+        for prefix in BASH_READONLY_PREFIXES:
+            if command.startswith(prefix):
+                return PermissionDecision(DecisionType.ALLOW)
+
+    # --- Layer 4: 询问用户 ---
+
+    return PermissionDecision(DecisionType.ASK, f"工具 '{tool_name}' 需要确认", tool_name, tool_input)
+
+
+def ask_user_permission(decision: PermissionDecision, *, quiet: bool = False) -> PermissionDecision:
+    """Layer 4: 展示操作详情，请求用户确认。子代理(quiet=True)自动拒绝。"""
+    if quiet:
+        return PermissionDecision(DecisionType.DENY, "子代理无法请求确认", decision.tool_name, decision.tool_input)
+
+    ti = decision.tool_input or {}
+    print(f"\n  [权限请求] {decision.tool_name}")
+    if decision.tool_name == "run_bash":
+        print(f"  命令: {ti.get('command', '')}")
+    elif decision.tool_name in ("write_file", "edit_file"):
+        print(f"  路径: {ti.get('path', '')}")
+
+    try:
+        answer = pt_prompt("  允许? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return PermissionDecision(DecisionType.DENY, "用户取消", decision.tool_name, decision.tool_input)
+
+    if answer in ("y", "yes"):
+        return PermissionDecision(DecisionType.ALLOW, "", decision.tool_name, decision.tool_input)
+    return PermissionDecision(DecisionType.DENY, "用户拒绝", decision.tool_name, decision.tool_input)
 
 
 
@@ -922,7 +1092,25 @@ def _agent_step(client, messages, tools, tool_handlers, system, quiet, ctx_mgr=N
             if handler is None:
                 result = f"错误：未知工具 '{block.name}'"
             else:
-                result = sanitize_text(handler(block.input))
+                global _consecutive_denies
+                decision = check_permission(block.name, block.input, _current_mode)
+
+                if decision.decision == DecisionType.DENY:
+                    result = f"[权限拒绝] {decision.reason}"
+                    _consecutive_denies += 1
+                    if _consecutive_denies >= 3:
+                        result += "\n[提示] 连续被拒，考虑 /mode edit 或 /mode auto"
+                elif decision.decision == DecisionType.ASK:
+                    decision = ask_user_permission(decision, quiet=quiet)
+                    if decision.allowed:
+                        result = sanitize_text(handler(block.input))
+                        _consecutive_denies = 0
+                    else:
+                        result = f"[权限拒绝] {decision.reason}"
+                        _consecutive_denies += 1
+                else:
+                    result = sanitize_text(handler(block.input))
+                    _consecutive_denies = 0
 
             result = truncate(result, MAX_TOOL_OUTPUT, "结果过长，已截断") if ctx_mgr is None else ctx_mgr.truncate_and_save(result, block.name)
 
@@ -936,6 +1124,15 @@ def _agent_step(client, messages, tools, tool_handlers, system, quiet, ctx_mgr=N
             })
 
         messages.append({"role": "user", "content": tool_results})
+
+        # 强制停止：连续权限拒绝达到上限
+        if _consecutive_denies >= MAX_CONSECUTIVE_DENIES:
+            stop_msg = f"已停止：连续 {MAX_CONSECUTIVE_DENIES} 次权限拒绝。请切换模式（/mode edit 或 /mode auto）后重试。"
+            if not quiet:
+                print(f"\n  {stop_msg}")
+            _consecutive_denies = 0
+            return stop_msg
+
         return None  # 继续迭代
 
     if not quiet:
@@ -957,6 +1154,10 @@ def run_agent_loop(client, user_message, *, tools=None, tool_handlers=None, syst
     tools = tools or _MAIN_TOOLS
     tool_handlers = tool_handlers or _MAIN_HANDLERS
     system = system or SYSTEM_PROMPT
+
+    # 主 agent 注入当前模式的工具限制说明
+    if not max_iterations:
+        system = _build_system_prompt(system, _current_mode)
 
     ctx_mgr = ContextManager(WORKDIR)
     messages = [{"role": "user", "content": user_message}]
@@ -988,6 +1189,7 @@ def run_agent_loop(client, user_message, *, tools=None, tool_handlers=None, syst
 
 # ─── 主入口 ─────────────────────────────────────────────────────────
 def main():
+    global _current_mode
     # 从环境变量获取 API 配置
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1024,6 +1226,7 @@ def main():
     print("=" * 60)
     print("  mi-code Agent Loop")
     print(f"  模型: {MODEL}")
+    print(f"  模式: {_current_mode.value} (/mode 切换)")
     print(f"  工具: {', '.join(_TOOL_HANDLERS.keys())}")
     print("  输入 'q' 或 'quit' 退出")
     print("=" * 60)
@@ -1042,6 +1245,22 @@ def main():
         if user_input.lower() in ("q", "quit"):
             print("再见！")
             break
+
+        # /mode 命令
+        if user_input.startswith("/mode"):
+            parts = user_input.split()
+            if len(parts) == 1:
+                print(f"  当前: {_current_mode.value}")
+                print("  可用: ask(只读) plan(只读+.md) edit(读写需确认) auto(全自动)")
+            else:
+                mode_map = {"ask": AgentMode.ASK, "plan": AgentMode.PLAN, "edit": AgentMode.EDIT, "auto": AgentMode.AUTO}
+                m = parts[1].lower()
+                if m in mode_map:
+                    _current_mode = mode_map[m]
+                    print(f"  已切换: {_current_mode.value}")
+                else:
+                    print(f"  未知模式: {m}")
+            continue
 
         try:
             run_agent_loop(_client, user_input)

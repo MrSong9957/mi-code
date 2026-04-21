@@ -28,3 +28,7 @@ CLI/Python/HTML/
 
 # Skills 目录（本地运行时生成）
 cli/python/skills/
+CLI/Python/skills/
+
+# 上下文落盘目录（运行时生成）
+CLI/Python/.transcripts/
