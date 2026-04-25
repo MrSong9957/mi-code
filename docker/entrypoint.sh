@@ -41,11 +41,19 @@ init_settings() {
   "env": {
     "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.1",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.1",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.1",
+    "ANTHROPIC_MODEL": "glm-5.1",
+    "ANTHROPIC_REASONING_MODEL": "glm-5",
+    "ENABLE_TOOL_SEARCH": "true",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "API_TIMEOUT_MS": "3000000",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
-  }
+  },
+  "effortLevel": "high",
+  "theme": "dark",
+  "showClearContextOnPlanAccept": true,
+  "autoUpdatesChannel": "latest"
 }
 EOF
         chown app:app "$SETTINGS_FILE" 2>/dev/null || true
