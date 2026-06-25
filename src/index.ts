@@ -86,14 +86,20 @@ function buildInput(): RenderNode {
 }
 
 function buildStatusBar(): RenderNode {
-  const left = ['Plan', MODEL, SHORT_DIR, GIT_BRANCH].join(' | ');
-  const right = systemVisible ? systemMessage : '';
   return {
     type: 'box',
-    props: { flexDirection: 'row' },
+    props: { flexDirection: 'row', justifyContent: 'space-between' },
     children: [
-      { type: 'text', text: left, props: { bold: true, color: 'cyan' } },
-      { type: 'text', text: right ? '  ' + right : '', props: { color: 'green' } },
+      // 左侧各项（不同颜色）
+      { type: 'text', text: 'Plan', props: { bold: true, color: 'yellow' } },
+      { type: 'text', text: ' | ', props: { color: 'gray' } },
+      { type: 'text', text: MODEL, props: { bold: true, color: 'cyan' } },
+      { type: 'text', text: ' | ', props: { color: 'gray' } },
+      { type: 'text', text: SHORT_DIR, props: { bold: true, color: 'blue' } },
+      { type: 'text', text: ' | ', props: { color: 'gray' } },
+      { type: 'text', text: GIT_BRANCH, props: { bold: true, color: 'magenta' } },
+      // 右侧系统消息
+      { type: 'text', text: systemVisible ? systemMessage : '', props: { color: 'green' } },
     ],
   };
 }

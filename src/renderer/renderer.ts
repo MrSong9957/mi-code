@@ -1,9 +1,9 @@
-import { type Cell, EMPTY_CELL, ATTR_BOLD, ATTR_DIM } from './cell.js';
+import { ATTR_BOLD, ATTR_DIM } from './cell.js';
 import { CharPool, StylePool } from './pool.js';
 import { createScreenBuffer, clearBuffer, setCell, diffBuffers, type ScreenBuffer } from './screen-buffer.js';
 import { optimize } from './optimizer.js';
 import { writePatches } from './writer.js';
-import { fgAnsi, bgAnsi } from './colors.js';
+import { fgAnsi } from './colors.js';
 
 // 简化的节点类型
 export interface RenderNode {
@@ -16,6 +16,7 @@ export interface RenderNode {
     bold?: boolean;
     dim?: boolean;
     flexDirection?: 'row' | 'column';
+    justifyContent?: 'flex-start' | 'flex-end' | 'space-between';
     paddingX?: number;
     paddingY?: number;
     marginY?: number;
@@ -145,12 +146,35 @@ function renderNode(
   } else if (node.children) {
     const isRow = node.props.flexDirection === 'row';
     if (isRow) {
-      // 水平排列：子元素并排放置
-      let curX = x + paddingX;
-      for (const child of node.children) {
-        const childWidth = measureTextWidth(child);
-        renderNode(buffer, child, curX, curY, Math.min(childWidth, maxWidth - (curX - x)), maxHeight);
-        curX += childWidth;
+      const justify = node.props.justifyContent ?? 'flex-start';
+      const totalWidth = node.children.reduce((sum, c) => sum + measureTextWidth(c), 0);
+      const availableWidth = maxWidth - paddingX * 2;
+
+      let curX: number;
+      if (justify === 'space-between' && node.children.length > 1) {
+        // 第一个元素左对齐，最后一个元素右对齐
+        curX = x + paddingX;
+        const lastChild = node.children[node.children.length - 1]!;
+        const lastWidth = measureTextWidth(lastChild);
+        const lastX = x + availableWidth - lastWidth + paddingX;
+
+        // 渲染除最后一个外的所有元素（左对齐）
+        for (let i = 0; i < node.children.length - 1; i++) {
+          const child = node.children[i]!;
+          const childWidth = measureTextWidth(child);
+          renderNode(buffer, child, curX, curY, Math.min(childWidth, availableWidth - (curX - x)), maxHeight);
+          curX += childWidth;
+        }
+        // 最后一个元素右对齐
+        renderNode(buffer, lastChild, lastX, curY, lastWidth, maxHeight);
+      } else {
+        // 默认左对齐
+        curX = x + paddingX;
+        for (const child of node.children) {
+          const childWidth = measureTextWidth(child);
+          renderNode(buffer, child, curX, curY, Math.min(childWidth, availableWidth - (curX - x)), maxHeight);
+          curX += childWidth;
+        }
       }
       curY++; // 行布局占一行
     } else {
