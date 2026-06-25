@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 // src/index.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { render, Box, Text } from 'ink';
 import TextInput from 'ink-text-input'; // 注：大厂通常会用这个标准的输入组件
 
@@ -12,13 +12,34 @@ interface StatusItem {
   color?: string;
 }
 
-// 状态栏组件：左 · 中 · 右 三栏
-function StatusBar({ left, center, right }: { left?: StatusItem; center?: StatusItem; right?: StatusItem }) {
+// 状态栏组件：左侧用户自定义（始终显示），右侧系统消息（自动消失）
+function StatusBar({ leftItems, systemMessage, systemColor }: {
+  leftItems: StatusItem[];
+  systemMessage?: string;
+  systemColor?: string;
+}) {
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    if (!systemMessage) {
+      setVisible(false);
+      return;
+    }
+    setVisible(true);
+    const timer = setTimeout(() => setVisible(false), 3000);
+    return () => clearTimeout(timer);
+  }, [systemMessage]);
+
   return (
     <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
-      <Text dimColor>{left ? <Text color={left.color as any}>{left.label}</Text> : ''}</Text>
-      <Text dimColor>{center ? <Text color={center.color as any}>{center.label}</Text> : ''}</Text>
-      <Text dimColor>{right ? <Text color={right.color as any}>{right.label}</Text> : ''}</Text>
+      <Box flexDirection="row">
+        {leftItems.map((item, i) => (
+          <Text key={i} color={item.color as any}>{item.label} </Text>
+        ))}
+      </Box>
+      {visible && systemMessage && (
+        <Text color={systemColor as any}>{systemMessage}</Text>
+      )}
     </Box>
   );
 }
@@ -80,9 +101,12 @@ function App() {
 
       {/* 4. 状态栏 */}
       <StatusBar
-        left={{ label: 'Ready', color: 'green' }}
-        center={{ label: `v${VERSION}` }}
-        right={{ label: process.cwd(), color: 'gray' }}
+        leftItems={[
+          { label: `v${VERSION}`, color: 'gray' },
+          { label: process.cwd(), color: 'gray' },
+        ]}
+        systemMessage="Ready"
+        systemColor="green"
       />
     </Box>
   );
