@@ -53,7 +53,7 @@ function StatusBar({ leftItems, systemMessage, systemColor }: {
       <Box flexDirection="row">
         {leftItems.map((item, i) => (
           <React.Fragment key={i}>
-            {i > 0 && <Text dimColor> | </Text>}
+            {i > 0 && <Text color="gray"> | </Text>}
             <Text color={item.color as any}>{item.label}</Text>
           </React.Fragment>
         ))}
@@ -108,7 +108,7 @@ function App() {
       </Box>
 
       {/* 3. 输入框 */}
-      <Box borderStyle="single" borderColor="gray" paddingX={1} flexDirection="row">
+      <Box borderStyle="single" borderColor="cyan" paddingX={1} flexDirection="row">
         <Box marginRight={1}>
           <Text bold color="white">❯</Text>
         </Box>
@@ -125,8 +125,8 @@ function App() {
         leftItems={[
           { label: 'Plan', color: 'yellow' },
           { label: MODEL, color: 'cyan' },
-          { label: getShortDir(), color: 'gray' },
-          { label: getGitBranch(), color: 'gray' },
+          { label: getShortDir(), color: 'white' },
+          { label: getGitBranch(), color: 'white' },
         ]}
         systemMessage="Ready"
         systemColor="green"
