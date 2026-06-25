@@ -6,6 +6,23 @@ import TextInput from 'ink-text-input'; // 注：大厂通常会用这个标准�
 
 const VERSION = "1.0.0";
 
+// 状态栏项配置
+interface StatusItem {
+  label: string;
+  color?: string;
+}
+
+// 状态栏组件：左 · 中 · 右 三栏
+function StatusBar({ left, center, right }: { left?: StatusItem; center?: StatusItem; right?: StatusItem }) {
+  return (
+    <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
+      <Text dimColor>{left ? <Text color={left.color as any}>{left.label}</Text> : ''}</Text>
+      <Text dimColor>{center ? <Text color={center.color as any}>{center.label}</Text> : ''}</Text>
+      <Text dimColor>{right ? <Text color={right.color as any}>{right.label}</Text> : ''}</Text>
+    </Box>
+  );
+}
+
 // 我们的极简 Banner 组件
 function Banner() {
   return (
@@ -60,6 +77,13 @@ function App() {
           placeholder="Type 'help' to get started..."
         />
       </Box>
+
+      {/* 4. 状态栏 */}
+      <StatusBar
+        left={{ label: 'Ready', color: 'green' }}
+        center={{ label: `v${VERSION}` }}
+        right={{ label: process.cwd(), color: 'gray' }}
+      />
     </Box>
   );
 }
