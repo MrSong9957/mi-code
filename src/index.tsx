@@ -49,7 +49,7 @@ function StatusBar({ leftItems, systemMessage, systemColor }: {
   }, [systemMessage]);
 
   return (
-    <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
+    <Box flexDirection="row" justifyContent="space-between" marginTop={0}>
       <Box flexDirection="row">
         {leftItems.map((item, i) => (
           <React.Fragment key={i}>
