@@ -147,8 +147,8 @@ if (process.stdin.isTTY) {
       return;
     }
 
-    // 普通字符
-    if (key.length === 1 && key >= ' ') {
+    // 普通字符（过滤换行符和控制字符）
+    if (key.length === 1 && key >= ' ' && key !== '\r' && key !== '\n') {
       input += key;
       scheduleRender();
     }

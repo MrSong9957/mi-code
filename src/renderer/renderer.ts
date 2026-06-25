@@ -131,9 +131,14 @@ function renderNode(
     if (node.props.bold) attrs |= ATTR_BOLD;
     if (node.props.dim) attrs |= ATTR_DIM;
 
-    const chars = [...node.text];
-    for (let i = 0; i < chars.length && i < maxWidth; i++) {
-      setCell(buffer, x + i, curY, chars[i]!, fg, '', attrs);
+    // 过滤换行符，只取第一行
+    const firstLine = node.text.split('\n')[0] ?? '';
+    const chars = [...firstLine];
+
+    // 文本超过宽度时，显示末尾（光标位置）
+    const startIdx = Math.max(0, chars.length - maxWidth);
+    for (let i = 0; i < maxWidth && startIdx + i < chars.length; i++) {
+      setCell(buffer, x + i, curY, chars[startIdx + i]!, fg, '', attrs);
     }
     curY++;
   } else if (node.children) {
