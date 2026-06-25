@@ -54,7 +54,7 @@ function StatusBar({ leftItems, systemMessage, systemColor }: {
         {leftItems.map((item, i) => (
           <React.Fragment key={i}>
             {i > 0 && <Text color="gray"> | </Text>}
-            <Text color={item.color as any}>{item.label}</Text>
+            <Text bold color={item.color as any}>{item.label}</Text>
           </React.Fragment>
         ))}
       </Box>
@@ -108,7 +108,7 @@ function App() {
       </Box>
 
       {/* 3. 输入框 */}
-      <Box borderStyle="single" borderColor="cyan" paddingX={1} flexDirection="row">
+      <Box borderStyle="single" borderColor="white" paddingX={1} flexDirection="row">
         <Box marginRight={1}>
           <Text bold color="white">❯</Text>
         </Box>
