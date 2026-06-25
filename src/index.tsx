@@ -2,9 +2,27 @@
 // src/index.tsx
 import React, { useState, useEffect } from 'react';
 import { render, Box, Text } from 'ink';
-import TextInput from 'ink-text-input'; // 注：大厂通常会用这个标准的输入组件
+import TextInput from 'ink-text-input';
+import { execSync } from 'child_process';
 
 const VERSION = "1.0.0";
+const MODEL = "mimo-v2.5-pro";
+
+// 获取 git 分支名
+function getGitBranch(): string {
+  try {
+    return execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8' }).trim();
+  } catch {
+    return 'no-git';
+  }
+}
+
+// 获取目录最后 2 层
+function getShortDir(): string {
+  const cwd = process.cwd();
+  const parts = cwd.replace(/\\/g, '/').split('/');
+  return parts.slice(-2).join('/');
+}
 
 // 状态栏项配置
 interface StatusItem {
@@ -34,7 +52,10 @@ function StatusBar({ leftItems, systemMessage, systemColor }: {
     <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
       <Box flexDirection="row">
         {leftItems.map((item, i) => (
-          <Text key={i} color={item.color as any}>{item.label} </Text>
+          <React.Fragment key={i}>
+            {i > 0 && <Text dimColor> | </Text>}
+            <Text color={item.color as any}>{item.label}</Text>
+          </React.Fragment>
         ))}
       </Box>
       {visible && systemMessage && (
@@ -102,8 +123,10 @@ function App() {
       {/* 4. 状态栏 */}
       <StatusBar
         leftItems={[
-          { label: `v${VERSION}`, color: 'gray' },
-          { label: process.cwd(), color: 'gray' },
+          { label: 'Plan', color: 'yellow' },
+          { label: MODEL, color: 'cyan' },
+          { label: getShortDir(), color: 'gray' },
+          { label: getGitBranch(), color: 'gray' },
         ]}
         systemMessage="Ready"
         systemColor="green"
