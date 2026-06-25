@@ -1,0 +1,21 @@
+{
+  "name": "mi-code",
+  "version": "1.0.0",
+  "description": "",
+  "main": "./dist/index.js",
+  "bin": {
+    "micode": "./dist/index.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
