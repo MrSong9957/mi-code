@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { render, Box, Text } from 'ink';
 import TextInput from 'ink-text-input';
 import { execSync } from 'child_process';
@@ -74,11 +74,11 @@ function App() {
   const [query, setQuery] = useState('');
   const [messages, setMessages] = useState<string[]>([]);
 
-  const handleSubmit = (value: string) => {
+  const handleSubmit = useCallback((value: string) => {
     if (value.trim() === 'exit') process.exit(0);
     if (value.trim()) setMessages(prev => [...prev, `> ${value}`]);
     setQuery('');
-  };
+  }, []);
 
   return (
     <Box flexDirection="column" padding={1}>
