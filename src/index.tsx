@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env node
 // src/index.tsx
 import React, { useState, useEffect } from 'react';
 import { render, Box, Text } from 'ink';
