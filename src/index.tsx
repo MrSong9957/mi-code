@@ -125,8 +125,8 @@ function App() {
         leftItems={[
           { label: 'Plan', color: 'yellow' },
           { label: MODEL, color: 'cyan' },
-          { label: getShortDir(), color: 'white' },
-          { label: getGitBranch(), color: 'white' },
+          { label: getShortDir(), color: 'blue' },
+          { label: getGitBranch(), color: 'magenta' },
         ]}
         systemMessage="Ready"
         systemColor="green"
