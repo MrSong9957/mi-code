@@ -109,49 +109,78 @@ function scheduleRender() {
   renderTree(buildTree());
 }
 
-// 输入处理
+// 输入处理：用 Buffer 原始字节手动处理 UTF-8，支持中文等多字节字符
 if (process.stdin.isTTY) {
   process.stdin.setRawMode(true);
   process.stdin.resume();
-  process.stdin.setEncoding('utf8');
+  // 不设 encoding — 用 Buffer 接收原始字节，手动解码 UTF-8
+  let pending = Buffer.alloc(0);
 
-  process.stdin.on('data', (key: string) => {
-    // Ctrl+C
-    if (key === '') {
-      process.stdout.write('\x1b[?25h'); // 显示光标
-      process.exit(0);
-    }
+  process.stdin.on('data', (buf: Buffer) => {
+    // 拼接上次未完成的字节
+    const data = Buffer.concat([pending, buf]);
+    pending = Buffer.alloc(0);
 
-    // 回车
-    if (key === '\r' || key === '\n') {
-      if (input.trim() === 'exit') {
+    for (let i = 0; i < data.length; ) {
+      const byte = data[i]!;
+
+      // Ctrl+C (0x03)
+      if (byte === 0x03) {
         process.stdout.write('\x1b[?25h');
         process.exit(0);
       }
-      if (input.trim()) {
-        messages.push('> ' + input);
-        // 临时系统消息
-        systemMessage = 'Received';
-        systemVisible = true;
-        setTimeout(() => { systemVisible = false; scheduleRender(); }, 3000);
+
+      // 回车 (CR=0x0D, LF=0x0A)
+      if (byte === 0x0d || byte === 0x0a) {
+        if (input.trim() === 'exit') {
+          process.stdout.write('\x1b[?25h');
+          process.exit(0);
+        }
+        if (input.trim()) {
+          messages.push('> ' + input);
+          systemMessage = 'Received';
+          systemVisible = true;
+          setTimeout(() => { systemVisible = false; scheduleRender(); }, 3000);
+        }
+        input = '';
+        scheduleRender();
+        i++;
+        continue;
       }
-      input = '';
-      scheduleRender();
-      return;
+
+      // 退格 (BS=0x08, DEL=0x7F)
+      if (byte === 0x08 || byte === 0x7F) {
+        input = input.slice(0, -1);
+        scheduleRender();
+        i++;
+        continue;
+      }
+
+      // 其他控制字符 (< 0x20) → 跳过
+      if (byte < 0x20) {
+        i++;
+        continue;
+      }
+
+      // 确定 UTF-8 字符的字节数
+      let charLen = 1;
+      if ((byte & 0xE0) === 0xC0) charLen = 2;       // 110xxxxx → 2 字节
+      else if ((byte & 0xF0) === 0xE0) charLen = 3;   // 1110xxxx → 3 字节 (中文)
+      else if ((byte & 0xF8) === 0xF0) charLen = 4;   // 11110xxx → 4 字节 (emoji)
+
+      // 字节不够，存入 pending 等下次 data
+      if (i + charLen > data.length) {
+        pending = data.subarray(i);
+        break;
+      }
+
+      // 解码完整 UTF-8 字符
+      const char = data.subarray(i, i + charLen).toString('utf8');
+      input += char;
+      i += charLen;
     }
 
-    // 退格
-    if (key === '' || key === '') {
-      input = input.slice(0, -1);
-      scheduleRender();
-      return;
-    }
-
-    // 普通字符（过滤换行符和控制字符）
-    if (key.length === 1 && key >= ' ' && key !== '\r' && key !== '\n') {
-      input += key;
-      scheduleRender();
-    }
+    scheduleRender();
   });
 }
 

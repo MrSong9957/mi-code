@@ -193,10 +193,9 @@ function renderNode(
       if (col + w > maxWidth) break;  // 放不下就停止
       setCell(buffer, x + col, curY, chars[i]!, fg, '', attrs);
       col += w;
-      // 宽字符占 2 格，第二个格设为空
-      if (w === 2 && col < maxWidth) {
-        setCell(buffer, x + col, curY, '', fg, '', attrs);
-        col++;
+      // 宽字符占 2 格，将下一格标记为"被宽字符占用"（空字符）
+      if (w === 2) {
+        setCell(buffer, x + col - 1, curY, '', fg, '', attrs);
       }
     }
     curY++;
