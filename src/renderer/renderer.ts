@@ -24,6 +24,21 @@ export interface RenderNode {
   };
 }
 
+// 测量节点文本宽度
+function measureTextWidth(node: RenderNode): number {
+  if (node.type === 'text' && node.text !== undefined) {
+    return [...node.text].length;
+  }
+  if (node.children) {
+    let total = 0;
+    for (const child of node.children) {
+      total += measureTextWidth(child);
+    }
+    return total;
+  }
+  return 0;
+}
+
 // 渲染器状态
 let prevBuffer: ScreenBuffer | null = null;
 const charPool = new CharPool();
@@ -128,8 +143,21 @@ function renderNode(
     }
     curY++;
   } else if (node.children) {
-    for (const child of node.children) {
-      curY = renderNode(buffer, child, x + paddingX, curY, maxWidth - paddingX * 2, maxHeight);
+    const isRow = node.props.flexDirection === 'row';
+    if (isRow) {
+      // 水平排列：子元素并排放置
+      let curX = x + paddingX;
+      for (const child of node.children) {
+        const childWidth = measureTextWidth(child);
+        renderNode(buffer, child, curX, curY, Math.min(childWidth, maxWidth - (curX - x)), maxHeight);
+        curX += childWidth;
+      }
+      curY++; // 行布局占一行
+    } else {
+      // 垂直排列（默认）
+      for (const child of node.children) {
+        curY = renderNode(buffer, child, x + paddingX, curY, maxWidth - paddingX * 2, maxHeight);
+      }
     }
   }
 
