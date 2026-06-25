@@ -25,10 +25,30 @@ export interface RenderNode {
   };
 }
 
+// 计算单个字符的终端宽度（中文=2，ASCII=1）
+function charWidth(char: string): number {
+  const code = char.charCodeAt(0);
+  // CJK 统一表意文字、全角字符等
+  if (code >= 0x4E00 && code <= 0x9FFF) return 2;  // CJK
+  if (code >= 0x3000 && code <= 0x303F) return 2;  // CJK 符号
+  if (code >= 0xFF00 && code <= 0xFFEF) return 2;  // 全角字符
+  if (code >= 0x2E80 && code <= 0x2FDF) return 2;  // CJK 部首
+  return 1;
+}
+
+// 计算字符串的终端宽度
+function stringWidth(str: string): number {
+  let width = 0;
+  for (const char of str) {
+    width += charWidth(char);
+  }
+  return width;
+}
+
 // 测量节点文本宽度
 function measureTextWidth(node: RenderNode): number {
   if (node.type === 'text' && node.text !== undefined) {
-    return [...node.text].length;
+    return stringWidth(node.text);
   }
   if (node.children) {
     let total = 0;
@@ -144,10 +164,40 @@ function renderNode(
     const firstLine = node.text.split('\n')[0] ?? '';
     const chars = [...firstLine];
 
+    // 计算每个字符的宽度，找到能显示的起始位置
+    let totalWidth = 0;
+    const charWidths = chars.map(c => {
+      const w = charWidth(c);
+      totalWidth += w;
+      return w;
+    });
+
     // 文本超过宽度时，显示末尾（光标位置）
-    const startIdx = Math.max(0, chars.length - maxWidth);
-    for (let i = 0; i < maxWidth && startIdx + i < chars.length; i++) {
-      setCell(buffer, x + i, curY, chars[startIdx + i]!, fg, '', attrs);
+    let startIdx = 0;
+    if (totalWidth > maxWidth) {
+      // 从末尾往前找，找到能放下的起始位置
+      let w = 0;
+      for (let i = chars.length - 1; i >= 0; i--) {
+        w += charWidths[i]!;
+        if (w > maxWidth) {
+          startIdx = i + 1;
+          break;
+        }
+      }
+    }
+
+    // 渲染字符
+    let col = 0;
+    for (let i = startIdx; i < chars.length && col < maxWidth; i++) {
+      const w = charWidths[i]!;
+      if (col + w > maxWidth) break;  // 放不下就停止
+      setCell(buffer, x + col, curY, chars[i]!, fg, '', attrs);
+      col += w;
+      // 宽字符占 2 格，第二个格设为空
+      if (w === 2 && col < maxWidth) {
+        setCell(buffer, x + col, curY, '', fg, '', attrs);
+        col++;
+      }
     }
     curY++;
   } else if (node.children) {
