@@ -59,8 +59,17 @@ export function renderTree(node: RenderNode): void {
   // 递归渲染节点树到缓冲区
   renderNode(buffer, node, 0, 0, width, height);
 
-  // 全屏重绘（后续可优化为 diff）
-  writeFullFrame(buffer);
+  // 与上一帧做 diff
+  if (prevBuffer) {
+    const patches = diffBuffers(prevBuffer, buffer);
+    if (patches.length > 0) {
+      const optimized = optimize(patches);
+      writePatches(optimized);
+    }
+  } else {
+    // 首帧，全屏输出
+    writeFullFrame(buffer);
+  }
 
   // 保存当前帧
   prevBuffer = buffer;

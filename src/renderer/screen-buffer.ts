@@ -1,12 +1,20 @@
 import { type Cell, EMPTY_CELL, cellEqual } from './cell.js';
 import type { CharPool, StylePool } from './pool.js';
 
+export interface DamageRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface ScreenBuffer {
   width: number;
   height: number;
   cells: Cell[];
   charPool: CharPool;
   stylePool: StylePool;
+  damage: DamageRegion | null;
 }
 
 export function createScreenBuffer(
@@ -17,7 +25,7 @@ export function createScreenBuffer(
 ): ScreenBuffer {
   const cells = new Array(width * height);
   for (let i = 0; i < cells.length; i++) cells[i] = { ...EMPTY_CELL };
-  return { width, height, cells, charPool, stylePool };
+  return { width, height, cells, charPool, stylePool, damage: null };
 }
 
 export function clearBuffer(buf: ScreenBuffer): void {
@@ -27,6 +35,7 @@ export function clearBuffer(buf: ScreenBuffer): void {
     buf.cells[i]!.bg = 0;
     buf.cells[i]!.attrs = 0;
   }
+  buf.damage = null;
 }
 
 export function setCell(
@@ -44,6 +53,18 @@ export function setCell(
   cell.fg = buf.stylePool.intern(fg);
   cell.bg = buf.stylePool.intern(bg);
   cell.attrs = attrs;
+
+  // 更新 damage 区域
+  if (!buf.damage) {
+    buf.damage = { x, y, width: 1, height: 1 };
+  } else {
+    const d = buf.damage;
+    const minX = Math.min(d.x, x);
+    const minY = Math.min(d.y, y);
+    const maxX = Math.max(d.x + d.width, x + 1);
+    const maxY = Math.max(d.y + d.height, y + 1);
+    buf.damage = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
 }
 
 // Diff 补丁
@@ -55,8 +76,32 @@ export type Patch =
 
 export function diffBuffers(prev: ScreenBuffer, curr: ScreenBuffer): Patch[] {
   const patches: Patch[] = [];
+
+  // 合并两个 buffer 的 damage 区域
+  const prevDamage = prev.damage;
+  const currDamage = curr.damage;
+
+  let region: DamageRegion;
+  if (!prevDamage && !currDamage) {
+    return patches; // 无变化
+  } else if (prevDamage && currDamage) {
+    // 合并两个 damage 区域
+    const minX = Math.min(prevDamage.x, currDamage.x);
+    const minY = Math.min(prevDamage.y, currDamage.y);
+    const maxX = Math.max(prevDamage.x + prevDamage.width, currDamage.x + currDamage.width);
+    const maxY = Math.max(prevDamage.y + prevDamage.height, currDamage.y + currDamage.height);
+    region = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  } else {
+    region = prevDamage || currDamage!;
+  }
+
+  // 限制在有效范围内
   const w = Math.min(prev.width, curr.width);
   const h = Math.min(prev.height, curr.height);
+  const startX = Math.max(0, region.x);
+  const startY = Math.max(0, region.y);
+  const endX = Math.min(w, region.x + region.width);
+  const endY = Math.min(h, region.y + region.height);
 
   let needCursor = true;
   let lastFg = -1, lastBg = -1, lastAttrs = -1;
@@ -69,8 +114,8 @@ export function diffBuffers(prev: ScreenBuffer, curr: ScreenBuffer): Patch[] {
     }
   }
 
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
+  for (let y = startY; y < endY; y++) {
+    for (let x = startX; x < endX; x++) {
       const prevCell = prev.cells[y * prev.width + x]!;
       const currCell = curr.cells[y * curr.width + x]!;
 
