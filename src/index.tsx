@@ -18,26 +18,32 @@ function getShortDir(): string {
 
 // 启动时缓存，避免每次渲染 spawn 子进程
 const GIT_BRANCH = getGitBranch();
+const SHORT_DIR = getShortDir();
 
 // --- Components ---
 
-function Banner() {
-  return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Text color="cyan"> ▐▛███▜▌   <Text bold color="white">MiCode</Text> <Text dimColor>v{VERSION}</Text></Text>
-      <Text color="cyan">▝▜█████▛▘  <Text dimColor>TypeScript CLI · Node.js Runtime</Text></Text>
-      <Text color="cyan">  ▘▘ ▝▝    <Text dimColor>{process.cwd()}</Text></Text>
-    </Box>
-  );
-}
+const Banner = React.memo(() => (
+  <Box flexDirection="column" marginBottom={1}>
+    <Text color="cyan"> ▐▛███▜▌   <Text bold color="white">MiCode</Text> <Text dimColor>v{VERSION}</Text></Text>
+    <Text color="cyan">▝▜█████▛▘  <Text dimColor>TypeScript CLI · Node.js Runtime</Text></Text>
+    <Text color="cyan">  ▘▘ ▝▝    <Text dimColor>{process.cwd()}</Text></Text>
+  </Box>
+));
 
 interface StatusItem { label: string; color?: string }
 
-function StatusBar({ leftItems, systemMessage, systemColor }: {
+const STATUS_LEFT_ITEMS: StatusItem[] = [
+  { label: 'Plan', color: 'yellow' },
+  { label: MODEL, color: 'cyan' },
+  { label: SHORT_DIR, color: 'blue' },
+  { label: GIT_BRANCH, color: 'magenta' },
+];
+
+const StatusBar = React.memo(({ leftItems, systemMessage, systemColor }: {
   leftItems: StatusItem[];
   systemMessage?: string;
   systemColor?: string;
-}) {
+}) => {
   const [visible, setVisible] = useState(true);
 
   useEffect(() => {
@@ -62,7 +68,7 @@ function StatusBar({ leftItems, systemMessage, systemColor }: {
       )}
     </Box>
   );
-}
+});
 
 function App() {
   const [query, setQuery] = useState('');
@@ -91,16 +97,7 @@ function App() {
         <TextInput value={query} onChange={setQuery} onSubmit={handleSubmit} placeholder="Type 'help' to get started..." />
       </Box>
 
-      <StatusBar
-        leftItems={[
-          { label: 'Plan', color: 'yellow' },
-          { label: MODEL, color: 'cyan' },
-          { label: getShortDir(), color: 'blue' },
-          { label: GIT_BRANCH, color: 'magenta' },
-        ]}
-        systemMessage="Ready"
-        systemColor="green"
-      />
+      <StatusBar leftItems={STATUS_LEFT_ITEMS} systemMessage="Ready" systemColor="green" />
     </Box>
   );
 }
