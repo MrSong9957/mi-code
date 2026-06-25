@@ -23,7 +23,6 @@
   "dependencies": {
     "ink": "^7.1.0",
     "ink-text-input": "^6.0.0",
-    "picocolors": "^1.1.1",
     "react": "^19.2.7"
   }
 }
