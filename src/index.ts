@@ -1,9 +1,62 @@
 #!/usr/bin/env node
 import { renderTree, type RenderNode } from './renderer/index.js';
 import { execSync } from 'child_process';
+import { createDefaultRegistry } from './agent/tool-registry.js';
+import { runWithVercelAI } from './agent/llm-vercel.js';
+import { ConfigStore } from './config/index.js';
+import { parseCommand, executeCommand } from './commands/index.js';
+import { TodoManager } from './agent/todo.js';
+import { createTaskTool } from './agent/tools/task-tool.js';
+import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
+import { parseBlockPrefix } from './commands/parser.js';
+import { PermissionChecker } from './permission/index.js';
+import { HookRunner, preToolSafetyCheck, sessionStartLogger } from './hooks/index.js';
+import { TeammateManager, createSendMessageTool, createReadInboxTool, NegotiationManager, createShutdownRequestTool, createRespondRequestTool, createSubmitPlanTool, createApprovePlanTool } from './agent/team/index.js';
+import { ScheduleManager } from './agent/scheduler/index.js';
+import { WorktreeManager } from './worktree/index.js';
+import { TaskBoard } from './task-board/index.js';
 
 const VERSION = "1.0.0";
-const MODEL = "mimo-v2.5-pro";
+
+// 初始化配置
+const configStore = new ConfigStore();
+const MODEL = configStore.getModel();
+
+// 初始化 TodoManager
+const todoManager = new TodoManager();
+
+// 初始化技能系统
+const skillRegistry = new SkillRegistry();
+skillRegistry.loadFromDir('skills');
+const skillNegotiator = new SkillNegotiator();
+
+// 初始化权限系统（从配置加载模式与规则，持久化重启可恢复）
+const permissionChecker = new PermissionChecker({
+  mode: configStore.getPermissionMode(),
+  rules: configStore.getPermissionRules(),
+  workdir: process.cwd(),
+});
+
+// 初始化团队系统
+const teammateManager = new TeammateManager('.team');
+const negotiationManager = new NegotiationManager();
+
+// 初始化调度系统
+const scheduler = new ScheduleManager('.schedules.json');
+scheduler.load();
+
+// 初始化 Hook 系统
+const hookRunner = new HookRunner();
+hookRunner.register('PreToolUse', preToolSafetyCheck);
+hookRunner.register('SessionStart', sessionStartLogger);
+
+// 初始化 Worktree 系统（启动时恢复：清理已不存在的 worktree 索引）
+const worktreeManager = new WorktreeManager(process.cwd());
+worktreeManager.recover();
+
+// 初始化任务看板（从 .tasks.json 断点恢复）
+const taskBoard = new TaskBoard();
+taskBoard.load(process.cwd());
 
 function getGitBranch(): string {
   try { return execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8' }).trim(); }
@@ -19,9 +72,41 @@ const SHORT_DIR = getShortDir();
 
 // 状态
 let input = '';
-let messages: string[] = [];
+let cursorPos = 0;  // 光标在 input 中的字符索引
+const messages: string[] = [];
 let systemMessage = 'Ready';
 let systemVisible = true;
+let isProcessing = false;  // Agent 是否正在处理
+
+// 权限确认状态机：当工具触发 ask 决策时，暂停输入循环等待用户 y/n
+let awaitingPermission = false;
+let pendingPermissionResolve: ((approved: boolean) => void) | null = null;
+let pendingPermissionPrompt = '';  // 显示给用户的确认提示行
+
+// Agent 组件
+// 子代理工具注册表（没有 task 工具，禁止递归；含 taskBoard + worktree 工具）
+const childToolRegistry = createDefaultRegistry(todoManager, undefined, undefined, undefined, taskBoard, worktreeManager);
+// 父代理工具注册表（有 task 工具）
+const toolRegistry = createDefaultRegistry(todoManager, undefined, undefined, undefined, taskBoard, worktreeManager);
+const taskTool = createTaskTool(childToolRegistry, worktreeManager);
+toolRegistry.register(taskTool.definition, taskTool.executor);
+// 注册 load_skill 工具
+const loadSkillTool = createLoadSkillTool(skillRegistry);
+toolRegistry.register(loadSkillTool.definition, loadSkillTool.executor);
+// 注册团队工具
+const sendMessageTool = createSendMessageTool(teammateManager);
+toolRegistry.register(sendMessageTool.definition, sendMessageTool.executor);
+const readInboxTool = createReadInboxTool(teammateManager);
+toolRegistry.register(readInboxTool.definition, readInboxTool.executor);
+// 注册协商工具
+const shutdownRequestTool = createShutdownRequestTool(negotiationManager, teammateManager);
+toolRegistry.register(shutdownRequestTool.definition, shutdownRequestTool.executor);
+const respondRequestTool = createRespondRequestTool(negotiationManager);
+toolRegistry.register(respondRequestTool.definition, respondRequestTool.executor);
+const submitPlanTool = createSubmitPlanTool(negotiationManager);
+toolRegistry.register(submitPlanTool.definition, submitPlanTool.executor);
+const approvePlanTool = createApprovePlanTool(negotiationManager);
+toolRegistry.register(approvePlanTool.definition, approvePlanTool.executor);
 
 // 构建 UI 树
 function buildTree(): RenderNode {
@@ -54,23 +139,25 @@ function buildBanner(): RenderNode {
 }
 
 function buildMessages(): RenderNode {
+  const lines: RenderNode[] = [];
+
   if (messages.length === 0) {
-    return {
-      type: 'box',
-      props: { flexDirection: 'column', marginY: 1 },
-      children: [
-        { type: 'text', text: 'Welcome to MiCode. Type something to start.', props: { dim: true } },
-      ],
-    };
+    lines.push({ type: 'text', text: 'Welcome to MiCode. Type something to start.', props: { dim: true } });
+  } else {
+    for (const msg of messages) {
+      lines.push({ type: 'text', text: msg, props: {} });
+    }
   }
+
+  // 权限确认提示行（ask 闸门）
+  if (awaitingPermission) {
+    lines.push({ type: 'text', text: pendingPermissionPrompt, props: { color: 'yellow' } });
+  }
+
   return {
     type: 'box',
     props: { flexDirection: 'column', marginY: 1 },
-    children: messages.map(msg => ({
-      type: 'text' as const,
-      text: msg,
-      props: {},
-    })),
+    children: lines,
   };
 }
 
@@ -78,7 +165,7 @@ function buildInput(): RenderNode {
   const cursor = '❯';
   return {
     type: 'box',
-    props: { borderStyle: 'single', borderColor: 'white', paddingX: 1, flexDirection: 'row' },
+    props: { borderStyle: 'single', borderColor: 'white', paddingX: 1 },
     children: [
       { type: 'text', text: cursor + ' ' + input, props: { bold: true, color: 'white' } },
     ],
@@ -104,9 +191,64 @@ function buildStatusBar(): RenderNode {
   };
 }
 
+// 计算单个字符的终端宽度（与 renderer 一致）
+function charWidth(char: string): number {
+  const code = char.charCodeAt(0);
+  if (code >= 0x4E00 && code <= 0x9FFF) return 2;  // CJK
+  if (code >= 0x3000 && code <= 0x303F) return 2;  // CJK 符号
+  if (code >= 0xFF00 && code <= 0xFFEF) return 2;  // 全角字符
+  if (code >= 0x2E80 && code <= 0x2FDF) return 2;  // CJK 部首
+  return 1;
+}
+
+/**
+ * 请求用户权限确认（ask 闸门）
+ *
+ * 由 runWithVercelAI 在权限决策为 ask 时调用。设置 awaitingPermission=true，
+ * 渲染提示行后挂起 Promise，等待输入循环处理 y/n 按键时 resolve。
+ */
+function requestPermission(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  reason: string,
+): Promise<boolean> {
+  // 构造简短的可读提示
+  const detail = toolName === 'run_bash'
+    ? (toolInput.command as string) ?? ''
+    : (toolInput.path as string) ?? JSON.stringify(toolInput).slice(0, 60);
+  pendingPermissionPrompt = `⚠ Permission: ${toolName} — ${reason}${detail ? `\n   ${detail}` : ''}\n   Allow? [y/N]`;
+
+  return new Promise<boolean>((resolve) => {
+    pendingPermissionResolve = resolve;
+    awaitingPermission = true;
+    input = '';          // 清空当前输入，避免干扰确认
+    cursorPos = 0;
+    scheduleRender();
+  });
+}
+
 // 渲染循环
 function scheduleRender() {
   renderTree(buildTree());
+  // 将终端光标定位到输入框内的正确位置
+  positionCursor();
+}
+
+// 计算并定位终端光标到输入框
+function positionCursor() {
+  // 布局计算（行和列都是 1-based）：
+  // 行：root paddingY(1) + banner marginY(1) + banner 3行 + messages marginY(1) + messages行数 + input marginY(1) + border上(1)
+  // 注意：awaitingPermission 时消息区会多渲染若干提示行，需一并计入
+  const baseMessageLines = messages.length === 0 ? 1 : messages.length;
+  const promptLines = awaitingPermission ? pendingPermissionPrompt.split('\n').length : 0;
+  const messageLines = baseMessageLines + promptLines;
+  const inputRow = 1 + 1 + 3 + 1 + messageLines + 1 + 1;
+  // 列：root内容起始(2) + box border左(1) + box paddingX(1) + "❯ "(2) + 光标前文本宽度
+  const chars = [...input];
+  const beforeWidth = chars.slice(0, cursorPos).reduce((w, c) => w + charWidth(c), 0);
+  const inputCol = 2 + 1 + 1 + 2 + beforeWidth;
+  // ANSI: \x1b[{row};{col}H (1-based)
+  process.stdout.write(`\x1b[${inputRow};${inputCol}H`);
 }
 
 // 输入处理：用 Buffer 原始字节手动处理 UTF-8，支持中文等多字节字符
@@ -124,10 +266,35 @@ if (process.stdin.isTTY) {
     for (let i = 0; i < data.length; ) {
       const byte = data[i]!;
 
-      // Ctrl+C (0x03)
+      // Ctrl+C (0x03) —— 始终生效，含权限确认中
       if (byte === 0x03) {
         process.stdout.write('\x1b[?25h');
         process.exit(0);
+      }
+
+      // ── 权限确认拦截：ask 闸门等待 y/n ──
+      if (awaitingPermission) {
+        // y / Y (0x79 / 0x59) → 同意
+        if (byte === 0x79 || byte === 0x59) {
+          awaitingPermission = false;
+          const resolve = pendingPermissionResolve;
+          pendingPermissionResolve = null;
+          pendingPermissionPrompt = '';
+          resolve?.(true);
+          scheduleRender();
+        }
+        // n / N / 回车 → 拒绝
+        else if (byte === 0x6e || byte === 0x4e || byte === 0x0d || byte === 0x0a) {
+          awaitingPermission = false;
+          const resolve = pendingPermissionResolve;
+          pendingPermissionResolve = null;
+          pendingPermissionPrompt = '';
+          resolve?.(false);
+          scheduleRender();
+        }
+        // 其余按键忽略（包括退格、普通字符），跳到下一字节
+        i++;
+        continue;
       }
 
       // 回车 (CR=0x0D, LF=0x0A)
@@ -136,21 +303,109 @@ if (process.stdin.isTTY) {
           process.stdout.write('\x1b[?25h');
           process.exit(0);
         }
-        if (input.trim()) {
-          messages.push('> ' + input);
-          systemMessage = 'Received';
-          systemVisible = true;
-          setTimeout(() => { systemVisible = false; scheduleRender(); }, 3000);
+        if (input.trim() && !isProcessing) {
+          const userInput = input.trim();
+          messages.push('> ' + userInput);
+          input = '';
+          cursorPos = 0;
+          scheduleRender();
+
+          // 检查 ! 前缀拦截（S10 协商协议）
+          const blockReq = parseBlockPrefix(userInput);
+          if (blockReq) {
+            skillNegotiator.block(blockReq.skillName, 'default');
+            messages.push(`Skill "${blockReq.skillName}" blocked.`);
+            systemMessage = 'Skill blocked';
+            systemVisible = true;
+            setTimeout(() => { systemVisible = false; scheduleRender(); }, 3000);
+            scheduleRender();
+          } else {
+            // 检查是否是斜杠命令
+            const cmd = parseCommand(userInput);
+            if (cmd) {
+              // 技能相关命令（/skill, /trigger, /y, /n, /edit）走协商器
+              if (['skill', 'trigger', 'y', 'n', 'edit'].includes(cmd.name)) {
+                const result = executeCommand(cmd, {
+                  skillRegistry,
+                  negotiator: skillNegotiator,
+                  userId: 'default',
+                });
+                messages.push(result.message);
+              } else {
+                const result = executeCommand(cmd, configStore, { permissionChecker });
+                messages.push(result.message);
+              }
+              systemMessage = 'Command executed';
+              systemVisible = true;
+              setTimeout(() => { systemVisible = false; scheduleRender(); }, 3000);
+              scheduleRender();
+            } else {
+              // Nag reminder：如果连续 3 轮没更新 todo，注入提醒
+              // 智能 nudge：全部完成后注入验证提示
+              todoManager.incrementRounds();
+              const reminder = todoManager.getReminder() || todoManager.getVerificationNudge();
+              const skillsDescription = skillRegistry.describeAvailable();
+              const systemPrompt = [
+                'You are a helpful assistant that can execute shell commands and manipulate files.',
+                '',
+                skillsDescription,
+                reminder ? `\n${reminder}` : '',
+              ].join('\n');
+
+              // 异步执行 Agent 循环
+              isProcessing = true;
+              systemMessage = 'Thinking...';
+              systemVisible = true;
+              scheduleRender();
+
+              const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
+              if (apiKey) {
+                runWithVercelAI(userInput, toolRegistry.tools, {
+                  system: systemPrompt,
+                  maxSteps: 10,
+                  permissionChecker,
+                  onPermissionAsk: (name, toolInput, reason) =>
+                    requestPermission(name, toolInput, reason),
+                }).then((result) => {
+                  if (result.text) messages.push(result.text);
+                  systemMessage = `Done (${result.steps} steps)`;
+                  systemVisible = true;
+                  setTimeout(() => { systemVisible = false; scheduleRender(); }, 3000);
+                  isProcessing = false;
+                  scheduleRender();
+                }).catch((err) => {
+                  messages.push(`[Error] ${err}`);
+                  systemMessage = 'Error';
+                  isProcessing = false;
+                  scheduleRender();
+                });
+              } else {
+                messages.push(`[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`);
+                systemMessage = 'No API Key';
+                systemVisible = true;
+                setTimeout(() => { systemVisible = false; scheduleRender(); }, 3000);
+                isProcessing = false;
+                scheduleRender();
+              }
+            }
+          }
+        } else if (!isProcessing) {
+          input = '';
+          cursorPos = 0;
+          scheduleRender();
         }
-        input = '';
-        scheduleRender();
         i++;
         continue;
       }
 
       // 退格 (BS=0x08, DEL=0x7F)
       if (byte === 0x08 || byte === 0x7F) {
-        input = input.slice(0, -1);
+        if (cursorPos > 0) {
+          const chars = [...input];
+          chars.splice(cursorPos - 1, 1);
+          input = chars.join('');
+          cursorPos--;
+        }
         scheduleRender();
         i++;
         continue;
@@ -174,9 +429,12 @@ if (process.stdin.isTTY) {
         break;
       }
 
-      // 解码完整 UTF-8 字符
+      // 解码完整 UTF-8 字符并插入到光标位置
       const char = data.subarray(i, i + charLen).toString('utf8');
-      input += char;
+      const chars = [...input];
+      chars.splice(cursorPos, 0, char);
+      input = chars.join('');
+      cursorPos++;
       i += charLen;
     }
 
@@ -189,6 +447,20 @@ process.stdout.on('resize', () => {
   scheduleRender();
 });
 
-// 隐藏光标并渲染
-process.stdout.write('\x1b[?25l');
+// 显示终端光标并渲染
+process.stdout.write('\x1b[?25h');
+
+// 触发 SessionStart hook
+hookRunner.run({ name: 'SessionStart', payload: {} });
+
+// 启动调度检查器（每 60 秒检查一次）
+setInterval(() => {
+  scheduler.check();
+  const notifications = scheduler.drain();
+  for (const n of notifications) {
+    messages.push(`[scheduled:${n.scheduleId}] ${n.prompt}`);
+  }
+  if (notifications.length > 0) scheduleRender();
+}, 60000);
+
 scheduleRender();
