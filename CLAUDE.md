@@ -137,18 +137,48 @@
 
 ### 技术栈
 
-[项目技术栈描述]
+- **语言**: TypeScript 6.0.3
+- **运行时**: Node.js (ES2022, NodeNext modules)
+- **开发工具**: tsx (TypeScript 执行)
+- **构建**: `tsc` (TypeScript 编译器)
+- **测试**: Vitest (已配置)
+- **Lint**: ESLint + typescript-eslint (已配置)
 
 ---
 
 ### 架构
 
-[项目架构描述]
+CLI 工具项目，使用 TypeScript 编写，编译为 ESM 模块。
 
 ---
 
 ### 项目
 
-[项目描述]
+mi-code - TypeScript CLI 工具
+
+---
+
+## ECC 规则
+
+项目使用 ECC (Everything Claude Code) 规则系统，规则文件位于 `rules/` 目录：
+
+- `rules/typescript/` - TypeScript/JavaScript 特定规则
+- `rules/common/` - 通用开发规范
+
+### 快速命令
+
+- `npm test` - 运行测试
+- `npm run test:coverage` - 运行测试并生成覆盖率报告
+- `npm run lint` - 运行 ESLint 检查
+- `npm run typecheck` - TypeScript 类型检查
+- `npm run build` - 构建项目
+
+### Agent 使用
+
+- **planner** - 复杂功能实现规划
+- **tdd-guide** - TDD 工作流指导
+- **code-reviewer** - 代码质量审查
+- **security-reviewer** - 安全审查
+- **build-error-resolver** - 构建错误修复
 
 ---

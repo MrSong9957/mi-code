@@ -203,7 +203,6 @@ function renderNode(
     const isRow = node.props.flexDirection === 'row';
     if (isRow) {
       const justify = node.props.justifyContent ?? 'flex-start';
-      const totalWidth = node.children.reduce((sum, c) => sum + measureTextWidth(c), 0);
       const availableWidth = maxWidth - paddingX * 2;
 
       let curX: number;

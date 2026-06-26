@@ -8,15 +8,29 @@
     "micode": "./dist/index.js"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "typecheck": "tsc --noEmit",
     "build": "tsc"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@eslint/js": "^9.39.2",
     "@types/node": "^26.0.1",
+    "@vitest/coverage-v8": "^3.2.1",
+    "eslint": "^9.39.2",
     "tsx": "^4.22.4",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.35.1",
+    "vitest": "^3.2.1"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.0",
+    "ai": "^7.0.2"
   }
 }

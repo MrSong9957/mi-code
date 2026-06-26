@@ -1,0 +1,180 @@
+// 配置存储：读写配置文件，合并环境变量
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
+import type { MiCodeConfig, ProviderConfig, PermissionMode, PermissionRuleConfig } from './schema.js';
+import { DEFAULT_CONFIG, DEFAULT_MODELS } from './schema.js';
+
+export class ConfigStore {
+  private config: MiCodeConfig;
+  private configDir: string;
+  private configFile: string;
+
+  constructor(configPath?: string) {
+    this.configDir = configPath || join(homedir(), '.micode');
+    this.configFile = join(this.configDir, 'config.json');
+    this.config = this.load();
+  }
+
+  /** 加载配置（用户级文件 + 环境变量覆盖） */
+  private load(): MiCodeConfig {
+    // 深拷贝 permissions，避免修改实例时污染共享的 DEFAULT_CONFIG
+    const config: MiCodeConfig = {
+      ...DEFAULT_CONFIG,
+      providers: {},
+      permissions: {
+        mode: DEFAULT_CONFIG.permissions.mode,
+        rules: [...DEFAULT_CONFIG.permissions.rules],
+      },
+    };
+
+    // 读取用户级配置文件
+    if (existsSync(this.configFile)) {
+      try {
+        const raw = readFileSync(this.configFile, 'utf8');
+        const saved = JSON.parse(raw) as Partial<MiCodeConfig>;
+        if (saved.providers) {
+          for (const [name, provider] of Object.entries(saved.providers)) {
+            config.providers[name] = provider;
+          }
+        }
+        if (saved.defaultProvider) {
+          config.defaultProvider = saved.defaultProvider;
+        }
+        // 权限配置（向后兼容：旧文件无此字段时保留默认）
+        if (saved.permissions) {
+          config.permissions = {
+            mode: saved.permissions.mode ?? DEFAULT_CONFIG.permissions.mode,
+            rules: saved.permissions.rules ?? [],
+          };
+        }
+      } catch {
+        // 配置文件损坏，使用默认
+      }
+    }
+
+    // 环境变量覆盖（不写入文件）
+    const envAnthropic = process.env.ANTHROPIC_API_KEY;
+    if (envAnthropic) {
+      config.providers.anthropic = {
+        ...config.providers.anthropic,
+        apiKey: envAnthropic,
+        model: config.providers.anthropic?.model || DEFAULT_MODELS.anthropic!,
+      };
+    }
+
+    const envOpenai = process.env.OPENAI_API_KEY;
+    if (envOpenai) {
+      config.providers.openai = {
+        ...config.providers.openai,
+        apiKey: envOpenai,
+        model: config.providers.openai?.model || DEFAULT_MODELS.openai!,
+      };
+    }
+
+    return config;
+  }
+
+  /** 获取当前 Provider 名称 */
+  getDefaultProvider(): string {
+    return this.config.defaultProvider;
+  }
+
+  /** 设置默认 Provider */
+  setDefaultProvider(name: string): void {
+    this.config.defaultProvider = name;
+    this.save();
+  }
+
+  /** 获取 Provider 配置 */
+  getProvider(name: string): ProviderConfig | undefined {
+    return this.config.providers[name];
+  }
+
+  /** 获取 API Key（优先级：环境变量 > 配置文件） */
+  getApiKey(provider: string): string | undefined {
+    // 环境变量优先
+    const envKey = process.env[`${provider.toUpperCase()}_API_KEY`];
+    if (envKey) return envKey;
+
+    return this.config.providers[provider]?.apiKey;
+  }
+
+  /** 获取当前模型 */
+  getModel(): string {
+    const provider = this.config.defaultProvider;
+    const providerConfig = this.config.providers[provider];
+    return providerConfig?.model || DEFAULT_MODELS[provider] || DEFAULT_MODELS.anthropic!;
+  }
+
+  /** 设置 Provider API Key */
+  setApiKey(provider: string, apiKey: string): void {
+    if (!this.config.providers[provider]) {
+      this.config.providers[provider] = {
+        apiKey: '',
+        model: DEFAULT_MODELS[provider] || '',
+      };
+    }
+    this.config.providers[provider]!.apiKey = apiKey;
+    this.save();
+  }
+
+  /** 设置 Provider 模型 */
+  setModel(provider: string, model: string): void {
+    if (!this.config.providers[provider]) {
+      this.config.providers[provider] = {
+        apiKey: '',
+        model: DEFAULT_MODELS[provider] || '',
+      };
+    }
+    this.config.providers[provider]!.model = model;
+    this.save();
+  }
+
+  /** 获取权限模式 */
+  getPermissionMode(): PermissionMode {
+    return this.config.permissions.mode;
+  }
+
+  /** 设置权限模式（持久化） */
+  setPermissionMode(mode: PermissionMode): void {
+    this.config.permissions.mode = mode;
+    this.save();
+  }
+
+  /** 获取权限规则列表（副本） */
+  getPermissionRules(): PermissionRuleConfig[] {
+    return [...this.config.permissions.rules];
+  }
+
+  /** 设置权限规则列表（持久化，替换全部） */
+  setPermissionRules(rules: PermissionRuleConfig[]): void {
+    this.config.permissions.rules = [...rules];
+    this.save();
+  }
+
+  /** 获取脱敏配置（用于显示） */
+  getMasked(): MiCodeConfig {
+    const masked = { ...this.config, providers: {} as Record<string, ProviderConfig> };
+    for (const [name, provider] of Object.entries(this.config.providers)) {
+      masked.providers[name] = {
+        ...provider,
+        apiKey: maskApiKey(provider.apiKey),
+      };
+    }
+    return masked;
+  }
+
+  /** 保存到文件 */
+  save(): void {
+    mkdirSync(this.configDir, { recursive: true });
+    writeFileSync(this.configFile, JSON.stringify(this.config, null, 2), 'utf8');
+  }
+}
+
+/** 脱敏 API Key：只显示前 8 位 */
+function maskApiKey(key: string): string {
+  if (!key) return '';
+  if (key.length <= 8) return '***';
+  return key.slice(0, 8) + '***';
+}
