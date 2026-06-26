@@ -11,6 +11,9 @@ export type ErrorType =
   | 'max_tokens_exceeded'
   | 'prompt_too_long'
   | 'rate_limited_429'
+  | 'stream_idle_timeout'
+  | 'stream_no_events'
+  | 'connection_error'
   | 'unknown';
 
 /** 恢复状态机 */
@@ -114,6 +117,15 @@ export function classifyError(error: unknown): ErrorType {
   }
   if (lower.includes('429') || lower.includes('rate_limit') || lower.includes('rate limit') || lower.includes('too many requests')) {
     return 'rate_limited_429';
+  }
+  if (lower.includes('idle timeout') || lower.includes('stream_idle_timeout')) {
+    return 'stream_idle_timeout';
+  }
+  if (lower.includes('no events') || lower.includes('stream_no_events')) {
+    return 'stream_no_events';
+  }
+  if (lower.includes('connection') || lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('network')) {
+    return 'connection_error';
   }
   return 'unknown';
 }

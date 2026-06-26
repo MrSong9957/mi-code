@@ -90,3 +90,97 @@ export interface AgentConfig {
 export interface LLMClient {
   create(messages: Message[], tools: ToolDefinition[]): Promise<ModelResponse>;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 流式输出类型定义
+// ═══════════════════════════════════════════════════════════════
+
+/** Token 使用量 */
+export interface Usage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+/** 内容块类型（流式扩展：增加 thinking 类型） */
+export type StreamingContentBlockType = 'text' | 'tool_use' | 'thinking';
+
+// ------ 六种流式事件 ------
+
+/** 1. 消息开始事件（API 返回 message_start） */
+export interface MessageStartEvent {
+  type: 'message_start';
+  messageId: string;
+  model: string;
+  inputTokens: number;
+}
+
+/** 2. 内容块开始事件（API 返回 content_block_start） */
+export interface ContentBlockStartEvent {
+  type: 'content_block_start';
+  index: number;
+  blockType: StreamingContentBlockType;
+  blockId?: string; // 仅 tool_use 类型
+}
+
+/** 3. 内容块增量事件（API 返回 content_block_delta，每个 token 一次） */
+export interface ContentBlockDeltaEvent {
+  type: 'content_block_delta';
+  index: number;
+  deltaType: 'text' | 'input_json' | 'thinking';
+  content: string;
+}
+
+/** 4. 内容块结束事件（API 返回 content_block_stop） */
+export interface ContentBlockStopEvent {
+  type: 'content_block_stop';
+  index: number;
+}
+
+/** 5. 消息增量事件（API 返回 message_delta） */
+export interface MessageDeltaEvent {
+  type: 'message_delta';
+  stopReason: string | null;
+  outputTokens: number;
+}
+
+/** 6. 消息结束事件（API 返回 message_stop） */
+export interface MessageStopEvent {
+  type: 'message_stop';
+}
+
+/** 流式事件联合类型 */
+export type StreamEvent =
+  | MessageStartEvent
+  | ContentBlockStartEvent
+  | ContentBlockDeltaEvent
+  | ContentBlockStopEvent
+  | MessageDeltaEvent
+  | MessageStopEvent;
+
+/** 助手消息（流式输出完成时生成） */
+export interface AssistantMessage {
+  type: 'assistant';
+  content: ContentBlock[];
+  usage: Usage;
+  stopReason: string | null;
+  uuid: string;
+  timestamp: string;
+}
+
+/** 流式调用选项 */
+export interface StreamOptions {
+  systemPrompt: string;
+  maxTokens: number;
+  signal: AbortSignal;
+}
+
+/** 流式 LLM 客户端接口 */
+export interface StreamingLLMClient {
+  stream(
+    messages: Message[],
+    tools: ToolDefinition[],
+    options: StreamOptions,
+  ): AsyncGenerator<StreamEvent | AssistantMessage>;
+}

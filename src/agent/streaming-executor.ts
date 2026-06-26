@@ -1,142 +1,187 @@
-// StreamingToolExecutor：流式工具执行器
+// StreamingToolExecutor：流式工具执行器（v2：基于结构化事件）
 //
-// 物理本质：快递到了就立刻拆，不用等整批到齐。
-// LLM 流式输出时，只要检测到完整的 tool_use 块，立刻开始执行，
-// 不等整条消息生成完毕，大幅降低用户体感延迟。
+// 物理本质：快递分拣中心。
+// AI 输出的每个工具调用就是一个快递包裹。
+// addTool → 包裹放到传送带
+// processQueue → 分拣员根据包裹类型决定怎么处理
+//   - 只读工具（读文件、搜索）→ 可以同时拆多个包裹（并发）
+//   - 写入工具（写文件、执行命令）→ 必须一个一个拆（独占）
+// getRemainingResults → 等所有包裹拆完，按顺序取结果
 
 import type { ToolRegistry } from './tool-registry.js';
+import type { ToolUseBlock, ContentBlock } from './types.js';
 
-/** 流式工具调用块 */
-export interface StreamingToolCall {
+/** 工具执行状态 */
+export type ToolStatus = 'queued' | 'executing' | 'completed' | 'yielded';
+
+/** 跟踪中的工具调用 */
+export interface TrackedTool {
   id: string;
-  name: string;
-  inputJson: string;
-  input: Record<string, unknown> | null;
+  block: ToolUseBlock;
+  status: ToolStatus;
+  isConcurrencySafe: boolean;
+  results?: ContentBlock[];
+  error?: string;
 }
 
-/** 流式执行结果 */
-export interface StreamingToolResult {
-  toolUseId: string;
-  name: string;
-  output: string;
-}
+/** 并发安全的只读工具白名单 */
+const READ_ONLY_TOOLS = new Set([
+  'read_file', 'glob', 'grep', 'web_fetch', 'web_search',
+  'list_directory', 'get_file_info',
+]);
 
-/** 流式解析状态 */
-interface ParseState {
-  current: StreamingToolCall | null;
-  completed: StreamingToolCall[];
-  executing: Map<string, Promise<StreamingToolResult>>;
-  results: StreamingToolResult[];
+/**
+ * 判断工具是否可并发执行（只读工具可并发，写入工具必须独占）
+ */
+export function isConcurrencySafe(toolName: string, _input?: Record<string, unknown>): boolean {
+  return READ_ONLY_TOOLS.has(toolName);
 }
 
 /**
- * StreamingToolExecutor
+ * StreamingToolExecutor v2
  *
- * 从流式文本中检测 tool_use 块，一旦完整就立即开始执行。
+ * 基于结构化事件的流式工具执行器。
+ * 替代原来的文本解析方式，通过 addTool() 直接传入已解析的 ToolUseBlock。
  */
 export class StreamingToolExecutor {
   private registry: ToolRegistry;
-  private state: ParseState;
+  private tools: TrackedTool[] = [];
+  private discarded = false;
+  private progressResolve?: () => void;
 
   constructor(registry: ToolRegistry) {
     this.registry = registry;
-    this.state = { current: null, completed: [], executing: new Map(), results: [] };
   }
 
-  /** 处理一个文本 chunk */
-  processChunk(chunk: string): void {
-    // 检测 tool_use 块开始（支持 "tool_use" 标记或直接的 JSON 工具调用）
-    if (!this.state.current) {
-      const isToolCall = chunk.includes('"tool_use"') || (chunk.includes('"name"') && chunk.includes('"input"'));
-      if (isToolCall) {
-        this.state.current = {
-          id: this.extractId(chunk),
-          name: this.extractName(chunk),
-          inputJson: chunk,
-          input: null,
-        };
-        // 如果第一个 chunk 就是完整的 JSON，立即执行
-        if (this.isJsonComplete(chunk)) {
-          this.finalizeCurrentBlock();
-        }
-        return;
-      }
-    }
+  /**
+   * 添加工具到执行队列
+   *
+   * 物理类比：包裹放到传送带上，立即尝试开始拆。
+   */
+  addTool(block: ToolUseBlock): void {
+    if (this.discarded) return;
 
-    // 累积内容到当前块
-    if (this.state.current) {
-      this.state.current.inputJson += chunk;
+    const concurrencySafe = isConcurrencySafe(block.name, block.input);
 
-      // 检测块结束（JSON 完整）
-      if (this.isJsonComplete(this.state.current.inputJson)) {
-        this.finalizeCurrentBlock();
+    this.tools.push({
+      id: block.id,
+      block,
+      status: 'queued',
+      isConcurrencySafe: concurrencySafe,
+    });
+
+    // 立即尝试执行
+    void this.processQueue();
+  }
+
+  /**
+   * 处理执行队列
+   *
+   * 并发控制逻辑：
+   * - 没有正在执行的工具 → 可以执行任何工具
+   * - 有正在执行的只读工具 → 只能执行只读工具
+   * - 有正在执行的写入工具 → 必须等待
+   */
+  private async processQueue(): Promise<void> {
+    for (const tool of this.tools) {
+      if (tool.status !== 'queued') continue;
+
+      if (this.canExecuteTool(tool.isConcurrencySafe)) {
+        await this.executeTool(tool);
+      } else {
+        // 不能执行：如果是非并发工具，必须等待前面的完成
+        if (!tool.isConcurrencySafe) break;
       }
     }
   }
 
-  /** 完成当前工具块解析并开始执行 */
-  private finalizeCurrentBlock(): void {
-    const current = this.state.current;
-    if (!current) return;
-
-    try {
-      const parsed = JSON.parse(current.inputJson);
-      current.id = parsed.id || current.id;
-      current.name = parsed.name || current.name;
-      current.input = parsed.input || {};
-    } catch {
-      this.state.current = null;
-      return;
-    }
-
-    this.state.completed.push(current);
-    this.state.current = null;
-
-    // 立即开始执行
-    if (current.input) {
-      const promise = this.executeTool(current);
-      this.state.executing.set(current.id, promise);
-    }
+  /** 检查是否可以执行指定类型的工具 */
+  private canExecuteTool(isConcurrencySafe: boolean): boolean {
+    const executing = this.tools.filter(t => t.status === 'executing');
+    return (
+      executing.length === 0 ||
+      (isConcurrencySafe && executing.every(t => t.isConcurrencySafe))
+    );
   }
 
   /** 执行单个工具 */
-  private async executeTool(call: StreamingToolCall): Promise<StreamingToolResult> {
-    const output = await this.registry.execute(call.name, call.input!);
-    const result: StreamingToolResult = { toolUseId: call.id, name: call.name, output };
-    this.state.results.push(result);
-    this.state.executing.delete(call.id);
-    return result;
+  private async executeTool(tool: TrackedTool): Promise<void> {
+    tool.status = 'executing';
+
+    try {
+      const output = await this.registry.execute(tool.block.name, tool.block.input);
+      tool.results = [{ type: 'text', text: output }];
+      tool.status = 'completed';
+    } catch (error) {
+      tool.error = String(error);
+      tool.results = [{ type: 'text', text: `[Tool Error] ${String(error)}` }];
+      tool.status = 'completed';
+    }
+
+    // 通知等待者
+    this.progressResolve?.();
   }
 
-  /** 等待所有正在执行的工具完成 */
-  async awaitAll(): Promise<StreamingToolResult[]> {
-    await Promise.all(this.state.executing.values());
-    return this.state.results;
+  /**
+   * 获取结果（按顺序，AsyncGenerator）
+   *
+   * 关键：即使 grep 先完成，也要等 read_file 输出后再输出 grep 的结果。
+   * 保证顺序与 AI 输出工具调用的顺序一致。
+   */
+  async *getRemainingResults(): AsyncGenerator<TrackedTool[]> {
+    for (const tool of this.tools) {
+      // 等待工具完成
+      while (tool.status !== 'completed' && tool.status !== 'yielded') {
+        await new Promise<void>(resolve => {
+          this.progressResolve = resolve;
+        });
+      }
+
+      if (tool.status === 'completed') {
+        tool.status = 'yielded';
+        yield [tool];
+      }
+    }
   }
 
-  /** 获取已完成的结果 */
-  getResults(): StreamingToolResult[] { return this.state.results; }
+  /**
+   * 丢弃所有待执行工具
+   *
+   * 物理类比：快递分拣中心关门了，还没拆的包裹全部丢弃。
+   * 在流式降级（streaming fallback）时调用。
+   */
+  discard(): void {
+    this.discarded = true;
+    // 标记所有 queued 的工具为 completed（带错误）
+    for (const tool of this.tools) {
+      if (tool.status === 'queued') {
+        tool.status = 'completed';
+        tool.error = 'Discarded due to streaming fallback';
+        tool.results = [{ type: 'text', text: '[Discarded] Streaming fallback' }];
+      }
+    }
+    this.progressResolve?.();
+  }
+
+  /** 获取所有已完成的结果（兼容旧接口） */
+  getResults(): TrackedTool[] {
+    return this.tools.filter(t => t.status === 'completed' || t.status === 'yielded');
+  }
 
   /** 是否有正在执行的工具 */
-  hasExecuting(): boolean { return this.state.executing.size > 0; }
+  hasExecuting(): boolean {
+    return this.tools.some(t => t.status === 'executing');
+  }
+
+  /** 是否有排队中的工具 */
+  hasQueued(): boolean {
+    return this.tools.some(t => t.status === 'queued');
+  }
 
   /** 重置状态 */
   reset(): void {
-    this.state = { current: null, completed: [], executing: new Map(), results: [] };
-  }
-
-  // 辅助方法
-  private extractId(text: string): string {
-    const match = text.match(/"id"\s*:\s*"([^"]+)"/);
-    return match?.[1] || `call_${Date.now()}`;
-  }
-
-  private extractName(text: string): string {
-    const match = text.match(/"name"\s*:\s*"([^"]+)"/);
-    return match?.[1] || 'unknown';
-  }
-
-  private isJsonComplete(json: string): boolean {
-    try { JSON.parse(json); return true; } catch { return false; }
+    this.tools = [];
+    this.discarded = false;
+    this.progressResolve = undefined;
   }
 }
