@@ -7,3 +7,4 @@ dist/
 .claude/
 .micode.json
 .task_outputs/
+.opencode/
