@@ -1,8 +1,13 @@
 #!/usr/bin/env node
+import 'dotenv/config';
 import { renderTree, type RenderNode } from './renderer/index.js';
 import { execSync } from 'child_process';
 import { createDefaultRegistry } from './agent/tool-registry.js';
-import { runWithVercelAI } from './agent/llm-vercel.js';
+// import { runWithVercelAI } from './agent/llm-vercel.js'; // 旧路径，已替换为流式
+import { AnthropicStreamClient } from './agent/anthropic-stream-client.js';
+import { streamingQuery } from './agent/streaming-query.js';
+import { StreamEventBus } from './agent/stream-event-bus.js';
+import { StreamEventRenderer } from './renderer/stream-renderer.js';
 import { ConfigStore } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
 import { TodoManager } from './agent/todo.js';
@@ -110,17 +115,31 @@ toolRegistry.register(approvePlanTool.definition, approvePlanTool.executor);
 
 // 构建 UI 树
 function buildTree(): RenderNode {
+  // 计算终端高度
+  const terminalHeight = process.stdout.rows || 24;
+
+  // 固定区域高度（底部）
+  // input: 上边框(1) + 内容(1) + 下边框(1) = 3行
+  // statusBar: 1行
+  // root paddingY: 2行
+  const bottomFixedHeight = 3 + 1 + 2; // 6行
+
+  // 消息区高度 = 终端高度 - 底部固定区域 - banner高度
+  // banner: 3行内容 + marginY(1) = 4行
+  const bannerHeight = 4;
+  const messageAreaHeight = Math.max(3, terminalHeight - bottomFixedHeight - bannerHeight);
+
   return {
     type: 'box',
     props: { flexDirection: 'column', paddingX: 1, paddingY: 1 },
     children: [
       // Banner
       buildBanner(),
-      // 消息区
-      buildMessages(),
-      // 输入框
+      // 消息区（固定高度）
+      buildMessages(messageAreaHeight),
+      // 输入框（固定在底部）
       buildInput(),
-      // 状态栏
+      // 状态栏（固定在底部）
       buildStatusBar(),
     ],
   };
@@ -138,14 +157,16 @@ function buildBanner(): RenderNode {
   };
 }
 
-function buildMessages(): RenderNode {
+function buildMessages(maxHeight: number): RenderNode {
   const lines: RenderNode[] = [];
 
   if (messages.length === 0) {
     lines.push({ type: 'text', text: 'Welcome to MiCode. Type something to start.', props: { dim: true } });
   } else {
-    for (const msg of messages) {
-      lines.push({ type: 'text', text: msg, props: {} });
+    // 只显示最近的N条消息，确保输入框固定在底部
+    const startIdx = Math.max(0, messages.length - maxHeight);
+    for (let i = startIdx; i < messages.length; i++) {
+      lines.push({ type: 'text', text: messages[i], props: {} });
     }
   }
 
@@ -156,7 +177,7 @@ function buildMessages(): RenderNode {
 
   return {
     type: 'box',
-    props: { flexDirection: 'column', marginY: 1 },
+    props: { flexDirection: 'column', marginY: 1, height: maxHeight },
     children: lines,
   };
 }
@@ -360,25 +381,72 @@ if (process.stdin.isTTY) {
 
               const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
               if (apiKey) {
-                runWithVercelAI(userInput, toolRegistry.tools, {
-                  system: systemPrompt,
-                  maxSteps: 10,
-                  permissionChecker,
-                  onPermissionAsk: (name, toolInput, reason) =>
-                    requestPermission(name, toolInput, reason),
-                }).then((result) => {
-                  if (result.text) messages.push(result.text);
-                  systemMessage = `Done (${result.steps} steps)`;
-                  systemVisible = true;
-                  setTimeout(() => { systemVisible = false; scheduleRender(); }, 3000);
-                  isProcessing = false;
-                  scheduleRender();
-                }).catch((err) => {
-                  messages.push(`[Error] ${err}`);
-                  systemMessage = 'Error';
-                  isProcessing = false;
-                  scheduleRender();
-                });
+                // 流式渲染路径
+                const streamClient = new AnthropicStreamClient({ apiKey, model: MODEL });
+                const eventBus = new StreamEventBus();
+
+                // 流式内容缓冲区
+                let streamBuffer = '';
+                let toolBuffer = '';
+
+                const tools = Array.from(toolRegistry.tools.values()).map(t => t.definition);
+                const ac = new AbortController();
+
+                (async () => {
+                  try {
+                    for await (const msg of streamingQuery(streamClient, toolRegistry, userInput, {
+                      systemPrompt,
+                      tools,
+                      signal: ac.signal,
+                      maxTurns: 10,
+                      eventBus,
+                    })) {
+                      // 处理流式消息，将内容添加到messages数组
+                      if ('type' in msg && msg.type === 'content_block_delta') {
+                        const deltaMsg = msg as { type: 'content_block_delta'; deltaType: string; content: string };
+                        if (deltaMsg.deltaType === 'text' && deltaMsg.content) {
+                          streamBuffer += deltaMsg.content;
+                          // 更新最后一条消息或添加新消息
+                          if (messages.length > 0 && messages[messages.length - 1].startsWith('[Streaming]')) {
+                            messages[messages.length - 1] = '[Streaming] ' + streamBuffer;
+                          } else {
+                            messages.push('[Streaming] ' + streamBuffer);
+                          }
+                          scheduleRender();
+                        }
+                      } else if ('type' in msg && msg.type === 'assistant') {
+                        const assistantMsg = msg as { type: 'assistant'; content: Array<{ type: string; text?: string }> };
+                        // 助手消息完成，将缓冲区内容转为正式消息
+                        if (streamBuffer) {
+                          // 替换最后的流式消息为正式消息
+                          if (messages.length > 0 && messages[messages.length - 1].startsWith('[Streaming]')) {
+                            messages[messages.length - 1] = streamBuffer;
+                          } else {
+                            messages.push(streamBuffer);
+                          }
+                          streamBuffer = '';
+                          scheduleRender();
+                        }
+                        // 处理工具调用结果
+                        for (const block of assistantMsg.content) {
+                          if (block.type === 'tool_use' && 'name' in block) {
+                            const toolBlock = block as { type: 'tool_use'; name: string; input: Record<string, unknown> };
+                            toolBuffer += `[Tool: ${toolBlock.name}]\n`;
+                          }
+                        }
+                      }
+                    }
+                    systemMessage = 'Done';
+                  } catch (err) {
+                    messages.push(`[Error] ${err}`);
+                    systemMessage = 'Error';
+                  } finally {
+                    isProcessing = false;
+                    systemVisible = true;
+                    setTimeout(() => { systemVisible = false; scheduleRender(); }, 3000);
+                    scheduleRender();
+                  }
+                })();
               } else {
                 messages.push(`[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`);
                 systemMessage = 'No API Key';

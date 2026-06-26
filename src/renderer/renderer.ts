@@ -22,6 +22,7 @@ export interface RenderNode {
     marginY?: number;
     borderStyle?: 'single';
     borderColor?: string;
+    height?: number;  // 固定高度限制
   };
 }
 
@@ -154,51 +155,59 @@ function renderNode(
   // 常规 box
   curY += paddingY;
 
+  // 如果有 height 属性，计算实际可用高度
+  const height = node.props.height;
+  const actualMaxHeight = height ? Math.min(maxHeight, curY + height) : maxHeight;
+
   if (node.type === 'text' && node.text !== undefined) {
     const fg = fgAnsi(node.props.color);
     let attrs = 0;
     if (node.props.bold) attrs |= ATTR_BOLD;
     if (node.props.dim) attrs |= ATTR_DIM;
 
-    // 过滤换行符，只取第一行
-    const firstLine = node.text.split('\n')[0] ?? '';
-    const chars = [...firstLine];
+    // 支持多行消息：按换行符分割
+    const lines = node.text.split('\n');
+    for (const line of lines) {
+      if (curY >= actualMaxHeight) break;
 
-    // 计算每个字符的宽度，找到能显示的起始位置
-    let totalWidth = 0;
-    const charWidths = chars.map(c => {
-      const w = charWidth(c);
-      totalWidth += w;
-      return w;
-    });
+      const chars = [...line];
 
-    // 文本超过宽度时，显示末尾（光标位置）
-    let startIdx = 0;
-    if (totalWidth > maxWidth) {
-      // 从末尾往前找，找到能放下的起始位置
-      let w = 0;
-      for (let i = chars.length - 1; i >= 0; i--) {
-        w += charWidths[i]!;
-        if (w > maxWidth) {
-          startIdx = i + 1;
-          break;
+      // 计算每个字符的宽度，找到能显示的起始位置
+      let totalWidth = 0;
+      const charWidths = chars.map(c => {
+        const w = charWidth(c);
+        totalWidth += w;
+        return w;
+      });
+
+      // 文本超过宽度时，显示末尾（光标位置）
+      let startIdx = 0;
+      if (totalWidth > maxWidth) {
+        // 从末尾往前找，找到能放下的起始位置
+        let w = 0;
+        for (let i = chars.length - 1; i >= 0; i--) {
+          w += charWidths[i]!;
+          if (w > maxWidth) {
+            startIdx = i + 1;
+            break;
+          }
         }
       }
-    }
 
-    // 渲染字符
-    let col = 0;
-    for (let i = startIdx; i < chars.length && col < maxWidth; i++) {
-      const w = charWidths[i]!;
-      if (col + w > maxWidth) break;  // 放不下就停止
-      setCell(buffer, x + col, curY, chars[i]!, fg, '', attrs);
-      col += w;
-      // 宽字符占 2 格，将下一格标记为"被宽字符占用"（空字符）
-      if (w === 2) {
-        setCell(buffer, x + col - 1, curY, '', fg, '', attrs);
+      // 渲染字符
+      let col = 0;
+      for (let i = startIdx; i < chars.length && col < maxWidth; i++) {
+        const w = charWidths[i]!;
+        if (col + w > maxWidth) break;  // 放不下就停止
+        setCell(buffer, x + col, curY, chars[i]!, fg, '', attrs);
+        col += w;
+        // 宽字符占 2 格，将下一格标记为"被宽字符占用"（空字符）
+        if (w === 2) {
+          setCell(buffer, x + col - 1, curY, '', fg, '', attrs);
+        }
       }
+      curY++;
     }
-    curY++;
   } else if (node.children) {
     const isRow = node.props.flexDirection === 'row';
     if (isRow) {
@@ -235,7 +244,9 @@ function renderNode(
     } else {
       // 垂直排列（默认）
       for (const child of node.children) {
-        curY = renderNode(buffer, child, x + paddingX, curY, maxWidth - paddingX * 2, maxHeight);
+        // 如果已达到高度限制，停止渲染子节点
+        if (height && curY >= actualMaxHeight) break;
+        curY = renderNode(buffer, child, x + paddingX, curY, maxWidth - paddingX * 2, actualMaxHeight);
       }
     }
   }
