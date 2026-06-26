@@ -259,11 +259,32 @@ function scheduleRender() {
 function positionCursor() {
   // 布局计算（行和列都是 1-based）：
   // 行：root paddingY(1) + banner marginY(1) + banner 3行 + messages marginY(1) + messages行数 + input marginY(1) + border上(1)
-  // 注意：awaitingPermission 时消息区会多渲染若干提示行，需一并计入
-  const baseMessageLines = messages.length === 0 ? 1 : messages.length;
+  // 注意：消息区高度受限制，只显示最近的N条消息
+
+  // 计算实际显示的消息行数（考虑高度限制）
+  const terminalHeight = process.stdout.rows || 24;
+  const bottomFixedHeight = 3 + 1 + 2; // input(3) + statusBar(1) + root paddingY(2)
+  const bannerHeight = 4;
+  const maxMessageLines = Math.max(3, terminalHeight - bottomFixedHeight - bannerHeight);
+
+  // 计算消息区实际占用的行数（每条消息可能有多行）
+  let messageAreaLines = 0;
+  if (messages.length === 0) {
+    messageAreaLines = 1; // "Welcome to MiCode..." 占一行
+  } else {
+    const startIdx = Math.max(0, messages.length - maxMessageLines);
+    for (let i = startIdx; i < messages.length; i++) {
+      // 每条消息按换行符分割，计算行数
+      const msgLines = messages[i].split('\n').length;
+      messageAreaLines += msgLines;
+    }
+  }
+
+  // 权限确认提示行
   const promptLines = awaitingPermission ? pendingPermissionPrompt.split('\n').length : 0;
-  const messageLines = baseMessageLines + promptLines;
-  const inputRow = 1 + 1 + 3 + 1 + messageLines + 1 + 1;
+  const totalMessageLines = Math.min(maxMessageLines, messageAreaLines + promptLines);
+
+  const inputRow = 1 + 1 + 3 + 1 + totalMessageLines + 1 + 1;
   // 列：root内容起始(2) + box border左(1) + box paddingX(1) + "❯ "(2) + 光标前文本宽度
   const chars = [...input];
   const beforeWidth = chars.slice(0, cursorPos).reduce((w, c) => w + charWidth(c), 0);
