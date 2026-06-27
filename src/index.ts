@@ -20,6 +20,7 @@ import { TeammateManager, createSendMessageTool, createReadInboxTool, Negotiatio
 import { ScheduleManager } from './agent/scheduler/index.js';
 import { WorktreeManager } from './worktree/index.js';
 import { TaskBoard } from './task-board/index.js';
+import { HistoryManager } from './history.js';
 
 const VERSION = "1.0.0";
 
@@ -62,6 +63,10 @@ worktreeManager.recover();
 // 初始化任务看板（从 .tasks.json 断点恢复）
 const taskBoard = new TaskBoard();
 taskBoard.load(process.cwd());
+
+// 初始化历史管理器
+const historyManager = new HistoryManager();
+const currentProject = process.cwd();
 
 function getGitBranch(): string {
   try { return execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8' }).trim(); }
@@ -300,7 +305,7 @@ if (process.stdin.isTTY) {
   // 不设 encoding — 用 Buffer 接收原始字节，手动解码 UTF-8
   let pending = Buffer.alloc(0);
 
-  process.stdin.on('data', (buf: Buffer) => {
+  process.stdin.on('data', async (buf: Buffer) => {
     // 拼接上次未完成的字节
     const data = Buffer.concat([pending, buf]);
     pending = Buffer.alloc(0);
@@ -339,6 +344,36 @@ if (process.stdin.isTTY) {
         continue;
       }
 
+      // ESC 序列检测 (方向键)
+      if (byte === 0x1b && i + 2 < data.length && data[i + 1] === 0x5b) {
+        // 上箭头: \x1b[A
+        if (data[i + 2] === 0x41) {
+          if (!isProcessing) {
+            const historyInput = await historyManager.up(input, currentProject);
+            if (historyInput !== null) {
+              input = historyInput;
+              cursorPos = [...input].length;
+              scheduleRender();
+            }
+          }
+          i += 3;
+          continue;
+        }
+        // 下箭头: \x1b[B
+        if (data[i + 2] === 0x42) {
+          if (!isProcessing) {
+            const historyInput = await historyManager.down(currentProject);
+            if (historyInput !== null) {
+              input = historyInput;
+              cursorPos = [...input].length;
+              scheduleRender();
+            }
+          }
+          i += 3;
+          continue;
+        }
+      }
+
       // 回车 (CR=0x0D, LF=0x0A)
       if (byte === 0x0d || byte === 0x0a) {
         if (input.trim() === 'exit') {
@@ -347,6 +382,7 @@ if (process.stdin.isTTY) {
         }
         if (input.trim() && !isProcessing) {
           const userInput = input.trim();
+          await historyManager.addEntry(userInput, currentProject);
           messages.push('> ' + userInput);
           input = '';
           cursorPos = 0;
@@ -483,6 +519,7 @@ if (process.stdin.isTTY) {
           cursorPos = 0;
           scheduleRender();
         }
+        historyManager.reset();
         i++;
         continue;
       }
