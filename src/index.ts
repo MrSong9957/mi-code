@@ -376,6 +376,25 @@ if (process.stdin.isTTY) {
           i += 3;
           continue;
         }
+        // 左箭头: \x1b[D
+        if (data[i + 2] === 0x44) {
+          if (cursorPos > 0) {
+            cursorPos--;
+            scheduleRender();
+          }
+          i += 3;
+          continue;
+        }
+        // 右箭头: \x1b[C
+        if (data[i + 2] === 0x43) {
+          const maxPos = [...input].length;
+          if (cursorPos < maxPos) {
+            cursorPos++;
+            scheduleRender();
+          }
+          i += 3;
+          continue;
+        }
       }
 
       // 回车 (CR=0x0D, LF=0x0A)
