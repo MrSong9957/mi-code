@@ -304,8 +304,12 @@ if (process.stdin.isTTY) {
   process.stdin.resume();
   // 不设 encoding — 用 Buffer 接收原始字节，手动解码 UTF-8
   let pending = Buffer.alloc(0);
+  let historyBusy = false;
 
   process.stdin.on('data', async (buf: Buffer) => {
+    if (historyBusy) return;
+    historyBusy = true;
+    try {
     // 拼接上次未完成的字节
     const data = Buffer.concat([pending, buf]);
     pending = Buffer.alloc(0);
@@ -565,6 +569,11 @@ if (process.stdin.isTTY) {
     }
 
     scheduleRender();
+    } catch (err) {
+      console.error('[stdin handler error]', err);
+    } finally {
+      historyBusy = false;
+    }
   });
 }
 
