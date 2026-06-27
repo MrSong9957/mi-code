@@ -1,5 +1,4 @@
 import { readFile, writeFile, appendFile, mkdir } from 'fs/promises'
-import { existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { homedir } from 'os'
 import { randomUUID } from 'crypto'
@@ -18,12 +17,12 @@ export class HistoryManager {
   private sessionId: string
   /** Project-keyed cache: maps project name to filtered entries. */
   private cacheByProject: Map<string, HistoryEntry[]> = new Map()
-  /** The last known project used by getHistory, for invalidation. */
-  private lastProject: string = ''
   private historyIndex: number = -1
   private draft: string = ''
   /** Per-session dedup key: only prevents consecutive duplicate inputs within the same HistoryManager instance. */
   private lastInput: string = ''
+  /** Approximate line count in the history file, used to skip cleanup I/O when under the cap. */
+  private lineCount: number = 0
 
   constructor(historyPath?: string) {
     this.historyPath = historyPath || join(homedir(), '.micode', 'history.jsonl')
@@ -51,8 +50,11 @@ export class HistoryManager {
     // Invalidate cache for this project so the next getHistory reads fresh data.
     this.cacheByProject.delete(project)
 
-    // Enforce 50-item cap on the file.
-    await this.cleanup()
+    // Enforce 50-item cap on the file only when over the limit.
+    this.lineCount++
+    if (this.lineCount > MAX_HISTORY_ITEMS) {
+      await this.cleanup()
+    }
   }
 
   async getHistory(project: string): Promise<HistoryEntry[]> {
@@ -61,13 +63,17 @@ export class HistoryManager {
       return cached
     }
 
-    if (!existsSync(this.historyPath)) {
-      const empty: HistoryEntry[] = []
-      this.cacheByProject.set(project, empty)
-      return empty
+    let content: string
+    try {
+      content = await readFile(this.historyPath, 'utf-8')
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        const empty: HistoryEntry[] = []
+        this.cacheByProject.set(project, empty)
+        return empty
+      }
+      throw err
     }
-
-    const content = await readFile(this.historyPath, 'utf-8')
     const lines = content.split('\n').filter(line => line.trim())
 
     const entries: HistoryEntry[] = []
@@ -135,16 +141,24 @@ export class HistoryManager {
   }
 
   async cleanup(): Promise<void> {
-    if (!existsSync(this.historyPath)) {
-      return
+    let content: string
+    try {
+      content = await readFile(this.historyPath, 'utf-8')
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return
+      }
+      throw err
     }
 
-    const content = await readFile(this.historyPath, 'utf-8')
     const lines = content.split('\n').filter(line => line.trim())
 
     if (lines.length > MAX_HISTORY_ITEMS) {
       const keep = lines.slice(-MAX_HISTORY_ITEMS)
       await writeFile(this.historyPath, keep.join('\n') + '\n', 'utf-8')
+      this.lineCount = keep.length
+    } else {
+      this.lineCount = lines.length
     }
   }
 }
