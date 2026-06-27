@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "content": "Build a CLI tool"
+  },
+  {
+    "role": "assistant",
+    "content": "I will create the files."
+  }
+]

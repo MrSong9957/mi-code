@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { HistoryManager } from '../history.js'
-import { existsSync, rmSync, readFileSync } from 'fs'
+import { existsSync, rmSync, readFileSync, appendFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -161,7 +161,6 @@ describe('HistoryManager', () => {
     })
 
     it('should skip corrupted JSON lines', async () => {
-      const { appendFileSync } = require('fs')
       appendFileSync(testHistoryPath, 'not valid json\n')
       appendFileSync(testHistoryPath, JSON.stringify({ input: 'valid', project: 'proj1', sessionId: 's', timestamp: 1 }) + '\n')
 

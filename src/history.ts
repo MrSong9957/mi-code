@@ -1,5 +1,5 @@
 import { readFile, writeFile, appendFile, mkdir } from 'fs/promises'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { homedir } from 'os'
 import { randomUUID } from 'crypto'
