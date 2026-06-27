@@ -156,6 +156,10 @@ CLI 工具项目，使用 TypeScript 编写，编译为 ESM 模块。
 
 mi-code - TypeScript CLI 工具
 
+设计计划时 或 多次修改失败时参考以下成熟方案：
+Claude Code 源代码仓库路径：E:\Files\GitHub\claude-code-source-code
+Claude Code 源代码仓库地图：[text](../../Obsidian/sources/projects/claude-code-project-map.md)
+
 ---
 
 ## ECC 规则
@@ -164,14 +168,6 @@ mi-code - TypeScript CLI 工具
 
 - `rules/typescript/` - TypeScript/JavaScript 特定规则
 - `rules/common/` - 通用开发规范
-
-### 快速命令
-
-- `npm test` - 运行测试
-- `npm run test:coverage` - 运行测试并生成覆盖率报告
-- `npm run lint` - 运行 ESLint 检查
-- `npm run typecheck` - TypeScript 类型检查
-- `npm run build` - 构建项目
 
 ### Agent 使用
 

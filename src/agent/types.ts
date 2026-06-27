@@ -184,3 +184,16 @@ export interface StreamingLLMClient {
     options: StreamOptions,
   ): AsyncGenerator<StreamEvent | AssistantMessage>;
 }
+
+// ------ 类型守卫 ------
+
+// 用于运行时验证未类型化数据（如 JSON 解析），TypeScript 的判别联合已在编译时保证类型安全
+const STREAM_EVENT_TYPES = new Set<string>([
+  'message_start', 'content_block_start', 'content_block_delta',
+  'content_block_stop', 'message_delta', 'message_stop',
+]);
+
+/** 判断是否为流式事件（统一守卫，避免重复定义） */
+export function isStreamEvent(msg: { type?: string }): msg is StreamEvent {
+  return typeof msg.type === 'string' && STREAM_EVENT_TYPES.has(msg.type);
+}

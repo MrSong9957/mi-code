@@ -8,4 +8,5 @@ dist/
 .micode.json
 .task_outputs/
 .opencode/
-.mimocode/
+.mimocode/.mcp.json
+.mcp.json

@@ -14,6 +14,7 @@ export type {
   AgentConfig,
   LLMClient,
 } from './types.js';
+export { isStreamEvent } from './types.js';
 
 export { ToolRegistry, createBashTool, createDefaultRegistry } from './tool-registry.js';
 export { MockLLMClient, createMockClient } from './llm-client.js';
@@ -37,3 +38,15 @@ export {
   sleep,
   withBackoff,
 } from './backoff.js';
+
+// 流式输出模块
+export { QueryEngine, type NormalizedMessage, type QueryEngineOptions } from './query-engine.js';
+export {
+  StreamEventBus,
+  type StreamEventType,
+  type ToolCallEvent,
+  type ToolResultEvent,
+  type ErrorEvent,
+  type LoopEndEvent,
+} from './stream-event-bus.js';
+export { streamingQuery, type StreamMessage, type StreamingQueryOptions } from './streaming-query.js';
