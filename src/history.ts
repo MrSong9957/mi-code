@@ -1,5 +1,5 @@
 import { readFile, writeFile, appendFile, mkdir } from 'fs/promises'
-import { existsSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { homedir } from 'os'
 import { randomUUID } from 'crypto'
@@ -16,9 +16,13 @@ const MAX_HISTORY_ITEMS = 50
 export class HistoryManager {
   private historyPath: string
   private sessionId: string
-  private cache: HistoryEntry[] = []
+  /** Project-keyed cache: maps project name to filtered entries. */
+  private cacheByProject: Map<string, HistoryEntry[]> = new Map()
+  /** The last known project used by getHistory, for invalidation. */
+  private lastProject: string = ''
   private historyIndex: number = -1
   private draft: string = ''
+  /** Per-session dedup key: only prevents consecutive duplicate inputs within the same HistoryManager instance. */
   private lastInput: string = ''
 
   constructor(historyPath?: string) {
@@ -40,25 +44,27 @@ export class HistoryManager {
     }
 
     const dir = dirname(this.historyPath)
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true })
-    }
+    await mkdir(dir, { recursive: true })
 
     await appendFile(this.historyPath, JSON.stringify(entry) + '\n', 'utf-8')
-    this.cache.unshift(entry)
 
-    if (this.cache.length > MAX_HISTORY_ITEMS) {
-      this.cache = this.cache.slice(0, MAX_HISTORY_ITEMS)
-    }
+    // Invalidate cache for this project so the next getHistory reads fresh data.
+    this.cacheByProject.delete(project)
+
+    // Enforce 50-item cap on the file.
+    await this.cleanup()
   }
 
   async getHistory(project: string): Promise<HistoryEntry[]> {
-    if (this.cache.length > 0) {
-      return this.cache.filter(e => e.project === project)
+    const cached = this.cacheByProject.get(project)
+    if (cached !== undefined) {
+      return cached
     }
 
     if (!existsSync(this.historyPath)) {
-      return []
+      const empty: HistoryEntry[] = []
+      this.cacheByProject.set(project, empty)
+      return empty
     }
 
     const content = await readFile(this.historyPath, 'utf-8')
@@ -82,8 +88,9 @@ export class HistoryManager {
       return b.timestamp - a.timestamp
     })
 
-    this.cache = entries.slice(0, MAX_HISTORY_ITEMS)
-    return this.cache
+    const result = entries.slice(0, MAX_HISTORY_ITEMS)
+    this.cacheByProject.set(project, result)
+    return result
   }
 
   async up(currentInput: string, project: string): Promise<string | null> {
@@ -114,8 +121,9 @@ export class HistoryManager {
 
     this.historyIndex--
 
-    if (this.cache.length > 0 && this.historyIndex < this.cache.length) {
-      return this.cache[this.historyIndex].input
+    const history = project ? await this.getHistory(project) : []
+    if (history.length > 0 && this.historyIndex < history.length) {
+      return history[this.historyIndex].input
     }
 
     return null
