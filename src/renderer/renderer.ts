@@ -219,8 +219,9 @@ export class Renderer {
       cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
     });
     this.writeCellsRow(next, statusY, statusCells, 0);
-    // 上边框
-    const borderCells = stringToCells(BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
+    // 上边框（每个 ─ 占 2 列，所以只需 this.cols/2 个字符填满宽度）
+    const borderCount = Math.ceil(this.cols / stringWidth(BORDER_CHAR));
+    const borderCells = stringToCells(BORDER_CHAR.repeat(borderCount), BORDER_STYLE);
     this.writeCellsRow(next, borderTopY, borderCells, 0);
     // 输入框
     const promptCells = stringToCells(this.prompt, PROMPT_STYLE);
