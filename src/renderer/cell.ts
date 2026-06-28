@@ -213,7 +213,7 @@ export function isWideCodePoint(code: number): boolean {
   if (code >= 0x00A1 && code <= 0x00FF) return true; // 拉丁补充（· × ÷ 等）
   if (code >= 0x2300 && code <= 0x23FF) return true; // 杂项技术符号（⎇ ⌘ ⏳ 等）
   if (code >= 0x2460 && code <= 0x24FF) return true; // 圈号/数字
-  if (code >= 0x2500 && code <= 0x257F) return true; // 制表/方框
+  // 0x2500-0x257F（Box Drawing）：现代终端（Windows Terminal 等）按宽度 1 渲染，不视为宽字符。
   if (code >= 0x2580 && code <= 0x259F) return true; // 块元素（LOGO 用）
   if (code >= 0x25A0 && code <= 0x26FF) return true; // 几何/杂项符号
   if (code >= 0x2700 && code <= 0x27BF) return true; // 装饰符号（含 ❯ U+275F）

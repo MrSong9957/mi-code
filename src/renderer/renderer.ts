@@ -45,13 +45,8 @@ const PROMPT_STYLE: Style = { fg: 'green', bold: true };
 const FOOTER_HEIGHT = 4;
 /** 边框样式 */
 const BORDER_STYLE: Style = { dim: true };
-/** 边框字符（用 '-' 而非 '─'：后者是 East Asian Ambiguous，isWideCodePoint 判定宽度 2，但部分终端按 1 渲染导致只填半屏） */
-function makeBorderCells(cols: number): Cell[] {
-  const cells: Cell[] = new Array(cols);
-  const cell: Cell = { char: '─', style: BORDER_STYLE, width: 1 };
-  for (let i = 0; i < cols; i++) cells[i] = cell;
-  return cells;
-}
+/** 边框字符（Box Drawing U+2500，isWideCodePoint 已按宽度 1 处理） */
+const BORDER_CHAR = '─';
 
 export class Renderer {
   private rows: number;
@@ -225,7 +220,7 @@ export class Renderer {
     });
     this.writeCellsRow(next, statusY, statusCells, 0);
     // 上边框
-    const borderCells = makeBorderCells(this.cols);
+    const borderCells = stringToCells(BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
     this.writeCellsRow(next, borderTopY, borderCells, 0);
     // 输入框
     const promptCells = stringToCells(this.prompt, PROMPT_STYLE);
