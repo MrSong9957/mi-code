@@ -1,293 +1,407 @@
-import { ATTR_BOLD, ATTR_DIM } from './cell.js';
-import { CharPool, StylePool } from './pool.js';
-import { createScreenBuffer, clearBuffer, setCell, diffBuffers, type ScreenBuffer } from './screen-buffer.js';
-import { optimize } from './optimizer.js';
-import { writePatches } from './writer.js';
-import { fgAnsi } from './colors.js';
+// 主屏增长画布渲染器（对齐 Claude Code 默认行为：主屏 + 原生 scrollback + 页脚钉底）
+//
+// 物理本质（第一性原理）：
+// - 把"内容"当成一张可变高度的格子纸（screen.height = 消息行数 + 页脚高度，随内容增长）。
+// - 终端只显示这张纸的最后 `rows` 行（viewport）。纸上更靠上的行**自然滚进终端 scrollback**，
+//   用户用终端滚动条翻阅（丝滑、原生）。
+// - 页脚（状态栏 + 输入框）钉在纸的最底两行 → 永远在 viewport 底部可见。
+//
+// 每帧（commit）：
+//   ① 按当前消息 + 页脚，在内存画一张新 screen（高度 = 内容高度）。
+//   ② viewportY = max(0, contentHeight - rows)（已进 scrollback 的行数）。
+//   ③ diff(prevScreen, nextScreen) 只比对 y >= viewportY 的可视行；y < viewportY 变了 → fullReset。
+//   ④ 内容增长（新行）靠光标 LF（\n）自然滚动进 scrollback。
+//   ⑤ 末尾把光标送到页脚输入框的逻辑光标处。
+//   ⑥ 单次 writer(buf)，原子。
+//
+// 这是 Claude Code log-update.ts 的同款算法（viewportY + fullReset + 增长 LF）。
 
-// 简化的节点类型
-export interface RenderNode {
-  type: 'box' | 'text';
-  children?: RenderNode[];
-  text?: string;
-  props: {
-    color?: string;
-    backgroundColor?: string;
-    bold?: boolean;
-    dim?: boolean;
-    flexDirection?: 'row' | 'column';
-    justifyContent?: 'flex-start' | 'flex-end' | 'space-between';
-    paddingX?: number;
-    paddingY?: number;
-    marginY?: number;
-    borderStyle?: 'single';
-    borderColor?: string;
-    height?: number;  // 固定高度限制
-  };
+import { Screen } from './screen.js';
+import { VirtualScreen } from './virtual-screen.js';
+import { MessageBuffer, type MessageRole } from './message-buffer.js';
+import { buildStatusBar, type StatusBarState, type ToolStatus } from './status-bar.js';
+import { stringToCells, stringWidth, styleKey, type Cell, type Style } from './cell.js';
+import { renderMarkdown } from './markdown.js';
+import { showCursor, hideCursor } from './ansi.js';
+
+/** 写出接口（默认 process.stdout.write；测试注入 fake） */
+export type Writer = (s: string) => void;
+
+export interface RendererOptions {
+  rows: number;
+  cols: number;
+  writer: Writer;
+  /** 状态栏静态信息（model/branch/dir） */
+  status: Pick<StatusBarState, 'model' | 'branch' | 'dir'>;
+  /** 提示符文本（默认 "❯ "） */
+  prompt?: string;
+  /** 帧间隔（ms），默认 16 */
+  frameIntervalMs?: number;
 }
 
-// 计算单个字符的终端宽度（中文=2，ASCII=1）
-function charWidth(char: string): number {
-  const code = char.charCodeAt(0);
-  // CJK 统一表意文字、全角字符等
-  if (code >= 0x4E00 && code <= 0x9FFF) return 2;  // CJK
-  if (code >= 0x3000 && code <= 0x303F) return 2;  // CJK 符号
-  if (code >= 0xFF00 && code <= 0xFFEF) return 2;  // 全角字符
-  if (code >= 0x2E80 && code <= 0x2FDF) return 2;  // CJK 部首
-  return 1;
-}
+const DEFAULT_PROMPT = '❯ ';
+const PROMPT_STYLE: Style = { fg: 'green', bold: true };
+/** 页脚高度：状态栏 1 行 + 上边框 1 行 + 输入框 1 行 + 下边框 1 行 */
+const FOOTER_HEIGHT = 4;
+/** 边框样式 */
+const BORDER_STYLE: Style = { dim: true };
+/** 边框字符 */
+const BORDER_CHAR = '─';
 
-// 计算字符串的终端宽度
-function stringWidth(str: string): number {
-  let width = 0;
-  for (const char of str) {
-    width += charWidth(char);
+export class Renderer {
+  private rows: number;
+  private cols: number;
+  private writer: Writer;
+  private statusInfo: Pick<StatusBarState, 'model' | 'branch' | 'dir'>;
+  private prompt: string;
+  private frameIntervalMs: number;
+
+  /** 消息缓冲（存全部消息行；画布按它建） */
+  private messages: MessageBuffer;
+
+  /** 输入态 */
+  private input = '';
+  private cursorPos = 0;
+
+  /** 工具状态（驱动状态栏） */
+  private tool: ToolStatus | null = null;
+  /** 提示文本（todo 提醒等） */
+  private hint: string | undefined;
+
+  /** 是否已启动 */
+  private entered = false;
+  /** 上一帧的 screen（diff 用）+ 它的高度（增长判定） */
+  private prevScreen: Screen | null = null;
+  private prevHeight = 0;
+  /** 上一帧光标在 screen 坐标系里的位置（VirtualScreen 相对记账起点） */
+  private prevCursorY = 0;
+  private prevCursorX = 0;
+
+  /** 节流状态 */
+  private scheduled = false;
+  private trailingPending = false;
+  private throttleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(opts: RendererOptions) {
+    this.rows = opts.rows;
+    this.cols = opts.cols;
+    this.writer = opts.writer;
+    this.statusInfo = opts.status;
+    this.prompt = opts.prompt ?? DEFAULT_PROMPT;
+    this.frameIntervalMs = opts.frameIntervalMs ?? 16;
+    this.messages = new MessageBuffer(this.cols);
   }
-  return width;
-}
 
-// 测量节点文本宽度
-function measureTextWidth(node: RenderNode): number {
-  if (node.type === 'text' && node.text !== undefined) {
-    return stringWidth(node.text);
+  // ═══════ 生命周期 ═══════
+
+  /** 启动：主屏模式，隐藏光标（自己管位置），画首帧。 */
+  enter(): void {
+    if (this.entered) return;
+    this.entered = true;
+    this.writer(hideCursor());
+    this.commit();
   }
-  if (node.children) {
-    let total = 0;
-    for (const child of node.children) {
-      total += measureTextWidth(child);
+
+  /** 退出：恢复光标可见。幂等。 */
+  exit(): void {
+    if (!this.entered) return;
+    this.entered = false;
+    if (this.throttleTimer) {
+      clearTimeout(this.throttleTimer);
+      this.throttleTimer = null;
     }
-    return total;
+    this.writer(showCursor());
   }
-  return 0;
-}
 
-// 渲染器状态
-let prevBuffer: ScreenBuffer | null = null;
-const charPool = new CharPool();
-const stylePool = new StylePool();
+  // ═══════ 消息输出 ═══════
 
-// ANSI 重置序列
-const RESET = '\x1b[0m';
+  /** 固化一条消息（按 \n 拆行，经 Markdown 渲染成带样式 cells，每行独立消息）。 */
+  printMessage(text: string, role: MessageRole, _style: Style = {}): void {
+    const rows = text === '' ? [[]] : renderMarkdown(text);
+    this.messages.push(rows.map(r => ({ cells: r, role })));
+    this.scheduleRender();
+  }
 
-export function renderTree(node: RenderNode): void {
-  const width = process.stdout.columns || 80;
-  const height = process.stdout.rows || 24;
+  /** 流式 Markdown：累积文本经 renderMarkdown 转 cells，替换当前 assistant 消息。 */
+  appendStreamingMarkdown(text: string, _isFinal: boolean): void {
+    const rows = renderMarkdown(text);
+    this.messages.setStreamingRows(rows);
+    this.scheduleRender();
+  }
 
-  // 创建当前帧的屏幕缓冲区
-  const buffer = createScreenBuffer(width, height, charPool, stylePool);
-  clearBuffer(buffer);
+  /** 流式追加纯文本（thinking 等）。 */
+  appendStreaming(text: string, style: Style = {}): void {
+    this.messages.appendText(text, 'assistant', style);
+    this.scheduleRender();
+  }
 
-  // 递归渲染节点树到缓冲区
-  renderNode(buffer, node, 0, 0, width, height);
+  /** 流式结束：把当前 assistant 消息"封口"（下次 appendStreaming 会新建一条）。 */
+  finalizeStreaming(): void {
+    this.flushNow();
+    // 插入一个空的 system 消息作为分隔符，确保下一次 appendStreamingMarkdown
+    // 不会替换已固化的 assistant 消息（setStreamingRows 检查最后一条的 role）。
+    this.messages.appendLine('', 'system', {});
+    this.scheduleRender();
+  }
 
-  // 与上一帧做 diff
-  if (prevBuffer) {
-    const patches = diffBuffers(prevBuffer, buffer);
-    if (patches.length > 0) {
-      const optimized = optimize(patches);
-      writePatches(optimized);
+  /** 清空消息区。 */
+  clearMessages(): void {
+    this.messages.clear();
+    this.scheduleRender();
+  }
+
+  // ═══════ 输入态 / 状态栏 ═══════
+
+  setInput(text: string, cursorPos: number): void {
+    this.input = text;
+    const max = [...text].length;
+    this.cursorPos = Math.max(0, Math.min(cursorPos, max));
+    this.scheduleRender();
+  }
+
+  setToolStatus(name: string, status: ToolStatus['status']): void {
+    this.tool = { name, status };
+    this.scheduleRender();
+  }
+  clearToolStatus(): void {
+    this.tool = null;
+    this.scheduleRender();
+  }
+  setHint(hint: string | undefined): void {
+    this.hint = hint;
+    this.scheduleRender();
+  }
+
+  // ═══════ 节流 + commit ═══════
+
+  private scheduleRender(): void {
+    if (this.scheduled) {
+      this.trailingPending = true;
+      return;
     }
-  } else {
-    // 首帧，全屏输出
-    writeFullFrame(buffer);
+    this.scheduled = true;
+    this.commit();
+    this.throttleTimer = setTimeout(() => {
+      this.throttleTimer = null;
+      this.scheduled = false;
+      if (this.trailingPending) {
+        this.trailingPending = false;
+        this.scheduleRender();
+      }
+    }, this.frameIntervalMs);
   }
 
-  // 保存当前帧
-  prevBuffer = buffer;
-}
+  flushNow(): void {
+    this.commit();
+  }
 
-function renderNode(
-  buffer: ScreenBuffer,
-  node: RenderNode,
-  x: number,
-  y: number,
-  maxWidth: number,
-  maxHeight: number,
-): number {
-  if (y >= maxHeight) return y;
+  /** 画一帧：构建增长 screen → 逐行 diff（跳 scrollback，用 LF 推进新行）→ 光标回输入框 → 单次写。
+   *  算法对齐 Claude Code log-update.ts：增长靠 LF（触发终端滚动进 scrollback），
+   *  不是 cursor-down（在底部静默失败不滚动）。 */
+  private commit(): void {
+    if (!this.entered) return;
 
-  const { paddingX = 0, paddingY = 0, marginY = 0 } = node.props;
-  let curY = y + marginY;
-
-  // 边框
-  if (node.props.borderStyle === 'single') {
-    const borderColor = node.props.borderColor ?? 'white';
-    const borderFg = fgAnsi(borderColor);
-    const attrs = 0;
-    const innerWidth = maxWidth - 2;
-    const innerX = x + 1;
-
+    // ① 构建新 screen：高度 = 消息行数 + 页脚高度（至少 1 行）
+    const msgLines = this.messages.allLines();
+    const contentHeight = msgLines.length + FOOTER_HEIGHT;
+    const next = new Screen(Math.max(1, contentHeight), this.cols);
+    for (let i = 0; i < msgLines.length; i++) {
+      this.writeCellsRow(next, i, msgLines[i]!.cells, 0);
+    }
+    // 页脚钉在 screen 底部（4 行：状态栏 + 上边框 + 输入框 + 下边框）
+    const statusY = next.rows - FOOTER_HEIGHT;
+    const borderTopY = statusY + 1;
+    const inputY = statusY + 2;
+    const borderBottomY = statusY + 3;
+    // 状态栏
+    const statusCells = buildStatusBar({
+      model: this.statusInfo.model, branch: this.statusInfo.branch, dir: this.statusInfo.dir,
+      cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
+    });
+    this.writeCellsRow(next, statusY, statusCells, 0);
     // 上边框
-    setCell(buffer, x, curY, '┌', borderFg, '', attrs);
-    for (let i = 1; i < maxWidth - 1; i++) {
-      setCell(buffer, x + i, curY, '─', borderFg, '', attrs);
-    }
-    setCell(buffer, x + maxWidth - 1, curY, '┐', borderFg, '', attrs);
-    curY++;
-
-    // 内容区域
-    const contentStartY = curY;
-    if (node.children) {
-      for (const child of node.children) {
-        curY = renderNode(buffer, child, innerX + paddingX, curY, innerWidth - paddingX * 2, maxHeight);
-      }
-    }
-
-    // 绘制左右边框（内容行）
-    for (let row = contentStartY; row < curY; row++) {
-      setCell(buffer, x, row, '│', borderFg, '', attrs);
-      setCell(buffer, x + maxWidth - 1, row, '│', borderFg, '', attrs);
-    }
-
+    const borderTopCells = stringToCells(BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
+    this.writeCellsRow(next, borderTopY, borderTopCells, 0);
+    // 输入框
+    const promptCells = stringToCells(this.prompt, PROMPT_STYLE);
+    const inputCells = stringToCells(this.input, {});
+    this.writeCellsRow(next, inputY, [...promptCells, ...inputCells], 0);
     // 下边框
-    if (curY < maxHeight) {
-      setCell(buffer, x, curY, '└', borderFg, '', attrs);
-      for (let i = 1; i < maxWidth - 1; i++) {
-        setCell(buffer, x + i, curY, '─', borderFg, '', attrs);
-      }
-      setCell(buffer, x + maxWidth - 1, curY, '┘', borderFg, '', attrs);
-      curY++;
+    const borderBottomCells = stringToCells(BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
+    this.writeCellsRow(next, borderBottomY, borderBottomCells, 0);
+
+    // ③ 首帧或 resize 后 prev 失准：整屏重画
+    if (!this.prevScreen) {
+      this.renderFull(next, Math.max(0, next.rows - this.rows));
+      this.prevScreen = next;
+      this.prevHeight = next.rows;
+      this.prevCursorY = inputY;
+      this.prevCursorX = this.computeInputCursorCol();
+      return;
     }
 
-    return curY;
-  }
+    const prev = this.prevScreen;
+    // ═══════ 对齐 Claude Code log-update.ts 的两段式 diff ═══════
+    // 1) 现有行(0..prevHeight)：用 cursorMove(相对) 重画变化格；y < viewportY 的够不着 → fullReset
+    // 2) 增长行(prevHeight..nextHeight)：用 CR+LF 推进——LF 在视口底部触发滚动进 scrollback
+    // 3) 光标恢复：用 LF 到输入框行（创建底部行 / 触发溢出滚动）
+    const prevHeight = prev.rows;
+    const cursorAtBottom = this.prevCursorY >= prevHeight;
+    const prevHadScrollback = cursorAtBottom && prevHeight >= this.rows;
+    const growing = next.rows > prevHeight;
+    const cursorRestoreScroll = prevHadScrollback ? 1 : 0;
+    // viewportY：已进 scrollback 的行数。growing 用 prev 状态；非 growing 用 max(prev,next)
+    const viewportY = growing
+      ? Math.max(0, prevHeight - this.rows + cursorRestoreScroll)
+      : Math.max(prevHeight, next.rows) - this.rows + cursorRestoreScroll;
 
-  // 常规 box
-  curY += paddingY;
+    const vs = new VirtualScreen({ x: this.prevCursorX, y: this.prevCursorY });
+    let needsFullReset = false;
 
-  // 如果有 height 属性，计算实际可用高度
-  const height = node.props.height;
-  const actualMaxHeight = height ? Math.min(maxHeight, curY + height) : maxHeight;
+    // —— 第 1 段：现有行 diff（cursorMove 相对移动；跳过 scrollback 行）——
+    const commonRows = Math.min(prevHeight, next.rows);
+    for (let y = 0; y < commonRows; y++) {
+      for (let x = 0; x < this.cols; x++) {
+        const pc = prev.getCell(x, y);
+        const nc = next.getCell(x, y);
+        if (pc.char === nc.char && styleKey(pc.style) === styleKey(nc.style)) continue;
+        // 变化但在 scrollback → fullReset
+        if (y < viewportY) { needsFullReset = true; break; }
+        vs.moveTo(x, y); // 相对移动（cursor-up/down/forward/back）
+        if (nc.char === '\u0000') continue;
+        vs.writeCell(nc);
+      }
+      if (needsFullReset) break;
+    }
 
-  if (node.type === 'text' && node.text !== undefined) {
-    const fg = fgAnsi(node.props.color);
-    let attrs = 0;
-    if (node.props.bold) attrs |= ATTR_BOLD;
-    if (node.props.dim) attrs |= ATTR_DIM;
+    if (needsFullReset) {
+      this.renderFull(next, Math.max(0, next.rows - this.rows));
+    } else {
+      // —— 第 1.5 段：缩小时清理旧行（next.rows..prevHeight 的行在新 screen 中不存在）——
+      if (!growing && next.rows < prevHeight) {
+        for (let y = next.rows; y < prevHeight; y++) {
+          if (y < viewportY) { needsFullReset = true; break; }
+          vs.moveTo(0, y);
+          vs.eraseLine();
+        }
+      }
 
-    // 支持多行消息：按换行符分割
-    const lines = node.text.split('\n');
-    for (const line of lines) {
-      if (curY >= actualMaxHeight) break;
-
-      const chars = [...line];
-
-      // 计算每个字符的宽度，找到能显示的起始位置
-      let totalWidth = 0;
-      const charWidths = chars.map(c => {
-        const w = charWidth(c);
-        totalWidth += w;
-        return w;
-      });
-
-      // 文本超过宽度时，显示末尾（光标位置）
-      let startIdx = 0;
-      if (totalWidth > maxWidth) {
-        // 从末尾往前找，找到能放下的起始位置
-        let w = 0;
-        for (let i = chars.length - 1; i >= 0; i--) {
-          w += charWidths[i]!;
-          if (w > maxWidth) {
-            startIdx = i + 1;
-            break;
+      // —— 第 2 段：增长行（prevHeight..next.rows）用 CR+LF 推进 ——
+      if (growing) {
+        for (let y = prevHeight; y < next.rows; y++) {
+          // LF 推进到新行（视口底部时触发滚动进 scrollback）
+          while (vs.cursor.y < y) vs.lineFeed();
+          vs.moveTo(0, y);
+          for (let x = 0; x < this.cols; x++) {
+            const nc = next.getCell(x, y);
+            if (nc.char === '\u0000' || nc.char === ' ') continue;
+            vs.moveTo(x, y);
+            vs.writeCell(nc);
           }
         }
       }
-
-      // 渲染字符
-      let col = 0;
-      for (let i = startIdx; i < chars.length && col < maxWidth; i++) {
-        const w = charWidths[i]!;
-        if (col + w > maxWidth) break;  // 放不下就停止
-        setCell(buffer, x + col, curY, chars[i]!, fg, '', attrs);
-        col += w;
-        // 宽字符占 2 格，将下一格标记为"被宽字符占用"（空字符）
-        if (w === 2) {
-          setCell(buffer, x + col - 1, curY, '', fg, '', attrs);
-        }
-      }
-      curY++;
+      // —— 第 3 段：光标恢复到输入框（用 LF 到 inputY，创建底部行 / 触发溢出滚动）——
+      while (vs.cursor.y < inputY) vs.lineFeed();
+      vs.moveTo(this.computeInputCursorCol(), inputY);
+      const buf = vs.flush();
+      if (buf) this.writer(buf);
     }
-  } else if (node.children) {
-    const isRow = node.props.flexDirection === 'row';
-    if (isRow) {
-      const justify = node.props.justifyContent ?? 'flex-start';
-      const availableWidth = maxWidth - paddingX * 2;
 
-      let curX: number;
-      if (justify === 'space-between' && node.children.length > 1) {
-        // 第一个元素左对齐，最后一个元素右对齐
-        curX = x + paddingX;
-        const lastChild = node.children[node.children.length - 1]!;
-        const lastWidth = measureTextWidth(lastChild);
-        const lastX = x + availableWidth - lastWidth + paddingX;
+    // ⑥ 记账
+    this.prevScreen = next;
+    this.prevHeight = next.rows;
+    this.prevCursorY = inputY;
+    this.prevCursorX = this.computeInputCursorCol();
+  }
 
-        // 渲染除最后一个外的所有元素（左对齐）
-        for (let i = 0; i < node.children.length - 1; i++) {
-          const child = node.children[i]!;
-          const childWidth = measureTextWidth(child);
-          renderNode(buffer, child, curX, curY, Math.min(childWidth, availableWidth - (curX - x)), maxHeight);
-          curX += childWidth;
-        }
-        // 最后一个元素右对齐
-        renderNode(buffer, lastChild, lastX, curY, lastWidth, maxHeight);
+  /** 整屏重画（首帧 / fullReset）：擦屏 + 回原点 + 从 viewportY 起用 LF 推进画可视行 + 光标回输入框。
+   *  fullReset 会闪（主屏固有代价）。 */
+  private renderFull(next: Screen, viewportY: number): void {
+    const vs = new VirtualScreen({ x: 0, y: 0 });
+    vs.raw('\x1b[2J\x1b[H'); // 擦屏 + 回原点
+    // 从 viewportY 起画到末尾（用 LF 推进，对齐 commit 的行推进机制）
+    for (let y = viewportY; y < next.rows; y++) {
+      while (vs.cursor.y < y - viewportY) vs.lineFeed();
+      vs.moveTo(0, y - viewportY);
+      vs.eraseLine();
+      for (let x = 0; x < this.cols; x++) {
+        const cell = next.getCell(x, y);
+        if (cell.char === '\u0000' || cell.char === ' ') continue;
+        vs.moveTo(x, y - viewportY);
+        vs.writeCell(cell);
+      }
+    }
+    // 光标回输入框（可视坐标 = screen 坐标 - viewportY）
+    // 必须与 commit() 中的 inputY 计算一致：next.rows - FOOTER_HEIGHT + 2
+    const inputY = next.rows - FOOTER_HEIGHT + 2;
+    while (vs.cursor.y < inputY - viewportY) vs.lineFeed();
+    vs.moveTo(this.computeInputCursorCol(), inputY - viewportY);
+    const buf = vs.flush();
+    if (buf) this.writer(buf);
+  }
+
+  /** 计算输入框光标的列（screen/终端通用，0-based）。 */
+  private computeInputCursorCol(): number {
+    const promptWidth = stringWidth(this.prompt);
+    const beforeChars = [...this.input].slice(0, this.cursorPos).join('');
+    const beforeWidth = stringWidth(beforeChars);
+    return promptWidth + beforeWidth;
+  }
+
+  /** 把一组 cells 从某行某列起铺进 screen（宽字符占两格）。 */
+  private writeCellsRow(frame: Screen, y: number, cells: Cell[], startX: number): void {
+    let x = startX;
+    for (const cell of cells) {
+      if (x >= this.cols) break;
+      frame.setCell(x, y, cell);
+      const w = stringWidth(cell.char);
+      if (w === 2 && x + 1 < this.cols) {
+        frame.setCell(x + 1, y, { char: '\u0000', style: cell.style });
+        x += 2;
       } else {
-        // 默认左对齐
-        curX = x + paddingX;
-        for (const child of node.children) {
-          const childWidth = measureTextWidth(child);
-          renderNode(buffer, child, curX, curY, Math.min(childWidth, availableWidth - (curX - x)), maxHeight);
-          curX += childWidth;
-        }
-      }
-      curY++; // 行布局占一行
-    } else {
-      // 垂直排列（默认）
-      for (const child of node.children) {
-        // 如果已达到高度限制，停止渲染子节点
-        if (height && curY >= actualMaxHeight) break;
-        curY = renderNode(buffer, child, x + paddingX, curY, maxWidth - paddingX * 2, actualMaxHeight);
+        x += 1;
       }
     }
   }
 
-  return curY;
-}
+  // ═══════ resize ═══════
 
-function writeFullFrame(buffer: ScreenBuffer): void {
-  // 清屏并移到左上角
-  process.stdout.write('\x1b[2J\x1b[H');
-
-  let output = '';
-  let lastFg = -1, lastBg = -1, lastAttrs = -1;
-
-  for (let y = 0; y < buffer.height; y++) {
-    for (let x = 0; x < buffer.width; x++) {
-      const cell = buffer.cells[y * buffer.width + x]!;
-      const charStr = cell.char === 0 ? ' ' : buffer.charPool.get(cell.char);
-
-      // 只在样式变化时输出 ANSI 代码
-      if (cell.fg !== lastFg || cell.bg !== lastBg || cell.attrs !== lastAttrs) {
-        const fg = buffer.stylePool.get(cell.fg);
-        const bg = buffer.stylePool.get(cell.bg);
-        output += '\x1b[0';
-        if (cell.attrs & ATTR_BOLD) output += ';1';
-        if (cell.attrs & ATTR_DIM) output += ';2';
-        if (fg) output += ';' + fg;
-        if (bg) output += ';' + bg;
-        output += 'm';
-        lastFg = cell.fg;
-        lastBg = cell.bg;
-        lastAttrs = cell.attrs;
-      }
-
-      output += charStr;
-    }
-    if (y < buffer.height - 1) {
-      output += '\n';
-      lastFg = lastBg = lastAttrs = -1; // 换行后重置样式缓存
-    }
+  resize(rows: number, cols: number): void {
+    this.rows = rows;
+    this.cols = cols;
+    this.messages.setWrapCols(cols);
+    // resize 后 prevScreen 失准 → 下一帧 fullReset
+    this.prevScreen = null;
+    this.scheduleRender();
   }
-  output += RESET;
-  process.stdout.write(output);
+
+  /** 调试/测试：返回当前 screen 各行文本（不含样式）。 */
+  inspectFrame(): string[] {
+    const msgLines = this.messages.allLines();
+    const contentHeight = msgLines.length + FOOTER_HEIGHT;
+    const probe = new Screen(Math.max(1, contentHeight), this.cols);
+    for (let i = 0; i < msgLines.length; i++) {
+      this.writeCellsRow(probe, i, msgLines[i]!.cells, 0);
+    }
+    const statusY = probe.rows - FOOTER_HEIGHT;
+    const inputY = probe.rows - FOOTER_HEIGHT + 1;
+    const statusCells = buildStatusBar({
+      model: this.statusInfo.model, branch: this.statusInfo.branch, dir: this.statusInfo.dir,
+      cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
+    });
+    this.writeCellsRow(probe, statusY, statusCells, 0);
+    const promptCells = stringToCells(this.prompt, PROMPT_STYLE);
+    const inputCells = stringToCells(this.input, {});
+    this.writeCellsRow(probe, inputY, [...promptCells, ...inputCells], 0);
+    const lines: string[] = [];
+    for (let y = 0; y < probe.rows; y++) {
+      let line = '';
+      for (let x = 0; x < this.cols; x++) {
+        const ch = probe.getCell(x, y).char;
+        line += ch === '\u0000' ? '' : ch;
+      }
+      lines.push(line.replace(/\s+$/, ''));
+    }
+    return lines;
+  }
 }

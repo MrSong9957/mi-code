@@ -21,7 +21,7 @@ import { QueryEngine, type NormalizedMessage, type QueryEngineOptions } from './
 import { StreamingToolExecutor } from './streaming-executor.js';
 import { StreamEventBus } from './stream-event-bus.js';
 import type { ToolRegistry } from './tool-registry.js';
-import { runCompaction } from './compression.js';
+import { runCompaction, compactHistoryWithLLM } from './compression.js';
 import {
   createRecoveryState,
   classifyError,
@@ -45,6 +45,12 @@ export interface StreamingQueryOptions {
   enableStreamingExecution?: boolean;
   eventBus?: StreamEventBus;
   model?: string;
+  /**
+   * 压缩用的小模型客户端（L4 全量摘要时调用）。
+   * 物理本质：办公桌堆满时，请来帮忙整理的"临时秘书"。
+   * 留空时 needsL4 仅发警告（保持旧行为），不实际压缩。
+   */
+  compactClient?: StreamingLLMClient;
 }
 
 /**
@@ -74,6 +80,7 @@ export async function* streamingQuery(
     enableStreamingExecution = true,
     eventBus,
     model = 'claude-sonnet-4-20250514',
+    compactClient,
   } = options;
 
   const engine = new QueryEngine(client);
@@ -283,12 +290,22 @@ export async function* streamingQuery(
     const { messages: compacted, needsL4 } = runCompaction(messages);
     messages = compacted;
     if (needsL4) {
-      // L4 压缩需要 LLM 摘要，当前循环不支持，记录警告
-      eventBus?.emitError({
-        errorType: 'context_overflow',
-        message: 'Context window exceeded, compaction recommended',
-        recoverable: true,
-      });
+      if (compactClient) {
+        // 有小模型：请"临时秘书"整理整本工作日志（失败时内部回退本地启发式，不崩）
+        messages = await compactHistoryWithLLM(messages, compactClient);
+        eventBus?.emitError({
+          errorType: 'context_overflow',
+          message: 'Context compacted via small model summary',
+          recoverable: true,
+        });
+      } else {
+        // 无小模型：仅发警告（保持旧行为）
+        eventBus?.emitError({
+          errorType: 'context_overflow',
+          message: 'Context window exceeded, compaction recommended',
+          recoverable: true,
+        });
+      }
     }
   }
 

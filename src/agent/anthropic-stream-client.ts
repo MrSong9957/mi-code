@@ -21,9 +21,6 @@ import type {
 /** 默认空闲超时（毫秒） */
 const DEFAULT_IDLE_TIMEOUT_MS = 90_000;
 
-/** 停滞检测阈值（毫秒） */
-const STALL_THRESHOLD_MS = 30_000;
-
 /**
  * AnthropicStreamClient
  *
@@ -99,7 +96,6 @@ export class AnthropicStreamClient implements StreamingLLMClient {
 
     let usage: Usage = { input_tokens: 0, output_tokens: 0 };
     let stopReason: string | null = null;
-    let lastEventTime = Date.now();
 
     // 空闲超时看门狗
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -115,13 +111,6 @@ export class AnthropicStreamClient implements StreamingLLMClient {
 
       for await (const event of stream) {
         resetIdleTimer();
-        lastEventTime = Date.now();
-
-        // 停滞检测
-        const now = Date.now();
-        if (now - lastEventTime > STALL_THRESHOLD_MS) {
-          console.warn(`[Streaming] Stall detected: ${(now - lastEventTime) / 1000}s gap`);
-        }
 
         switch (event.type) {
           case 'message_start': {

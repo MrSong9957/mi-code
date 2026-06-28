@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "content": "做任务 A"
+  },
+  {
+    "role": "assistant",
+    "content": "正在做 A"
+  }
+]

@@ -5,6 +5,8 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   baseUrl?: string;
+  /** 轻量任务（子代理、压缩摘要）所用模型 */
+  smallModel?: string;
 }
 
 /** 权限模式（与 permission/types.ts 同步，本地定义避免循环依赖） */

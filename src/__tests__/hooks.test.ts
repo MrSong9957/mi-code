@@ -1,7 +1,7 @@
 // Hook 系统测试
 import { describe, it, expect, vi } from 'vitest';
 import { HookRunner } from '../hooks/runner.js';
-import { preToolSafetyCheck } from '../hooks/builtins.js';
+import { preToolSafetyCheck, postToolLogger, sessionStartLogger } from '../hooks/builtins.js';
 import type { HookEvent, HookHandler } from '../hooks/types.js';
 
 describe('HookRunner', () => {
@@ -137,5 +137,58 @@ describe('preToolSafetyCheck', () => {
     const result = preToolSafetyCheck(event);
 
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe('postToolLogger', () => {
+  it('返回 exitCode 0，不直接写终端（message 由调用方展示）', () => {
+    const event: HookEvent = {
+      name: 'PostToolUse',
+      payload: { tool_name: 'run_bash', output: 'hello world' },
+    };
+    const result = postToolLogger(event);
+    expect(result.exitCode).toBe(0);
+    expect(result.message).toContain('[Hook]');
+    expect(result.message).toContain('run_bash');
+    expect(result.message).toContain('hello world');
+  });
+
+  it('长输出截断到 100 字符并加省略号', () => {
+    const long = 'x'.repeat(250);
+    const event: HookEvent = {
+      name: 'PostToolUse',
+      payload: { tool_name: 'read_file', output: long },
+    };
+    const result = postToolLogger(event);
+    expect(result.message).toContain('...');
+    expect(result.message.length).toBeLessThan(long.length);
+  });
+
+  it('不调用 console.log（不绕过渲染器）', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      postToolLogger({ name: 'PostToolUse', payload: { tool_name: 't', output: 'o' } });
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+});
+
+describe('sessionStartLogger', () => {
+  it('返回 exitCode 0，message 含 Session started', () => {
+    const result = sessionStartLogger();
+    expect(result.exitCode).toBe(0);
+    expect(result.message).toContain('Session started');
+  });
+
+  it('不调用 console.log（不绕过渲染器）', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      sessionStartLogger();
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });

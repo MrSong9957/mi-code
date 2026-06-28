@@ -4,12 +4,13 @@ import {
   snipCompact,
   microCompact,
   compactHistory,
+  compactHistoryWithLLM,
   runCompaction,
   estimateContextSize,
   needsCompaction,
   persistLargeOutput,
 } from '../agent/compression.js';
-import type { Message, ContentBlock } from '../agent/types.js';
+import type { Message, ContentBlock, StreamingLLMClient, StreamEvent, AssistantMessage, ToolDefinition, StreamOptions } from '../agent/types.js';
 
 function makeMsg(role: 'user' | 'assistant', text: string): Message {
   return { role, content: text };
@@ -165,5 +166,84 @@ describe('needsCompaction', () => {
 describe('persistLargeOutput', () => {
   it('should return output unchanged if below threshold', () => {
     expect(persistLargeOutput('test', 'short')).toBe('short');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// compactHistoryWithLLM：用小模型生成真实摘要（带本地回退）
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * 假的 StreamingLLMClient。
+ * 物理本质：一个会"按剧本说话"的假翻译官——
+ * 你提前把要说的话（摘要文本）写在剧本里，它就照着念出来。
+ */
+class FakeStreamClient implements StreamingLLMClient {
+  constructor(
+    /** 剧本：要念的摘要文本。设为 null 表示"念到一半出错"（抛异常）。 */
+    private script: string | null,
+  ) {}
+
+  async *stream(
+    _messages: Message[],
+    _tools: ToolDefinition[],
+    _options: StreamOptions,
+  ): AsyncGenerator<StreamEvent | AssistantMessage> {
+    if (this.script === null) {
+      throw new Error('simulated API failure');
+    }
+    // 模拟流式：message_start → content_block_start → delta(s) → stop → message_stop
+    yield { type: 'message_start', messageId: 'msg_1', model: 'mimo-v2.5', inputTokens: 10 };
+    yield { type: 'content_block_start', index: 0, blockType: 'text' };
+    // 把摘要切成几段，模拟逐 token 流式
+    const chunks = this.script.match(/.{1,8}/g) ?? [this.script];
+    for (const chunk of chunks) {
+      yield { type: 'content_block_delta', index: 0, deltaType: 'text', content: chunk };
+    }
+    yield { type: 'content_block_stop', index: 0 };
+    yield { type: 'message_delta', stopReason: 'end_turn', outputTokens: chunks.length };
+    yield { type: 'message_stop' };
+  }
+}
+
+describe('compactHistoryWithLLM', () => {
+  it('应使用小模型返回的摘要文本', async () => {
+    const messages = [
+      makeMsg('user', '帮我建一个 CLI'),
+      makeMsg('assistant', '好的，我来创建文件。'),
+    ];
+    const client = new FakeStreamClient('用户想建 CLI，助手开始创建文件。');
+
+    const result = await compactHistoryWithLLM(messages, client);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.role).toBe('user');
+    // 摘要文本应在压缩后的消息里
+    expect(typeof result[0]!.content === 'string').toBe(true);
+    expect(result[0]!.content as string).toContain('用户想建 CLI');
+  });
+
+  it('client 抛错时应回退到本地启发式摘要，绝不崩溃', async () => {
+    const messages = [
+      makeMsg('user', '做任务 A'),
+      makeMsg('assistant', '正在做 A'),
+    ];
+    const client = new FakeStreamClient(null); // 会抛错
+
+    const result = await compactHistoryWithLLM(messages, client);
+
+    // 回退路径：产出含"compacted for continuity"的本地摘要消息
+    expect(result).toHaveLength(1);
+    expect(result[0]!.role).toBe('user');
+    expect(result[0]!.content).toContain('compacted for continuity');
+  });
+
+  it('压缩消息应保持连续性前缀（让下一轮 AI 知道这是历史摘要）', async () => {
+    const messages = [makeMsg('user', 'hello')];
+    const client = new FakeStreamClient('打招呼的对话。');
+
+    const result = await compactHistoryWithLLM(messages, client);
+
+    expect(result[0]!.content).toContain('compacted for continuity');
   });
 });

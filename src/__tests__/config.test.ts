@@ -90,6 +90,53 @@ describe('ConfigStore', () => {
     expect(store.getPermissionMode()).toBe('default');
     expect(store.getPermissionRules()).toEqual([]);
   });
+
+  // ── smallModel：小模型配置（子代理 / 压缩摘要等轻量任务使用）──
+  it('getSmallModel should return configured smallModel from file', () => {
+    const configDir = join(tempDir, '.micode');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({
+      providers: {
+        anthropic: { apiKey: 'sk-test', model: 'mimo-v2.5-pro', smallModel: 'mimo-v2.5' },
+      },
+      defaultProvider: 'anthropic',
+    }));
+
+    const store = new ConfigStore(configDir);
+    expect(store.getSmallModel('anthropic')).toBe('mimo-v2.5');
+  });
+
+  it('getSmallModel should fall back to main model when smallModel not configured', () => {
+    const configDir = join(tempDir, '.micode');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({
+      providers: {
+        anthropic: { apiKey: 'sk-test', model: 'mimo-v2.5-pro' },
+      },
+      defaultProvider: 'anthropic',
+    }));
+
+    const store = new ConfigStore(configDir);
+    // 未配置 smallModel → 回退到主模型（默认行为零变化）
+    expect(store.getSmallModel('anthropic')).toBe('mimo-v2.5-pro');
+    expect(store.getSmallModel('anthropic')).toBe(store.getModel());
+  });
+
+  it('getSmallModel should fall back to default model when provider has no model at all', () => {
+    const store = new ConfigStore();
+    // 空配置：连主模型都没有 → 回退到 DEFAULT_MODELS.anthropic
+    expect(store.getSmallModel('anthropic')).toBe(store.getModel());
+  });
+
+  it('setSmallModel should persist and reload', () => {
+    const configDir = join(tempDir, '.micode');
+    const store1 = new ConfigStore(configDir);
+    store1.setSmallModel('anthropic', 'mimo-v2.5');
+
+    // 重新加载，验证从文件恢复
+    const store2 = new ConfigStore(configDir);
+    expect(store2.getSmallModel('anthropic')).toBe('mimo-v2.5');
+  });
 });
 
 describe('Command Parser', () => {

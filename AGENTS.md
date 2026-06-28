@@ -157,8 +157,8 @@ CLI 工具项目，使用 TypeScript 编写，编译为 ESM 模块。
 mi-code - TypeScript CLI 工具
 
 设计计划时 或 多次修改失败时参考以下成熟方案：
-Claude Code 源代码仓库路径：E:\Files\GitHub\claude-code-source-code
-Claude Code 源代码仓库地图：[text](../../Obsidian/sources/projects/claude-code-project-map.md)
+Claude Code 源代码仓库路径：E:\Files\GitHub\claude-code-source-code 或 D:\Files\GitHub\claude-code-source-code
+Claude Code 源代码仓库地图：[text](../../Obsidian/sources/projects/claude-code-project-map.md) 或 "D:\Files\Obsidian\sources\projects\claude-code-project-map.md"
 
 ---
 

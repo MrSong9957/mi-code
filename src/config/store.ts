@@ -107,6 +107,18 @@ export class ConfigStore {
     return providerConfig?.model || DEFAULT_MODELS[provider] || DEFAULT_MODELS.anthropic!;
   }
 
+  /**
+   * 获取小模型（用于子代理、压缩摘要等轻量任务）。
+   * 解析顺序：provider.smallModel → (空时回退) getModel()
+   * 未配置时回退到主模型，保证默认行为零变化。
+   */
+  getSmallModel(provider: string = this.config.defaultProvider): string {
+    const smallModel = this.config.providers[provider]?.smallModel;
+    if (smallModel) return smallModel;
+    // 回退到主模型（含 DEFAULT_MODELS 兜底）
+    return this.getModel();
+  }
+
   /** 设置 Provider API Key */
   setApiKey(provider: string, apiKey: string): void {
     if (!this.config.providers[provider]) {
@@ -128,6 +140,18 @@ export class ConfigStore {
       };
     }
     this.config.providers[provider]!.model = model;
+    this.save();
+  }
+
+  /** 设置 Provider 小模型（持久化） */
+  setSmallModel(provider: string, smallModel: string): void {
+    if (!this.config.providers[provider]) {
+      this.config.providers[provider] = {
+        apiKey: '',
+        model: DEFAULT_MODELS[provider] || '',
+      };
+    }
+    this.config.providers[provider]!.smallModel = smallModel;
     this.save();
   }
 

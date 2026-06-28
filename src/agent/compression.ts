@@ -8,7 +8,7 @@
 
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import type { Message, ContentBlock } from './types.js';
+import type { Message, ContentBlock, StreamingLLMClient, StreamEvent, AssistantMessage } from './types.js';
 
 /** 大结果阈值：超过此长度写磁盘 */
 const PERSIST_THRESHOLD = 5000;
@@ -136,6 +136,106 @@ export function compactHistory(messages: Message[]): Message[] {
     role: 'user',
     content: `This conversation was compacted for continuity.\n\n${summary}`,
   }];
+}
+
+/**
+ * 摘要请求的系统提示：指导小模型如何压缩对话历史。
+ */
+const SUMMARIZE_SYSTEM_PROMPT = [
+  'You are a conversation summarizer.',
+  'Summarize the key information of the conversation below concisely:',
+  '- User requests and goals',
+  '- Decisions made and actions taken',
+  '- Current state and pending work',
+  'Reply with the summary text only, no preamble.',
+].join('\n');
+
+/**
+ * 从流式事件中提取最终的助手文本。
+ *
+ * 物理本质：接水管。
+ * API 流出来的是一串水滴（content_block_delta），我们拿桶接着，
+ * 等水流完（message_stop），桶里就是完整的摘要文本。
+ */
+async function extractTextFromStream(
+  events: AsyncGenerator<StreamEvent | AssistantMessage>,
+): Promise<string> {
+  let text = '';
+  for await (const event of events) {
+    // 只关心文本增量事件
+    if (event.type === 'content_block_delta' && event.deltaType === 'text') {
+      text += event.content;
+    }
+  }
+  return text;
+}
+
+/**
+ * L4+: 用小模型生成真实摘要（带本地启发式回退）。
+ *
+ * 物理本质：请一个"临时秘书"（小模型）读完整本工作日志，写一份精炼总结。
+ * 如果秘书请假（API 失败/超时），就用柜子里那份"机械模板总结"（本地启发式）顶上，
+ * 绝不让整理办公桌这件事把整个办公室搞停工。
+ *
+ * @param messages 待压缩的对话历史
+ * @param client   流式 LLM 客户端（通常用小模型实例化的 AnthropicStreamClient）
+ * @returns 压缩后的单条 user 消息（保持与 compactHistory 相同的连续性前缀）
+ */
+export async function compactHistoryWithLLM(
+  messages: Message[],
+  client: StreamingLLMClient,
+): Promise<Message[]> {
+  saveTranscript(messages);
+
+  let summary: string;
+  try {
+    const stream = client.stream(
+      [{ role: 'user', content: serializeMessagesForSummary(messages) }],
+      [], // 摘要任务不需要工具
+      {
+        systemPrompt: SUMMARIZE_SYSTEM_PROMPT,
+        maxTokens: 2048,
+        signal: new AbortController().signal,
+      },
+    );
+    summary = (await extractTextFromStream(stream)).trim();
+    // 小模型可能返回空内容 → 回退本地摘要
+    if (!summary) {
+      summary = generateSummary(messages);
+    }
+  } catch {
+    // 任何失败（网络/超时/解析）都回退本地启发式，保证不崩
+    summary = generateSummary(messages);
+  }
+
+  return [{
+    role: 'user',
+    content: `This conversation was compacted for continuity.\n\n${summary}`,
+  }];
+}
+
+/**
+ * 把消息序列化成给摘要模型的纯文本输入。
+ * 去掉 tool_use/tool_result 等结构化块的细节，只保留可读文本。
+ */
+function serializeMessagesForSummary(messages: Message[]): string {
+  const lines: string[] = [];
+  for (const msg of messages) {
+    const role = msg.role === 'assistant' ? 'Assistant' : 'User';
+    const text = typeof msg.content === 'string'
+      ? msg.content
+      : msg.content
+        .map(block => {
+          if (block.type === 'text') return block.text;
+          if (block.type === 'tool_use') return `[tool: ${block.name}]`;
+          if (block.type === 'tool_result') return `[tool result]`;
+          return '';
+        })
+        .filter(Boolean)
+        .join(' ');
+    if (text) lines.push(`${role}: ${text}`);
+  }
+  return lines.join('\n');
 }
 
 /**

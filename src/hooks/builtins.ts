@@ -23,17 +23,16 @@ export function preToolSafetyCheck(event: HookEvent): HookResult {
   return { exitCode: 0, message: '' };
 }
 
-/** PostToolUse：记录工具执行结果（教学版只打 console） */
+/** PostToolUse：记录工具执行结果（把日志作为 message 返回，由调用方决定如何展示）
+ *  注意：不直接写终端——在备用屏画布渲染下，所有输出必须经渲染器，否则会冲乱布局。 */
 export function postToolLogger(event: HookEvent): HookResult {
   const toolName = event.payload.tool_name as string;
   const output = event.payload.output as string;
   const preview = output.length > 100 ? output.slice(0, 100) + '...' : output;
-  console.log(`[Hook] ${toolName} → ${preview}`);
-  return { exitCode: 0, message: '' };
+  return { exitCode: 0, message: `[Hook] ${toolName} → ${preview}` };
 }
 
-/** SessionStart：记录会话开始 */
+/** SessionStart：记录会话开始（把日志作为 message 返回，由调用方决定如何展示） */
 export function sessionStartLogger(): HookResult {
-  console.log(`[Hook] Session started at ${new Date().toISOString()}`);
-  return { exitCode: 0, message: '' };
+  return { exitCode: 0, message: `[Hook] Session started at ${new Date().toISOString()}` };
 }
