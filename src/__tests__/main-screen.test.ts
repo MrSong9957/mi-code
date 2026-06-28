@@ -105,14 +105,15 @@ describe('主屏增长画布渲染器', () => {
       const r = new Renderer({ rows: 10, cols: 40, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
       r.enter();
       for (let i = 1; i <= 10; i++) { r.printMessage(`msg-${i}`, 'system', {}); r.flushNow(); }
-      // 最早的消息进 scrollback
+      // 动态 footer：输入 1 行 → footer=4（border+input+border+status）→ 消息区 6 行
+      // 最早的消息进 scrollback（msg-1..4）
       expect(t.scrollback.some(l => l.includes('msg-1'))).toBe(true);
-      expect(t.scrollback.some(l => l.includes('msg-6'))).toBe(true);
-      // 最新消息在可视区（消息区 4 行：rows 0-3）
-      expect(t.line(0)).toContain('msg-7');
-      expect(t.line(3)).toContain('msg-10');
-      // 页脚钉底（6行：上边框 row4 + 输入区 rows5-7 + 下边框 row8 + 状态栏 row9）
-      expect(t.line(5)).toContain('❯');
+      expect(t.scrollback.some(l => l.includes('msg-4'))).toBe(true);
+      // 最新消息在可视区（rows 0-5）
+      expect(t.line(0)).toContain('msg-5');
+      expect(t.line(5)).toContain('msg-10');
+      // 页脚（row6=border, row7=input, row8=border, row9=status）
+      expect(t.line(7)).toContain('❯');
       expect(t.line(9)).toContain('MDL');
     });
   });

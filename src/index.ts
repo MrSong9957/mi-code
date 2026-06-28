@@ -169,11 +169,12 @@ if (process.stdin.isTTY) {
           process.exit(0);
         }
 
-        // Ctrl+J —— 多行输入换行
+        // Ctrl+J —— 多行输入换行（预留 prompt 宽度空格对齐）
         if (byte === 0x0a) {
+          const promptPad = ' '.repeat([...renderer.getPrompt()].length);
           const chars = [...input];
-          input = chars.slice(0, cursorPos).join('') + '\n' + chars.slice(cursorPos).join('');
-          cursorPos++;
+          input = chars.slice(0, cursorPos).join('') + '\n' + promptPad + chars.slice(cursorPos).join('');
+          cursorPos += 1 + promptPad.length;
           syncInput();
           i++; continue;
         }

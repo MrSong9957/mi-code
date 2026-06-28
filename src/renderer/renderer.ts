@@ -43,8 +43,10 @@ const DEFAULT_PROMPT = '❯  ';
 const PROMPT_STYLE: Style = { fg: 'green', bold: true };
 /** 输入区最大行数 */
 const MAX_INPUT_LINES = 3;
-/** 页脚高度：上边框 1 行 + 输入区 MAX_INPUT_LINES 行 + 下边框 1 行 + 状态栏 1 行 */
-const FOOTER_HEIGHT = 2 + MAX_INPUT_LINES + 1;
+/** 计算输入区实际行数（至少 1 行，最多 MAX_INPUT_LINES 行） */
+function getInputLineCount(input: string): number {
+  return Math.min(MAX_INPUT_LINES, Math.max(1, input.split('\n').length));
+}
 /** 边框样式 */
 const BORDER_STYLE: Style = { dim: true };
 /** 边框字符（Box Drawing U+2500，isWideCodePoint 已按宽度 1 处理） */
@@ -173,6 +175,9 @@ export class Renderer {
     this.hint = hint;
     this.scheduleRender();
   }
+  getPrompt(): string {
+    return this.prompt;
+  }
 
   // ═══════ 节流 + commit ═══════
 
@@ -206,34 +211,33 @@ export class Renderer {
 
     // ① 构建新 screen：高度 = 消息行数 + 页脚高度（至少 1 行）
     const msgLines = this.messages.allLines();
-    const contentHeight = msgLines.length + FOOTER_HEIGHT;
+    const inputLineCount = getInputLineCount(this.input);
+    const footerHeight = 2 + inputLineCount + 1;
+    const contentHeight = msgLines.length + footerHeight;
     const next = new Screen(Math.max(1, contentHeight), this.cols);
     for (let i = 0; i < msgLines.length; i++) {
       this.writeCellsRow(next, i, msgLines[i]!.cells, 0);
     }
-    // 页脚钉在 screen 底部（上边框 + 输入区 MAX_INPUT_LINES 行 + 下边框 + 状态栏）
-    const baseY = next.rows - FOOTER_HEIGHT;
+    // 页脚钉在 screen 底部（上边框 + 输入区 + 下边框 + 状态栏）
+    const baseY = next.rows - footerHeight;
     const borderTopY = baseY;
     const inputStartY = baseY + 1;
-    const borderBottomY = baseY + 1 + MAX_INPUT_LINES;
+    const borderBottomY = baseY + 1 + inputLineCount;
     const statusY = borderBottomY + 1;
     const cursor = this.computeInputCursorPos();
-    // 上边框（每个 ─ 占 2 列，所以只需 this.cols/2 个字符填满宽度）
+    // 上边框
     const borderCount = Math.ceil(this.cols / stringWidth(BORDER_CHAR));
     const borderCells = stringToCells(BORDER_CHAR.repeat(borderCount), BORDER_STYLE);
     this.writeCellsRow(next, borderTopY, borderCells, 0);
-    // 输入区（多行）
+    // 输入区（实际行数）
     const inputLines = this.input.split('\n');
-    for (let li = 0; li < MAX_INPUT_LINES; li++) {
+    for (let li = 0; li < inputLineCount; li++) {
       const y = inputStartY + li;
-      if (li < inputLines.length) {
-        const line = inputLines[li]!;
-        const cells = li === 0
-          ? [...stringToCells(this.prompt, PROMPT_STYLE), ...stringToCells(line, {})]
-          : stringToCells(line, {});
-        this.writeCellsRow(next, y, cells, 0);
-      }
-      // 超出实际行数的区域留空（已初始化为空格）
+      const line = inputLines[li] ?? '';
+      const cells = li === 0
+        ? [...stringToCells(this.prompt, PROMPT_STYLE), ...stringToCells(line, {})]
+        : stringToCells(line, {});
+      this.writeCellsRow(next, y, cells, 0);
     }
     // 下边框
     this.writeCellsRow(next, borderBottomY, borderCells, 0);
@@ -356,7 +360,9 @@ export class Renderer {
       }
     }
     // 光标回输入框（可视坐标 = screen 坐标 - viewportY）
-    const inputStartY = next.rows - FOOTER_HEIGHT + 1;
+    const inputLineCount = getInputLineCount(this.input);
+    const footerHeight = 2 + inputLineCount + 1;
+    const inputStartY = next.rows - footerHeight + 1;
     const cursor = this.computeInputCursorPos();
     const cursorVY = inputStartY + cursor.row - viewportY;
     while (vs.cursor.y < cursorVY) vs.lineFeed();
@@ -416,21 +422,30 @@ export class Renderer {
   /** 调试/测试：返回当前 screen 各行文本（不含样式）。 */
   inspectFrame(): string[] {
     const msgLines = this.messages.allLines();
-    const contentHeight = msgLines.length + FOOTER_HEIGHT;
+    const inputLineCount = getInputLineCount(this.input);
+    const footerHeight = 2 + inputLineCount + 1;
+    const contentHeight = msgLines.length + footerHeight;
     const probe = new Screen(Math.max(1, contentHeight), this.cols);
     for (let i = 0; i < msgLines.length; i++) {
       this.writeCellsRow(probe, i, msgLines[i]!.cells, 0);
     }
-    const statusY = probe.rows - FOOTER_HEIGHT;
-    const inputY = probe.rows - FOOTER_HEIGHT + 1;
+    const baseY = probe.rows - footerHeight;
+    const inputStartY = baseY + 1;
+    const borderBottomY = baseY + 1 + inputLineCount;
+    const statusY = borderBottomY + 1;
     const statusCells = buildStatusBar({
       model: this.statusInfo.model, branch: this.statusInfo.branch, dir: this.statusInfo.dir,
       cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
     });
     this.writeCellsRow(probe, statusY, statusCells, 0);
-    const promptCells = stringToCells(this.prompt, PROMPT_STYLE);
-    const inputCells = stringToCells(this.input, {});
-    this.writeCellsRow(probe, inputY, [...promptCells, ...inputCells], 0);
+    const inputLines = this.input.split('\n');
+    for (let li = 0; li < inputLineCount; li++) {
+      const line = inputLines[li] ?? '';
+      const cells = li === 0
+        ? [...stringToCells(this.prompt, PROMPT_STYLE), ...stringToCells(line, {})]
+        : stringToCells(line, {});
+      this.writeCellsRow(probe, inputStartY + li, cells, 0);
+    }
     const lines: string[] = [];
     for (let y = 0; y < probe.rows; y++) {
       let line = '';
