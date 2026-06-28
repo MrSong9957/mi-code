@@ -101,19 +101,19 @@ describe('主屏增长画布渲染器', () => {
 
   describe('原生 scrollback（消息超屏滚进历史）', () => {
     it('消息超出一屏：顶部行进 scrollback，最新消息 + 页脚在可视区', () => {
-      const t = new FakeTerminal(8, 40);
-      const r = new Renderer({ rows: 8, cols: 40, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
+      const t = new FakeTerminal(10, 40);
+      const r = new Renderer({ rows: 10, cols: 40, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
       r.enter();
       for (let i = 1; i <= 10; i++) { r.printMessage(`msg-${i}`, 'system', {}); r.flushNow(); }
       // 最早的消息进 scrollback
       expect(t.scrollback.some(l => l.includes('msg-1'))).toBe(true);
       expect(t.scrollback.some(l => l.includes('msg-6'))).toBe(true);
-      // 最新消息在可视区
+      // 最新消息在可视区（消息区 4 行：rows 0-3）
       expect(t.line(0)).toContain('msg-7');
       expect(t.line(3)).toContain('msg-10');
-      // 页脚钉底（4行：上边框 + 输入框 + 下边框 + 状态栏）
+      // 页脚钉底（6行：上边框 row4 + 输入区 rows5-7 + 下边框 row8 + 状态栏 row9）
       expect(t.line(5)).toContain('❯');
-      expect(t.line(7)).toContain('MDL');
+      expect(t.line(9)).toContain('MDL');
     });
   });
 

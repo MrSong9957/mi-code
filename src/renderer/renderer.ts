@@ -41,8 +41,10 @@ export interface RendererOptions {
 
 const DEFAULT_PROMPT = '❯  ';
 const PROMPT_STYLE: Style = { fg: 'green', bold: true };
-/** 页脚高度：上边框 1 行 + 输入框 1 行 + 下边框 1 行 + 状态栏 1 行 */
-const FOOTER_HEIGHT = 4;
+/** 输入区最大行数 */
+const MAX_INPUT_LINES = 3;
+/** 页脚高度：上边框 1 行 + 输入区 MAX_INPUT_LINES 行 + 下边框 1 行 + 状态栏 1 行 */
+const FOOTER_HEIGHT = 2 + MAX_INPUT_LINES + 1;
 /** 边框样式 */
 const BORDER_STYLE: Style = { dim: true };
 /** 边框字符（Box Drawing U+2500，isWideCodePoint 已按宽度 1 处理） */
@@ -209,20 +211,30 @@ export class Renderer {
     for (let i = 0; i < msgLines.length; i++) {
       this.writeCellsRow(next, i, msgLines[i]!.cells, 0);
     }
-    // 页脚钉在 screen 底部（4 行：上边框 + 输入框 + 下边框 + 状态栏）
+    // 页脚钉在 screen 底部（上边框 + 输入区 MAX_INPUT_LINES 行 + 下边框 + 状态栏）
     const baseY = next.rows - FOOTER_HEIGHT;
     const borderTopY = baseY;
-    const inputY = baseY + 1;
-    const borderBottomY = baseY + 2;
-    const statusY = baseY + 3;
+    const inputStartY = baseY + 1;
+    const borderBottomY = baseY + 1 + MAX_INPUT_LINES;
+    const statusY = borderBottomY + 1;
+    const cursor = this.computeInputCursorPos();
     // 上边框（每个 ─ 占 2 列，所以只需 this.cols/2 个字符填满宽度）
     const borderCount = Math.ceil(this.cols / stringWidth(BORDER_CHAR));
     const borderCells = stringToCells(BORDER_CHAR.repeat(borderCount), BORDER_STYLE);
     this.writeCellsRow(next, borderTopY, borderCells, 0);
-    // 输入框
-    const promptCells = stringToCells(this.prompt, PROMPT_STYLE);
-    const inputCells = stringToCells(this.input, {});
-    this.writeCellsRow(next, inputY, [...promptCells, ...inputCells], 0);
+    // 输入区（多行）
+    const inputLines = this.input.split('\n');
+    for (let li = 0; li < MAX_INPUT_LINES; li++) {
+      const y = inputStartY + li;
+      if (li < inputLines.length) {
+        const line = inputLines[li]!;
+        const cells = li === 0
+          ? [...stringToCells(this.prompt, PROMPT_STYLE), ...stringToCells(line, {})]
+          : stringToCells(line, {});
+        this.writeCellsRow(next, y, cells, 0);
+      }
+      // 超出实际行数的区域留空（已初始化为空格）
+    }
     // 下边框
     this.writeCellsRow(next, borderBottomY, borderCells, 0);
     // 状态栏
@@ -239,8 +251,8 @@ export class Renderer {
       this.renderFull(next, Math.max(0, next.rows - this.rows));
       this.prevScreen = next;
       this.prevHeight = next.rows;
-      this.prevCursorY = inputY;
-      this.prevCursorX = this.computeInputCursorCol();
+      this.prevCursorY = inputStartY + cursor.row;
+      this.prevCursorX = cursor.col;
       return;
     }
 
@@ -310,9 +322,9 @@ export class Renderer {
       // —— 第 3 段：光标恢复到输入框（用视口相对坐标）——
       // 增长后 viewportY 可能变化，需要重新计算
       const vpY = Math.max(0, next.rows - this.rows);
-      const inputVY = inputY - vpY;
-      while (vs.cursor.y < inputVY) vs.lineFeed();
-      vs.moveTo(this.computeInputCursorCol(), inputVY);
+      const cursorVY = inputStartY + cursor.row - vpY;
+      while (vs.cursor.y < cursorVY) vs.lineFeed();
+      vs.moveTo(cursor.col, cursorVY);
       const buf = vs.flush();
       if (buf) this.writer(buf);
       this.writer(showCursor());
@@ -321,8 +333,8 @@ export class Renderer {
     // ⑥ 记账
     this.prevScreen = next;
     this.prevHeight = next.rows;
-    this.prevCursorY = inputY;
-    this.prevCursorX = this.computeInputCursorCol();
+    this.prevCursorY = inputStartY + cursor.row;
+    this.prevCursorX = cursor.col;
   }
 
   /** 整屏重画（首帧 / fullReset）：擦屏 + 回原点 + 从 viewportY 起用 LF 推进画可视行 + 光标回输入框。
@@ -344,21 +356,34 @@ export class Renderer {
       }
     }
     // 光标回输入框（可视坐标 = screen 坐标 - viewportY）
-    // 必须与 commit() 中的 inputY 计算一致：next.rows - FOOTER_HEIGHT + 1
-    const inputY = next.rows - FOOTER_HEIGHT + 1;
-    while (vs.cursor.y < inputY - viewportY) vs.lineFeed();
-    vs.moveTo(this.computeInputCursorCol(), inputY - viewportY);
+    const inputStartY = next.rows - FOOTER_HEIGHT + 1;
+    const cursor = this.computeInputCursorPos();
+    const cursorVY = inputStartY + cursor.row - viewportY;
+    while (vs.cursor.y < cursorVY) vs.lineFeed();
+    vs.moveTo(cursor.col, cursorVY);
     const buf = vs.flush();
     if (buf) this.writer(buf);
     this.writer(showCursor());
   }
 
-  /** 计算输入框光标的列（screen/终端通用，0-based）。 */
-  private computeInputCursorCol(): number {
-    const promptWidth = stringWidth(this.prompt);
-    const beforeChars = [...this.input].slice(0, this.cursorPos).join('');
-    const beforeWidth = stringWidth(beforeChars);
-    return promptWidth + beforeWidth;
+  /** 计算输入框光标的 (行偏移, 列) （0-based，行偏移相对于 inputStartY）。 */
+  private computeInputCursorPos(): { row: number; col: number } {
+    const lines = this.input.split('\n');
+    let remaining = this.cursorPos;
+    for (let i = 0; i < lines.length; i++) {
+      const lineLen = [...lines[i]!].length;
+      if (remaining <= lineLen) {
+        const promptW = i === 0 ? stringWidth(this.prompt) : 0;
+        const beforeWidth = stringWidth([...lines[i]!].slice(0, remaining).join(''));
+        return { row: i, col: promptW + beforeWidth };
+      }
+      remaining -= lineLen + 1; // +1 for the '\n'
+    }
+    // 光标在末尾
+    const lastRow = Math.max(0, lines.length - 1);
+    const lastLine = lines[lastRow]!;
+    const promptW = lastRow === 0 ? stringWidth(this.prompt) : 0;
+    return { row: lastRow, col: promptW + stringWidth(lastLine) };
   }
 
   /** 把一组 cells 从某行某列起铺进 screen（宽字符占两格）。 */

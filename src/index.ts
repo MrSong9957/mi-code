@@ -169,17 +169,54 @@ if (process.stdin.isTTY) {
           process.exit(0);
         }
 
+        // Ctrl+J —— 多行输入换行
+        if (byte === 0x0a) {
+          const chars = [...input];
+          input = chars.slice(0, cursorPos).join('') + '\n' + chars.slice(cursorPos).join('');
+          cursorPos++;
+          syncInput();
+          i++; continue;
+        }
+
         // ESC 序列检测（方向键）
-        // 注意：流式期间输入框仍可编辑（不再 isProcessing 拦截），方向键始终生效。
         if (byte === 0x1b && i + 2 < data.length && data[i + 1] === 0x5b) {
-          if (data[i + 2] === 0x41) {  // 上箭头：历史导航
-            const h = await historyManager.up(input, currentProject);
-            if (h !== null) { input = h; cursorPos = [...input].length; syncInput(); }
+          if (data[i + 2] === 0x41) {  // 上箭头：光标上移一行
+            const lines = input.split('\n');
+            let offset = 0;
+            for (let li = 0; li < lines.length; li++) {
+              const lineLen = [...lines[li]!].length;
+              if (cursorPos <= offset + lineLen) {
+                // 当前行是 li，光标在该行的 col = cursorPos - offset
+                if (li > 0) {
+                  const col = cursorPos - offset;
+                  const prevLineLen = [...lines[li - 1]!].length;
+                  const prevOffset = offset - prevLineLen - 1;
+                  cursorPos = prevOffset + Math.min(col, prevLineLen);
+                  syncInput();
+                }
+                break;
+              }
+              offset += lineLen + 1;
+            }
             i += 3; continue;
           }
-          if (data[i + 2] === 0x42) {  // 下箭头：历史导航
-            const h = await historyManager.down(currentProject);
-            if (h !== null) { input = h; cursorPos = [...input].length; syncInput(); }
+          if (data[i + 2] === 0x42) {  // 下箭头：光标下移一行
+            const lines = input.split('\n');
+            let offset = 0;
+            for (let li = 0; li < lines.length; li++) {
+              const lineLen = [...lines[li]!].length;
+              if (cursorPos <= offset + lineLen) {
+                if (li < lines.length - 1) {
+                  const col = cursorPos - offset;
+                  const nextLineLen = [...lines[li + 1]!].length;
+                  const nextOffset = offset + lineLen + 1;
+                  cursorPos = nextOffset + Math.min(col, nextLineLen);
+                  syncInput();
+                }
+                break;
+              }
+              offset += lineLen + 1;
+            }
             i += 3; continue;
           }
           if (data[i + 2] === 0x44) {  // 左箭头
@@ -193,8 +230,8 @@ if (process.stdin.isTTY) {
           }
         }
 
-        // 回车
-        if (byte === 0x0d || byte === 0x0a) {
+        // 回车（仅 CR 提交，LF 由 Ctrl+J 处理）
+        if (byte === 0x0d) {
           if (input.trim() === 'exit') {
             renderer.exit();
             process.exit(0);
