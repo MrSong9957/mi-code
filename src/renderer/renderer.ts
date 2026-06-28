@@ -45,10 +45,8 @@ const PROMPT_STYLE: Style = { fg: 'green', bold: true };
 const FOOTER_HEIGHT = 4;
 /** 边框样式 */
 const BORDER_STYLE: Style = { dim: true };
-/** 边框字符 */
-const BORDER_CHAR = '─';
-/** 边框字符显示宽度（─ 是 East Asian Ambiguous，isWideCodePoint 判定为 2） */
-const BORDER_CHAR_WIDTH = stringWidth(BORDER_CHAR);
+/** 边框字符（用 '-' 而非 '─'：后者是 East Asian Ambiguous，isWideCodePoint 判定宽度 2，但部分终端按 1 渲染导致只填半屏） */
+const BORDER_CHAR = '-';
 
 export class Renderer {
   private rows: number;
@@ -221,17 +219,15 @@ export class Renderer {
       cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
     });
     this.writeCellsRow(next, statusY, statusCells, 0);
-    // 上边框（─ 宽度为 2，需要 cols/2 个字符铺满终端宽度）
-    const borderCount = Math.ceil(this.cols / BORDER_CHAR_WIDTH);
-    const borderTopCells = stringToCells(BORDER_CHAR.repeat(borderCount), BORDER_STYLE);
-    this.writeCellsRow(next, borderTopY, borderTopCells, 0);
+    // 上边框（writeCellsRow 正确处理宽字符占位：─ 写在 x，  写在 x+1）
+    const borderCells = stringToCells(BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
+    this.writeCellsRow(next, borderTopY, borderCells, 0);
     // 输入框
     const promptCells = stringToCells(this.prompt, PROMPT_STYLE);
     const inputCells = stringToCells(this.input, {});
     this.writeCellsRow(next, inputY, [...promptCells, ...inputCells], 0);
     // 下边框
-    const borderBottomCells = stringToCells(BORDER_CHAR.repeat(borderCount), BORDER_STYLE);
-    this.writeCellsRow(next, borderBottomY, borderBottomCells, 0);
+    this.writeCellsRow(next, borderBottomY, borderCells, 0);
 
     // ③ 首帧或 resize 后 prev 失准：整屏重画
     if (!this.prevScreen) {
