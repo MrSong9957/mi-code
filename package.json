@@ -34,6 +34,7 @@
     "@anthropic-ai/sdk": "^0.106.0",
     "ai": "^7.0.2",
     "dotenv": "^17.4.2",
-    "ecc-universal": "^2.0.0"
+    "ecc-universal": "^2.0.0",
+    "string-width": "^8.2.1"
   }
 }

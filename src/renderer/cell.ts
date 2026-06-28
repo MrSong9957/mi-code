@@ -4,6 +4,7 @@
 // 显示宽度：一个字符在终端里横向占几个格子（中文/全角/emoji=2，半角=1）。
 
 import { fg, bg } from './colors.js';
+import sw from 'string-width';
 
 /** 文本样式（全部可选；缺省即默认） */
 export interface Style {
@@ -132,14 +133,12 @@ function cached(key: string, build: () => string): string {
 }
 
 // ═══════ 显示宽度 ═══════
+// 使用 string-width 包（Unicode East Asian Width 数据库）替代手写范围判定。
+// ambiguousIsNarrow: false → CJK 终端行为：Ambiguous 字符按宽度 2 渲染。
 
 /** 计算字符串在终端的显示宽度（中文/全角/emoji=2，半角=1） */
 export function stringWidth(s: string): number {
-  let width = 0;
-  for (const ch of s) {
-    width += codePointWidth(codePointOf(ch));
-  }
-  return width;
+  return sw(s, { ambiguousIsNarrow: false });
 }
 
 /**
@@ -158,7 +157,7 @@ export function truncateToWidth(cells: Cell[], maxWidth: number): Cell[] {
   const out: Cell[] = [];
   let width = 0;
   for (const cell of cells) {
-    const w = codePointWidth(codePointOf(cell.char));
+    const w = stringWidth(cell.char);
     if (width + w > maxWidth) break;
     out.push(cell);
     width += w;
@@ -166,59 +165,12 @@ export function truncateToWidth(cells: Cell[], maxWidth: number): Cell[] {
   return out;
 }
 
-function codePointOf(ch: string): number {
-  // [...] 已按码点迭代，单字符字符串的码点直接取
-  return ch.codePointAt(0) ?? 0;
-}
-
-/** 单码点显示宽度：宽字符返回 2，其余 1 */
-function codePointWidth(code: number): number {
-  // 控制字符不计宽（理论上画布里不该出现，但防御）
-  if (code === 0) return 0;
-  return isWideCodePoint(code) ? 2 : 1;
-}
-
 /**
  * 判断一个码点是否"宽字符"（占 2 列）。
- *
- * 这是渲染层与终端"对账"的统一口径——cell.ts 的 stringWidth、screen.ts 的占位格、
- * 测试用的 FakeTerminal **三方必须走同一个判定**，否则任一处算错都会让后续格子整体错位。
- *
- * 覆盖范围：
- * - East Asian Fullwidth/Wide（CJK 文字、全角符号、韩文、假名、彝文、CJK 扩展等）
- * - East Asian **Ambiguous**（块元素、制表符、几何符号、杂项符号如 ❯ ⎇ · × 等）
- *   → 保守按 2 处理。多数 CJK locale 终端（Windows Terminal/带 CJK 的 xterm）都把它们渲染成宽字符，
- *     若按 1 算会与真实终端不一致，导致布局错位（这是历史 bug 的根因）。
- * - Emoji 与补充符号区。
+ * 委托给 string-width（Unicode East Asian Width 数据库），ASCII 快速路径优化。
  */
 export function isWideCodePoint(code: number): boolean {
-  // ── East Asian Fullwidth / Wide ──
-  if (code >= 0x1100 && code <= 0x115F) return true; // 韩文 Jamo
-  if (code >= 0x2E80 && code <= 0x303E) return true; // CJK 部首/标点
-  if (code >= 0x3040 && code <= 0x33FF) return true; // 假名/韩文兼容/中文竖排标点
-  if (code >= 0x3400 && code <= 0x4DBF) return true; // CJK 扩展 A
-  if (code >= 0x4E00 && code <= 0x9FFF) return true; // CJK 统一表意
-  if (code >= 0xA000 && code <= 0xA4CF) return true; // 彝文
-  if (code >= 0xAC00 && code <= 0xD7A3) return true; // 韩文音节
-  if (code >= 0xF900 && code <= 0xFAFF) return true; // CJK 兼容表意
-  if (code >= 0xFE10 && code <= 0xFE19) return true; // 竖排标点
-  if (code >= 0xFE30 && code <= 0xFE6F) return true; // CJK 兼容标点
-  if (code >= 0xFF00 && code <= 0xFF60) return true; // 全角 ASCII/标点
-  if (code >= 0xFFE0 && code <= 0xFFE6) return true; // 全角符号
-  if (code >= 0x1F300 && code <= 0x1FAFF) return true; // emoji/补充符号
-  if (code >= 0x1F000 && code <= 0x1F02F) return true; // 麻将
-  if (code >= 0x20000 && code <= 0x3FFFD) return true; // CJK 扩展 B-F
-
-  // ── East Asian Ambiguous（CJK 终端普遍按宽渲染；保守按 2）──
-  if (code >= 0x00A1 && code <= 0x00FF) return true; // 拉丁补充（· × ÷ 等）
-  if (code >= 0x2300 && code <= 0x23FF) return true; // 杂项技术符号（⎇ ⌘ ⏳ 等）
-  if (code >= 0x2460 && code <= 0x24FF) return true; // 圈号/数字
-  if (code >= 0x2500 && code <= 0x257F) return true; // 制表/方框
-  if (code >= 0x2580 && code <= 0x259F) return true; // 块元素（LOGO 用）
-  if (code >= 0x25A0 && code <= 0x26FF) return true; // 几何/杂项符号
-  if (code >= 0x2700 && code <= 0x27BF) return true; // 装饰符号（含 ❯ U+275F）
-  if (code >= 0x2E80 && code <= 0x303F) return true; // （已含，保留防漏）
-  if (code >= 0x3200 && code <= 0x33FF) return true; // CJK 兼容（含封闭）
-
-  return false;
+  if (code === 0) return false;
+  if (code < 0x80) return false; // ASCII 快速路径
+  return stringWidth(String.fromCodePoint(code)) >= 2;
 }
