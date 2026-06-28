@@ -134,11 +134,10 @@ function cached(key: string, build: () => string): string {
 
 // ═══════ 显示宽度 ═══════
 // 使用 string-width 包（Unicode East Asian Width 数据库）替代手写范围判定。
-// ambiguousIsNarrow: false → CJK 终端行为：Ambiguous 字符按宽度 2 渲染。
 
 /** 计算字符串在终端的显示宽度（中文/全角/emoji=2，半角=1） */
 export function stringWidth(s: string): number {
-  return sw(s, { ambiguousIsNarrow: false });
+  return sw(s);
 }
 
 /**
