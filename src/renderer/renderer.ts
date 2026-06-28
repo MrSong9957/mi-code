@@ -39,7 +39,7 @@ export interface RendererOptions {
   frameIntervalMs?: number;
 }
 
-const DEFAULT_PROMPT = '❯ ';
+const DEFAULT_PROMPT = '❯  ';
 const PROMPT_STYLE: Style = { fg: 'green', bold: true };
 /** 页脚高度：状态栏 1 行 + 上边框 1 行 + 输入框 1 行 + 下边框 1 行 */
 const FOOTER_HEIGHT = 4;
