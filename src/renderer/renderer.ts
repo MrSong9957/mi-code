@@ -219,7 +219,7 @@ export class Renderer {
       cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
     });
     this.writeCellsRow(next, statusY, statusCells, 0);
-    // 上边框（writeCellsRow 正确处理宽字符占位：─ 写在 x，  写在 x+1）
+    // 上边框
     const borderCells = stringToCells(BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
     this.writeCellsRow(next, borderTopY, borderCells, 0);
     // 输入框
@@ -267,7 +267,7 @@ export class Renderer {
         // 变化但在 scrollback → fullReset
         if (y < viewportY) { needsFullReset = true; break; }
         vs.moveTo(x, y); // 相对移动（cursor-up/down/forward/back）
-        if (nc.char === '\u0000') continue;
+        if (nc.char === ' ') continue;
         vs.writeCell(nc);
       }
       if (needsFullReset) break;
@@ -290,18 +290,24 @@ export class Renderer {
         for (let y = prevHeight; y < next.rows; y++) {
           // LF 推进到新行（视口底部时触发滚动进 scrollback）
           while (vs.cursor.y < y) vs.lineFeed();
-          vs.moveTo(0, y);
+          // 钳位虚拟光标到视口底部——终端滚动时物理光标停在底部，
+          // 但 lineFeed 会让虚拟光标超过视口高度，导致后续 moveTo 的相对偏移全部错位。
+          if (vs.cursor.y >= this.rows) vs.cursor.y = this.rows - 1;
+          vs.moveTo(0, vs.cursor.y);
           for (let x = 0; x < this.cols; x++) {
             const nc = next.getCell(x, y);
-            if (nc.char === '\u0000' || nc.char === ' ') continue;
-            vs.moveTo(x, y);
+            if (nc.char === ' ' || nc.char === ' ') continue;
+            vs.moveTo(x, vs.cursor.y);
             vs.writeCell(nc);
           }
         }
       }
-      // —— 第 3 段：光标恢复到输入框（用 LF 到 inputY，创建底部行 / 触发溢出滚动）——
-      while (vs.cursor.y < inputY) vs.lineFeed();
-      vs.moveTo(this.computeInputCursorCol(), inputY);
+      // —— 第 3 段：光标恢复到输入框（用视口相对坐标）——
+      // 增长后 viewportY 可能变化，需要重新计算
+      const vpY = Math.max(0, next.rows - this.rows);
+      const inputVY = inputY - vpY;
+      while (vs.cursor.y < inputVY) vs.lineFeed();
+      vs.moveTo(this.computeInputCursorCol(), inputVY);
       const buf = vs.flush();
       if (buf) this.writer(buf);
     }
@@ -325,7 +331,7 @@ export class Renderer {
       vs.eraseLine();
       for (let x = 0; x < this.cols; x++) {
         const cell = next.getCell(x, y);
-        if (cell.char === '\u0000' || cell.char === ' ') continue;
+        if (cell.char === ' ' || cell.char === ' ') continue;
         vs.moveTo(x, y - viewportY);
         vs.writeCell(cell);
       }
@@ -355,7 +361,7 @@ export class Renderer {
       frame.setCell(x, y, cell);
       const w = stringWidth(cell.char);
       if (w === 2 && x + 1 < this.cols) {
-        frame.setCell(x + 1, y, { char: '\u0000', style: cell.style });
+        frame.setCell(x + 1, y, { char: ' ', style: cell.style });
         x += 2;
       } else {
         x += 1;
@@ -397,7 +403,7 @@ export class Renderer {
       let line = '';
       for (let x = 0; x < this.cols; x++) {
         const ch = probe.getCell(x, y).char;
-        line += ch === '\u0000' ? '' : ch;
+        line += ch === ' ' ? '' : ch;
       }
       lines.push(line.replace(/\s+$/, ''));
     }
