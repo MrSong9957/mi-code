@@ -111,7 +111,7 @@ const renderer = new Renderer({
   rows: termSize.rows,
   cols: termSize.cols,
   writer: (s: string) => process.stdout.write(s),
-  status: { model: MODEL, branch: GIT_BRANCH, dir: SHORT_DIR },
+  status: { mode: 'Act', model: MODEL, branch: GIT_BRANCH, dir: SHORT_DIR, contextUsage: 0 },
 });
 
 /** 把一行文本作为"系统消息"固化进消息区（经 Markdown 渲染进 scrollback）。 */

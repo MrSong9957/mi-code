@@ -12,12 +12,16 @@ export interface ToolStatus {
 }
 
 export interface StatusBarState {
+  /** 模式（Plan / Act 等） */
+  mode?: string;
   model: string;
   branch: string;
   /** 可选：短目录名 */
   dir?: string;
   /** 可选：当前工具状态（来自 StreamEventBus） */
   tool?: ToolStatus;
+  /** 上下文窗口使用率 0-1 */
+  contextUsage?: number;
   /** 终端列数（用于截断） */
   cols: number;
   /** 可选：自定义提示文本（如 todo 提醒） */
@@ -28,11 +32,23 @@ const DIM: Style = { dim: true };
 const ACCENT: Style = { fg: 'cyan' };
 const WARN: Style = { fg: 'yellow' };
 const ERR: Style = { fg: 'red' };
+const BAR_FILL: Style = { fg: 'cyan' };
+const BAR_EMPTY: Style = { dim: true };
 
-/** 由状态构建状态栏一行的 cells。结果按 cols 截断。 */
+/** 构建进度条文本（10 格 + 百分比） */
+function buildProgressBar(ratio: number, totalWidth = 10): string {
+  const pct = Math.max(0, Math.min(1, ratio));
+  const filled = Math.round(pct * totalWidth);
+  const empty = totalWidth - filled;
+  const pctStr = `${Math.round(pct * 100)}%`;
+  return '█'.repeat(filled) + '░'.repeat(empty) + ' ' + pctStr;
+}
+
+/** 由状态构建状态栏一行的 cells。格式：mode | model | dir | branch | progress */
 export function buildStatusBar(state: StatusBarState): Cell[] {
   if (state.cols <= 0) return [];
 
+  const sep = ' │ ';
   const segments: Array<{ text: string; style: Style }> = [];
 
   // 工具状态（若有，放在最前，最醒目）
@@ -44,21 +60,40 @@ export function buildStatusBar(state: StatusBarState): Cell[] {
       : state.tool.status === 'error' ? ERR
         : ACCENT;
     segments.push({ text: `${mark} ${state.tool.name}`, style: sty });
-    segments.push({ text: '  ', style: DIM });
+    segments.push({ text: sep, style: DIM });
+  }
+
+  // 模式
+  if (state.mode) {
+    segments.push({ text: state.mode, style: ACCENT });
+    segments.push({ text: sep, style: DIM });
   }
 
   // 模型
   segments.push({ text: state.model, style: DIM });
-  // 分隔
-  segments.push({ text: ' · ', style: DIM });
-  // 分支
-  segments.push({ text: `⎇ ${state.branch}`, style: DIM });
+  segments.push({ text: sep, style: DIM });
+
+  // 路径（最后 2 个层级）
   if (state.dir) {
-    segments.push({ text: ' · ', style: DIM });
-    segments.push({ text: state.dir, style: DIM });
+    const parts = state.dir.replace(/\\/g, '/').split('/').filter(Boolean);
+    const short = parts.slice(-2).join('/');
+    segments.push({ text: '~/' + short, style: DIM });
+    segments.push({ text: sep, style: DIM });
   }
+
+  // 分支
+  segments.push({ text: state.branch, style: DIM });
+
+  // 上下文窗口进度条
+  if (state.contextUsage !== undefined) {
+    segments.push({ text: sep, style: DIM });
+    const bar = buildProgressBar(state.contextUsage);
+    segments.push({ text: bar, style: BAR_FILL });
+  }
+
+  // 提示
   if (state.hint) {
-    segments.push({ text: ' · ', style: DIM });
+    segments.push({ text: sep, style: DIM });
     segments.push({ text: state.hint, style: ACCENT });
   }
 
@@ -68,6 +103,5 @@ export function buildStatusBar(state: StatusBarState): Cell[] {
     cells = cells.concat(stringToCells(seg.text, seg.style));
   }
 
-  // 按 cols 截断（不溢出状态栏）
   return truncateToWidth(cells, state.cols);
 }

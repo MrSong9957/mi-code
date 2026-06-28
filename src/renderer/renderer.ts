@@ -31,8 +31,8 @@ export interface RendererOptions {
   rows: number;
   cols: number;
   writer: Writer;
-  /** 状态栏静态信息（model/branch/dir） */
-  status: Pick<StatusBarState, 'model' | 'branch' | 'dir'>;
+  /** 状态栏静态信息（mode/model/branch/dir/contextUsage） */
+  status: Pick<StatusBarState, 'model' | 'branch' | 'dir' | 'mode' | 'contextUsage'>;
   /** 提示符文本（默认 "❯ "） */
   prompt?: string;
   /** 帧间隔（ms），默认 16 */
@@ -41,7 +41,7 @@ export interface RendererOptions {
 
 const DEFAULT_PROMPT = '❯  ';
 const PROMPT_STYLE: Style = { fg: 'green', bold: true };
-/** 页脚高度：状态栏 1 行 + 上边框 1 行 + 输入框 1 行 + 下边框 1 行 */
+/** 页脚高度：上边框 1 行 + 输入框 1 行 + 下边框 1 行 + 状态栏 1 行 */
 const FOOTER_HEIGHT = 4;
 /** 边框样式 */
 const BORDER_STYLE: Style = { dim: true };
@@ -52,7 +52,7 @@ export class Renderer {
   private rows: number;
   private cols: number;
   private writer: Writer;
-  private statusInfo: Pick<StatusBarState, 'model' | 'branch' | 'dir'>;
+  private statusInfo: Pick<StatusBarState, 'model' | 'branch' | 'dir' | 'mode' | 'contextUsage'>;
   private prompt: string;
   private frameIntervalMs: number;
 
@@ -209,17 +209,12 @@ export class Renderer {
     for (let i = 0; i < msgLines.length; i++) {
       this.writeCellsRow(next, i, msgLines[i]!.cells, 0);
     }
-    // 页脚钉在 screen 底部（4 行：状态栏 + 上边框 + 输入框 + 下边框）
-    const statusY = next.rows - FOOTER_HEIGHT;
-    const borderTopY = statusY + 1;
-    const inputY = statusY + 2;
-    const borderBottomY = statusY + 3;
-    // 状态栏
-    const statusCells = buildStatusBar({
-      model: this.statusInfo.model, branch: this.statusInfo.branch, dir: this.statusInfo.dir,
-      cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
-    });
-    this.writeCellsRow(next, statusY, statusCells, 0);
+    // 页脚钉在 screen 底部（4 行：上边框 + 输入框 + 下边框 + 状态栏）
+    const baseY = next.rows - FOOTER_HEIGHT;
+    const borderTopY = baseY;
+    const inputY = baseY + 1;
+    const borderBottomY = baseY + 2;
+    const statusY = baseY + 3;
     // 上边框（每个 ─ 占 2 列，所以只需 this.cols/2 个字符填满宽度）
     const borderCount = Math.ceil(this.cols / stringWidth(BORDER_CHAR));
     const borderCells = stringToCells(BORDER_CHAR.repeat(borderCount), BORDER_STYLE);
@@ -230,6 +225,14 @@ export class Renderer {
     this.writeCellsRow(next, inputY, [...promptCells, ...inputCells], 0);
     // 下边框
     this.writeCellsRow(next, borderBottomY, borderCells, 0);
+    // 状态栏
+    const statusCells = buildStatusBar({
+      mode: this.statusInfo.mode, model: this.statusInfo.model,
+      branch: this.statusInfo.branch, dir: this.statusInfo.dir,
+      contextUsage: this.statusInfo.contextUsage,
+      cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
+    });
+    this.writeCellsRow(next, statusY, statusCells, 0);
 
     // ③ 首帧或 resize 后 prev 失准：整屏重画
     if (!this.prevScreen) {
@@ -341,8 +344,8 @@ export class Renderer {
       }
     }
     // 光标回输入框（可视坐标 = screen 坐标 - viewportY）
-    // 必须与 commit() 中的 inputY 计算一致：next.rows - FOOTER_HEIGHT + 2
-    const inputY = next.rows - FOOTER_HEIGHT + 2;
+    // 必须与 commit() 中的 inputY 计算一致：next.rows - FOOTER_HEIGHT + 1
+    const inputY = next.rows - FOOTER_HEIGHT + 1;
     while (vs.cursor.y < inputY - viewportY) vs.lineFeed();
     vs.moveTo(this.computeInputCursorCol(), inputY - viewportY);
     const buf = vs.flush();

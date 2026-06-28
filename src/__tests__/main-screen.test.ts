@@ -111,9 +111,9 @@ describe('主屏增长画布渲染器', () => {
       // 最新消息在可视区
       expect(t.line(0)).toContain('msg-7');
       expect(t.line(3)).toContain('msg-10');
-      // 页脚钉底（4行：状态栏 + 上边框 + 输入框 + 下边框）
-      expect(t.line(4)).toContain('MDL');
-      expect(t.line(6)).toContain('❯');
+      // 页脚钉底（4行：上边框 + 输入框 + 下边框 + 状态栏）
+      expect(t.line(5)).toContain('❯');
+      expect(t.line(7)).toContain('MDL');
     });
   });
 
