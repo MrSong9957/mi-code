@@ -200,6 +200,7 @@ export class Renderer {
    *  不是 cursor-down（在底部静默失败不滚动）。 */
   private commit(): void {
     if (!this.entered) return;
+    this.writer(hideCursor());
 
     // ① 构建新 screen：高度 = 消息行数 + 页脚高度（至少 1 行）
     const msgLines = this.messages.allLines();
@@ -311,6 +312,7 @@ export class Renderer {
       vs.moveTo(this.computeInputCursorCol(), inputVY);
       const buf = vs.flush();
       if (buf) this.writer(buf);
+      this.writer(showCursor());
     }
 
     // ⑥ 记账
@@ -323,6 +325,7 @@ export class Renderer {
   /** 整屏重画（首帧 / fullReset）：擦屏 + 回原点 + 从 viewportY 起用 LF 推进画可视行 + 光标回输入框。
    *  fullReset 会闪（主屏固有代价）。 */
   private renderFull(next: Screen, viewportY: number): void {
+    this.writer(hideCursor());
     const vs = new VirtualScreen({ x: 0, y: 0 });
     vs.raw('\x1b[2J\x1b[H'); // 擦屏 + 回原点
     // 从 viewportY 起画到末尾（用 LF 推进，对齐 commit 的行推进机制）
@@ -344,6 +347,7 @@ export class Renderer {
     vs.moveTo(this.computeInputCursorCol(), inputY - viewportY);
     const buf = vs.flush();
     if (buf) this.writer(buf);
+    this.writer(showCursor());
   }
 
   /** 计算输入框光标的列（screen/终端通用，0-based）。 */
