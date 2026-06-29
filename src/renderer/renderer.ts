@@ -278,29 +278,15 @@ export class Renderer {
     if (!this.entered) return;
     this.writer(hideCursor());
 
-    // ① 构建新 screen：高度 = 消息行数 + 思考指示器 + 页脚高度（至少 1 行）
+    // ① 构建新 screen：高度 = 消息行数 + 页脚高度（至少 1 行）
+    // 思考指示器作为消息的一部分，不单独占行
     const msgLines = this.messages.allLines();
-    const thinkingState = this.getThinkingState();
-    const hasThinking = thinkingState !== null;
     const inputLineCount = getInputLineCount(this.input);
     const footerHeight = 2 + inputLineCount + 1;
-    const contentHeight = msgLines.length + (hasThinking ? 1 : 0) + footerHeight;
+    const contentHeight = msgLines.length + footerHeight;
     const next = new Screen(Math.max(1, contentHeight), this.cols);
     for (let i = 0; i < msgLines.length; i++) {
       this.writeCellsRow(next, i, msgLines[i]!.cells, 0);
-    }
-    // 思考指示器
-    if (hasThinking) {
-      const thinkingY = msgLines.length;
-      if (thinkingState!.collapsed) {
-        // 折叠状态：dim 灰色 "   Thought for Xs (ctrl+o to expand)"
-        const text = `   Thought for ${thinkingState!.elapsed}s (ctrl+o to expand)`;
-        this.writeCellsRow(next, thinkingY, stringToCells(text, { dim: true }), 0);
-      } else {
-        // 展开状态：白色 "● Thinking for Xs… (ctrl+o to expand)"
-        const text = `● Thinking for ${thinkingState!.elapsed}s… (ctrl+o to expand)`;
-        this.writeCellsRow(next, thinkingY, stringToCells(text, {}), 0);
-      }
     }
     // 页脚钉在 screen 底部（上边框 + 输入区 + 下边框 + 状态栏）
     const baseY = next.rows - footerHeight;

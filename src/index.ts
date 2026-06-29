@@ -285,6 +285,7 @@ if (process.stdin.isTTY) {
 
                 isProcessing = true;
                 renderer.startThinking();
+                printStyled('● Thinking...', {});
 
                 const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
                 if (apiKey) {
@@ -351,8 +352,11 @@ if (process.stdin.isTTY) {
                       printStyled(`[Error] ${err}`, { fg: 'red' });
                     } finally {
                       isProcessing = false;
+                      const ts = renderer.getThinkingState();
+                      if (ts) {
+                        printStyled(`   Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
+                      }
                       renderer.finishThinking();
-                      renderer.clearToolStatus();
                       printLine('');
                       syncInput();
                     }
