@@ -24,6 +24,9 @@ const STY_HR: Style = { dim: true };
 const STY_LINK: Style = { underline: true };
 const STY_URL: Style = { dim: true };
 const STY_LIST_MARKER: Style = { fg: 'yellow' };
+const STY_CHECK_DONE: Style = { fg: 'green' };
+const STY_TABLE_HEADER: Style = { bold: true };
+const STY_TABLE_BORDER: Style = { dim: true };
 
 /**
  * 解析整段 Markdown，返回"每行的 cells 数组"。
@@ -47,32 +50,45 @@ export function renderMarkdown(text: string, cols: number = 80, streaming: boole
     codeBuf = [];
   };
 
+  let tableBuf: string[] = [];
+
+  const flushTable = (): void => {
+    if (tableBuf.length === 0) return;
+    parseTable(tableBuf, cols, streaming).forEach(row => out.push(row));
+    tableBuf = [];
+  };
+
   for (const line of rawLines) {
     // 代码围栏检测
     const fence = matchFence(line);
     if (inCode) {
       if (fence !== null) {
-        // 闭合围栏
         flushCode();
         inCode = false;
         codeLang = '';
         continue;
       }
-      // 累积代码行
       codeBuf.push(line);
       continue;
     }
-    // 不在 code 中
     if (fence !== null) {
-      // 开启围栏
       inCode = true;
       codeLang = fence;
       codeBuf = [];
       continue;
     }
 
+    // 表格行检测（以 | 开头或包含 | 的行）
+    if (/^\s*\|/.test(line) || (tableBuf.length > 0 && /\|/.test(line))) {
+      tableBuf.push(line);
+      continue;
+    }
+    // 非表格行 → 先刷出累积的表格
+    flushTable();
+
     out.push(parseLine(line, cols, streaming));
   }
+  flushTable();
 
   // 流式未闭合围栏：把已累积的代码也输出（不丢内容）
   if (inCode) flushCode();
@@ -112,6 +128,17 @@ function parseLine(line: string, cols: number = 80, streaming: boolean = false):
   if (q) {
     const inner = parseInline(q[1]!, { base: STY_QUOTE });
     return [makeCell('▌', STY_QUOTE), makeCell(' ', STY_QUOTE), ...inner];
+  }
+
+  // 任务列表 - [x] / - [ ]
+  const task = line.match(/^(\s*)[-*]\s+\[([ xX])\]\s*(.*)$/);
+  if (task) {
+    const indent = task[1]!.length;
+    const done = task[2] !== ' ';
+    const check = done ? '☑ ' : '☐ ';
+    const sty = done ? STY_CHECK_DONE : STY_LIST_MARKER;
+    const content = parseInline(task[3]!, { base: done ? { dim: true } : {} });
+    return [...pad(indent), ...makeCells(check, sty), ...content];
   }
 
   // 无序列表 - / *
@@ -228,4 +255,67 @@ function splitCellsByLine(cells: Cell[]): Cell[][] {
     else lines[lines.length - 1]!.push(c);
   }
   return lines;
+}
+
+// ═══════ 表格解析 ═══════
+
+/** 解析表格行数组 → 每行的 cells（带对齐）。 */
+function parseTable(lines: string[], cols: number, streaming: boolean): Cell[][] {
+  // 解析所有行的单元格
+  const rows: string[][] = [];
+  let isSeparator: boolean[] = [];
+  for (const line of lines) {
+    // 跳过分隔行 |---|---|
+    if (/^\s*\|?\s*[-:]+[-| :]*$/.test(line.trim())) {
+      isSeparator.push(true);
+      continue;
+    }
+    isSeparator.push(false);
+    // 按 | 分割，去掉首尾空列
+    const cells = line.split('|').map(c => c.trim());
+    if (cells[0] === '') cells.shift();
+    if (cells[cells.length - 1] === '') cells.pop();
+    rows.push(cells);
+  }
+
+  if (rows.length === 0) return [];
+
+  // 计算每列最大宽度
+  const colCount = Math.max(...rows.map(r => r.length));
+  const colWidths: number[] = new Array(colCount).fill(0);
+  for (const row of rows) {
+    for (let ci = 0; ci < row.length; ci++) {
+      colWidths[ci] = Math.max(colWidths[ci]!, [...row[ci]!].length);
+    }
+  }
+
+  // 渲染每行
+  const out: Cell[][] = [];
+  for (let ri = 0; ri < rows.length; ri++) {
+    const isHeader = ri === 0;
+    const row = rows[ri]!;
+    const cells: Cell[] = [];
+    const sty = isHeader ? STY_TABLE_HEADER : {};
+    cells.push(...makeCells('│ ', STY_TABLE_BORDER));
+    for (let ci = 0; ci < colCount; ci++) {
+      const text = (row[ci] ?? '').padEnd(colWidths[ci]!);
+      const content = streaming ? makeCells(text, sty) : parseInline(text, { base: sty });
+      cells.push(...content);
+      cells.push(...makeCells(' │ ', STY_TABLE_BORDER));
+    }
+    out.push(cells);
+
+    // 表头后加分隔行
+    if (isHeader) {
+      const sep: Cell[] = [];
+      sep.push(...makeCells('├─', STY_TABLE_BORDER));
+      for (let ci = 0; ci < colCount; ci++) {
+        sep.push(...makeCells('─'.repeat(colWidths[ci]!), STY_TABLE_BORDER));
+        if (ci < colCount - 1) sep.push(...makeCells('─┼─', STY_TABLE_BORDER));
+      }
+      sep.push(...makeCells('─┤', STY_TABLE_BORDER));
+      out.push(sep);
+    }
+  }
+  return out;
 }
