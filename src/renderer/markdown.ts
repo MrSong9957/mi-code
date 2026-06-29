@@ -29,8 +29,9 @@ const STY_LIST_MARKER: Style = { fg: 'yellow' };
  * 解析整段 Markdown，返回"每行的 cells 数组"。
  * 输入用 \n 分行；输出每个元素是一行（已去 Markdown 标记、带样式）。
  * cols 用于水平线等需要知道终端宽度的元素。
+ * streaming=true 时跳过内联格式（粗/斜/代码/链接），只解析块级元素，避免流式时格式闪烁。
  */
-export function renderMarkdown(text: string, cols: number = 80): Cell[][] {
+export function renderMarkdown(text: string, cols: number = 80, streaming: boolean = false): Cell[][] {
   const rawLines = text.split('\n');
   const out: Cell[][] = [];
   let inCode = false;
@@ -70,7 +71,7 @@ export function renderMarkdown(text: string, cols: number = 80): Cell[][] {
       continue;
     }
 
-    out.push(parseLine(line, cols));
+    out.push(parseLine(line, cols, streaming));
   }
 
   // 流式未闭合围栏：把已累积的代码也输出（不丢内容）
@@ -88,8 +89,8 @@ function matchFence(line: string): string | null {
   return m[2] ?? '';
 }
 
-/** 解析一行非代码内容 → cells。 */
-function parseLine(line: string, cols: number = 80): Cell[] {
+/** 解析一行非代码内容 → cells。streaming=true 时跳过内联格式。 */
+function parseLine(line: string, cols: number = 80, streaming: boolean = false): Cell[] {
   if (line.trim() === '') return [];
 
   // 分隔线 --- / ***（动态宽度，用 ─ 填满终端宽度）
@@ -132,7 +133,8 @@ function parseLine(line: string, cols: number = 80): Cell[] {
     return [...pad(indent), ...marker, ...content];
   }
 
-  // 普通段落
+  // 普通段落（流式阶段跳过内联格式，避免未闭合标记闪烁）
+  if (streaming) return makeCells(line, {});
   return parseInline(line, { base: {} });
 }
 

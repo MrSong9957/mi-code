@@ -127,8 +127,8 @@ export class Renderer {
   }
 
   /** 流式 Markdown：累积文本经 renderMarkdown 转 cells，替换当前 assistant 消息。 */
-  appendStreamingMarkdown(text: string, _isFinal: boolean): void {
-    const rows = renderMarkdown(text, this.cols);
+  appendStreamingMarkdown(text: string, isFinal: boolean): void {
+    const rows = renderMarkdown(text, this.cols, !isFinal);
     this.messages.setStreamingRows(rows);
     this.scheduleRender();
   }
