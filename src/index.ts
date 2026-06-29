@@ -182,6 +182,12 @@ if (process.stdin.isTTY) {
           i++; continue;
         }
 
+        // Ctrl+O —— 切换思考内容展开/折叠
+        if (byte === 0x0f) {
+          renderer.toggleThinking();
+          i++; continue;
+        }
+
         // ESC 序列检测（方向键）
         if (byte === 0x1b && i + 2 < data.length && data[i + 1] === 0x5b) {
           if (data[i + 2] === 0x41) {  // 上箭头：光标上移一行
@@ -278,18 +284,20 @@ if (process.stdin.isTTY) {
                 ].join('\n');
 
                 isProcessing = true;
-                renderer.setHint('thinking');
-                printStyled('⏳ Thinking...', { dim: true });
+                renderer.startThinking();
 
                 const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
                 if (apiKey) {
                   const streamClient = new AnthropicStreamClient({ apiKey, model: MODEL });
                   const compactClient = new AnthropicStreamClient({ apiKey, model: SMALL_MODEL });
                   const eventBus = new StreamEventBus();
-                  // 状态栏实时反映工具进度（终于用上这条闲置总线）
-                  eventBus.onToolCall(d => renderer.setToolStatus(d.name, 'running'));
-                  eventBus.onToolResult(d => renderer.setToolStatus(d.name, 'done'));
-                  eventBus.onLoopEnd(() => renderer.clearToolStatus());
+                  // 工具执行显示：● 工具名（绿色）
+                  eventBus.onToolCall(d => {
+                    printStyled(`● ${d.name}`, { fg: 'green' });
+                  });
+                  eventBus.onToolResult(d => {
+                    printStyled(`  ⎿  Done`, { dim: true });
+                  });
                   const tools = Array.from(toolRegistry.tools.values()).map(t => t.definition);
                   const ac = new AbortController();
 
@@ -314,8 +322,7 @@ if (process.stdin.isTTY) {
                             // 流式中：增量解析（已闭合的标记/代码块即时成型）
                             renderer.appendStreamingMarkdown(assistantText, false);
                           } else if (delta.deltaType === 'thinking' && delta.content) {
-                            // thinking 不进 Markdown，按原始文本 dim 显示
-                            renderer.appendStreaming(delta.content, { dim: true, italic: true });
+                            renderer.appendThinking(delta.content);
                           }
                         } else if ('type' in msg && msg.type === 'assistant') {
                           // 一条 assistant 消息完成：finalize 流式（落定进 scrollback），下一条会新建
@@ -344,7 +351,7 @@ if (process.stdin.isTTY) {
                       printStyled(`[Error] ${err}`, { fg: 'red' });
                     } finally {
                       isProcessing = false;
-                      renderer.setHint(undefined);
+                      renderer.finishThinking();
                       renderer.clearToolStatus();
                       printLine('');
                       syncInput();
