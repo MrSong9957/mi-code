@@ -28,8 +28,9 @@ const STY_LIST_MARKER: Style = { fg: 'yellow' };
 /**
  * 解析整段 Markdown，返回"每行的 cells 数组"。
  * 输入用 \n 分行；输出每个元素是一行（已去 Markdown 标记、带样式）。
+ * cols 用于水平线等需要知道终端宽度的元素。
  */
-export function renderMarkdown(text: string): Cell[][] {
+export function renderMarkdown(text: string, cols: number = 80): Cell[][] {
   const rawLines = text.split('\n');
   const out: Cell[][] = [];
   let inCode = false;
@@ -69,7 +70,7 @@ export function renderMarkdown(text: string): Cell[][] {
       continue;
     }
 
-    out.push(parseLine(line));
+    out.push(parseLine(line, cols));
   }
 
   // 流式未闭合围栏：把已累积的代码也输出（不丢内容）
@@ -88,12 +89,12 @@ function matchFence(line: string): string | null {
 }
 
 /** 解析一行非代码内容 → cells。 */
-function parseLine(line: string): Cell[] {
+function parseLine(line: string, cols: number = 80): Cell[] {
   if (line.trim() === '') return [];
 
-  // 分隔线 --- / ***
+  // 分隔线 --- / ***（动态宽度，用 ─ 填满终端宽度）
   if (/^\s*(-\s*){3,}$/.test(line) || /^\s*(\*\s*){3,}$/.test(line)) {
-    return stringToCells('────────────────────────────────────────', STY_HR);
+    return stringToCells('─'.repeat(cols), STY_HR);
   }
 
   // 标题

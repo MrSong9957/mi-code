@@ -189,6 +189,7 @@ export class MessageBuffer {
 /**
  * 把一串 cells 按 wrapCols 折成多行（每行宽度不超过 wrapCols）。
  * wrapCols<=0 表示不折行（返回单行）。
+ * 词边界换行：遇到超宽时回退到最近的空格处断行，避免单词中间断开。
  * 宽字符不拆半：若本行剩余宽度不足以容纳下一个宽字符，换到下一行。
  */
 function wrapCells(cells: Cell[], wrapCols: number): Cell[][] {
@@ -197,15 +198,41 @@ function wrapCells(cells: Cell[], wrapCols: number): Cell[][] {
   const lines: Cell[][] = [];
   let cur: Cell[] = [];
   let width = 0;
+  // 记录当前行中最后一个空格的位置（用于词边界回退）
+  let lastSpaceIdx = -1;
+  let lastSpaceWidth = 0;
   for (const cell of cells) {
     const w = stringWidth(cell.char);
     if (width + w > wrapCols && cur.length > 0) {
-      lines.push(cur);
-      cur = [];
-      width = 0;
+      // 词边界回退：如果有空格，回退到空格处断行
+      if (lastSpaceIdx >= 0 && lastSpaceIdx < cur.length - 1) {
+        // 空格后的部分作为下一行的开头
+        const nextLineStart = cur.slice(lastSpaceIdx + 1);
+        cur.length = lastSpaceIdx; // 截断到空格处（含空格）
+        lines.push(cur);
+        cur = nextLineStart;
+        // 重新计算下一行的宽度
+        width = 0;
+        for (const c of cur) width += stringWidth(c.char);
+        lastSpaceIdx = -1;
+        // 重新扫描下一行中的空格
+        for (let i = 0; i < cur.length; i++) {
+          if (cur[i]!.char === ' ') { lastSpaceIdx = i; lastSpaceWidth = width; }
+        }
+      } else {
+        // 没有空格可回退，强制断行
+        lines.push(cur);
+        cur = [];
+        width = 0;
+        lastSpaceIdx = -1;
+      }
     }
     cur.push(cell);
     width += w;
+    if (cell.char === ' ') {
+      lastSpaceIdx = cur.length - 1;
+      lastSpaceWidth = width;
+    }
   }
   if (cur.length > 0) lines.push(cur);
   return lines;

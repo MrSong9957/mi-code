@@ -121,14 +121,14 @@ export class Renderer {
 
   /** 固化一条消息（按 \n 拆行，经 Markdown 渲染成带样式 cells，每行独立消息）。 */
   printMessage(text: string, role: MessageRole, _style: Style = {}): void {
-    const rows = text === '' ? [[]] : renderMarkdown(text);
+    const rows = text === '' ? [[]] : renderMarkdown(text, this.cols);
     this.messages.push(rows.map(r => ({ cells: r, role })));
     this.scheduleRender();
   }
 
   /** 流式 Markdown：累积文本经 renderMarkdown 转 cells，替换当前 assistant 消息。 */
   appendStreamingMarkdown(text: string, _isFinal: boolean): void {
-    const rows = renderMarkdown(text);
+    const rows = renderMarkdown(text, this.cols);
     this.messages.setStreamingRows(rows);
     this.scheduleRender();
   }
