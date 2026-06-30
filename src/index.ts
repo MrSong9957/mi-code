@@ -16,6 +16,7 @@ import { AnthropicStreamClient } from './agent/anthropic-stream-client.js';
 import { streamingQuery } from './agent/streaming-query.js';
 import { StreamEventBus } from './agent/stream-event-bus.js';
 import { UILayout } from './ui/index.js';
+import { computeEditDiff, computeWriteDiff } from './ui/block-format.js';
 import { ConfigStore } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
 import { TodoManager } from './agent/todo.js';
@@ -135,6 +136,40 @@ function printStyled(text: string, style: Record<string, unknown>): void {
   } else {
     layout.send('system', text);
   }
+}
+
+/**
+ * 根据工具名 + 输出，构造 tool_result 的 meta（行数统计 / 原始输出）。
+ *
+ * 物理本质：把工具执行结果翻译成「UI 能读懂的摘要数据」。
+ * - edit_file：用缓存的 input.old_text/new_text 算 +N/-M 行。
+ * - write_file：用缓存的新内容算（旧内容未知时算全新增）。
+ * - run_bash / 其他：直接传原始输出，让 formatter 内部 summarize。
+ */
+function buildToolResultMeta(
+  name: string,
+  output: string,
+  pendingToolInputs: Map<string, Record<string, unknown>>,
+): Record<string, unknown> {
+  const input = pendingToolInputs.get(name);
+  pendingToolInputs.delete(name);
+
+  if (name === 'edit_file' && input) {
+    const oldText = String(input.old_text ?? '');
+    const newText = String(input.new_text ?? '');
+    const { added, removed } = computeEditDiff(oldText, newText);
+    return { toolName: name, linesAdded: added, linesRemoved: removed, filePath: String(input.path ?? '') };
+  }
+
+  if (name === 'write_file' && input) {
+    // write_file 覆盖式：input 只有新内容，旧内容未知 → 当作全新增
+    const newText = String(input.content ?? '');
+    const { added, removed } = computeWriteDiff(undefined, newText);
+    return { toolName: name, linesAdded: added, linesRemoved: removed, filePath: String(input.path ?? '') };
+  }
+
+  // run_bash / 其他：传原始输出（formatter 内部 summarize，带 ctrl+o 折叠提示）
+  return { toolName: name, rawOutput: output };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -305,12 +340,21 @@ if (process.stdin.isTTY) {
                   const streamClient = new AnthropicStreamClient({ apiKey, model: MODEL });
                   const compactClient = new AnthropicStreamClient({ apiKey, model: SMALL_MODEL });
                   const eventBus = new StreamEventBus();
-                  // 工具执行显示：● 工具名
+                  // 工具调用 input 缓存：onToolCall 记录，onToolResult 按 name 取回算 diff。
+                  // （写工具串行执行，按 name 匹配安全；读/并发工具不读 input，不受影响。）
+                  const pendingToolInputs = new Map<string, Record<string, unknown>>();
+                  /**
+                   * 工具结果显示：● Name(args) + ⎿ 摘要。
+                   * 物理本质：把工具调用的真实数据（命令、行数、输出）接回 UI。
+                   */
                   eventBus.onToolCall(d => {
-                    layout.send('tool_call', '', { toolName: d.name });
+                    layout.send('tool_call', '', { toolName: d.name, toolInput: d.input });
+                    if (d.name === 'edit_file' || d.name === 'write_file') {
+                      pendingToolInputs.set(d.name, d.input);
+                    }
                   });
                   eventBus.onToolResult(d => {
-                    layout.send('tool_result');
+                    layout.send('tool_result', '', buildToolResultMeta(d.name, d.output, pendingToolInputs));
                   });
                   const tools = Array.from(toolRegistry.tools.values()).map(t => t.definition);
                   const ac = new AbortController();
@@ -352,8 +396,8 @@ if (process.stdin.isTTY) {
                           }
                         } else if ('type' in msg && msg.type === 'tool_result') {
                           const tr = msg as { type: 'tool_result'; name: string; output: string };
-                          layout.send('tool_result');
-                          // PostToolUse hook：摘要日志经 UILayout 画进消息区
+                          // 工具结果显示已由 eventBus.onToolResult 处理（带行数/输出摘要），
+                          // 这里不再重复 send，仅跑 PostToolUse hook。
                           void hookRunner.run({
                             name: 'PostToolUse',
                             payload: { tool_name: tr.name, output: tr.output },
