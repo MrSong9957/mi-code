@@ -119,10 +119,17 @@ export class Renderer {
 
   // ═══════ 消息输出 ═══════
 
-  /** 固化一条消息（按 \n 拆行，经 Markdown 渲染成带样式 cells，每行独立消息）。 */
-  printMessage(text: string, role: MessageRole, _style: Style = {}): void {
+  /** 固化一条消息（按 \n 拆行，经 Markdown 渲染成带样式 cells，每行独立消息）。
+   *  传入的 style 作为「基础层」叠加到每个 cell：cell 自身已有的 style 属性优先
+   *  （避免覆盖 Markdown 解析出的标题/代码等颜色），未设置的属性由 style 补齐。
+   *  这样 MessageFormatter 的 ● (magenta) / ⎿ (dim) 才能真正着色。 */
+  printMessage(text: string, role: MessageRole, style: Style = {}): void {
     const rows = text === '' ? [[]] : renderMarkdown(text, this.cols);
-    this.messages.push(rows.map(r => ({ cells: r, role })));
+    const hasStyle = style && Object.keys(style).length > 0;
+    const styledRows = hasStyle
+      ? rows.map(r => r.map(c => ({ ...c, style: mergeBaseStyle(c.style, style) })))
+      : rows;
+    this.messages.push(styledRows.map(r => ({ cells: r, role })));
     this.scheduleRender();
   }
 
@@ -458,4 +465,12 @@ export class Renderer {
     }
     return lines;
   }
+}
+
+/**
+ * 把 base style 合并到 cell 的 style 之上：cell 自身属性优先，base 仅补齐空缺。
+ * 用于 printMessage：让传入的 ● magenta / ⎿ dim 等样式着色，又不破坏 Markdown 颜色。
+ */
+function mergeBaseStyle(cellStyle: Style, base: Style): Style {
+  return { ...base, ...cellStyle };
 }

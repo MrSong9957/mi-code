@@ -157,4 +157,53 @@ describe('主屏增长画布渲染器', () => {
       expect(all.some(l => l.includes('bold'))).toBe(true);
     });
   });
+
+  describe('printMessage 应用传入的 style（颜色不再被丢弃）', () => {
+    it('magenta style → 输出含 35m 颜色码', () => {
+      const frames: string[] = [];
+      const r = new Renderer({
+        rows: 6, cols: 40,
+        writer: s => frames.push(s),
+        status: { model: 'M', branch: 'b' },
+      });
+      r.enter();
+      r.printMessage('● Bash(npm test)', 'system', { fg: 'magenta' });
+      r.flushNow();
+      const all = frames.join('');
+      // 35m = magenta 前景色
+      expect(/\[35m/.test(all)).toBe(true);
+      expect(all).toContain('Bash(npm test)');
+    });
+
+    it('dim style → 输出含 2m 颜色码', () => {
+      const frames: string[] = [];
+      const r = new Renderer({
+        rows: 6, cols: 40,
+        writer: s => frames.push(s),
+        status: { model: 'M', branch: 'b' },
+      });
+      r.enter();
+      r.printMessage('⎿  Done', 'system', { dim: true });
+      r.flushNow();
+      const all = frames.join('');
+      expect(/\[2m/.test(all)).toBe(true);
+      expect(all).toContain('Done');
+    });
+
+    it('无 style 时（{}）不强制改变颜色', () => {
+      const frames: string[] = [];
+      const r = new Renderer({
+        rows: 6, cols: 40,
+        writer: s => frames.push(s),
+        status: { model: 'M', branch: 'b' },
+      });
+      r.enter();
+      r.printMessage('plain text', 'system', {});
+      r.flushNow();
+      const all = frames.join('');
+      expect(all).toContain('plain text');
+      // 不应被强制成 magenta
+      expect(/\[35m/.test(all)).toBe(false);
+    });
+  });
 });
