@@ -29,7 +29,8 @@ export interface PipelineRenderer {
     isFinal: boolean,
     opts?: { indent?: number; firstLinePrefix?: string; firstLineStyle?: Style },
   ): void;
-  finalizeStreaming(): void;
+  /** 封口流式（插分隔符，不强制 flushNow）——比 finalizeStreaming 温和 */
+  sealStreaming(): void;
   flushNow(): void;
   clearMessages(): void;
 }
@@ -54,9 +55,6 @@ export class BlockPipeline {
   private hasContent = false;
   private assistantGapApplied = false;
   private thinkingActive = false;
-  /** renderer.finalizeStreaming() 刚执行过（它已插一个空 system 分隔行）；
-   *  下一次 ensureGap 时据此跳过，避免双重空行 */
-  private justFinalized = false;
   /** tool_call → tool_result 的 input 缓存（按 name 匹配，算 diff 用） */
   private pendingToolInputs = new Map<string, Record<string, unknown>>();
 
@@ -88,14 +86,15 @@ export class BlockPipeline {
 
       case 'thinking_end':
         // thinking 摘要行（2 空格缩进烤进 content，dim 样式）
+        // thinking 走 printMessage（独立行），不走 setStreamingRows，
+        // 所以不需要 finalizeStreaming 封口（那会触发 flushNow + 插分隔行，
+        // 增加帧频率与状态机复杂度）。
         if (this.thinkingActive) {
           this.print(MessageFormatter.format('thinking_end', {
             duration: block.durationSec,
             filesRead: block.filesRead,
           }));
         }
-        this.renderer.finalizeStreaming();
-        this.justFinalized = true; // finalizeStreaming 已插空分隔行
         this.thinkingActive = false;
         break;
 
@@ -107,8 +106,8 @@ export class BlockPipeline {
         }
         this.renderer.appendStreamingMarkdown(block.text, block.isFinal, ASSISTANT_FORMAT);
         if (block.isFinal) {
-          this.renderer.finalizeStreaming();
-          this.justFinalized = true; // finalizeStreaming 已插空分隔行
+          // 封口（插分隔符防覆盖），但不强制 flushNow——减少渲染竞态
+          this.renderer.sealStreaming();
           this.hasContent = true;
           this.assistantGapApplied = false; // 下一个 assistant 块重新加空行
         }
@@ -171,11 +170,6 @@ export class BlockPipeline {
   }
 
   private ensureGap(): void {
-    // finalizeStreaming 已插空分隔行 → 跳过，避免双重空行
-    if (this.justFinalized) {
-      this.justFinalized = false;
-      return;
-    }
     if (this.hasContent) {
       this.renderer.printMessage('', 'system');
     }
@@ -198,7 +192,6 @@ export class BlockPipeline {
     this.hasContent = false;
     this.assistantGapApplied = false;
     this.thinkingActive = false;
-    this.justFinalized = false;
     this.pendingToolInputs.clear();
     this.renderer.clearMessages();
   }

@@ -226,6 +226,11 @@ export class UILayout {
     this.renderer.finalizeStreaming();
   }
 
+  /** 透传：温和封口（插分隔符，不强制 flushNow）——供 pipeline 用 */
+  rawSealStreaming(): void {
+    this.renderer.sealStreaming();
+  }
+
   /** 透传：清空消息区 */
   rawClearMessages(): void {
     this.renderer.clearMessages();

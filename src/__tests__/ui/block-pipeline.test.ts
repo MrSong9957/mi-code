@@ -16,6 +16,7 @@ function mockRenderer() {
     appendStreamingMarkdown: vi.fn((text: string, isFinal: boolean) => {
       streamMarks.push({ text, isFinal });
     }),
+    sealStreaming: vi.fn(),
     finalizeStreaming: vi.fn(),
     appendStreaming: vi.fn(),
     flushNow: vi.fn(),
@@ -165,15 +166,15 @@ describe('BlockPipeline', () => {
       expect(emptyCount).toBe(1); // 仅首块 tool_call 前的空行，result 续接不另加
     });
 
-    it('finalizeStreaming 后下一个块不出现双重空行', () => {
+    it('thinking→assistant 之间不出现双重空行', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
-      // thinking 块（finalizeStreaming 会插分隔行）
+      // thinking 块（thinking_end 不再调 finalizeStreaming，无多余分隔行）
       p.emit({ kind: 'thinking_start' });
       p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
       // 下一个块（assistant_text）
       p.emit({ kind: 'assistant_text', text: '你好', isFinal: true });
-      // thinking 与 assistant 之间不应有连续两个空行
+      // 不应有连续两个空行
       const empties = prints.map(p => p.text === '');
       let consecutiveDouble = false;
       for (let i = 0; i < empties.length - 1; i++) {

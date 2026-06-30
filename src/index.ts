@@ -127,7 +127,7 @@ const layout = new UILayout({
 const pipeline = new BlockPipeline({
   printMessage: (text, role, style) => layout.rawPrintMessage(text, (role ?? 'system') as 'user' | 'assistant' | 'system', style ?? {}),
   appendStreamingMarkdown: (text, isFinal, opts) => layout.rawAppendStreamingMarkdown(text, isFinal, opts ?? {}),
-  finalizeStreaming: () => layout.rawFinalizeStreaming(),
+  sealStreaming: () => layout.rawSealStreaming(),
   flushNow: () => layout.commit(),
   clearMessages: () => layout.rawClearMessages(),
 });

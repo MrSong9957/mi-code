@@ -165,6 +165,13 @@ export class Renderer {
     this.scheduleRender();
   }
 
+  /** 封口流式（仅插分隔符，不强制 flushNow）：供 pipeline 在 assistant isFinal 后调用。
+   *  比 finalizeStreaming 温和——不触发额外 commit 帧，减少渲染竞态。 */
+  sealStreaming(): void {
+    this.messages.appendLine('', 'system', {});
+    this.scheduleRender();
+  }
+
   /** 清空消息区。 */
   clearMessages(): void {
     this.messages.clear();
