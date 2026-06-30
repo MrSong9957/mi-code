@@ -360,9 +360,12 @@ if (process.stdin.isTTY) {
                       printStyled(`[Error] ${err}`, { fg: 'red' });
                     } finally {
                       isProcessing = false;
-                      // 如果还在思考状态（没有收到文本），折叠思考
                       const ts = renderer.getThinkingState();
-                      if (ts && !ts.collapsed) {
+                      if (ts) {
+                        // 显示思考内容（dim 灰色）
+                        if (ts.content) {
+                          printStyled(ts.content, { dim: true });
+                        }
                         printStyled(`   Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
                         renderer.finishThinking();
                       }
