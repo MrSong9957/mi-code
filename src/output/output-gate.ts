@@ -5,15 +5,17 @@
 // 所有车辆（输出）必须经过收费站（OutputGate），
 // 不允许任何车走应急车道（直接写终端）。
 //
-// 这是 Claude Code log-update.ts 的同款机制：
-// - 唯一出口：所有输出都经过 gate.send()
-// - 优先级队列：error > thinking > tool > assistant > system
+// 当前职责：
+// - 消息排队：优先级队列（error > thinking > tool > assistant > system）
 // - 编码清洗：GBK→UTF-8 自动检测
-// - 帧缓冲：只写变化的格子
+// - 样式管理：通过 StylePool 生成 ANSI 转义序列
+//
+// 未来职责（待集成）：
+// - 帧缓冲：通过 LayoutScheduler 计算布局，只写变化的格子
+// - 内容增长模型：新行靠 LF 滚入 scrollback，页脚钉底
 
 import { MessageQueue } from './message-queue.js';
 import { Encoder } from './encoder.js';
-import { LayoutScheduler } from './layout-scheduler.js';
 import { StylePool } from './style-pool.js';
 import type { MessageType, OutputMessage, Writer, TermSize } from './types.js';
 import { MessagePriority } from './types.js';
@@ -26,15 +28,15 @@ export interface OutputGateOptions {
 
 export class OutputGate {
   private queue: MessageQueue;
-  private layout: LayoutScheduler;
   private stylePool: StylePool;
   private writer: Writer;
+  private termSize: TermSize;
 
   constructor(options: OutputGateOptions) {
     this.queue = new MessageQueue();
-    this.layout = new LayoutScheduler({ rows: options.rows, cols: options.cols });
     this.stylePool = new StylePool();
     this.writer = options.writer;
+    this.termSize = { rows: options.rows, cols: options.cols };
   }
 
   /**
@@ -126,7 +128,7 @@ export class OutputGate {
    * 更新终端尺寸
    */
   updateTermSize(size: TermSize): void {
-    this.layout.updateTermSize(size);
+    this.termSize = size;
   }
 
   /**

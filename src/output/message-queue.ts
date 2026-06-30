@@ -8,6 +8,12 @@
 import type { OutputMessage, MessageType } from './types.js';
 import { MessagePriority } from './types.js';
 
+/**
+ * 全局消息 ID 计数器（模块级）
+ *
+ * 有意设计为模块级而非实例级，确保跨所有 MessageQueue 实例的 ID 全局唯一。
+ * 这样即使创建多个队列实例，消息 ID 也不会冲突。
+ */
 let nextId = 0;
 
 export class MessageQueue {

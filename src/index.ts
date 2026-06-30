@@ -29,6 +29,7 @@ import { ScheduleManager } from './agent/scheduler/index.js';
 import { WorktreeManager } from './worktree/index.js';
 import { TaskBoard } from './task-board/index.js';
 import { HistoryManager } from './history.js';
+import { OutputGate } from './output/index.js';
 
 const VERSION = "1.0.0";
 
@@ -107,6 +108,11 @@ function readTermSize(): { rows: number; cols: number } {
  * 滚动交给终端原生 scrollback（用户用滚动条翻历史）。
  */
 const termSize = readTermSize();
+
+/**
+ * Renderer：负责流式 Markdown 渲染和帧缓冲（逐格 diff）
+ * 职责：AI 回复的流式渲染、thinking 状态显示、输入框管理
+ */
 const renderer = new Renderer({
   rows: termSize.rows,
   cols: termSize.cols,
@@ -114,14 +120,30 @@ const renderer = new Renderer({
   status: { mode: 'Act', model: MODEL, branch: GIT_BRANCH, dir: SHORT_DIR, contextUsage: 0 },
 });
 
+/**
+ * OutputGate：负责简单消息输出和编码清洗
+ * 职责：系统消息、错误信息、hook 日志、工具状态
+ *
+ * 注意：gate 和 renderer 是两个独立的输出通道：
+ * - gate：简单消息，直接写终端（无帧缓冲）
+ * - renderer：流式内容，通过帧缓冲优化（逐格 diff）
+ */
+const gate = new OutputGate({
+  rows: termSize.rows,
+  cols: termSize.cols,
+  writer: (s: string) => process.stdout.write(s),
+});
+
 /** 把一行文本作为"系统消息"固化进消息区（经 Markdown 渲染进 scrollback）。 */
 function printLine(text: string): void {
-  renderer.printMessage(text, 'system', {});
+  gate.send('system', text);
+  gate.flush();
 }
 
 /** 把一行带样式的消息固化进消息区。 */
 function printStyled(text: string, style: Parameters<typeof renderer.printMessage>[2]): void {
-  renderer.printMessage(text, 'system', style);
+  gate.send('system', text, style);
+  gate.flush();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -319,8 +341,11 @@ if (process.stdin.isTTY) {
                         if ('type' in msg && msg.type === 'content_block_delta') {
                           const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
                           if (delta.deltaType === 'text' && delta.content) {
-                            // 文本开始时，输出思考内容和折叠指示器
+                            // 文本开始时，先固化思考内容
                             if (assistantText === '' && thinkingContent) {
+                              // 先 finalize 之前的 thinking 流式内容
+                              renderer.finalizeStreaming();
+                              // 打印思考内容和折叠指示器
                               printStyled(thinkingContent, { dim: true });
                               const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
                               printStyled(`   Thought for ${elapsed}s (ctrl+o to expand)`, { dim: true });
@@ -330,6 +355,8 @@ if (process.stdin.isTTY) {
                             renderer.appendStreamingMarkdown(assistantText, false);
                           } else if (delta.deltaType === 'thinking' && delta.content) {
                             thinkingContent += delta.content;
+                            // 实时渲染 thinking 内容（带 dim 样式）
+                            renderer.appendStreaming(thinkingContent, { dim: true });
                           }
                         } else if ('type' in msg && msg.type === 'assistant') {
                           // 一条 assistant 消息完成：finalize 流式（落定进 scrollback），下一条会新建
@@ -451,6 +478,7 @@ renderer.enter();
 process.stdout.on('resize', () => {
   const { rows, cols } = readTermSize();
   renderer.resize(rows, cols);
+  gate.updateTermSize({ rows, cols });
 });
 
 // 进程退出兜底：务必退出备用屏、恢复光标，否则用户终端残留在备用屏

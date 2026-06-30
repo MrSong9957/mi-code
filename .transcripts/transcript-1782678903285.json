@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "content": "帮我建一个 CLI"
+  },
+  {
+    "role": "assistant",
+    "content": "好的，我来创建文件。"
+  }
+]
