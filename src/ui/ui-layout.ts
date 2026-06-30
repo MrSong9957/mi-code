@@ -2,10 +2,9 @@
 // UI 布局管理器（主入口）
 //
 // 物理本质：排版工厂的总管。
-// 接收消息 → 格式化 → 分区 → 布局 → 帧缓冲 → 终端。
+// 接收消息 → 格式化 → 布局 → 帧缓冲 → 终端。
 
 import { MessageFormatter } from './message-formatter.js';
-import { ContentRegion } from './content-region.js';
 import { Renderer } from '../renderer/renderer.js';
 import type { UIMessageType, UIMessageMeta, Writer } from './types.js';
 import type { StatusBarState, ToolStatus } from '../renderer/status-bar.js';
@@ -20,7 +19,6 @@ export interface UILayoutOptions {
 
 export class UILayout {
   private renderer: Renderer;
-  private region: ContentRegion;
   private streamingContent: string = '';
   private streamingType: 'thinking' | 'assistant' | null = null;
 
@@ -32,7 +30,6 @@ export class UILayout {
       status: options.status,
       prompt: options.prompt,
     });
-    this.region = new ContentRegion();
   }
 
   /**
@@ -48,11 +45,6 @@ export class UILayout {
 
     // 格式化
     const lines = MessageFormatter.format(type, meta ?? {}, content);
-
-    // 路由到对应区域
-    for (const line of lines) {
-      this.region.addLine(type, line);
-    }
 
     // 通过 renderer 输出
     for (const line of lines) {
@@ -124,11 +116,10 @@ export class UILayout {
   }
 
   /**
-   * 更新状态栏
+   * 更新状态栏（暂未实现）
+   *
+   * TODO: 当需要运行时更新状态栏时实现此方法
    */
-  setStatus(_status: Partial<StatusBarState>): void {
-    // 状态栏由构造时的 status 信息驱动，暂不支持运行时更新
-  }
 
   /**
    * 设置工具状态
@@ -169,7 +160,6 @@ export class UILayout {
    * 清空所有内容
    */
   clear(): void {
-    this.region.clear();
     this.streamingContent = '';
     this.streamingType = null;
     this.renderer.clearMessages();
