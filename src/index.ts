@@ -356,8 +356,8 @@ if (process.stdin.isTTY) {
                             renderer.appendStreamingMarkdown(assistantText, false);
                           } else if (delta.deltaType === 'thinking' && delta.content) {
                             thinkingContent += delta.content;
-                            // 实时渲染 thinking 内容（带 dim 样式）
-                            renderer.appendStreaming(thinkingContent, { dim: true });
+                            // 只传入新的 delta 内容（appendStreaming 是追加模式）
+                            renderer.appendStreaming(delta.content, { dim: true });
                           }
                         } else if ('type' in msg && msg.type === 'assistant') {
                           // 一条 assistant 消息完成：finalize 流式（落定进 scrollback），下一条会新建
