@@ -182,9 +182,8 @@ if (process.stdin.isTTY) {
           i++; continue;
         }
 
-        // Ctrl+O —— 切换思考内容展开/折叠
+        // Ctrl+O —— 预留：思考内容展开/折叠（待实现）
         if (byte === 0x0f) {
-          renderer.toggleThinking();
           i++; continue;
         }
 
@@ -284,7 +283,8 @@ if (process.stdin.isTTY) {
                 ].join('\n');
 
                 isProcessing = true;
-                renderer.startThinking();
+                let thinkingContent = '';
+                let thinkingStart = Date.now();
                 printStyled(`● Thinking…`, {});
 
                 const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
@@ -320,18 +320,16 @@ if (process.stdin.isTTY) {
                           const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
                           if (delta.deltaType === 'text' && delta.content) {
                             // 文本开始时，输出思考内容和折叠指示器
-                            if (assistantText === '') {
-                              const ts = renderer.getThinkingState();
-                              if (ts) {
-                                if (ts.content) printStyled(ts.content, { dim: true });
-                                printStyled(`   Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
-                                renderer.finishThinking();
-                              }
+                            if (assistantText === '' && thinkingContent) {
+                              printStyled(thinkingContent, { dim: true });
+                              const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
+                              printStyled(`   Thought for ${elapsed}s (ctrl+o to expand)`, { dim: true });
+                              thinkingContent = '';
                             }
                             assistantText += delta.content;
                             renderer.appendStreamingMarkdown(assistantText, false);
                           } else if (delta.deltaType === 'thinking' && delta.content) {
-                            renderer.appendThinking(delta.content);
+                            thinkingContent += delta.content;
                           }
                         } else if ('type' in msg && msg.type === 'assistant') {
                           // 一条 assistant 消息完成：finalize 流式（落定进 scrollback），下一条会新建
@@ -361,11 +359,11 @@ if (process.stdin.isTTY) {
                     } finally {
                       isProcessing = false;
                       // 如果还在思考状态（没有收到文本），显示内容并折叠
-                      const ts = renderer.getThinkingState();
-                      if (ts && !ts.collapsed) {
-                        if (ts.content) printStyled(ts.content, { dim: true });
-                        printStyled(`   Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
-                        renderer.finishThinking();
+                      if (thinkingContent) {
+                        printStyled(thinkingContent, { dim: true });
+                        const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
+                        printStyled(`   Thought for ${elapsed}s (ctrl+o to expand)`, { dim: true });
+                        thinkingContent = '';
                       }
                       printLine('');
                       syncInput();

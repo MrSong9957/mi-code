@@ -72,15 +72,6 @@ export class Renderer {
   /** 提示文本（todo 提醒等） */
   private hint: string | undefined;
 
-  /** 思考状态 */
-  private thinking: {
-    text: string;
-    startTime: number;
-    collapsed: boolean;
-    content: string;
-    timer: ReturnType<typeof setInterval> | null;
-  } | null = null;
-
   /** 是否已启动 */
   private entered = false;
   /** 上一帧的 screen（diff 用）+ 它的高度（增长判定） */
@@ -186,66 +177,6 @@ export class Renderer {
   }
   getPrompt(): string {
     return this.prompt;
-  }
-
-  // ═══════ 思考状态管理 ═══════
-
-  /** 开始思考：显示 ● Thinking for Xs… */
-  startThinking(): void {
-    if (this.thinking) this.stopThinking();
-    this.thinking = {
-      text: '',
-      startTime: Date.now(),
-      collapsed: false,
-      content: '',
-      timer: null,
-    };
-    // 每秒更新显示
-    this.thinking.timer = setInterval(() => this.scheduleRender(), 1000);
-    this.scheduleRender();
-  }
-
-  /** 追加思考文本 */
-  appendThinking(text: string): void {
-    if (!this.thinking) return;
-    this.thinking.content += text;
-  }
-
-  /** 思考完成：折叠为 Thought for Xs */
-  finishThinking(): void {
-    if (!this.thinking) return;
-    this.thinking.collapsed = true;
-    if (this.thinking.timer) {
-      clearInterval(this.thinking.timer);
-      this.thinking.timer = null;
-    }
-    this.scheduleRender();
-  }
-
-  /** 切换思考内容展开/折叠 */
-  toggleThinking(): void {
-    if (!this.thinking) return;
-    this.thinking.collapsed = !this.thinking.collapsed;
-    this.scheduleRender();
-  }
-
-  /** 停止思考（清理状态） */
-  private stopThinking(): void {
-    if (this.thinking?.timer) {
-      clearInterval(this.thinking.timer);
-    }
-    this.thinking = null;
-  }
-
-  /** 获取思考状态（用于渲染） */
-  getThinkingState(): { text: string; elapsed: number; collapsed: boolean; content: string } | null {
-    if (!this.thinking) return null;
-    return {
-      text: this.thinking.collapsed ? 'Thought' : 'Thinking',
-      elapsed: Math.floor((Date.now() - this.thinking.startTime) / 1000),
-      collapsed: this.thinking.collapsed,
-      content: this.thinking.content,
-    };
   }
 
   // ═══════ 节流 + commit ═══════
