@@ -54,6 +54,11 @@ export class BlockPipeline {
   private hasContent = false;
   private assistantGapApplied = false;
   private thinkingActive = false;
+  /** renderer.finalizeStreaming() 刚执行过（它已插一个空 system 分隔行）；
+   *  下一次 ensureGap 时据此跳过，避免双重空行 */
+  private justFinalized = false;
+  /** tool_call → tool_result 的 input 缓存（按 name 匹配，算 diff 用） */
+  private pendingToolInputs = new Map<string, Record<string, unknown>>();
 
   constructor(renderer: PipelineRenderer) {
     this.renderer = renderer;
@@ -89,6 +94,7 @@ export class BlockPipeline {
           }));
         }
         this.renderer.finalizeStreaming();
+        this.justFinalized = true; // finalizeStreaming 已插空分隔行
         this.thinkingActive = false;
         break;
 
@@ -101,6 +107,7 @@ export class BlockPipeline {
         this.renderer.appendStreamingMarkdown(block.text, block.isFinal, ASSISTANT_FORMAT);
         if (block.isFinal) {
           this.renderer.finalizeStreaming();
+          this.justFinalized = true; // finalizeStreaming 已插空分隔行
           this.hasContent = true;
           this.assistantGapApplied = false; // 下一个 assistant 块重新加空行
         }
@@ -109,6 +116,9 @@ export class BlockPipeline {
 
       case 'tool_call':
         this.openBlock();
+        // 缓存 input 供后续 tool_result 计算 diff（按 name 匹配；
+        // 写工具串行执行，安全。读工具不读 input，不受影响。）
+        this.pendingToolInputs.set(block.name, block.input);
         this.print(MessageFormatter.format('tool_call', {
           toolName: block.name,
           toolInput: block.input,
@@ -117,7 +127,10 @@ export class BlockPipeline {
 
       case 'tool_result': {
         // tool_result 续接 tool_call，不单独开新块（不加空行）
-        const meta = buildToolResultBlock(block.name, block.input, block.output);
+        // input 优先用 Block 自带的，否则从 tool_call 缓存按 name 取回
+        const input = block.input ?? this.pendingToolInputs.get(block.name);
+        this.pendingToolInputs.delete(block.name);
+        const meta = buildToolResultBlock(block.name, input, block.output);
         this.print(MessageFormatter.format('tool_result', meta));
         this.hasContent = true;
         break;
@@ -151,6 +164,11 @@ export class BlockPipeline {
   }
 
   private ensureGap(): void {
+    // finalizeStreaming 已插空分隔行 → 跳过，避免双重空行
+    if (this.justFinalized) {
+      this.justFinalized = false;
+      return;
+    }
     if (this.hasContent) {
       this.renderer.printMessage('', 'system');
     }
@@ -173,6 +191,8 @@ export class BlockPipeline {
     this.hasContent = false;
     this.assistantGapApplied = false;
     this.thinkingActive = false;
+    this.justFinalized = false;
+    this.pendingToolInputs.clear();
     this.renderer.clearMessages();
   }
 }

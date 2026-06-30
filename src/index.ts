@@ -16,7 +16,7 @@ import { AnthropicStreamClient } from './agent/anthropic-stream-client.js';
 import { streamingQuery } from './agent/streaming-query.js';
 import { StreamEventBus } from './agent/stream-event-bus.js';
 import { UILayout } from './ui/index.js';
-import { buildToolResultBlock } from './ui/block-format.js';
+import { BlockPipeline } from './ui/block-pipeline.js';
 import { ConfigStore } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
 import { TodoManager } from './agent/todo.js';
@@ -120,39 +120,38 @@ const layout = new UILayout({
   status: { mode: 'Act', model: MODEL, branch: GIT_BRANCH, dir: SHORT_DIR, contextUsage: 0 },
 });
 
-/** 把一行文本作为"系统消息"固化进消息区。 */
+/**
+ * 统一输出管道：所有渲染经 pipeline.emit(Block)，统一块间空行 + 格式契约。
+ * pipeline 直接调 layout 的 raw* 原语（透传到 Renderer），不走 layout.send。
+ */
+const pipeline = new BlockPipeline({
+  printMessage: (text, role, style) => layout.rawPrintMessage(text, (role ?? 'system') as 'user' | 'assistant' | 'system', style ?? {}),
+  appendStreamingMarkdown: (text, isFinal, opts) => layout.rawAppendStreamingMarkdown(text, isFinal, opts ?? {}),
+  finalizeStreaming: () => layout.rawFinalizeStreaming(),
+  flushNow: () => layout.commit(),
+  clearMessages: () => layout.rawClearMessages(),
+});
+
+/** 把一行文本作为"系统消息"固化进消息区（经统一管道）。 */
 function printLine(text: string): void {
-  layout.send('system', text);
+  pipeline.emit({ kind: 'system', text });
 }
 
-/** 把一行带样式的消息固化进消息区（语义路由到对应消息类型）。 */
+/** 把一行带样式的消息固化进消息区（经统一管道，按样式路由 Block kind）。 */
 function printStyled(text: string, style: Record<string, unknown>): void {
   if ((style as Record<string, unknown>).fg === 'green' && (style as Record<string, unknown>).bold) {
-    // input 类型：UILayout 会添加 ❯ 前缀，所以去掉原始文本中的 ❯
+    // input 类型：pipeline 会添加 ❯ 前缀，所以去掉原始文本中的 ❯
     const cleanText = text.replace(/^❯\s*/, '');
-    layout.send('input', cleanText);
+    pipeline.emit({ kind: 'user_input', text: cleanText });
   } else if ((style as Record<string, unknown>).fg === 'red') {
-    layout.send('error', text);
+    pipeline.emit({ kind: 'error', text });
   } else {
-    layout.send('system', text);
+    pipeline.emit({ kind: 'system', text });
   }
 }
 
-/**
- * 根据工具名 + 输出，构造 tool_result 的 meta（行数统计 / 原始输出）。
- *
- * 物理本质：从 pendingToolInputs 缓存取出工具 input，委托 block-format.buildToolResultBlock
- * 按工具名分派（edit_file→行数、bash→输出）。index.ts 不再关心具体怎么算。
- */
-function buildToolResultMeta(
-  name: string,
-  output: string,
-  pendingToolInputs: Map<string, Record<string, unknown>>,
-): Record<string, unknown> {
-  const input = pendingToolInputs.get(name);
-  pendingToolInputs.delete(name);
-  return buildToolResultBlock(name, input, output);
-}
+// 注：tool_result 的 diff 计算已移至 BlockPipeline（pendingToolInputs 缓存 +
+// buildToolResultBlock 在 pipeline 内部）。index.ts 只 emit Block，不关心怎么算。
 
 // ─────────────────────────────────────────────────────────────
 // UI 状态
@@ -315,28 +314,19 @@ if (process.stdin.isTTY) {
                 isProcessing = true;
                 let thinkingContent = '';
                 let thinkingStart = Date.now();
-                layout.send('thinking');
+                pipeline.emit({ kind: 'thinking_start' });
 
                 const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
                 if (apiKey) {
                   const streamClient = new AnthropicStreamClient({ apiKey, model: MODEL });
                   const compactClient = new AnthropicStreamClient({ apiKey, model: SMALL_MODEL });
                   const eventBus = new StreamEventBus();
-                  // 工具调用 input 缓存：onToolCall 记录，onToolResult 按 name 取回算 diff。
-                  // （写工具串行执行，按 name 匹配安全；读/并发工具不读 input，不受影响。）
-                  const pendingToolInputs = new Map<string, Record<string, unknown>>();
-                  /**
-                   * 工具结果显示：● Name(args) + ⎿ 摘要。
-                   * 物理本质：把工具调用的真实数据（命令、行数、输出）接回 UI。
-                   */
+                  // 工具显示经统一管道：emit Block，pipeline 内部缓存 input + 计算 diff。
                   eventBus.onToolCall(d => {
-                    layout.send('tool_call', '', { toolName: d.name, toolInput: d.input });
-                    if (d.name === 'edit_file' || d.name === 'write_file') {
-                      pendingToolInputs.set(d.name, d.input);
-                    }
+                    pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input });
                   });
                   eventBus.onToolResult(d => {
-                    layout.send('tool_result', '', buildToolResultMeta(d.name, d.output, pendingToolInputs));
+                    pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output });
                   });
                   const tools = Array.from(toolRegistry.tools.values()).map(t => t.definition);
                   const ac = new AbortController();
@@ -353,33 +343,32 @@ if (process.stdin.isTTY) {
                         eventBus,
                         compactClient,
                       })) {
-                        // AI 输出期间：累积 token，经 UILayout 的 Markdown 渲染进消息区
+                        // AI 输出期间：累积 token，经 pipeline 渲染进消息区
                         if ('type' in msg && msg.type === 'content_block_delta') {
                           const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
                           if (delta.deltaType === 'text' && delta.content) {
                             // 文本开始时，先固化思考内容
                             if (assistantText === '' && thinkingContent) {
                               const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-                              layout.finalizeStreaming(elapsed, 0);
+                              pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
                               thinkingContent = '';
                             }
                             assistantText += delta.content;
-                            layout.appendStreamingMarkdown(assistantText, false);
+                            pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: false });
                           } else if (delta.deltaType === 'thinking' && delta.content) {
                             thinkingContent += delta.content;
-                            layout.appendStreaming('thinking_content', delta.content);
+                            pipeline.emit({ kind: 'thinking_delta', content: delta.content });
                           }
                         } else if ('type' in msg && msg.type === 'assistant') {
                           // 一条 assistant 消息完成：finalize 流式（落定进 scrollback），下一条会新建
                           if (assistantText) {
-                            layout.appendStreamingMarkdown(assistantText, true);
-                            layout.finalizeStreaming();
+                            pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: true });
                             assistantText = '';
                           }
                         } else if ('type' in msg && msg.type === 'tool_result') {
                           const tr = msg as { type: 'tool_result'; name: string; output: string };
-                          // 工具结果显示已由 eventBus.onToolResult 处理（带行数/输出摘要），
-                          // 这里不再重复 send，仅跑 PostToolUse hook。
+                          // 工具结果显示已由 eventBus.onToolResult 经 pipeline 处理，
+                          // 这里仅跑 PostToolUse hook。
                           void hookRunner.run({
                             name: 'PostToolUse',
                             payload: { tool_name: tr.name, output: tr.output },
@@ -388,17 +377,17 @@ if (process.stdin.isTTY) {
                       }
                       // 循环结束兜底：若还有未收尾的累积文本，最终解析一次
                       if (assistantText) {
-                        layout.appendStreamingMarkdown(assistantText, true);
+                        pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: true });
                         assistantText = '';
                       }
                     } catch (err) {
-                      layout.send('error', `[Error] ${err}`);
+                      pipeline.emit({ kind: 'error', text: `[Error] ${err}` });
                     } finally {
                       isProcessing = false;
                       // 如果还在思考状态（没有收到文本），显示内容并折叠
                       if (thinkingContent) {
                         const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-                        layout.finalizeStreaming(elapsed, 0);
+                        pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
                         thinkingContent = '';
                       }
                       printLine('');
@@ -406,7 +395,7 @@ if (process.stdin.isTTY) {
                     }
                   })();
                 } else {
-                  layout.send('error', `[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`);
+                  pipeline.emit({ kind: 'error', text: `[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.` });
                   isProcessing = false;
                   layout.setHint(undefined);
                   syncInput();
@@ -463,8 +452,8 @@ if (process.stdin.isTTY) {
       // 兜底：处理完一批按键后确保输入框反映最新 input（流式期间也照常，输入框始终可编辑）
       syncInput();
     } catch (err) {
-      // 经 UILayout 显示
-      layout.send('error', `[stdin handler error] ${err instanceof Error ? err.message : String(err)}`);
+      // 经统一管道显示
+      pipeline.emit({ kind: 'error', text: `[stdin handler error] ${err instanceof Error ? err.message : String(err)}` });
     } finally {
       historyBusy = false;
       // 处理期间若有新数据到达（连按按键），续处理，确保零丢失

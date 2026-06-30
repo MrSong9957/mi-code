@@ -166,6 +166,23 @@ describe('BlockPipeline', () => {
       const emptyCount = prints.filter(p => p.text === '').length;
       expect(emptyCount).toBe(0); // 首块 tool_call，result 续接，无空行
     });
+
+    it('finalizeStreaming 后下一个块不出现双重空行', () => {
+      const { renderer, prints } = mockRenderer();
+      const p = new BlockPipeline(renderer);
+      // thinking 块（finalizeStreaming 会插分隔行）
+      p.emit({ kind: 'thinking_start' });
+      p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
+      // 下一个块（assistant_text）
+      p.emit({ kind: 'assistant_text', text: '你好', isFinal: true });
+      // thinking 与 assistant 之间不应有连续两个空行
+      const empties = prints.map(p => p.text === '');
+      let consecutiveDouble = false;
+      for (let i = 0; i < empties.length - 1; i++) {
+        if (empties[i] && empties[i + 1]) { consecutiveDouble = true; break; }
+      }
+      expect(consecutiveDouble).toBe(false);
+    });
   });
 });
 

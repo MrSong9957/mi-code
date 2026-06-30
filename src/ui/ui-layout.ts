@@ -8,6 +8,8 @@ import { MessageFormatter } from './message-formatter.js';
 import { Renderer } from '../renderer/renderer.js';
 import type { UIMessageType, UIMessageMeta, Writer } from './types.js';
 import type { StatusBarState, ToolStatus } from '../renderer/status-bar.js';
+import type { Style } from '../renderer/cell.js';
+import type { MessageRole } from '../renderer/message-buffer.js';
 
 export interface UILayoutOptions {
   rows: number;
@@ -194,6 +196,34 @@ export class UILayout {
     this.streamingType = null;
     this.hasContent = false;
     this.assistantGapApplied = false;
+    this.renderer.clearMessages();
+  }
+
+  // ═══════ PipelineRenderer 原语透传（供 BlockPipeline 直接调 Renderer）═══════
+  // 这些方法把 renderer 的底层原语暴露给 BlockPipeline，避免 pipeline 走
+  // send()（会重复套 gap/format 逻辑）。pipeline 自己管 gap + 格式契约。
+
+  /** 透传：固化一条带样式的消息（pipeline 用，自带 style 参数） */
+  rawPrintMessage(text: string, role: MessageRole, style: Style): void {
+    this.renderer.printMessage(text, role, style);
+  }
+
+  /** 透传：流式 Markdown（pipeline 传 opts 控制块格式） */
+  rawAppendStreamingMarkdown(
+    text: string,
+    isFinal: boolean,
+    opts: { indent?: number; firstLinePrefix?: string; firstLineStyle?: Style },
+  ): void {
+    this.renderer.appendStreamingMarkdown(text, isFinal, opts);
+  }
+
+  /** 透传：封口流式 */
+  rawFinalizeStreaming(): void {
+    this.renderer.finalizeStreaming();
+  }
+
+  /** 透传：清空消息区 */
+  rawClearMessages(): void {
     this.renderer.clearMessages();
   }
 
