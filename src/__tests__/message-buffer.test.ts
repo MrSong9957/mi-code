@@ -131,17 +131,17 @@ describe('MessageBuffer', () => {
   });
 
   // ─────────────── 统一块格式：● 首行前缀 + 全体 2 空格缩进 ───────────────
-  describe('setStreamingRows 块格式（前缀 + 缩进）', () => {
-    it('首行加 ● 前缀，所有行加 2 空格缩进（indent=2, prefix="● "）', () => {
+  describe('setStreamingRows 块格式（hanging indent：首行 ● 第0列，续行 2 空格）', () => {
+    it('首行 ● 在第 0 列（无缩进），续行 2 空格缩进', () => {
       const buf = new MessageBuffer();
       // 模拟 renderMarkdown 输出：两行段落
       const rows = [stringToCells('你好！', {}), stringToCells('我可以：', {})];
       buf.setStreamingRows(rows, { indent: 2, firstLinePrefix: '● ' });
       const vp = buf.viewport(5);
       expect(vp).toHaveLength(2);
-      // 首行：'  ● 你好！'（2 空格缩进 + ● 前缀）
-      expect(cellsText(vp[0]!)).toBe('  ● 你好！');
-      // 续行：'  我可以：'（2 空格缩进，无前缀）
+      // 首行：'● 你好！'（● 在第 0 列，无缩进）
+      expect(cellsText(vp[0]!)).toBe('● 你好！');
+      // 续行：'  我可以：'（2 空格缩进，对齐到 ● 后内容）
       expect(cellsText(vp[1]!)).toBe('  我可以：');
     });
 
@@ -159,6 +159,8 @@ describe('MessageBuffer', () => {
       const vp = buf.viewport(5);
       // 空行（renderMarkdown 对空行返回 []）保持空
       expect(cellsText(vp[1]!)).toBe('');
+      // 空行后的段落仍是续行（2 空格缩进，不再加 ● 前缀）
+      expect(cellsText(vp[2]!)).toBe('  第二段');
     });
 
     it('firstLineStyle 给前缀（●）着色（如 magenta）', () => {
@@ -181,7 +183,7 @@ describe('MessageBuffer', () => {
 
   // ─────────────── 续行缩进：wrapCells 折行时保留缩进 ───────────────
   describe('wrapCells 续行缩进（hangingIndent）', () => {
-    it('软换行的续行也带 2 空格缩进（不顶到 0 列）', () => {
+    it('软换行的续行也带 2 空格缩进（不顶到 0 列）；首行 ● 仍在第 0 列', () => {
       const buf = new MessageBuffer(10); // wrapCols=10
       // 一行长文本，会被折成多行
       buf.setStreamingRows(
@@ -190,9 +192,10 @@ describe('MessageBuffer', () => {
       );
       const vp = buf.viewport(5);
       expect(vp.length).toBeGreaterThanOrEqual(2);
-      // 首行有缩进 + 前缀
-      expect(cellsText(vp[0]!).startsWith('  ● ')).toBe(true);
-      // 续行也应以 2 空格开头（不是顶到 0 列）
+      // 首行：● 在第 0 列（无缩进）
+      expect(cellsText(vp[0]!).startsWith('● ')).toBe(true);
+      expect(cellsText(vp[0]!).startsWith('  ●')).toBe(false);
+      // 续行：2 空格开头（不是顶到 0 列）
       expect(cellsText(vp[1]!).startsWith('  ')).toBe(true);
     });
   });

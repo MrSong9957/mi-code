@@ -121,9 +121,10 @@ export class MessageBuffer {
    * 用于 Markdown 流式渲染：上层把累积文本经 renderMarkdown 转成 Cell[][]，
    * 整体替换当前消息——这样行内标记/代码块/标题等都能成型。
    *
-   * 块格式选项（统一渲染契约）：
-   * - indent：每行前置的缩进空格数（软换行续行也带同样缩进）。
-   * - firstLinePrefix：仅首行在缩进后额外前置的字符串（如 assistant 的 `● `）。
+   * 块格式选项（统一渲染契约，hanging indent）：
+   * - indent：续行（后续段落行 + 软换行）的缩进空格数。首行不加此缩进——
+   *   配合 firstLinePrefix 实现"● 在第 0 列、续行对齐到 ● 后内容"的悬挂缩进。
+   * - firstLinePrefix：仅首行前置的字符串（如 assistant 的 `● `）。
    * - firstLineStyle：前缀的样式（如 {fg:'magenta'}，让 ● 着色，与 thinking/tool 块一致）。
    *   空行（renderMarkdown 对空行返回 []）保持空，不补缩进/前缀——保留段落间空行结构。
    */
@@ -158,8 +159,9 @@ export class MessageBuffer {
         this.lines.push({ cells: [], role });
         continue;
       }
-      // 首行：缩进 + 前缀 + 内容；后续行：仅缩进 + 内容
-      const lead = isFirst ? [...indentCells, ...prefixCells] : indentCells;
+      // Hanging indent：首行只加前缀（● 在第 0 列，不缩进）；
+      // 续行（后续段落行 + 软换行）加 indent 空格，对齐到 ● 后内容。
+      const lead = isFirst ? prefixCells : indentCells;
       // leadLock：保护 lead 区不被当成词边界断点（避免 ● 后空格拆前缀）
       const wrapped = wrapCells([...lead, ...row], this.wrapCols, hangingIndent, lead.length);
       for (const seg of wrapped) {

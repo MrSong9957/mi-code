@@ -139,7 +139,7 @@ export class Renderer {
    *  软换行续行也带 2 空格缩进（不顶到 0 列）。 */
   appendStreamingMarkdown(text: string, isFinal: boolean): void {
     const rows = renderMarkdown(text, this.cols, !isFinal);
-    this.messages.setStreamingRows(rows, { indent: 0, firstLinePrefix: '● ', firstLineStyle: { fg: 'magenta' } });
+    this.messages.setStreamingRows(rows, { indent: 2, firstLinePrefix: '● ', firstLineStyle: { fg: 'magenta' } });
     this.scheduleRender();
   }
 
