@@ -51,6 +51,27 @@ export interface UIMessageStyle {
 /** Writer 接口 */
 export type Writer = (s: string) => void;
 
+/**
+ * Block：统一输出管道的数据模型。
+ *
+ * 物理本质：每「一块」要渲染到终端的内容都是一个 Block。
+ * 大模型事件、工具结果、用户输入、错误，全部转成 Block 丢给 pipeline.emit。
+ * pipeline 内部按 kind 统一处理块间空行 + 前缀 + 缩进 + 样式。
+ *
+ * 与 UIMessageType 并存过渡：UIMessageType 是 send-path 的旧路由类型，
+ * Block 是新管道的语义类型。最终 index.ts 只用 Block。
+ */
+export type Block =
+  | { kind: 'user_input'; text: string }
+  | { kind: 'thinking_start' }
+  | { kind: 'thinking_delta'; content: string }      // 累积，折叠模式下不渲染
+  | { kind: 'thinking_end'; durationSec: number; filesRead: number }
+  | { kind: 'assistant_text'; text: string; isFinal: boolean }  // 流式 markdown
+  | { kind: 'tool_call'; name: string; input: Record<string, unknown> }
+  | { kind: 'tool_result'; name: string; input?: Record<string, unknown>; output: string }
+  | { kind: 'system'; text: string }
+  | { kind: 'error'; text: string };
+
 /** 终端尺寸 */
 export interface TermSize {
   rows: number;
