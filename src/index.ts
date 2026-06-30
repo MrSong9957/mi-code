@@ -127,7 +127,9 @@ function printLine(text: string): void {
 /** 把一行带样式的消息固化进消息区（语义路由到对应消息类型）。 */
 function printStyled(text: string, style: Record<string, unknown>): void {
   if ((style as Record<string, unknown>).fg === 'green' && (style as Record<string, unknown>).bold) {
-    layout.send('input', text);
+    // input 类型：UILayout 会添加 ❯ 前缀，所以去掉原始文本中的 ❯
+    const cleanText = text.replace(/^❯\s*/, '');
+    layout.send('input', cleanText);
   } else if ((style as Record<string, unknown>).fg === 'red') {
     layout.send('error', text);
   } else {

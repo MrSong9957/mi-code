@@ -63,11 +63,9 @@ export class UILayout {
       this.streamingContent += content;
       this.streamingType = 'thinking';
 
-      // 格式化并输出
-      const lines = MessageFormatter.format('thinking_content', {}, content);
-      for (const line of lines) {
-        this.renderer.printMessage(line.content, 'system', line.style);
-      }
+      // 使用 appendStreaming 累积内容（带 2 空格缩进和 dim 样式）
+      const indentedContent = '  ' + content;
+      this.renderer.appendStreaming(indentedContent, { dim: true });
     } else if (type === 'assistant') {
       // assistant 内容：累积到流式缓冲区
       this.streamingContent += content;
