@@ -8,6 +8,7 @@ import {
   computeWriteDiff,
   summarizeOutput,
   formatThinkingSummary,
+  buildToolResultBlock,
 } from '../../ui/block-format.js';
 
 describe('block-format', () => {
@@ -143,6 +144,53 @@ describe('block-format', () => {
 
     it('duration 为 0 也正常输出', () => {
       expect(formatThinkingSummary(0, 0)).toBe('Thought for 0s (ctrl+o to expand)');
+    });
+  });
+
+  // ─────────────── buildToolResultBlock ───────────────
+  describe('buildToolResultBlock', () => {
+    it('edit_file → 算 +N/-M 行数', () => {
+      const result = buildToolResultBlock('edit_file', {
+        path: 'src/a.ts',
+        old_text: 'line1\nline2',
+        new_text: 'line1\nline3\nline4',
+      }, 'File edited: src/a.ts');
+      expect(result.linesAdded).toBe(2);
+      expect(result.linesRemoved).toBe(1);
+      expect(result.filePath).toBe('src/a.ts');
+      expect(result.rawOutput).toBeUndefined();
+    });
+
+    it('write_file → 算行数（旧内容未知当全新增）', () => {
+      const result = buildToolResultBlock('write_file', {
+        path: 'src/new.ts',
+        content: 'a\nb\nc',
+      }, 'File written: src/new.ts');
+      expect(result.linesAdded).toBe(3);
+      expect(result.linesRemoved).toBe(0);
+      expect(result.filePath).toBe('src/new.ts');
+    });
+
+    it('run_bash → 传 rawOutput（不计算行数）', () => {
+      const result = buildToolResultBlock('run_bash', {
+        command: 'npm test',
+      }, '> vitest\n✓ 10 tests');
+      expect(result.rawOutput).toBe('> vitest\n✓ 10 tests');
+      expect(result.linesAdded).toBeUndefined();
+      expect(result.linesRemoved).toBeUndefined();
+    });
+
+    it('未知工具 → 传 rawOutput', () => {
+      const result = buildToolResultBlock('memory_write', {
+        key: 'k', value: 'v',
+      }, 'ok');
+      expect(result.rawOutput).toBe('ok');
+    });
+
+    it('edit_file 但 input 为 undefined → 退化传 rawOutput', () => {
+      const result = buildToolResultBlock('edit_file', undefined, 'some output');
+      expect(result.rawOutput).toBe('some output');
+      expect(result.linesAdded).toBeUndefined();
     });
   });
 });

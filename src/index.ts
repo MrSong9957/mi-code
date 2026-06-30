@@ -16,7 +16,7 @@ import { AnthropicStreamClient } from './agent/anthropic-stream-client.js';
 import { streamingQuery } from './agent/streaming-query.js';
 import { StreamEventBus } from './agent/stream-event-bus.js';
 import { UILayout } from './ui/index.js';
-import { computeEditDiff, computeWriteDiff } from './ui/block-format.js';
+import { buildToolResultBlock } from './ui/block-format.js';
 import { ConfigStore } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
 import { TodoManager } from './agent/todo.js';
@@ -141,10 +141,8 @@ function printStyled(text: string, style: Record<string, unknown>): void {
 /**
  * 根据工具名 + 输出，构造 tool_result 的 meta（行数统计 / 原始输出）。
  *
- * 物理本质：把工具执行结果翻译成「UI 能读懂的摘要数据」。
- * - edit_file：用缓存的 input.old_text/new_text 算 +N/-M 行。
- * - write_file：用缓存的新内容算（旧内容未知时算全新增）。
- * - run_bash / 其他：直接传原始输出，让 formatter 内部 summarize。
+ * 物理本质：从 pendingToolInputs 缓存取出工具 input，委托 block-format.buildToolResultBlock
+ * 按工具名分派（edit_file→行数、bash→输出）。index.ts 不再关心具体怎么算。
  */
 function buildToolResultMeta(
   name: string,
@@ -153,23 +151,7 @@ function buildToolResultMeta(
 ): Record<string, unknown> {
   const input = pendingToolInputs.get(name);
   pendingToolInputs.delete(name);
-
-  if (name === 'edit_file' && input) {
-    const oldText = String(input.old_text ?? '');
-    const newText = String(input.new_text ?? '');
-    const { added, removed } = computeEditDiff(oldText, newText);
-    return { toolName: name, linesAdded: added, linesRemoved: removed, filePath: String(input.path ?? '') };
-  }
-
-  if (name === 'write_file' && input) {
-    // write_file 覆盖式：input 只有新内容，旧内容未知 → 当作全新增
-    const newText = String(input.content ?? '');
-    const { added, removed } = computeWriteDiff(undefined, newText);
-    return { toolName: name, linesAdded: added, linesRemoved: removed, filePath: String(input.path ?? '') };
-  }
-
-  // run_bash / 其他：传原始输出（formatter 内部 summarize，带 ctrl+o 折叠提示）
-  return { toolName: name, rawOutput: output };
+  return buildToolResultBlock(name, input, output);
 }
 
 // ─────────────────────────────────────────────────────────────

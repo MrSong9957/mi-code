@@ -208,6 +208,41 @@ export function formatThinkingSummary(durationSec: number, filesRead: number): s
   return text;
 }
 
+/**
+ * 把工具执行结果翻译成「UI 能读懂的摘要数据」。
+ *
+ * 物理本质：工具执行完返回的是原始字符串，但不同工具要显示不同摘要——
+ * edit_file 显示 +N/-M 行数、run_bash 显示 stdout 摘要。这个函数按工具名分派。
+ *
+ * - edit_file：用 input.old_text/new_text 算 +N/-M（经 computeEditDiff）。
+ * - write_file：覆盖式，旧内容未知 → 当作全新增（经 computeWriteDiff）。
+ * - run_bash / 其他：直接传 rawOutput（让 formatter 内部 summarize）。
+ * - input 为 undefined：退化传 rawOutput（无法算行数）。
+ *
+ * 返回值直接作为 MessageFormatter.format('tool_result', meta) 的 meta 字段。
+ */
+export function buildToolResultBlock(
+  name: string,
+  input: Record<string, unknown> | undefined,
+  output: string,
+): { linesAdded?: number; linesRemoved?: number; rawOutput?: string; filePath?: string; toolName: string } {
+  if (name === 'edit_file' && input) {
+    const oldText = String(input.old_text ?? '');
+    const newText = String(input.new_text ?? '');
+    const { added, removed } = computeEditDiff(oldText, newText);
+    return { toolName: name, linesAdded: added, linesRemoved: removed, filePath: String(input.path ?? '') };
+  }
+
+  if (name === 'write_file' && input) {
+    const newText = String(input.content ?? '');
+    const { added, removed } = computeWriteDiff(undefined, newText);
+    return { toolName: name, linesAdded: added, linesRemoved: removed, filePath: String(input.path ?? '') };
+  }
+
+  // run_bash / 其他 / input 缺失：传原始输出（formatter 内部 summarize，带 ctrl+o 折叠提示）
+  return { toolName: name, rawOutput: output };
+}
+
 // ─────────────── 内部辅助 ───────────────
 
 /** 按 \n 拆行并过滤掉空串（尾部空行不计入）。 */
