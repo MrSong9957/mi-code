@@ -1,6 +1,6 @@
 // 工具注册表：注册、查找、执行工具
-import { execSync } from 'child_process';
-import { TextDecoder } from 'util';
+import { spawnSync } from 'child_process';
+import { Encoder } from '../output/encoder.js';
 import type { ToolDefinition, ToolExecutor, RegisteredTool } from './types.js';
 import { createReadFileTool, createWriteFileTool, createEditFileTool } from './tools/index.js';
 import { createTodoTool } from './tools/todo-tool.js';
@@ -105,23 +105,6 @@ export function partitionToolCalls(calls: ToolCall[]): ToolBatch[] {
   return batches;
 }
 
-/**
- * 解码 shell 输出 Buffer：优先 UTF-8，若含替换字符则回退 GBK。
- *
- * 物理本质：收到一封用中文写的信，先试着用英文读（UTF-8），
- * 发现读不通（出现乱码符号），再换中文读（GBK）。
- */
-function decodeOutput(buf: Buffer): string {
-  const utf8 = buf.toString('utf8');
-  // U+FFFD 是 UTF-8 解码失败时的替换字符——出现它说明原文不是 UTF-8
-  if (!utf8.includes('�')) return utf8;
-  try {
-    return new TextDecoder('gbk').decode(buf);
-  } catch {
-    return utf8;
-  }
-}
-
 /** 内置工具：执行 bash 命令 */
 export function createBashTool(): { definition: ToolDefinition; executor: ToolExecutor } {
   return {
@@ -141,22 +124,45 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
     },
     executor: async (input) => {
       const command = input.command as string;
-      try {
-        const buf = execSync(command, {
-          timeout: 30000,
-          maxBuffer: 1024 * 1024,
-        });
-        return decodeOutput(buf);
-      } catch (err: unknown) {
-        const e = err as { stderr?: Buffer | string; message?: string; stdout?: Buffer | string };
-        if (e.stderr) {
-          return typeof e.stderr === 'string' ? e.stderr : decodeOutput(e.stderr);
+      // 使用 spawnSync 替代 execSync，显式配置 stdio 为 'pipe' 以捕获 stderr
+      // 而非让它直接输出到终端（导致乱码显示在 UI 上）
+      const result = spawnSync(command, {
+        shell: true,
+        timeout: 30000,
+        maxBuffer: 1024 * 1024,
+        // 不指定 encoding，确保返回 Buffer 以便正确处理 GBK
+        stdio: ['pipe', 'pipe', 'pipe'], // 显式捕获 stdin/stdout/stderr
+        windowsHide: true, // 隐藏 Windows 上的 CMD 窗口
+      });
+
+      // 检查是否超时
+      if (result.error) {
+        const err = result.error as NodeJS.ErrnoException;
+        if (err.code === 'ETIMEDOUT') {
+          return 'Command timed out after 30 seconds';
         }
-        if (e.stdout) {
-          return typeof e.stdout === 'string' ? e.stdout : decodeOutput(e.stdout);
-        }
-        return e.message || 'Command failed';
+        return `Command failed: ${err.message}`;
       }
+
+      // 有 stderr 输出（命令可能失败）
+      if (result.stderr && result.stderr.length > 0) {
+        const stderr = typeof result.stderr === 'string' ? result.stderr : Encoder.decodeBuffer(result.stderr);
+        // 如果命令失败（非零退出码），返回 stderr
+        if (result.status !== 0) {
+          return stderr;
+        }
+        // 命令成功但有 stderr（警告），附加到 stdout
+        const stdout = result.stdout ? (typeof result.stdout === 'string' ? result.stdout : Encoder.decodeBuffer(result.stdout)) : '';
+        return stdout ? `${stdout}\n${stderr}` : stderr;
+      }
+
+      // 命令成功，返回 stdout
+      if (result.stdout) {
+        return typeof result.stdout === 'string' ? result.stdout : Encoder.decodeBuffer(result.stdout);
+      }
+
+      // 无输出
+      return '';
     },
   };
 }
