@@ -319,18 +319,18 @@ if (process.stdin.isTTY) {
                         if ('type' in msg && msg.type === 'content_block_delta') {
                           const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
                           if (delta.deltaType === 'text' && delta.content) {
-                            // 文本开始时，折叠思考指示器
+                            // 文本开始时，输出思考内容和折叠指示器
                             if (assistantText === '') {
                               const ts = renderer.getThinkingState();
                               if (ts) {
-                                printStyled(`  Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
+                                if (ts.content) printStyled(ts.content, { dim: true });
+                                printStyled(`   Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
                                 renderer.finishThinking();
                               }
                             }
                             assistantText += delta.content;
                             renderer.appendStreamingMarkdown(assistantText, false);
                           } else if (delta.deltaType === 'thinking' && delta.content) {
-                            // 只累积思考文本，不显示（折叠状态，ctrl+o 展开）
                             renderer.appendThinking(delta.content);
                           }
                         } else if ('type' in msg && msg.type === 'assistant') {
@@ -360,12 +360,10 @@ if (process.stdin.isTTY) {
                       printStyled(`[Error] ${err}`, { fg: 'red' });
                     } finally {
                       isProcessing = false;
+                      // 如果还在思考状态（没有收到文本），显示内容并折叠
                       const ts = renderer.getThinkingState();
-                      if (ts) {
-                        // 显示思考内容（dim 灰色）
-                        if (ts.content) {
-                          printStyled(ts.content, { dim: true });
-                        }
+                      if (ts && !ts.collapsed) {
+                        if (ts.content) printStyled(ts.content, { dim: true });
                         printStyled(`   Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
                         renderer.finishThinking();
                       }
