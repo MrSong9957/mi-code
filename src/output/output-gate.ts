@@ -17,6 +17,7 @@
 import { MessageQueue } from './message-queue.js';
 import { Encoder } from './encoder.js';
 import { StylePool } from './style-pool.js';
+import { LayoutScheduler } from './layout-scheduler.js';
 import type { MessageType, OutputMessage, Writer, TermSize } from './types.js';
 import { MessagePriority } from './types.js';
 
@@ -31,12 +32,14 @@ export class OutputGate {
   private stylePool: StylePool;
   private writer: Writer;
   private termSize: TermSize;
+  private layout: LayoutScheduler;
 
   constructor(options: OutputGateOptions) {
     this.queue = new MessageQueue();
     this.stylePool = new StylePool();
     this.writer = options.writer;
     this.termSize = { rows: options.rows, cols: options.cols };
+    this.layout = new LayoutScheduler(this.termSize);
   }
 
   /**
@@ -86,6 +89,12 @@ export class OutputGate {
     const style = this.stylePool.get(message.style);
     const ansiStyle = this.stylePool.toAnsi(style);
 
+    // 计算布局（每条消息占 1 行）
+    this.layout.calculateLayout({
+      messageLines: 1,
+      inputLines: 1,
+    });
+
     // 生成 ANSI 序列
     const output = ansiStyle
       ? `${ansiStyle}${message.content}\x1b[0m`
@@ -129,6 +138,7 @@ export class OutputGate {
    */
   updateTermSize(size: TermSize): void {
     this.termSize = size;
+    this.layout.updateTermSize(size);
   }
 
   /**

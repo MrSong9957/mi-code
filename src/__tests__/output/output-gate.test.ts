@@ -79,4 +79,22 @@ describe('OutputGate', () => {
       // 不应抛出错误
     });
   });
+
+  describe('layout integration', () => {
+    it('should use layout scheduler for message processing', () => {
+      gate.send('system', 'msg1');
+      gate.send('system', 'msg2');
+      gate.flush();
+
+      expect(writer).toHaveBeenCalledTimes(2);
+    });
+
+    it('should update layout on resize', () => {
+      gate.updateTermSize({ rows: 40, cols: 120 });
+      // resize 后仍能正常处理消息
+      gate.send('system', 'msg');
+      gate.flush();
+      expect(writer).toHaveBeenCalledTimes(1);
+    });
+  });
 });

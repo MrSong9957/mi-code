@@ -121,29 +121,30 @@ const renderer = new Renderer({
 });
 
 /**
- * OutputGate：负责简单消息输出和编码清洗
- * 职责：系统消息、错误信息、hook 日志、工具状态
+ * OutputGate：负责编码清洗（不直接写终端）
+ * 职责：GBK/UTF-8 编码检测、消息标准化
  *
- * 注意：gate 和 renderer 是两个独立的输出通道：
- * - gate：简单消息，直接写终端（无帧缓冲）
- * - renderer：流式内容，通过帧缓冲优化（逐格 diff）
+ * 注意：gate 只负责编码清洗，输出仍通过 renderer 的帧缓冲机制。
+ * 这样可以避免两个输出通道的冲突。
  */
 const gate = new OutputGate({
   rows: termSize.rows,
   cols: termSize.cols,
-  writer: (s: string) => process.stdout.write(s),
+  writer: () => {}, // 不直接写终端
 });
 
 /** 把一行文本作为"系统消息"固化进消息区（经 Markdown 渲染进 scrollback）。 */
 function printLine(text: string): void {
-  gate.send('system', text);
-  gate.flush();
+  // 使用 gate 进行编码清洗，然后通过 renderer 输出
+  const cleaned = gate.normalize(text);
+  renderer.printMessage(cleaned, 'system', {});
 }
 
 /** 把一行带样式的消息固化进消息区。 */
 function printStyled(text: string, style: Parameters<typeof renderer.printMessage>[2]): void {
-  gate.send('system', text, style);
-  gate.flush();
+  // 使用 gate 进行编码清洗，然后通过 renderer 输出
+  const cleaned = gate.normalize(text);
+  renderer.printMessage(cleaned, 'system', style);
 }
 
 // ─────────────────────────────────────────────────────────────
