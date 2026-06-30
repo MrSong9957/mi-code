@@ -285,6 +285,7 @@ if (process.stdin.isTTY) {
 
                 isProcessing = true;
                 renderer.startThinking();
+                printStyled(`● Thinking… (ctrl+o to expand)`, {});
 
                 const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
                 if (apiKey) {
