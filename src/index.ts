@@ -319,11 +319,19 @@ if (process.stdin.isTTY) {
                         if ('type' in msg && msg.type === 'content_block_delta') {
                           const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
                           if (delta.deltaType === 'text' && delta.content) {
+                            // 文本开始时，折叠思考指示器
+                            if (assistantText === '') {
+                              const ts = renderer.getThinkingState();
+                              if (ts) {
+                                printStyled(`   Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
+                                renderer.finishThinking();
+                              }
+                            }
                             assistantText += delta.content;
-                            // 流式中：增量解析（已闭合的标记/代码块即时成型）
                             renderer.appendStreamingMarkdown(assistantText, false);
                           } else if (delta.deltaType === 'thinking' && delta.content) {
                             renderer.appendThinking(delta.content);
+                            renderer.appendStreaming(delta.content, { dim: true, italic: true });
                           }
                         } else if ('type' in msg && msg.type === 'assistant') {
                           // 一条 assistant 消息完成：finalize 流式（落定进 scrollback），下一条会新建
@@ -352,11 +360,12 @@ if (process.stdin.isTTY) {
                       printStyled(`[Error] ${err}`, { fg: 'red' });
                     } finally {
                       isProcessing = false;
+                      // 如果还在思考状态（没有收到文本），折叠思考
                       const ts = renderer.getThinkingState();
-                      if (ts) {
+                      if (ts && !ts.collapsed) {
                         printStyled(`   Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
+                        renderer.finishThinking();
                       }
-                      renderer.finishThinking();
                       printLine('');
                       syncInput();
                     }
