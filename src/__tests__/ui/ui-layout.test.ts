@@ -135,6 +135,59 @@ describe('UILayout', () => {
     });
   });
 
+  describe('块间空行（ensureBlockGap）', () => {
+    it('首个块前不加空行，后续块（thinking/tool_call/input）前加空行', () => {
+      const r = getRenderer();
+      const calls: string[] = [];
+      vi.spyOn(r, 'printMessage').mockImplementation((text: string) => {
+        calls.push(text);
+      });
+      // 第一个块：thinking（不应有空行前缀）
+      layout.send('thinking');
+      // 第二个块：tool_call（前面应有一个空行 printMessage('')）
+      layout.send('tool_call', '', { toolName: 'Bash' });
+      layout.commit();
+      // 找到 tool_call 那次 printMessage 的索引
+      const toolCallIdx = calls.findIndex(c => c.includes('Bash'));
+      expect(toolCallIdx).toBeGreaterThan(0);
+      // 紧邻 tool_call 之前的那次 printMessage 应是空串（块间空行）
+      expect(calls[toolCallIdx - 1]).toBe('');
+    });
+
+    it('assistant 流式块首次输出前加空行（仅一次，不随 delta 重复）', () => {
+      const r = getRenderer();
+      const calls: string[] = [];
+      vi.spyOn(r, 'printMessage').mockImplementation((text: string) => {
+        calls.push(text);
+      });
+      // 先有一个 thinking 块（建立 hasContent）
+      layout.send('thinking');
+      // assistant 流式：首次加空行
+      layout.appendStreamingMarkdown('你好', false);
+      const emptyBefore = calls.filter(c => c === '').length;
+      // 再次累积 delta，不应再加空行
+      layout.appendStreamingMarkdown('你好，世界', false);
+      const emptyAfter = calls.filter(c => c === '').length;
+      expect(emptyAfter).toBe(emptyBefore); // 不随 delta 重复
+      expect(emptyBefore).toBeGreaterThanOrEqual(1); // thinking 块前不加，assistant 前加
+    });
+
+    it('clear 后重置，新块不再加空行（首个块）', () => {
+      const r = getRenderer();
+      const calls: string[] = [];
+      vi.spyOn(r, 'printMessage').mockImplementation((text: string) => {
+        calls.push(text);
+      });
+      layout.send('thinking');
+      layout.clear();
+      calls.length = 0;
+      // clear 后第一个块不应有空行前缀
+      layout.send('thinking');
+      layout.commit();
+      expect(calls[0]).not.toBe('');
+    });
+  });
+
   describe('setInput', () => {
     it('should update input text', () => {
       layout.setInput('hello', 5);

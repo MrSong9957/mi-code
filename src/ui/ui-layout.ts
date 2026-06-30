@@ -21,6 +21,10 @@ export class UILayout {
   private renderer: Renderer;
   private streamingContent: string = '';
   private streamingType: 'thinking' | 'assistant' | null = null;
+  /** 是否已有内容输出（用于块间空行：首个块前不加空行，后续块前加） */
+  private hasContent: boolean = false;
+  /** 当前 assistant 流式块是否已加过块前空行（避免每次累积 delta 重复加） */
+  private assistantGapApplied: boolean = false;
 
   constructor(options: UILayoutOptions) {
     this.renderer = new Renderer({
@@ -30,6 +34,16 @@ export class UILayout {
       status: options.status,
       prompt: options.prompt,
     });
+  }
+
+  /**
+   * 块间空行：若已有内容，先输出一个空行分隔（贴近 Claude Code 的块间距）。
+   * 首个块前不加。用于 thinking / tool_call / assistant 块开始前。
+   */
+  private ensureBlockGap(): void {
+    if (this.hasContent) {
+      this.renderer.printMessage('', 'system');
+    }
   }
 
   /**
@@ -43,12 +57,23 @@ export class UILayout {
       this.finalizeStreaming();
     }
 
+    // 块边界：thinking / tool_call / input / assistant 开始前插空行
+    if (type === 'thinking' || type === 'tool_call' || type === 'input') {
+      this.ensureBlockGap();
+    }
+
     // 格式化
     const lines = MessageFormatter.format(type, meta ?? {}, content);
 
     // 通过 renderer 输出
     for (const line of lines) {
       this.renderer.printMessage(line.content, 'system', line.style);
+    }
+    this.hasContent = true;
+    // 仅 send('assistant') 走此路径时标记 assistant 块已加空行；
+    // 其他类型（thinking/tool_call/input）不影响 assistant 流式块的空行标记。
+    if (type === 'assistant') {
+      this.assistantGapApplied = true;
     }
   }
 
@@ -81,10 +106,16 @@ export class UILayout {
    * isFinal=true 时封口（固化进 scrollback）。
    */
   appendStreamingMarkdown(text: string, isFinal: boolean): void {
+    // assistant 流式块：首次输出前插块间空行（仅一次，避免每个 delta 重复）
+    if (!this.assistantGapApplied) {
+      this.ensureBlockGap();
+      this.assistantGapApplied = true;
+    }
     this.renderer.appendStreamingMarkdown(text, isFinal);
     if (isFinal) {
       this.streamingContent = '';
       this.streamingType = null;
+      this.hasContent = true;
     }
   }
 
@@ -161,6 +192,8 @@ export class UILayout {
   clear(): void {
     this.streamingContent = '';
     this.streamingType = null;
+    this.hasContent = false;
+    this.assistantGapApplied = false;
     this.renderer.clearMessages();
   }
 
