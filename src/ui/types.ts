@@ -17,8 +17,11 @@ export type UIMessageType =
 
 /** 消息元数据 */
 export interface UIMessageMeta {
-  toolName?: string;      // 工具名（用于 tool_call）
-  toolArgs?: string;      // 工具参数（用于 tool_call）
+  toolName?: string;      // 工具名（用于 tool_call / tool_result 分派）
+  toolArgs?: string;      // 工具参数字符串（旧字段，保留兼容）
+  toolInput?: Record<string, unknown>;  // 工具原始输入（用于 tool_call 显示参数）
+  rawOutput?: string;     // 工具原始输出（Bash 等，formatter 内部 summarize）
+  isWriteTool?: boolean;  // 标记 write_file（区分覆盖式 vs edit 式 diff）
   duration?: number;      // 耗时秒数（用于 thinking_end）
   filesRead?: number;     // 读取文件数（用于 thinking_end）
   linesAdded?: number;    // 添加行数（用于 tool_result）

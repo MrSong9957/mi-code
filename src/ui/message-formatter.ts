@@ -1,141 +1,162 @@
 // src/ui/message-formatter.ts
-// 消息格式化器
+// 消息格式化器（已接入 block-format 统一契约）
 //
-// 物理本质：排版工人。
-// 给每种消息贴上统一格式的标签（前缀、样式、缩进）。
+// 物理本质：排版工厂的「路由员」。
+// 接收语义消息类型（thinking / tool_call / tool_result / ...），
+// 路由到 block-format 的统一格式化函数，贴上前缀、缩进、样式标签。
+//
+// 关键设计原则（统一性）：
+// 1. 内容字符串本身**不含前导缩进空格**——缩进完全由 indent 字段表达。
+//    （旧的 `  ⎿  ...` 双重缩进 bug 已消除。）
+// 2. 所有块样式复用 block-format.BLOCK_STYLES 的单例常量，
+//    保证 MessageBuffer.appendText 的 styleEq 能正确累积流式内容。
+// 3. tool_call 从 toolInput（真实参数对象）提取显示文本；
+//    tool_result 按工具类型分派（edit/write 显示行数、bash 显示输出摘要）。
 
 import type { UIMessageType, UIMessageMeta, FormattedLine, UIMessageStyle } from './types.js';
+import {
+  BLOCK_STYLES,
+  formatToolCallDisplay,
+  formatThinkingSummary,
+  summarizeOutput,
+} from './block-format.js';
 
-/** 紫色样式 */
-const MAGENTA_STYLE: UIMessageStyle = { fg: 'magenta' };
-/** 灰色样式 */
-const DIM_STYLE: UIMessageStyle = { dim: true };
-/** 绿色粗体样式 */
-const GREEN_BOLD_STYLE: UIMessageStyle = { fg: 'green', bold: true };
-/** 红色样式 */
-const RED_STYLE: UIMessageStyle = { fg: 'red' };
-/** 默认样式 */
-const DEFAULT_STYLE: UIMessageStyle = {};
+/** Bash 等输出摘要的最大预览行数 */
+const OUTPUT_PREVIEW_LINES = 4;
 
 export class MessageFormatter {
   /**
    * 格式化消息
    *
-   * 物理本质：排版工人根据消息类型贴标签。
+   * 物理本质：路由员根据消息类型，把任务派发给 block-format 的专门函数。
    */
   static format(type: UIMessageType, meta: UIMessageMeta = {}, content?: string): FormattedLine[] {
     switch (type) {
       case 'thinking':
-        return [{ content: '● Thinking…', style: MAGENTA_STYLE, indent: 0 }];
+        return [{ content: '● Thinking…', style: BLOCK_STYLES.magenta, indent: 0 }];
 
       case 'thinking_content':
-        return [{ content: `  ${content ?? ''}`, style: DIM_STYLE, indent: 2 }];
+        // thinking 折叠模式下不再实时显示内容，仅保留分支以防外部调用
+        return [{ content: content ?? '', style: BLOCK_STYLES.dim, indent: 2 }];
 
       case 'thinking_end':
         return [this.formatThinkingEnd(meta)];
 
       case 'assistant':
-        return [{ content: `● ${content ?? ''}`, style: MAGENTA_STYLE, indent: 0 }];
+        return [{ content: `● ${content ?? ''}`, style: BLOCK_STYLES.magenta, indent: 0 }];
 
       case 'tool_call':
         return [this.formatToolCall(meta)];
 
       case 'tool_result':
-        return [this.formatToolResult(meta)];
+        return this.formatToolResult(meta);
 
       case 'tool_output':
         return [this.formatToolOutput(meta)];
 
       case 'permission':
-        return [{ content: `  ⎿  ${meta.permission ?? ''}`, style: DIM_STYLE, indent: 2 }];
+        return [{ content: `⎿  ${meta.permission ?? ''}`, style: BLOCK_STYLES.dim, indent: 2 }];
 
       case 'system':
-        return [{ content: content ?? '', style: DEFAULT_STYLE, indent: 0 }];
+        return [{ content: content ?? '', style: BLOCK_STYLES.default, indent: 0 }];
 
       case 'error':
-        return [{ content: content ?? '', style: RED_STYLE, indent: 0 }];
+        return [{ content: content ?? '', style: BLOCK_STYLES.red, indent: 0 }];
 
       case 'input':
-        return [{ content: `❯ ${content ?? ''}`, style: GREEN_BOLD_STYLE, indent: 0 }];
+        return [{ content: `❯ ${content ?? ''}`, style: BLOCK_STYLES.greenBold, indent: 0 }];
 
       default:
-        return [{ content: content ?? '', style: DEFAULT_STYLE, indent: 0 }];
+        return [{ content: content ?? '', style: BLOCK_STYLES.default, indent: 0 }];
     }
   }
 
   /**
-   * 格式化 thinking 结束
+   * 格式化 thinking 结束摘要（委托 block-format）
    *
-   * 示例：  Thought for 17s, read 2 files (ctrl+o to expand)
+   * 示例：Thought for 17s, read 2 files (ctrl+o to expand)
    */
   private static formatThinkingEnd(meta: UIMessageMeta): FormattedLine {
-    const duration = meta.duration ?? 0;
-    const filesRead = meta.filesRead ?? 0;
-
-    let text = `  Thought for ${duration}s`;
-    if (filesRead > 0) {
-      text += `, read ${filesRead} file${filesRead > 1 ? 's' : ''}`;
-    }
-    text += ' (ctrl+o to expand)';
-
-    return { content: text, style: DIM_STYLE, indent: 2 };
+    return {
+      content: formatThinkingSummary(meta.duration ?? 0, meta.filesRead ?? 0),
+      style: BLOCK_STYLES.dim,
+      indent: 2,
+    };
   }
 
   /**
-   * 格式化工具调用
+   * 格式化工具调用：`● Name(key_args)`
    *
-   * 示例：● Bash(cd ...)
+   * 优先用 toolInput（真实参数对象）；兼容旧字段 toolArgs（字符串）。
    */
   private static formatToolCall(meta: UIMessageMeta): FormattedLine {
     const name = meta.toolName ?? 'unknown';
-    const args = meta.toolArgs;
 
-    let content = `● ${name}`;
-    if (args) {
-      // 参数过长时截断
-      const maxArgsLen = 50;
-      const displayArgs = args.length > maxArgsLen ? args.slice(0, maxArgsLen) + '…' : args;
-      content += `(${displayArgs})`;
+    let display: string;
+    if (meta.toolInput && Object.keys(meta.toolInput).length > 0) {
+      // 新路径：从参数对象提取
+      display = formatToolCallDisplay(name, meta.toolInput);
+    } else if (meta.toolArgs) {
+      // 兼容旧字段（直接拼字符串，工具名按字面）
+      const maxArgsLen = 60;
+      const displayArgs = meta.toolArgs.length > maxArgsLen ? meta.toolArgs.slice(0, maxArgsLen) + '…' : meta.toolArgs;
+      display = `${name}(${displayArgs})`;
+    } else {
+      display = name;
     }
 
-    return { content, style: MAGENTA_STYLE, indent: 0 };
+    return { content: `● ${display}`, style: BLOCK_STYLES.magenta, indent: 0 };
   }
 
   /**
-   * 格式化工具结果
-   *
-   * 示例：  ⎿  Added 2 lines, removed 1 line
+   * 格式化工具结果，按数据来源分派：
+   * 1. 有 linesAdded/linesRemoved → edit/write 风格：`⎿  Added N lines, removed M line`
+   * 2. 有 rawOutput（Bash 等）→ 输出摘要：preview + `+N 行 (ctrl+o to expand)`
+   * 3. 都没有 → `⎿  Done` 兜底
    */
-  private static formatToolResult(meta: UIMessageMeta): FormattedLine {
+  private static formatToolResult(meta: UIMessageMeta): FormattedLine[] {
     const added = meta.linesAdded ?? 0;
     const removed = meta.linesRemoved ?? 0;
 
-    if (added === 0 && removed === 0) {
-      return { content: '  ⎿  Done', style: DIM_STYLE, indent: 2 };
+    // 路径 1：edit/write 行数统计
+    if (added > 0 || removed > 0) {
+      const parts: string[] = [];
+      if (added > 0) parts.push(`Added ${added} line${added > 1 ? 's' : ''}`);
+      if (removed > 0) parts.push(`removed ${removed} line${removed > 1 ? 's' : ''}`);
+      return [{ content: `⎿  ${parts.join(', ')}`, style: BLOCK_STYLES.dim, indent: 2 }];
     }
 
-    const parts: string[] = [];
-    if (added > 0) {
-      parts.push(`Added ${added} line${added > 1 ? 's' : ''}`);
-    }
-    if (removed > 0) {
-      parts.push(`removed ${removed} line${removed > 1 ? 's' : ''}`);
+    // 路径 2：Bash 等原始输出摘要
+    if (meta.rawOutput !== undefined && meta.rawOutput !== '') {
+      const { preview, totalLines, truncated } = summarizeOutput(meta.rawOutput, OUTPUT_PREVIEW_LINES);
+      const lines: FormattedLine[] = [];
+      // preview 可能多行，每行一行（首行带 ⎿）
+      const previewLines = preview.split('\n');
+      previewLines.forEach((pl, i) => {
+        const prefix = i === 0 ? '⎿  ' : '   ';
+        lines.push({ content: `${prefix}${pl}`, style: BLOCK_STYLES.dim, indent: 2 });
+      });
+      // 截断时追加折叠提示
+      if (truncated) {
+        const hidden = totalLines - OUTPUT_PREVIEW_LINES;
+        lines.push({ content: `   +${hidden} 行 (ctrl+o to expand)`, style: BLOCK_STYLES.dim, indent: 2 });
+      }
+      return lines;
     }
 
-    return { content: `  ⎿  ${parts.join(', ')}`, style: DIM_STYLE, indent: 2 };
+    // 路径 3：兜底
+    return [{ content: '⎿  Done', style: BLOCK_STYLES.dim, indent: 2 }];
   }
 
   /**
-   * 格式化工具输出
+   * 格式化工具输出（独立 tool_output 类型，保留兼容）
    *
-   * 示例：  ⎿  > npm test ...
+   * 示例：⎿  > npm test ...
    */
   private static formatToolOutput(meta: UIMessageMeta): FormattedLine {
     const output = meta.output ?? '';
-    // 截断过长输出
     const maxLen = 200;
     const displayOutput = output.length > maxLen ? output.slice(0, maxLen) + '…' : output;
-
-    return { content: `  ⎿  ${displayOutput}`, style: DIM_STYLE, indent: 2 };
+    return { content: `⎿  ${displayOutput}`, style: BLOCK_STYLES.dim, indent: 2 };
   }
 }
