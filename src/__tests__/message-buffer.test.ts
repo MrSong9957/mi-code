@@ -129,6 +129,73 @@ describe('MessageBuffer', () => {
     // 这些 API 已移除，相关测试随之删除。
     it.skip('已移除：主屏用原生 scrollback', () => {});
   });
+
+  // ─────────────── 统一块格式：● 首行前缀 + 全体 2 空格缩进 ───────────────
+  describe('setStreamingRows 块格式（前缀 + 缩进）', () => {
+    it('首行加 ● 前缀，所有行加 2 空格缩进（indent=2, prefix="● "）', () => {
+      const buf = new MessageBuffer();
+      // 模拟 renderMarkdown 输出：两行段落
+      const rows = [stringToCells('你好！', {}), stringToCells('我可以：', {})];
+      buf.setStreamingRows(rows, { indent: 2, firstLinePrefix: '● ' });
+      const vp = buf.viewport(5);
+      expect(vp).toHaveLength(2);
+      // 首行：'  ● 你好！'（2 空格缩进 + ● 前缀）
+      expect(cellsText(vp[0]!)).toBe('  ● 你好！');
+      // 续行：'  我可以：'（2 空格缩进，无前缀）
+      expect(cellsText(vp[1]!)).toBe('  我可以：');
+    });
+
+    it('无选项时保持原行为（向后兼容）', () => {
+      const buf = new MessageBuffer();
+      buf.setStreamingRows([stringToCells('纯文本', {})]);
+      const vp = buf.viewport(5);
+      expect(cellsText(vp[0]!)).toBe('纯文本');
+    });
+
+    it('空行段落保留空结构（不补缩进，避免段落间出现纯空格行）', () => {
+      const buf = new MessageBuffer();
+      const rows = [stringToCells('第一段', {}), [], stringToCells('第二段', {})];
+      buf.setStreamingRows(rows, { indent: 2, firstLinePrefix: '● ' });
+      const vp = buf.viewport(5);
+      // 空行（renderMarkdown 对空行返回 []）保持空
+      expect(cellsText(vp[1]!)).toBe('');
+    });
+
+    it('firstLineStyle 给前缀（●）着色（如 magenta）', () => {
+      const buf = new MessageBuffer();
+      buf.setStreamingRows(
+        [stringToCells('内容', {})],
+        { indent: 2, firstLinePrefix: '● ', firstLineStyle: { fg: 'magenta' } },
+      );
+      const vp = buf.viewport(5);
+      const line = vp[0]!;
+      // 找到 ● 那个 cell，断言它是 magenta
+      const bullet = line.cells.find(c => c.char === '●');
+      expect(bullet).toBeDefined();
+      expect(bullet!.style.fg).toBe('magenta');
+      // 内容 cell 不应被染成 magenta
+      const content = line.cells.find(c => c.char === '内');
+      expect(content!.style.fg).toBeUndefined();
+    });
+  });
+
+  // ─────────────── 续行缩进：wrapCells 折行时保留缩进 ───────────────
+  describe('wrapCells 续行缩进（hangingIndent）', () => {
+    it('软换行的续行也带 2 空格缩进（不顶到 0 列）', () => {
+      const buf = new MessageBuffer(10); // wrapCols=10
+      // 一行长文本，会被折成多行
+      buf.setStreamingRows(
+        [stringToCells('ABCDEFGHIJ KLMNOP', {})],
+        { indent: 2, firstLinePrefix: '● ' },
+      );
+      const vp = buf.viewport(5);
+      expect(vp.length).toBeGreaterThanOrEqual(2);
+      // 首行有缩进 + 前缀
+      expect(cellsText(vp[0]!).startsWith('  ● ')).toBe(true);
+      // 续行也应以 2 空格开头（不是顶到 0 列）
+      expect(cellsText(vp[1]!).startsWith('  ')).toBe(true);
+    });
+  });
 });
 
 function cellsText(row: { cells: ReturnType<typeof stringToCells> }): string {

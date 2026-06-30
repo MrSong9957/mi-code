@@ -120,8 +120,17 @@ export class MessageBuffer {
    *
    * 用于 Markdown 流式渲染：上层把累积文本经 renderMarkdown 转成 Cell[][]，
    * 整体替换当前消息——这样行内标记/代码块/标题等都能成型。
+   *
+   * 块格式选项（统一渲染契约）：
+   * - indent：每行前置的缩进空格数（软换行续行也带同样缩进）。
+   * - firstLinePrefix：仅首行在缩进后额外前置的字符串（如 assistant 的 `● `）。
+   * - firstLineStyle：前缀的样式（如 {fg:'magenta'}，让 ● 着色，与 thinking/tool 块一致）。
+   *   空行（renderMarkdown 对空行返回 []）保持空，不补缩进/前缀——保留段落间空行结构。
    */
-  setStreamingRows(rows: Cell[][]): void {
+  setStreamingRows(
+    rows: Cell[][],
+    opts?: { indent?: number; firstLinePrefix?: string; firstLineStyle?: Style },
+  ): void {
     const role: MessageRole = 'assistant';
     let entry = this.messages[this.messages.length - 1];
     if (!entry || entry.role !== role) {
@@ -132,11 +141,31 @@ export class MessageBuffer {
     this.lines.length = entry.startLine;
     const idx = this.messages.indexOf(entry);
     if (idx >= 0) this.messages.length = idx + 1;
-    // 逐行折行追加（保留每 cell 的样式）
+
+    // 应用块格式：构造前缀 cells
+    const indent = opts?.indent ?? 0;
+    const prefixStr = opts?.firstLinePrefix ?? '';
+    const prefixStyle = opts?.firstLineStyle ?? {};
+    const indentCells = indent > 0 ? stringToCells(' '.repeat(indent), {}) : [];
+    // 前缀（如 ● ）用专属样式（magenta），与 thinking/tool 的 ● 着色一致
+    const prefixCells = prefixStr ? stringToCells(prefixStr, prefixStyle) : [];
+    const hangingIndent = indent; // 软换行续行的缩进 = indent
+
+    let isFirst = true;
     for (const row of rows) {
-      for (const seg of wrapCells(row, this.wrapCols)) {
+      // 空行（段落间空行）保持空，不补缩进/前缀
+      if (row.length === 0) {
+        this.lines.push({ cells: [], role });
+        continue;
+      }
+      // 首行：缩进 + 前缀 + 内容；后续行：仅缩进 + 内容
+      const lead = isFirst ? [...indentCells, ...prefixCells] : indentCells;
+      // leadLock：保护 lead 区不被当成词边界断点（避免 ● 后空格拆前缀）
+      const wrapped = wrapCells([...lead, ...row], this.wrapCols, hangingIndent, lead.length);
+      for (const seg of wrapped) {
         this.lines.push({ cells: seg, role });
       }
+      isFirst = false;
     }
   }
 
@@ -192,38 +221,44 @@ export class MessageBuffer {
  * 词边界换行：遇到超宽时回退到最近的空格处断行，避免单词中间断开。
  * 宽字符不拆半：若本行剩余宽度不足以容纳下一个宽字符，换到下一行。
  */
-function wrapCells(cells: Cell[], wrapCols: number): Cell[][] {
+function wrapCells(cells: Cell[], wrapCols: number, hangingIndent: number = 0, leadLock: number = 0): Cell[][] {
   if (cells.length === 0) return [[]];
   if (wrapCols <= 0) return [cells];
+  // 软换行续行的前置缩进 cells（让续行与首行对齐，不顶到 0 列）
+  const hangCells = hangingIndent > 0 ? stringToCells(' '.repeat(hangingIndent), {}) : [];
   const lines: Cell[][] = [];
   let cur: Cell[] = [];
   let width = 0;
   // 记录当前行中最后一个空格的位置（用于词边界回退）
   let lastSpaceIdx = -1;
   let lastSpaceWidth = 0;
+  // leadLock 之前的前缀（缩进 + ● 等）不允许作为断行点——否则 ● 后的空格
+  // 会被当成词边界，导致前缀被拆开。续行的 hangCells 天然在此范围外。
   for (const cell of cells) {
     const w = stringWidth(cell.char);
     if (width + w > wrapCols && cur.length > 0) {
-      // 词边界回退：如果有空格，回退到空格处断行
-      if (lastSpaceIdx >= 0 && lastSpaceIdx < cur.length - 1) {
+      // 词边界回退：若有空格、且空格在前缀保护范围之外、且不在行尾
+      if (lastSpaceIdx >= leadLock && lastSpaceIdx < cur.length - 1) {
         // 空格后的部分作为下一行的开头
         const nextLineStart = cur.slice(lastSpaceIdx + 1);
         cur.length = lastSpaceIdx; // 截断到空格处（含空格）
         lines.push(cur);
-        cur = nextLineStart;
+        // 续行先挂上缩进 cells，再接空格后的内容
+        cur = [...hangCells, ...nextLineStart];
         // 重新计算下一行的宽度
         width = 0;
         for (const c of cur) width += stringWidth(c.char);
         lastSpaceIdx = -1;
-        // 重新扫描下一行中的空格
-        for (let i = 0; i < cur.length; i++) {
+        // 重新扫描下一行中的空格（缩进空格不计入词边界：从 hangCells.length 起）
+        for (let i = hangCells.length; i < cur.length; i++) {
           if (cur[i]!.char === ' ') { lastSpaceIdx = i; lastSpaceWidth = width; }
         }
       } else {
-        // 没有空格可回退，强制断行
+        // 没有合适的空格可回退，强制断行
         lines.push(cur);
-        cur = [];
-        width = 0;
+        // 续行带缩进
+        cur = [...hangCells];
+        width = hangingIndent;
         lastSpaceIdx = -1;
       }
     }

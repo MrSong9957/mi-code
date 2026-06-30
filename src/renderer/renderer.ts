@@ -134,9 +134,12 @@ export class Renderer {
   }
 
   /** 流式 Markdown：累积文本经 renderMarkdown 转 cells，替换当前 assistant 消息。 */
+  /** 流式 Markdown：累积文本经 renderMarkdown 转 cells，替换当前 assistant 消息。
+   *  统一块格式：首行加 `● ` 前缀、所有行加 2 空格缩进（与 thinking/tool 块对齐）。
+   *  软换行续行也带 2 空格缩进（不顶到 0 列）。 */
   appendStreamingMarkdown(text: string, isFinal: boolean): void {
     const rows = renderMarkdown(text, this.cols, !isFinal);
-    this.messages.setStreamingRows(rows);
+    this.messages.setStreamingRows(rows, { indent: 2, firstLinePrefix: '● ', firstLineStyle: { fg: 'magenta' } });
     this.scheduleRender();
   }
 
