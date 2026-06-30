@@ -75,7 +75,8 @@ export class BlockPipeline {
         break;
 
       case 'thinking_start':
-        this.openBlock();
+        // 第一个模型块：强制加空行（前面总有 banner/用户输入等非模型内容）
+        this.openModelBlock();
         this.thinkingActive = true;
         this.print(MessageFormatter.format('thinking'));
         break;
@@ -101,7 +102,7 @@ export class BlockPipeline {
       case 'assistant_text': {
         // assistant 流式块：首次输出前插块间空行（仅一次）
         if (!this.assistantGapApplied) {
-          this.ensureGap();
+          this.openModelBlock();
           this.assistantGapApplied = true;
         }
         this.renderer.appendStreamingMarkdown(block.text, block.isFinal, ASSISTANT_FORMAT);
@@ -115,7 +116,7 @@ export class BlockPipeline {
       }
 
       case 'tool_call':
-        this.openBlock();
+        this.openModelBlock();
         // 缓存 input 供后续 tool_result 计算 diff（按 name 匹配；
         // 写工具串行执行，安全。读工具不读 input，不受影响。）
         this.pendingToolInputs.set(block.name, block.input);
@@ -150,6 +151,22 @@ export class BlockPipeline {
    */
   private openBlock(): void {
     this.ensureGap();
+    this.hasContent = true;
+  }
+
+  /**
+   * 第一个模型内容块（thinking_start / assistant_text / tool_call）：
+   * 强制加空行分隔，因为前面总有非模型内容（banner / 用户输入）。
+   * 后续模型块走普通 openBlock（仅在模型内容流内部加间隔）。
+   */
+  private openModelBlock(): void {
+    if (!this.hasContent) {
+      // 第一个模型块：强制加空行（即便 pipeline.hasContent=false，
+      // 因为 UILayout 侧已有 banner/用户输入）
+      this.renderer.printMessage('', 'system');
+    } else {
+      this.ensureGap();
+    }
     this.hasContent = true;
   }
 

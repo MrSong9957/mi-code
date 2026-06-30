@@ -24,6 +24,11 @@ function mockRenderer() {
   return { renderer, prints, streamMarks };
 }
 
+/** 从 prints 找第一条非空内容（跳过块间空行） */
+function firstContent(prints: { text: string }[]): { text: string } | undefined {
+  return prints.find(p => p.text !== '');
+}
+
 describe('BlockPipeline', () => {
   describe('emit 路由 + 格式契约', () => {
     it('user_input → printMessage("❯ 你好", green bold)', () => {
@@ -34,12 +39,14 @@ describe('BlockPipeline', () => {
       expect(prints[0].style).toMatchObject({ fg: 'green', bold: true });
     });
 
-    it('thinking_start → printMessage("● Thinking…", magenta)', () => {
+    it('thinking_start → printMessage("● Thinking…", magenta)；首个模型块前有空行', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
-      expect(prints[0].text).toBe('● Thinking…');
-      expect(prints[0].style).toMatchObject({ fg: 'magenta' });
+      // 第一个模型块前强制有空行（前面有 banner/用户输入）
+      expect(prints[0].text).toBe('');
+      const content = firstContent(prints);
+      expect(content!.text).toBe('● Thinking…');
     });
 
     it('thinking_delta → 不渲染（折叠），仅累积', () => {
@@ -77,12 +84,13 @@ describe('BlockPipeline', () => {
       );
     });
 
-    it('tool_call → printMessage("● Bash(cmd)", magenta)', () => {
+    it('tool_call → printMessage("● Bash(cmd)", magenta)；首个模型块前有空行', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
-      expect(prints[0].text).toBe('● Bash(ls)');
-      expect(prints[0].style).toMatchObject({ fg: 'magenta' });
+      expect(prints[0].text).toBe(''); // 首个模型块前空行
+      const content = firstContent(prints);
+      expect(content!.text).toBe('● Bash(ls)');
     });
 
     it('tool_result edit_file → printMessage("⎿  Added N lines...", dim)，含行数', () => {
@@ -113,13 +121,14 @@ describe('BlockPipeline', () => {
   });
 
   describe('块间空行（集中化）', () => {
-    it('首个块前不加空行', () => {
+    it('首个模型块前有空行（前面总有 banner/用户输入）', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
-      // 第一个块：不应有空行 printMessage('')
-      expect(prints[0].text).toBe('● Thinking…');
-      expect(prints.some(p => p.text === '')).toBe(false);
+      // 第一个模型块：强制加空行（pipeline 假设前面有非模型内容）
+      expect(prints[0].text).toBe('');
+      const content = firstContent(prints);
+      expect(content!.text).toBe('● Thinking…');
     });
 
     it('第二个块前加空行（tool_call 在 thinking_end 之后）', () => {
@@ -129,7 +138,7 @@ describe('BlockPipeline', () => {
       p.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
       p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
       // tool_call 前应有空行（thinking_end 的 finalize 分隔已被 justFinalized 抵消，
-      // 但 tool_call openBlock 仍会在已有内容前加空行）
+      // 但 tool_call openModelBlock 仍会在已有内容前加空行）
       const toolIdx = prints.findIndex(p => p.text.includes('Bash'));
       expect(toolIdx).toBeGreaterThan(0);
     });
@@ -137,14 +146,14 @@ describe('BlockPipeline', () => {
     it('assistant_text 多次 delta 只加一次空行', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'thinking_start' }); // 建立块 1
+      p.emit({ kind: 'thinking_start' }); // 建立块 1（含首块空行）
       // assistant 流式块
       p.emit({ kind: 'assistant_text', text: 'a', isFinal: false });
       p.emit({ kind: 'assistant_text', text: 'ab', isFinal: false });
       p.emit({ kind: 'assistant_text', text: 'abc', isFinal: true });
-      // assistant 块前应只有一个空行（thinking 与 assistant 之间）
+      // 空行数：首块 1（thinking 前）+ thinking→assistant 间 1 = 2
       const emptyCount = prints.filter(p => p.text === '').length;
-      expect(emptyCount).toBe(1);
+      expect(emptyCount).toBe(2);
     });
 
     it('tool_result 紧跟 tool_call 不加额外空行（结果续接调用）', () => {
@@ -153,7 +162,7 @@ describe('BlockPipeline', () => {
       p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
       p.emit({ kind: 'tool_result', name: 'run_bash', output: 'file1' });
       const emptyCount = prints.filter(p => p.text === '').length;
-      expect(emptyCount).toBe(0); // 首块 tool_call，result 续接，无空行
+      expect(emptyCount).toBe(1); // 仅首块 tool_call 前的空行，result 续接不另加
     });
 
     it('finalizeStreaming 后下一个块不出现双重空行', () => {
