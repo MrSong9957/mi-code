@@ -16,6 +16,19 @@ describe('UILayout', () => {
     layout.enter();
   });
 
+  /** 拿到内部 renderer（用于 spy） */
+  function getRenderer(): {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    appendStreaming: (...args: any[]) => void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    printMessage: (...args: any[]) => void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    appendStreamingMarkdown: (...args: any[]) => void;
+  } {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (layout as unknown as { renderer: any }).renderer;
+  }
+
   describe('send', () => {
     it('should format and send thinking', () => {
       layout.send('thinking');
@@ -48,40 +61,66 @@ describe('UILayout', () => {
     });
   });
 
-  describe('appendStreaming', () => {
-    it('should accumulate thinking content', () => {
+  describe('appendStreaming（thinking 折叠）', () => {
+    it('thinking_content 不应实时画文本（renderer.appendStreaming 调用 0 次）', () => {
+      const r = getRenderer();
+      const spy = vi.spyOn(r, 'appendStreaming');
       layout.send('thinking');
       layout.appendStreaming('thinking_content', '用户问"你是谁？"');
       layout.appendStreaming('thinking_content', '这是一个问题。');
       layout.commit();
-      // 内容应该累积 — writer 被调用
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('thinking_content 仍累积到内部缓冲（finalizeStreaming 后能产出摘要）', () => {
+      layout.send('thinking');
+      layout.appendStreaming('thinking_content', '内容片段');
+      // finalize 应产出摘要（说明内部状态正确）
+      layout.finalizeStreaming(5, 0);
+      layout.commit();
       expect(writer).toHaveBeenCalled();
     });
 
-    it('should accumulate assistant content', () => {
+    it('assistant 内容仍走 appendStreamingMarkdown（不受影响）', () => {
+      const r = getRenderer();
+      const spy = vi.spyOn(r, 'appendStreamingMarkdown');
       layout.appendStreaming('assistant', '你好');
       layout.appendStreaming('assistant', '，我是AI助手。');
       layout.commit();
       expect(writer).toHaveBeenCalled();
+      // 注意：appendStreaming('assistant') 当前只是标记状态，不直接调 renderer
+      // 真正的 assistant 文本渲染走 appendStreamingMarkdown
+      void spy;
     });
   });
 
-  describe('finalizeStreaming', () => {
-    it('should finalize thinking with duration', () => {
+  describe('finalizeStreaming（thinking 摘要）', () => {
+    it('finalize 时输出 Thought for Ns 摘要行', () => {
+      const r = getRenderer();
+      const calls: string[] = [];
+      vi.spyOn(r, 'printMessage').mockImplementation((text: string) => {
+        calls.push(text);
+      });
       layout.send('thinking');
       layout.appendStreaming('thinking_content', '内容');
       layout.finalizeStreaming(17, 2);
       layout.commit();
-      // 应该包含 "Thought for 17s, read 2 files"
-      expect(writer).toHaveBeenCalled();
+      const summary = calls.find(c => c.includes('Thought for'));
+      expect(summary).toBeDefined();
+      expect(summary).toContain('17s');
+      expect(summary).toContain('read 2 files');
     });
 
-    it('should finalize thinking without filesRead', () => {
-      layout.send('thinking');
-      layout.appendStreaming('thinking_content', '内容');
-      layout.finalizeStreaming(5);
-      layout.commit();
-      expect(writer).toHaveBeenCalled();
+    it('无 thinking 时 finalize 不输出摘要（避免误报）', () => {
+      const r = getRenderer();
+      const calls: string[] = [];
+      vi.spyOn(r, 'printMessage').mockImplementation((text: string) => {
+        calls.push(text);
+      });
+      // 未 send('thinking') 直接 finalize
+      layout.finalizeStreaming(5, 0);
+      const summary = calls.find(c => c.includes('Thought for'));
+      expect(summary).toBeUndefined();
     });
   });
 

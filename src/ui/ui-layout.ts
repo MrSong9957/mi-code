@@ -56,18 +56,19 @@ export class UILayout {
    * 流式更新（thinking/assistant）
    *
    * 物理本质：实时接收流式内容，累积到缓冲区。
+   *
+   * thinking 折叠模式：thinking_content 只累积到本地缓冲（供未来 ctrl+o 展开），
+   * **不实时画到终端**。流式期间只显示 `● Thinking…` 标题（由 send('thinking') 输出）。
+   * finalizeStreaming 时输出 `Thought for Ns` 摘要行。
    */
   appendStreaming(type: 'thinking_content' | 'assistant', content: string): void {
     if (type === 'thinking_content') {
-      // thinking 内容：累积到流式缓冲区
+      // thinking 内容：累积到本地缓冲（不实时画）
       this.streamingContent += content;
       this.streamingType = 'thinking';
-
-      // 使用 appendStreaming 累积内容（dim 样式）
-      // 注意：不在这里添加缩进，缩进在 finalizeStreaming 时统一处理
-      this.renderer.appendStreaming(content, { dim: true });
+      // 注意：折叠模式下不调用 renderer.appendStreaming
     } else if (type === 'assistant') {
-      // assistant 内容：累积到流式缓冲区
+      // assistant 内容：仅标记状态（真正渲染走 appendStreamingMarkdown）
       this.streamingContent += content;
       this.streamingType = 'assistant';
     }
