@@ -312,11 +312,13 @@ export class Renderer {
     // 下边框
     this.writeCellsRow(next, borderBottomY, borderCells, 0);
     // 状态栏
+    const thinkingState = this.getThinkingState();
     const statusCells = buildStatusBar({
       mode: this.statusInfo.mode, model: this.statusInfo.model,
       branch: this.statusInfo.branch, dir: this.statusInfo.dir,
       contextUsage: this.statusInfo.contextUsage,
       cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
+      thinking: thinkingState ? { elapsed: thinkingState.elapsed, collapsed: thinkingState.collapsed } : undefined,
     });
     this.writeCellsRow(next, statusY, statusCells, 0);
 

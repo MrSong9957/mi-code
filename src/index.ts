@@ -285,7 +285,6 @@ if (process.stdin.isTTY) {
 
                 isProcessing = true;
                 renderer.startThinking();
-                printStyled('● Thinking...', {});
 
                 const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
                 if (apiKey) {
@@ -323,15 +322,15 @@ if (process.stdin.isTTY) {
                             if (assistantText === '') {
                               const ts = renderer.getThinkingState();
                               if (ts) {
-                                printStyled(`   Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
+                                printStyled(`  Thought for ${ts.elapsed}s (ctrl+o to expand)`, { dim: true });
                                 renderer.finishThinking();
                               }
                             }
                             assistantText += delta.content;
                             renderer.appendStreamingMarkdown(assistantText, false);
                           } else if (delta.deltaType === 'thinking' && delta.content) {
+                            // 只累积思考文本，不实时显示（通过 ctrl+o 展开）
                             renderer.appendThinking(delta.content);
-                            renderer.appendStreaming(delta.content, { dim: true, italic: true });
                           }
                         } else if ('type' in msg && msg.type === 'assistant') {
                           // 一条 assistant 消息完成：finalize 流式（落定进 scrollback），下一条会新建

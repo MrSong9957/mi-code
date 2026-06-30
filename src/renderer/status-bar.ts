@@ -26,6 +26,8 @@ export interface StatusBarState {
   cols: number;
   /** 可选：自定义提示文本（如 todo 提醒） */
   hint?: string;
+  /** 可选：思考状态 */
+  thinking?: { elapsed: number; collapsed: boolean };
 }
 
 const DIM: Style = { dim: true };
@@ -51,7 +53,17 @@ export function buildStatusBar(state: StatusBarState): Cell[] {
   const sep = ' │ ';
   const segments: Array<{ text: string; style: Style }> = [];
 
-  // 工具状态（若有，放在最前，最醒目）
+  // 思考状态（若有，放在最前）
+  if (state.thinking) {
+    if (state.thinking.collapsed) {
+      segments.push({ text: `Thought for ${state.thinking.elapsed}s (ctrl+o to expand)`, style: DIM });
+    } else {
+      segments.push({ text: `● Thinking for ${state.thinking.elapsed}s… (ctrl+o to expand)`, style: {} });
+    }
+    segments.push({ text: sep, style: DIM });
+  }
+
+  // 工具状态（若有）
   if (state.tool) {
     const mark = state.tool.status === 'running' ? '⏳'
       : state.tool.status === 'error' ? '✗'
