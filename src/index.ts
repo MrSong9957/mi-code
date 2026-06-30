@@ -132,21 +132,21 @@ const pipeline = new BlockPipeline({
   clearMessages: () => layout.rawClearMessages(),
 });
 
-/** 把一行文本作为"系统消息"固化进消息区（经统一管道）。 */
+/** 把一行文本作为"系统消息"固化进消息区（非模型内容：banner / hook / 提示等，直走 UILayout，不经 pipeline）。 */
 function printLine(text: string): void {
-  pipeline.emit({ kind: 'system', text });
+  layout.send('system', text);
 }
 
-/** 把一行带样式的消息固化进消息区（经统一管道，按样式路由 Block kind）。 */
+/** 把一行带样式的消息固化进消息区（非模型内容，按样式路由 UILayout 类型）。 */
 function printStyled(text: string, style: Record<string, unknown>): void {
   if ((style as Record<string, unknown>).fg === 'green' && (style as Record<string, unknown>).bold) {
-    // input 类型：pipeline 会添加 ❯ 前缀，所以去掉原始文本中的 ❯
+    // input 类型：UILayout 会添加 ❯ 前缀，所以去掉原始文本中的 ❯
     const cleanText = text.replace(/^❯\s*/, '');
-    pipeline.emit({ kind: 'user_input', text: cleanText });
+    layout.send('input', cleanText);
   } else if ((style as Record<string, unknown>).fg === 'red') {
-    pipeline.emit({ kind: 'error', text });
+    layout.send('error', text);
   } else {
-    pipeline.emit({ kind: 'system', text });
+    layout.send('system', text);
   }
 }
 
@@ -381,7 +381,7 @@ if (process.stdin.isTTY) {
                         assistantText = '';
                       }
                     } catch (err) {
-                      pipeline.emit({ kind: 'error', text: `[Error] ${err}` });
+                      layout.send('error', `[Error] ${err}`);
                     } finally {
                       isProcessing = false;
                       // 如果还在思考状态（没有收到文本），显示内容并折叠
@@ -395,7 +395,7 @@ if (process.stdin.isTTY) {
                     }
                   })();
                 } else {
-                  pipeline.emit({ kind: 'error', text: `[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.` });
+                  layout.send('error', `[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`);
                   isProcessing = false;
                   layout.setHint(undefined);
                   syncInput();
@@ -453,7 +453,7 @@ if (process.stdin.isTTY) {
       syncInput();
     } catch (err) {
       // 经统一管道显示
-      pipeline.emit({ kind: 'error', text: `[stdin handler error] ${err instanceof Error ? err.message : String(err)}` });
+      layout.send('error', `[stdin handler error] ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       historyBusy = false;
       // 处理期间若有新数据到达（连按按键），续处理，确保零丢失

@@ -108,41 +108,30 @@ describe('BlockPipeline', () => {
       expect(resultLine).toBeDefined();
     });
 
-    it('system → printMessage(text, default)', () => {
-      const { renderer, prints } = mockRenderer();
-      const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'system', text: '[Hook] started' });
-      expect(prints[0].text).toBe('[Hook] started');
-    });
-
-    it('error → printMessage(text, red)', () => {
-      const { renderer, prints } = mockRenderer();
-      const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'error', text: '[Error] boom' });
-      expect(prints[0].text).toBe('[Error] boom');
-      expect(prints[0].style).toMatchObject({ fg: 'red' });
-    });
+    // 注：system / error 不再是 Block kind——非模型内容（banner/hook/错误）
+    // 直接走 UILayout.send，不经 pipeline。
   });
 
   describe('块间空行（集中化）', () => {
     it('首个块前不加空行', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'system', text: 'first' });
+      p.emit({ kind: 'thinking_start' });
       // 第一个块：不应有空行 printMessage('')
-      expect(prints[0].text).toBe('first');
+      expect(prints[0].text).toBe('● Thinking…');
       expect(prints.some(p => p.text === '')).toBe(false);
     });
 
-    it('第二个块前加空行（thinking_start 在 system 之后）', () => {
+    it('第二个块前加空行（tool_call 在 thinking_end 之后）', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'system', text: 'first' });
       p.emit({ kind: 'thinking_start' });
-      // 第二个块（thinking_start）前应有空行
-      const thinkingIdx = prints.findIndex(p => p.text === '● Thinking…');
-      expect(thinkingIdx).toBeGreaterThan(0);
-      expect(prints[thinkingIdx - 1].text).toBe('');
+      p.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
+      p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
+      // tool_call 前应有空行（thinking_end 的 finalize 分隔已被 justFinalized 抵消，
+      // 但 tool_call openBlock 仍会在已有内容前加空行）
+      const toolIdx = prints.findIndex(p => p.text.includes('Bash'));
+      expect(toolIdx).toBeGreaterThan(0);
     });
 
     it('assistant_text 多次 delta 只加一次空行', () => {

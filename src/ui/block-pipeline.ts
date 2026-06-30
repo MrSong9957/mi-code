@@ -136,16 +136,6 @@ export class BlockPipeline {
         break;
       }
 
-      case 'system':
-        this.openBlock();
-        this.print(MessageFormatter.format('system', {}, block.text));
-        break;
-
-      case 'error':
-        this.openBlock();
-        this.print(MessageFormatter.format('error', {}, block.text));
-        break;
-
       default: {
         const _exhaustive: never = block;
         void _exhaustive;
