@@ -344,9 +344,7 @@ if (process.stdin.isTTY) {
                           if (delta.deltaType === 'text' && delta.content) {
                             // 文本开始时，先固化思考内容
                             if (assistantText === '' && thinkingContent) {
-                              // 先 finalize 之前的 thinking 流式内容
-                              renderer.finalizeStreaming();
-                              // 打印思考内容和折叠指示器
+                              // 打印思考内容和折叠指示器（通过 printMessage 固化）
                               printStyled(thinkingContent, { dim: true });
                               const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
                               printStyled(`   Thought for ${elapsed}s (ctrl+o to expand)`, { dim: true });
@@ -356,8 +354,8 @@ if (process.stdin.isTTY) {
                             renderer.appendStreamingMarkdown(assistantText, false);
                           } else if (delta.deltaType === 'thinking' && delta.content) {
                             thinkingContent += delta.content;
-                            // 只传入新的 delta 内容（appendStreaming 是追加模式）
-                            renderer.appendStreaming(delta.content, { dim: true });
+                            // 不使用 appendStreaming，避免累积到 assistant 消息
+                            // thinking 内容会在结束时通过 printStyled 固化
                           }
                         } else if ('type' in msg && msg.type === 'assistant') {
                           // 一条 assistant 消息完成：finalize 流式（落定进 scrollback），下一条会新建
