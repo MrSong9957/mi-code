@@ -369,7 +369,8 @@ if (process.stdin.isTTY) {
                         } else if ('type' in msg && msg.type === 'tool_result') {
                           const tr = msg as { type: 'tool_result'; name: string; output: string };
                           const lineCount = tr.output.split('\n').length;
-                          renderer.printMessage(`  ↳ ${tr.name} 完成 — ${lineCount} 行`, 'system', { dim: true });
+                          // 使用 printStyled 确保编码清洗
+                          printStyled(`  ↳ ${tr.name} 完成 — ${lineCount} 行`, { dim: true });
                           // PostToolUse hook：摘要日志经渲染器画进消息区（hook 返回 message，不直写终端）
                           void hookRunner.run({
                             name: 'PostToolUse',
