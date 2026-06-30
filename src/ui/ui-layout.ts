@@ -84,6 +84,20 @@ export class UILayout {
   }
 
   /**
+   * 流式 Markdown 渲染（assistant 文本）
+   *
+   * 物理本质：累积文本经 Markdown 渲染器转成带样式的 cells，替换当前 assistant 消息。
+   * isFinal=true 时封口（固化进 scrollback）。
+   */
+  appendStreamingMarkdown(text: string, isFinal: boolean): void {
+    this.renderer.appendStreamingMarkdown(text, isFinal);
+    if (isFinal) {
+      this.streamingContent = '';
+      this.streamingType = null;
+    }
+  }
+
+  /**
    * 固化流式内容
    *
    * 物理本质：流式内容接收完毕，固化到消息区。

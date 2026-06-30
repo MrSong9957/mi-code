@@ -1,9 +1,6 @@
 // src/output/index.ts
 // 输出系统公共导出
 
-export { OutputGate } from './output-gate.js';
-export type { OutputGateOptions } from './output-gate.js';
-
 export { MessageQueue } from './message-queue.js';
 
 export { Encoder } from './encoder.js';

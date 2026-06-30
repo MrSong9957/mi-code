@@ -15,7 +15,7 @@ import { createDefaultRegistry } from './agent/tool-registry.js';
 import { AnthropicStreamClient } from './agent/anthropic-stream-client.js';
 import { streamingQuery } from './agent/streaming-query.js';
 import { StreamEventBus } from './agent/stream-event-bus.js';
-import { Renderer } from './renderer/renderer.js';
+import { UILayout } from './ui/index.js';
 import { ConfigStore } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
 import { TodoManager } from './agent/todo.js';
@@ -29,7 +29,6 @@ import { ScheduleManager } from './agent/scheduler/index.js';
 import { WorktreeManager } from './worktree/index.js';
 import { TaskBoard } from './task-board/index.js';
 import { HistoryManager } from './history.js';
-import { OutputGate } from './output/index.js';
 
 const VERSION = "1.0.0";
 
@@ -110,41 +109,30 @@ function readTermSize(): { rows: number; cols: number } {
 const termSize = readTermSize();
 
 /**
- * Renderer：负责流式 Markdown 渲染和帧缓冲（逐格 diff）
- * 职责：AI 回复的流式渲染、thinking 状态显示、输入框管理
+ * UILayout：统一消息格式化 + 流式 Markdown 渲染 + 帧缓冲
+ * 物理本质：排版工厂的总管——消息进、格式化、分区、渲染、终端出。
  */
-const renderer = new Renderer({
+const layout = new UILayout({
   rows: termSize.rows,
   cols: termSize.cols,
   writer: (s: string) => process.stdout.write(s),
   status: { mode: 'Act', model: MODEL, branch: GIT_BRANCH, dir: SHORT_DIR, contextUsage: 0 },
 });
 
-/**
- * OutputGate：负责编码清洗（不直接写终端）
- * 职责：GBK/UTF-8 编码检测、消息标准化
- *
- * 注意：gate 只负责编码清洗，输出仍通过 renderer 的帧缓冲机制。
- * 这样可以避免两个输出通道的冲突。
- */
-const gate = new OutputGate({
-  rows: termSize.rows,
-  cols: termSize.cols,
-  writer: () => {}, // 不直接写终端
-});
-
-/** 把一行文本作为"系统消息"固化进消息区（经 Markdown 渲染进 scrollback）。 */
+/** 把一行文本作为"系统消息"固化进消息区。 */
 function printLine(text: string): void {
-  // 使用 gate 进行编码清洗，然后通过 renderer 输出
-  const cleaned = gate.normalize(text);
-  renderer.printMessage(cleaned, 'system', {});
+  layout.send('system', text);
 }
 
-/** 把一行带样式的消息固化进消息区。 */
-function printStyled(text: string, style: Parameters<typeof renderer.printMessage>[2]): void {
-  // 使用 gate 进行编码清洗，然后通过 renderer 输出
-  const cleaned = gate.normalize(text);
-  renderer.printMessage(cleaned, 'system', style);
+/** 把一行带样式的消息固化进消息区（语义路由到对应消息类型）。 */
+function printStyled(text: string, style: Record<string, unknown>): void {
+  if ((style as Record<string, unknown>).fg === 'green' && (style as Record<string, unknown>).bold) {
+    layout.send('input', text);
+  } else if ((style as Record<string, unknown>).fg === 'red') {
+    layout.send('error', text);
+  } else {
+    layout.send('system', text);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -156,7 +144,7 @@ let isProcessing = false;
 
 /** 同步输入态到渲染器并请求重绘（节流，不直接写屏）。 */
 function syncInput(): void {
-  renderer.setInput(input, cursorPos);
+  layout.setInput(input, cursorPos);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -188,7 +176,7 @@ if (process.stdin.isTTY) {
 
         // Ctrl+C —— 始终生效（先退出、恢复光标，再退出进程）
         if (byte === 0x03) {
-          renderer.exit();
+          layout.exit();
           process.exit(0);
         }
 
@@ -196,7 +184,7 @@ if (process.stdin.isTTY) {
         if (byte === 0x0a) {
           const currentLines = input.split('\n').length;
           if (currentLines < 3) { // MAX_INPUT_LINES
-            const promptPad = ' '.repeat([...renderer.getPrompt()].length);
+            const promptPad = ' '.repeat([...layout.getPrompt()].length);
             const chars = [...input];
             input = chars.slice(0, cursorPos).join('') + '\n' + promptPad + chars.slice(cursorPos).join('');
             cursorPos += 1 + promptPad.length;
@@ -265,7 +253,7 @@ if (process.stdin.isTTY) {
         // 回车（仅 CR 提交，LF 由 Ctrl+J 处理）
         if (byte === 0x0d) {
           if (input.trim() === 'exit') {
-            renderer.exit();
+            layout.exit();
             process.exit(0);
           }
           if (input.trim() && !isProcessing) {
@@ -308,19 +296,19 @@ if (process.stdin.isTTY) {
                 isProcessing = true;
                 let thinkingContent = '';
                 let thinkingStart = Date.now();
-                printStyled(`● Thinking…`, {});
+                layout.send('thinking');
 
                 const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
                 if (apiKey) {
                   const streamClient = new AnthropicStreamClient({ apiKey, model: MODEL });
                   const compactClient = new AnthropicStreamClient({ apiKey, model: SMALL_MODEL });
                   const eventBus = new StreamEventBus();
-                  // 工具执行显示：● 工具名（绿色）
+                  // 工具执行显示：● 工具名
                   eventBus.onToolCall(d => {
-                    printStyled(`● ${d.name}`, { fg: 'green' });
+                    layout.send('tool_call', '', { toolName: d.name });
                   });
                   eventBus.onToolResult(d => {
-                    printStyled(`  ⎿  Done`, { dim: true });
+                    layout.send('tool_result');
                   });
                   const tools = Array.from(toolRegistry.tools.values()).map(t => t.definition);
                   const ac = new AbortController();
@@ -337,39 +325,33 @@ if (process.stdin.isTTY) {
                         eventBus,
                         compactClient,
                       })) {
-                        // AI 输出期间：累积 token，经 Markdown 渲染进消息区（renderer 节流攒批、
-                        // 只刷变化格子，状态栏/输入框逐格不变则零字节写入）
+                        // AI 输出期间：累积 token，经 UILayout 的 Markdown 渲染进消息区
                         if ('type' in msg && msg.type === 'content_block_delta') {
                           const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
                           if (delta.deltaType === 'text' && delta.content) {
                             // 文本开始时，先固化思考内容
                             if (assistantText === '' && thinkingContent) {
-                              // 打印思考内容和折叠指示器（通过 printMessage 固化）
-                              printStyled(thinkingContent, { dim: true });
                               const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-                              printStyled(`   Thought for ${elapsed}s (ctrl+o to expand)`, { dim: true });
+                              layout.finalizeStreaming(elapsed, 0);
                               thinkingContent = '';
                             }
                             assistantText += delta.content;
-                            renderer.appendStreamingMarkdown(assistantText, false);
+                            layout.appendStreamingMarkdown(assistantText, false);
                           } else if (delta.deltaType === 'thinking' && delta.content) {
                             thinkingContent += delta.content;
-                            // 不使用 appendStreaming，避免累积到 assistant 消息
-                            // thinking 内容会在结束时通过 printStyled 固化
+                            layout.appendStreaming('thinking_content', delta.content);
                           }
                         } else if ('type' in msg && msg.type === 'assistant') {
                           // 一条 assistant 消息完成：finalize 流式（落定进 scrollback），下一条会新建
                           if (assistantText) {
-                            renderer.appendStreamingMarkdown(assistantText, true);
-                            renderer.finalizeStreaming();
+                            layout.appendStreamingMarkdown(assistantText, true);
+                            layout.finalizeStreaming();
                             assistantText = '';
                           }
                         } else if ('type' in msg && msg.type === 'tool_result') {
                           const tr = msg as { type: 'tool_result'; name: string; output: string };
-                          const lineCount = tr.output.split('\n').length;
-                          // 使用 printStyled 确保编码清洗
-                          printStyled(`  ↳ ${tr.name} 完成 — ${lineCount} 行`, { dim: true });
-                          // PostToolUse hook：摘要日志经渲染器画进消息区（hook 返回 message，不直写终端）
+                          layout.send('tool_result');
+                          // PostToolUse hook：摘要日志经 UILayout 画进消息区
                           void hookRunner.run({
                             name: 'PostToolUse',
                             payload: { tool_name: tr.name, output: tr.output },
@@ -378,18 +360,17 @@ if (process.stdin.isTTY) {
                       }
                       // 循环结束兜底：若还有未收尾的累积文本，最终解析一次
                       if (assistantText) {
-                        renderer.appendStreamingMarkdown(assistantText, true);
+                        layout.appendStreamingMarkdown(assistantText, true);
                         assistantText = '';
                       }
                     } catch (err) {
-                      printStyled(`[Error] ${err}`, { fg: 'red' });
+                      layout.send('error', `[Error] ${err}`);
                     } finally {
                       isProcessing = false;
                       // 如果还在思考状态（没有收到文本），显示内容并折叠
                       if (thinkingContent) {
-                        printStyled(thinkingContent, { dim: true });
                         const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-                        printStyled(`   Thought for ${elapsed}s (ctrl+o to expand)`, { dim: true });
+                        layout.finalizeStreaming(elapsed, 0);
                         thinkingContent = '';
                       }
                       printLine('');
@@ -397,9 +378,9 @@ if (process.stdin.isTTY) {
                     }
                   })();
                 } else {
-                  printStyled(`[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`, { fg: 'red' });
+                  layout.send('error', `[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`);
                   isProcessing = false;
-                  renderer.setHint(undefined);
+                  layout.setHint(undefined);
                   syncInput();
                 }
               }
@@ -454,8 +435,8 @@ if (process.stdin.isTTY) {
       // 兜底：处理完一批按键后确保输入框反映最新 input（流式期间也照常，输入框始终可编辑）
       syncInput();
     } catch (err) {
-      // 经渲染器显示（备用屏下 console.error 会冲乱画布）
-      printStyled(`[stdin handler error] ${err instanceof Error ? err.message : String(err)}`, { fg: 'red' });
+      // 经 UILayout 显示
+      layout.send('error', `[stdin handler error] ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       historyBusy = false;
       // 处理期间若有新数据到达（连按按键），续处理，确保零丢失
@@ -471,19 +452,18 @@ if (process.stdin.isTTY) {
 // 启动
 // ─────────────────────────────────────────────────────────────
 
-// 进入备用屏全屏画布（切画布 + 清屏 + 隐藏光标 + 画首帧）
-renderer.enter();
+// 进入渲染模式（隐藏光标 + 画首帧）
+layout.enter();
 
-// 终端尺寸变化 → 渲染器 fullReset 重排
+// 终端尺寸变化 → UILayout fullReset 重排
 process.stdout.on('resize', () => {
   const { rows, cols } = readTermSize();
-  renderer.resize(rows, cols);
-  gate.updateTermSize({ rows, cols });
+  layout.resize(rows, cols);
 });
 
-// 进程退出兜底：务必退出备用屏、恢复光标，否则用户终端残留在备用屏
+// 进程退出兜底：恢复光标
 function cleanupOnExit(): void {
-  renderer.exit();
+  layout.exit();
 }
 process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });
 process.on('SIGTERM', () => { cleanupOnExit(); process.exit(0); });
