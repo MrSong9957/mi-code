@@ -10,3 +10,4 @@ dist/
 .opencode/
 .mimocode/.mcp.json
 .mcp.json
+.transcripts/
