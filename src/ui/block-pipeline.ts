@@ -15,7 +15,7 @@
 //   不经过 UILayout 的 send（避免重复套 gap/format 逻辑）
 
 import type { Block, UIMessageStyle } from './types.js';
-import { buildToolResultBlock } from './block-format.js';
+import { INDENT, buildToolResultBlock } from './block-format.js';
 import { MessageFormatter } from './message-formatter.js';
 import type { Style } from '../renderer/cell.js';
 
@@ -34,9 +34,9 @@ export interface PipelineRenderer {
   clearMessages(): void;
 }
 
-/** assistant 流式块的固定格式契约（hanging indent：● 第0列 + 续行 2 空格） */
+/** assistant 流式块的固定格式契约（hanging indent：● 第0列 + 续行 INDENT.nested 空格） */
 const ASSISTANT_FORMAT = {
-  indent: 2,
+  indent: INDENT.nested,
   firstLinePrefix: '● ',
   firstLineStyle: { fg: 'magenta' } as Style,
 };

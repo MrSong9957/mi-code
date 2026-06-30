@@ -49,7 +49,11 @@ export class UILayout {
   }
 
   /**
-   * 发送消息（自动格式化 + 路由）
+   * 发送消息（自动格式化 + 路由）—— ⚠️ DEPRECATED
+   *
+   * 块间空行 + 格式契约已迁移到 BlockPipeline（生产路径走 pipeline.emit）。
+   * 本方法及其 gap 逻辑（hasContent/ensureBlockGap）保留供测试与过渡使用，
+   * 新代码应使用 BlockPipeline.emit。
    *
    * 物理本质：排版工人接收快递，贴标签，放到正确的传送带。
    */
