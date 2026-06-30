@@ -63,9 +63,9 @@ export class UILayout {
       this.streamingContent += content;
       this.streamingType = 'thinking';
 
-      // 使用 appendStreaming 累积内容（带 2 空格缩进和 dim 样式）
-      const indentedContent = '  ' + content;
-      this.renderer.appendStreaming(indentedContent, { dim: true });
+      // 使用 appendStreaming 累积内容（dim 样式）
+      // 注意：不在这里添加缩进，缩进在 finalizeStreaming 时统一处理
+      this.renderer.appendStreaming(content, { dim: true });
     } else if (type === 'assistant') {
       // assistant 内容：累积到流式缓冲区
       this.streamingContent += content;
