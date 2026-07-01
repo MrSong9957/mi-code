@@ -21,9 +21,12 @@ import type {
  * 物理本质：一个"按剧本念台词"的演员——你给它一沓台词卡(每张是一轮要念的内容)，
  * 它一张张念出来。念的台词会原样变成 AssistantMessage 事件。
  */
+/** 脚本块：ContentBlock 或 thinking 块（测试用，thinking 不在 ContentBlock 联合里） */
+type ScriptBlock = ContentBlock | { type: 'thinking'; thinking: string };
+
 class ScriptedStreamClient implements StreamingLLMClient {
   private callCount = 0;
-  constructor(private scripts: ContentBlock[][]) {}
+  constructor(private scripts: ScriptBlock[][]) {}
 
   async *stream(
     _messages: Message[],
@@ -33,10 +36,14 @@ class ScriptedStreamClient implements StreamingLLMClient {
     const blocks = this.scripts[this.callCount++] ?? [];
     yield { type: 'message_start', messageId: `msg_${this.callCount}`, model: 'fake', inputTokens: 1 };
     for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i]!;
+      const block = blocks[i] as ContentBlock | { type: 'thinking'; thinking: string };
       if (block.type === 'text') {
         yield { type: 'content_block_start', index: i, blockType: 'text' };
         yield { type: 'content_block_delta', index: i, deltaType: 'text', content: block.text };
+        yield { type: 'content_block_stop', index: i };
+      } else if (block.type === 'thinking') {
+        yield { type: 'content_block_start', index: i, blockType: 'thinking' };
+        yield { type: 'content_block_delta', index: i, deltaType: 'thinking', content: block.thinking };
         yield { type: 'content_block_stop', index: i };
       } else if (block.type === 'tool_use') {
         yield { type: 'content_block_start', index: i, blockType: 'tool_use', blockId: block.id };
@@ -50,9 +57,11 @@ class ScriptedStreamClient implements StreamingLLMClient {
     yield { type: 'message_stop' };
 
     // 发出完整 AssistantMessage（QueryEngine 依赖它产出 NormalizedMessage）
+    // thinking 块不进 assistant content（真实 API 里 thinking 是独立块，这里只过滤给 content 用）
+    const contentBlocks = blocks.filter((b): b is ContentBlock => b.type !== 'thinking');
     yield {
       type: 'assistant',
-      content: blocks,
+      content: contentBlocks,
       usage: { input_tokens: 1, output_tokens: blocks.length },
       stopReason: blocks.some(b => b.type === 'tool_use') ? 'tool_use' : 'end_turn',
       uuid: `asst_${this.callCount}`,
@@ -154,5 +163,55 @@ describe('streamingQuery L4 压缩接入', () => {
 
     // 能正常产出消息流，没崩
     expect(results.length).toBeGreaterThan(0);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// thinking 块的事件序列（Thought for Ns 位置错乱 bug 的前提验证）
+//
+// 物理本质：Anthropic API 对每个 content block 产出精确边界事件：
+//   content_block_start (blockType) → deltas → content_block_stop
+// 模型回复顺序常为「thinking 块 → tool_use 块（无文本）」。
+// 此时 thinking 块的 content_block_stop 是「思考结束」的精确信号，
+// 且它在 tool_use 块的 content_block_start（→ emitToolCall → pipeline.emit tool_call）之前。
+// 消费方（index.ts）应在 thinking 的 content_block_stop 时触发 thinking_end，
+// 而非等 text delta（那会推迟到所有工具调用之后，导致位置错乱）。
+// ════════════════════════════════════════════════════════════════════
+describe('thinking 块事件序列（Thought for Ns 时序前提）', () => {
+  it('thinking + tool_use 场景：thinking 的 content_block_stop 在 tool_use 相关事件之前', async () => {
+    // 模拟模型「先思考，再调工具」（无文本）的真实序列
+    const client = new ScriptedStreamClient([
+      [
+        { type: 'thinking', thinking: '分析问题，决定调用工具' } as { type: 'thinking'; thinking: string },
+        { type: 'tool_use', id: 'call_1', name: 'big_output', input: {} },
+      ],
+      [{ type: 'text', text: '完成。' }],
+    ]);
+    const registry = makeRegistryWithBigTool();
+
+    const ac = new AbortController();
+    const events = await drain(streamingQuery(client, registry, 'do thing', {
+      systemPrompt: 'sys',
+      tools: registry.getDefinitions(),
+      signal: ac.signal,
+      maxTurns: 3,
+      enableStreamingExecution: false,
+    })) as Array<{ type: string; index?: number; blockType?: string }>;
+
+    // 找 thinking 块的 content_block_stop 位置
+    const thinkingStopIdx = events.findIndex(
+      e => e.type === 'content_block_stop' && events.some(
+        (ev, i) => i < events.indexOf(e) && ev.type === 'content_block_start' && ev.blockType === 'thinking',
+      ),
+    );
+    // 找 tool_use 块的 content_block_start 位置
+    const toolUseStartIdx = events.findIndex(
+      e => e.type === 'content_block_start' && e.blockType === 'tool_use',
+    );
+
+    expect(thinkingStopIdx, '应有 thinking 块的 content_block_stop 事件').toBeGreaterThanOrEqual(0);
+    expect(toolUseStartIdx, '应有 tool_use 块的 content_block_start 事件').toBeGreaterThanOrEqual(0);
+    // 关键断言：thinking 结束信号在 tool_use 开始之前（保证 thinking_end 能在 tool_call 前 emit）
+    expect(thinkingStopIdx, `thinking 的 content_block_stop(${thinkingStopIdx}) 应在 tool_use 的 content_block_start(${toolUseStartIdx}) 之前`).toBeLessThan(toolUseStartIdx);
   });
 });

@@ -281,8 +281,12 @@ if (process.stdin.isTTY) {
           if (input.trim() && !isProcessing) {
             const userInput = input.trim();
             await historyManager.addEntry(userInput, currentProject);
-            // 用户输入固化进消息区
-            printStyled(`❯ ${userInput}`, { fg: 'green', bold: true });
+            // 新 turn：先重置 turn 状态（清上一 turn 的快照/可折叠块），再 emit user_input。
+            // 顺序关键：clearTurnState 必须在 user_input emit 之前，否则 user_input 的
+            // 快照会被清掉，导致 ctrl+o 重绘时丢失用户输入。
+            pipeline.clearTurnState();
+            // 用户输入固化进消息区（经统一管道，纳入 turnSnapshot 供 ctrl+o 重绘）
+            pipeline.emit({ kind: 'user_input', text: userInput });
             input = '';
             cursorPos = 0;
 
@@ -318,8 +322,8 @@ if (process.stdin.isTTY) {
                 isProcessing = true;
                 let thinkingContent = '';
                 let thinkingStart = Date.now();
-                // 新 turn：重置可折叠块存储 + 快照（上一 turn 的展开状态不保留）
-                pipeline.clearTurnState();
+                // clearTurnState 已在 user_input emit 前调用（见上方）。
+                // thinking_start 复用同一 turn 的快照，不再重置。
                 pipeline.emit({ kind: 'thinking_start' });
 
                 const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
@@ -340,6 +344,10 @@ if (process.stdin.isTTY) {
                   (async () => {
                     // 当前 assistant 回合的累积文本（流式 Markdown 渲染用）
                     let assistantText = '';
+                    // content block 的 index → blockType 映射（追踪每个块类型，用于 content_block_stop 分派）
+                    const blockTypes = new Map<number, string>();
+                    // 当前是否处于 thinking 块（控制 thinking_start/end 配对，避免重复）
+                    let thinkingActive = true; // L323 已乐观 emit thinking_start
                     try {
                       for await (const msg of streamingQuery(streamClient, toolRegistry, userInput, {
                         systemPrompt,
@@ -350,14 +358,36 @@ if (process.stdin.isTTY) {
                         compactClient,
                       })) {
                         // AI 输出期间：累积 token，经 pipeline 渲染进消息区
-                        if ('type' in msg && msg.type === 'content_block_delta') {
+                        if ('type' in msg && msg.type === 'content_block_start') {
+                          // 记录块类型；thinking 块开始时 emit thinking_start（多轮场景每轮都配对）
+                          const cbs = msg as { type: 'content_block_start'; index: number; blockType: string };
+                          blockTypes.set(cbs.index, cbs.blockType);
+                          if (cbs.blockType === 'thinking' && !thinkingActive) {
+                            pipeline.emit({ kind: 'thinking_start' });
+                            thinkingStart = Date.now();
+                            thinkingActive = true;
+                          }
+                        } else if ('type' in msg && msg.type === 'content_block_stop') {
+                          // thinking 块结束的精确信号：立即 emit thinking_end，
+                          // 保证 Thought for Ns 紧跟思考内容、在 tool_call/text 之前。
+                          // （旧逻辑等首个 text delta 才触发，导致「思考→工具」时摘要推迟到末尾。）
+                          const cstop = msg as { type: 'content_block_stop'; index: number };
+                          if (blockTypes.get(cstop.index) === 'thinking' && thinkingActive) {
+                            const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
+                            pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
+                            thinkingContent = '';
+                            thinkingActive = false;
+                          }
+                        } else if ('type' in msg && msg.type === 'content_block_delta') {
                           const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
                           if (delta.deltaType === 'text' && delta.content) {
-                            // 文本开始时，先固化思考内容
+                            // 兜底：若 content_block_stop 信号缺失（如旧版 API），首个 text 时固化思考。
+                            // 正常路径已由 content_block_stop 处理（thinkingContent 此时为空，不触发）。
                             if (assistantText === '' && thinkingContent) {
                               const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
                               pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
                               thinkingContent = '';
+                              thinkingActive = false;
                             }
                             assistantText += delta.content;
                             pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: false });
@@ -374,11 +404,16 @@ if (process.stdin.isTTY) {
                         } else if ('type' in msg && msg.type === 'tool_result') {
                           const tr = msg as { type: 'tool_result'; name: string; output: string };
                           // 工具结果显示已由 eventBus.onToolResult 经 pipeline 处理，
-                          // 这里仅跑 PostToolUse hook。
-                          void hookRunner.run({
+                          // 这里跑 PostToolUse hook 并同步经 pipeline 输出日志。
+                          // 必须同步 await：builtins 是同步函数立即完成，避免异步 .then
+                          // 穿插进下一轮流式内容（时序竞态导致 hook 消息错位）。
+                          const hookResult = await hookRunner.run({
                             name: 'PostToolUse',
                             payload: { tool_name: tr.name, output: tr.output },
-                          }).then(r => { if (r.message) printLine(r.message); });
+                          });
+                          if (hookResult.message) {
+                            pipeline.emit({ kind: 'hook', text: hookResult.message });
+                          }
                         }
                       }
                       // 循环结束兜底：若还有未收尾的累积文本，最终解析一次

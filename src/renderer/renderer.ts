@@ -333,27 +333,31 @@ export class Renderer {
 
       // —— 第 2 段：增长行（prevHeight..next.rows）用 CR+LF 推进 ——
       if (growing) {
+        // 对齐 Claude Code log-update.ts：稳定增长走增量 LF，绝不全清屏。
+        // 虚拟光标记画布绝对坐标（不钳位），靠 LF 在视口底部的滚动语义推进。
+        // 关键不变式（Claude Code L544-560）：行间只用 CR+LF，绝不用 CUD（cursor-down）——
+        // CUD 在视口底部静默失败，会让虚拟/真实光标永久脱钩。行内只用水平移动（dy=0）。
         for (let y = prevHeight; y < next.rows; y++) {
-          // LF 推进到新行（视口底部时触发滚动进 scrollback）
+          // LF 推进到目标行：cursor.y 线性增长到画布绝对值 y（不钳位）。
+          // LF 在视口底部触发终端原生滚动，旧行进 scrollback，物理光标钉底。
           while (vs.cursor.y < y) vs.lineFeed();
-          // 钳位虚拟光标到视口底部——终端滚动时物理光标停在底部，
-          // 但 lineFeed 会让虚拟光标超过视口高度，导致后续 moveTo 的相对偏移全部错位。
-          if (vs.cursor.y >= this.rows) vs.cursor.y = this.rows - 1;
-          vs.moveTo(0, vs.cursor.y);
+          // cursor.y === y，moveTo 的 dy=0，不发垂直 CUD（仅回列 0）
+          vs.moveTo(0, y);
           for (let x = 0; x < this.cols; x++) {
             const nc = next.getCell(x, y);
             if (nc.char === ' ' || nc.char === ' ') continue;
-            vs.moveTo(x, vs.cursor.y);
+            // 行内水平移动：cursor.y 仍 === y，dy=0，只发 CUF
+            vs.moveTo(x, y);
             vs.writeCell(nc);
           }
         }
       }
-      // —— 第 3 段：光标恢复到输入框（用视口相对坐标）——
-      // 增长后 viewportY 可能变化，需要重新计算
-      const vpY = Math.max(0, next.rows - this.rows);
-      const cursorVY = inputStartY + cursor.row - vpY;
-      while (vs.cursor.y < cursorVY) vs.lineFeed();
-      vs.moveTo(cursor.col, cursorVY);
+      // —— 第 3 段：光标恢复到输入框（画布绝对坐标 + LF）——
+      // 对齐 Claude Code ink.tsx L425-448：目标行用画布绝对坐标（inputStartY+row），
+      // 用 LF 推进（不用 CUU）。此前增长段 cursor.y 已是画布绝对值。
+      const cursorTargetY = inputStartY + cursor.row;
+      while (vs.cursor.y < cursorTargetY) vs.lineFeed();
+      vs.moveTo(cursor.col, cursorTargetY);
       const buf = vs.flush();
       if (buf) this.writer(buf);
       this.writer(showCursor());
