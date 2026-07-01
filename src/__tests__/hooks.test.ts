@@ -141,7 +141,7 @@ describe('preToolSafetyCheck', () => {
 });
 
 describe('postToolLogger', () => {
-  it('返回 exitCode 0，不直接写终端（message 由调用方展示）', () => {
+  it('返回 exitCode 0，message 含工具名但不重复输出内容（避免与 tool_result 块重复渲染）', () => {
     const event: HookEvent = {
       name: 'PostToolUse',
       payload: { tool_name: 'run_bash', output: 'hello world' },
@@ -150,18 +150,20 @@ describe('postToolLogger', () => {
     expect(result.exitCode).toBe(0);
     expect(result.message).toContain('[Hook]');
     expect(result.message).toContain('run_bash');
-    expect(result.message).toContain('hello world');
+    // 关键：不再返回 output 预览——输出已由 pipeline 的 tool_result 块渲染，
+    // hook 二次输出会导致同一内容被画两遍（症状 C 根因）。
+    expect(result.message).not.toContain('hello world');
   });
 
-  it('长输出截断到 100 字符并加省略号', () => {
+  it('message 不含任何 output 内容（无论多长）', () => {
     const long = 'x'.repeat(250);
     const event: HookEvent = {
       name: 'PostToolUse',
       payload: { tool_name: 'read_file', output: long },
     };
     const result = postToolLogger(event);
-    expect(result.message).toContain('...');
-    expect(result.message.length).toBeLessThan(long.length);
+    expect(result.message).not.toContain('x');
+    expect(result.message).not.toContain('...');
   });
 
   it('不调用 console.log（不绕过渲染器）', () => {

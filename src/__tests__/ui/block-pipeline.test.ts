@@ -117,8 +117,24 @@ describe('BlockPipeline', () => {
       expect(resultLine).toBeDefined();
     });
 
-    // 注：system / error 不再是 Block kind——非模型内容（banner/hook/错误）
-    // 直接走 UILayout.send，不经 pipeline。
+    it('hook → printMessage(text, dim)；前面已有内容时加块间空行', () => {
+      const { renderer, prints } = mockRenderer();
+      const p = new BlockPipeline(renderer);
+      // 先有 tool_result 内容，再 emit hook（模拟 PostToolUse 紧跟 tool_result）
+      p.emit({ kind: 'tool_result', name: 'run_bash', output: 'out' });
+      const printsBeforeHook = prints.length;
+      p.emit({ kind: 'hook', text: '[Hook] run_bash done' });
+      // hook 文本经 printMessage 输出，带 dim 样式
+      const hookLine = prints.slice(printsBeforeHook).find(p => p.text.includes('[Hook]'));
+      expect(hookLine, '应有 hook 输出行').toBeDefined();
+      expect(hookLine!.style).toMatchObject({ dim: true });
+      // 前面已有内容 → hook 前应有空行（openBlock 的块间分隔）
+      const hasGapBeforeHook = prints.slice(printsBeforeHook).some(p => p.text === '');
+      expect(hasGapBeforeHook, 'hook 前应有块间空行').toBe(true);
+    });
+
+    // 注：纯 UI 的 system / error 不再是 Block kind——banner/错误直接走 UILayout.send。
+    // PostToolUse hook 作为工具附属事件，走 pipeline（kind: 'hook'）以获得同步时序 + gap 契约。
   });
 
   describe('块间空行（集中化）', () => {

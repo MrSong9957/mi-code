@@ -197,6 +197,17 @@ export class BlockPipeline {
         break;
       }
 
+      case 'hook': {
+        // PostToolUse hook 日志：紧跟 tool_result 的附属信息。
+        // 开新块（加块间空行）+ dim 样式 + nested 缩进，与 tool_result 的 ⎿ 行视觉对齐。
+        // 同步渲染（emit 即落屏），避免异步 printLine 穿插进下一轮流式内容。
+        const hookLines = [{ content: block.text, style: BLOCK_STYLES.dim, indent: INDENT.nested }];
+        this.openBlock();
+        this.snapshot(() => this.print(hookLines));
+        this.print(hookLines);
+        break;
+      }
+
       default: {
         const _exhaustive: never = block;
         void _exhaustive;
