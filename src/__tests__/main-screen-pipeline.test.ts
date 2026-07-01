@@ -75,33 +75,60 @@ describe('BlockPipeline 超屏渲染（复现乱码）', () => {
     // 检查：可视区内 footer 只出现一次（状态栏 MDL 只在最后一行）
     const visibleLines = Array.from({ length: 12 }, (_, i) => t.line(i));
     const mdlCount = visibleLines.filter(l => l.includes('MDL')).length;
-    console.log('VISIBLE:', JSON.stringify(visibleLines));
-    console.log('MDL count in visible:', mdlCount);
     expect(mdlCount).toBe(1); // footer 状态栏应只出现一次
   });
 });
 
-it('多轮超屏渲染可视化（打印调试）', () => {
-  const t = new FakeTerminal(14, 70);
-  const r = new Renderer({ rows: 14, cols: 70, writer: s => t.write(s), status: { model: 'mimo', branch: 'master', dir: '~/mi-code', mode: 'Act', contextUsage: 0 } });
-  r.enter();
-  const p = new BlockPipeline(r);
-  p.emit({ kind: 'thinking_start' });
-  p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
-  let txt = '';
-  for (const c of ['我是你的助手。\n', '我可以：\n', '1. 执行命令\n', '2. 编辑文件\n', '3. 代码审查\n']) { txt += c; p.emit({ kind: 'assistant_text', text: txt, isFinal: false }); }
-  p.emit({ kind: 'assistant_text', text: txt, isFinal: true });
-  p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'pwd' } });
-  p.emit({ kind: 'tool_result', name: 'run_bash', output: '/home/user' });
-  p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
-  p.emit({ kind: 'tool_result', name: 'run_bash', output: 'file1\nfile2' });
-  r.flushNow();
-  r.exit();
-  console.log('═══ scrollback ═══');
-  t.scrollback.forEach((l, i) => console.log(`[s${i}] ${l.slice(0, 65)}`));
-  console.log('═══ 可视区 ═══');
-  for (let i = 0; i < 14; i++) console.log(`[${i}] ${t.line(i).slice(0, 65)}`);
-  const visibleMdl = Array.from({ length: 14 }, (_, i) => t.line(i)).filter(l => l.includes('mimo')).length;
-  console.log('可视区状态栏次数:', visibleMdl);
-  expect(visibleMdl).toBe(1);
+describe('ctrl+o 展开/折叠', () => {
+  it('thinking 折叠态显示摘要，展开后显示完整内容', () => {
+    const t = new FakeTerminal(20, 70);
+    const r = new Renderer({ rows: 20, cols: 70, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
+    r.enter();
+    const p = new BlockPipeline(r);
+    p.emit({ kind: 'thinking_start' });
+    p.emit({ kind: 'thinking_delta', content: '这是被折叠的完整思考内容，应该只在展开后显示。' });
+    p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
+    r.flushNow();
+    const before = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
+    expect(before.some(l => l.includes('Thought for'))).toBe(true);
+    expect(before.some(l => l.includes('被折叠的完整思考'))).toBe(false);
+    // 展开
+    p.toggleLastExpandable();
+    p.redraw();
+    r.flushNow();
+    const after = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
+    expect(after.some(l => l.includes('被折叠的完整思考'))).toBe(true);
+  });
+
+  it('tool_result 截断时折叠显示预览，展开后显示全部', () => {
+    const t = new FakeTerminal(20, 70);
+    const r = new Renderer({ rows: 20, cols: 70, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
+    r.enter();
+    const p = new BlockPipeline(r);
+    p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
+    p.emit({ kind: 'tool_result', name: 'run_bash', output: 'f1\nf2\nf3\nf4\nf5\nf6\nf7' });
+    r.flushNow();
+    const before = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
+    expect(before.some(l => l.includes('f7'))).toBe(false); // 折叠态不含 f7
+    // 展开
+    p.toggleLastExpandable();
+    p.redraw();
+    r.flushNow();
+    const after = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
+    expect(after.some(l => l.includes('f7'))).toBe(true); // 展开后含 f7
+  });
+
+  it('再按 ctrl+o 折叠回摘要', () => {
+    const t = new FakeTerminal(20, 70);
+    const r = new Renderer({ rows: 20, cols: 70, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
+    r.enter();
+    const p = new BlockPipeline(r);
+    p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
+    p.emit({ kind: 'tool_result', name: 'run_bash', output: 'f1\nf2\nf3\nf4\nf5\nf6\nf7' });
+    r.flushNow();
+    p.toggleLastExpandable(); p.redraw(); r.flushNow(); // 展开
+    p.toggleLastExpandable(); p.redraw(); r.flushNow(); // 折叠
+    const lines = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
+    expect(lines.some(l => l.includes('f7'))).toBe(false); // 折叠后不含 f7
+  });
 });

@@ -211,8 +211,12 @@ if (process.stdin.isTTY) {
           i++; continue;
         }
 
-        // Ctrl+O —— 预留：思考内容展开/折叠（待实现）
+        // Ctrl+O —— 展开/折叠最后一个可折叠块（thinking / tool_result）
         if (byte === 0x0f) {
+          if (pipeline.toggleLastExpandable()) {
+            pipeline.redraw();
+            syncInput();
+          }
           i++; continue;
         }
 
@@ -314,6 +318,8 @@ if (process.stdin.isTTY) {
                 isProcessing = true;
                 let thinkingContent = '';
                 let thinkingStart = Date.now();
+                // 新 turn：重置可折叠块存储 + 快照（上一 turn 的展开状态不保留）
+                pipeline.clearTurnState();
                 pipeline.emit({ kind: 'thinking_start' });
 
                 const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
