@@ -115,3 +115,53 @@ describe('流式重写器 rewriteStreamingBlock（退格重写）', () => {
     expect(Math.max(0, ...cuu)).toBeLessThan(20);
   });
 });
+
+describe('边界：clearMessages / resize / enter', () => {
+  it('clearMessages 全清屏，lastFlushedLine 归零', () => {
+    const frames: string[] = [];
+    const r = new Renderer({
+      rows: 8, cols: 40,
+      writer: (s: string) => { frames.push(s); },
+      status: { model: 'MDL', branch: 'main', dir: '~/d', mode: 'Act', contextUsage: 0 },
+    });
+    r.enter();
+    r.printMessage('to-clear', 'system');
+    r.flushNow();
+    frames.length = 0;
+    r.clearMessages();
+    r.flushNow();
+    expect(frames.join('')).toContain('\x1b[2J');
+  });
+
+  it('resize 后消息从 MessageBuffer 重画', () => {
+    const frames: string[] = [];
+    const r = new Renderer({
+      rows: 8, cols: 40,
+      writer: (s: string) => { frames.push(s); },
+      status: { model: 'MDL', branch: 'main', dir: '~/d', mode: 'Act', contextUsage: 0 },
+    });
+    r.enter();
+    r.printMessage('resize-test', 'system');
+    r.flushNow();
+    frames.length = 0;
+    r.resize(10, 50);
+    r.flushNow();
+    const all = frames.join('');
+    expect(all).toContain('\x1b[2J');
+    expect(all).toContain('resize-test');
+  });
+
+  it('enter 首帧清屏（\\x1b[2J）并画出页脚', () => {
+    const frames: string[] = [];
+    const r = new Renderer({
+      rows: 8, cols: 40,
+      writer: (s: string) => { frames.push(s); },
+      status: { model: 'MDL', branch: 'main', dir: '~/d', mode: 'Act', contextUsage: 0 },
+    });
+    r.enter();
+    const all = frames.join('');
+    expect(all).toContain('\x1b[2J');
+    expect(all).toContain('MDL');
+  });
+});
+
