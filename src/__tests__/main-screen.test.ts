@@ -78,7 +78,13 @@ class FakeTerminal {
       const row = this.grid[this.row];
       if (row) for (let x = this.col; x < this.cols; x++) row[x] = ' ';
     } else if (cmd === 'J') {
-      for (let rr = 0; rr < this.rows; rr++) this.grid[rr] = new Array(this.cols).fill(' ');
+      // ED：对齐真实 ANSI（0/空=光标到屏末，1=屏首到光标，2=全屏）。
+      const mode = params === '' ? 0 : n;
+      const clear = (rr: number) => { this.grid[rr] = new Array(this.cols).fill(' '); };
+      const clearFromCol = (rr: number, fromCol: number) => { const row = this.grid[rr]; if (row) for (let x = fromCol; x < this.cols; x++) row[x] = ' '; };
+      if (mode === 0) { clearFromCol(this.row, this.col); for (let rr = this.row + 1; rr < this.rows; rr++) clear(rr); }
+      else if (mode === 1) { for (let rr = 0; rr < this.row; rr++) clear(rr); clearFromCol(this.row, 0); }
+      else if (mode === 2) { for (let rr = 0; rr < this.rows; rr++) clear(rr); }
     }
   }
   line(r: number): string {

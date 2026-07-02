@@ -53,7 +53,18 @@ class FakeTerminal {
     else if (cmd === 'D') this.col = Math.max(0, this.col - n);
     else if (cmd === 'G') this.col = Math.max(0, Math.min(this.cols - 1, n - 1));
     else if (cmd === 'K') { const row = this.grid[this.row]; if (row) for (let x = this.col; x < this.cols; x++) row[x] = ' '; }
-    else if (cmd === 'J') { for (let rr = 0; rr < this.rows; rr++) this.grid[rr] = new Array(this.cols).fill(' '); }
+    // ED（擦屏）：对齐真实 ANSI 语义。
+    //   无参/0：从光标到屏末（当前行光标列→行尾 + 之后所有行全擦）。
+    //   1：从屏首到光标。2：全屏。
+    // 旧实现把任意 J 都当全屏擦（流式重写器的 \x1b[J 用于清块底残留），会误擦整屏。
+    else if (cmd === 'J') {
+      const mode = params === '' ? 0 : n;
+      const clear = (rr: number) => { this.grid[rr] = new Array(this.cols).fill(' '); };
+      const clearFromCol = (rr: number, fromCol: number) => { const row = this.grid[rr]; if (row) for (let x = fromCol; x < this.cols; x++) row[x] = ' '; };
+      if (mode === 0) { clearFromCol(this.row, this.col); for (let rr = this.row + 1; rr < this.rows; rr++) clear(rr); }
+      else if (mode === 1) { for (let rr = 0; rr < this.row; rr++) clear(rr); clearFromCol(this.row, 0); }
+      else if (mode === 2) { for (let rr = 0; rr < this.rows; rr++) clear(rr); }
+    }
   }
   line(r: number): string { return (this.grid[r] ?? []).map(c => (c === '\u0000' ? '' : c)).join('').replace(/\s+$/, ''); }
 }
