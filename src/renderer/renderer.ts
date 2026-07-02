@@ -259,7 +259,7 @@ export class Renderer {
     // 光标定位（CUP 到输入框位置）
     const cursor = this.computeInputCursorPos();
     const footerHeight = 2 + getInputLineCount(this.input) + 1;
-    const inputScreenRow = this.rows - footerHeight + 1 + cursor.row; // 1-based
+    const inputScreenRow = this.rows - footerHeight + 2 + cursor.row; // 1-based，+2 跳过上边框到输入框
     this.writer('\x1b[' + inputScreenRow + ';' + (cursor.col + 1) + 'H');
     this.writer(showCursor());
   }
