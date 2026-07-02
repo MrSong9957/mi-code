@@ -164,4 +164,53 @@ describe('边界：clearMessages / resize / enter', () => {
     expect(all).toContain('MDL');
   });
 });
-
+
+describe('样式精修（SGR 颜色）', () => {
+  it('消息行 cells 的 style 被转为 SGR（magenta → 35m）', () => {
+    const frames: string[] = [];
+    const r = new Renderer({
+      rows: 8, cols: 40,
+      writer: (s: string) => { frames.push(s); },
+      status: { model: 'MDL', branch: 'main', dir: '~/d', mode: 'Act', contextUsage: 0 },
+    });
+    r.enter();
+    r.printMessage('● magenta test', 'system', { fg: 'magenta' });
+    r.flushNow();
+    expect(frames.join('')).toContain('\x1b[35m');
+  });
+
+  it('边框行带 dim 样式（2m）', () => {
+    const frames: string[] = [];
+    const r = new Renderer({
+      rows: 8, cols: 40,
+      writer: (s: string) => { frames.push(s); },
+      status: { model: 'MDL', branch: 'main', dir: '~/d', mode: 'Act', contextUsage: 0 },
+    });
+    r.enter();
+    expect(frames.join('')).toContain('\x1b[2m');
+  });
+
+  it('prompt 带 green+bold 样式（32m + 1m）', () => {
+    const frames: string[] = [];
+    const r = new Renderer({
+      rows: 8, cols: 40,
+      writer: (s: string) => { frames.push(s); },
+      status: { model: 'MDL', branch: 'main', dir: '~/d', mode: 'Act', contextUsage: 0 },
+    });
+    r.enter();
+    const all = frames.join('');
+    expect(all).toContain('\x1b[32m');
+    expect(all).toContain('\x1b[1m');
+  });
+
+  it('状态栏 cells 的 style 被转为 SGR（cyan → 36m）', () => {
+    const frames: string[] = [];
+    const r = new Renderer({
+      rows: 8, cols: 40,
+      writer: (s: string) => { frames.push(s); },
+      status: { model: 'MDL', branch: 'main', dir: '~/d', mode: 'Act', contextUsage: 0 },
+    });
+    r.enter();
+    expect(frames.join('')).toContain('\x1b[36m');
+  });
+});

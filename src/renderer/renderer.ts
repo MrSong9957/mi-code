@@ -16,6 +16,7 @@
 import { MessageBuffer, type MessageRole } from './message-buffer.js';
 import { buildStatusBar, type StatusBarState, type ToolStatus } from './status-bar.js';
 import { stringToCells, stringWidth, styleKey, type Cell, type Style } from './cell.js';
+import { fg, bg } from './colors.js';
 import { renderMarkdown } from './markdown.js';
 import { showCursor, hideCursor } from './ansi.js';
 
@@ -276,10 +277,7 @@ export class Renderer {
    *  CR+LF 在视口底部触发终端原生滚动进 scrollback（与 Claude Code log-update 同款语义）。 */
   private writeMsgLine(line: { cells: Cell[]; role: MessageRole }): void {
     this.writer('\x1b[2K'); // 擦当前行
-    for (const cell of line.cells) {
-      if (cell.char === '\u0000') continue; // 跳过宽字符占位
-      this.writer(cell.char);
-    }
+    this.writer(cellsToStyledString(line.cells)); // 带 SGR 颜色写出
     this.writer('\r\n'); // CR+LF（满屏时触发终端原生滚动）
   }
 
@@ -322,10 +320,7 @@ export class Renderer {
     for (let i = 0; i < currentLineCount; i++) {
       this.writer('\x1b[2K');
       const line = allLines[this.streamingBlockStartRow + i]!;
-      for (const cell of line.cells) {
-        if (cell.char === '\u0000') continue; // 跳过宽字符占位
-        this.writer(cell.char);
-      }
+      this.writer(cellsToStyledString(line.cells)); // 带 SGR 颜色写出
       if (i < currentLineCount - 1) this.writer('\r\n');
     }
     // 擦除块底以下到屏末（ED）：清掉块收缩/重排后多出的残留旧行，顺带擦掉旧页脚
@@ -346,7 +341,7 @@ export class Renderer {
 
   /** 底部区刷新器（CUP 绝对定位）：把页脚（上边框 + 输入框 + 下边框 + 状态栏）
    *  直接用 CSI CUP（\x1b[r;1H）写到屏幕最后 footerHeight 行，不依赖光标当前位置，
-   *  避开满屏后坐标脱钩的根因。Task 1 简化样式（不加 SGR 颜色）。
+   *  避开满屏后坐标脱钩的根因。段3 边框 dim、prompt green+bold、状态栏 cells 带 SGR。
    *
    *  实现：把所有字节攒到一个字符串里，单次 this.writer 原子输出，也让「最后一帧」
    *  = 完整底部区内容。画完页脚后把光标 CUP 到输入框逻辑位置（commit 末尾也会再定位一次）。 */
@@ -362,19 +357,19 @@ export class Renderer {
     let out = "";
     // 上边框
     out += "\x1b[" + borderTopRow + ";1H\x1b[2K";
-    out += BORDER_CHAR.repeat(borderCount);
+    out += "[2m" + BORDER_CHAR.repeat(borderCount) + "[0m";
     // 输入框
     const inputLines = this.input.split("\n");
     for (let li = 0; li < inputLineCount; li++) {
       const row = inputStartRow + li;
       const line = inputLines[li] ?? "";
       out += "\x1b[" + row + ";1H\x1b[2K";
-      if (li === 0) out += this.prompt;
+      if (li === 0) out += "[32m[1m" + this.prompt + "[0m";
       out += line;
     }
     // 下边框
     out += "\x1b[" + borderBottomRow + ";1H\x1b[2K";
-    out += BORDER_CHAR.repeat(borderCount);
+    out += "[2m" + BORDER_CHAR.repeat(borderCount) + "[0m";
     // 状态栏
     out += "\x1b[" + statusRow + ";1H\x1b[2K";
     const statusCells = buildStatusBar({
@@ -383,9 +378,7 @@ export class Renderer {
       contextUsage: this.statusInfo.contextUsage,
       cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
     });
-    for (const cell of statusCells) {
-      if (cell.char !== "\u0000") out += cell.char;
-    }
+    out += cellsToStyledString(statusCells); // 带 SGR 颜色（dim/彩色）
     // 光标 CUP 到输入框逻辑位置（commit 末尾也会再 CUP 一次，保证最终光标位置正确）
     const cursorRow = inputStartRow + cursor.row;
     const cursorCol = cursor.col + 1; // 1-based
@@ -423,6 +416,41 @@ export class Renderer {
   }
 
 }
+
+/**
+ * 把 Style 转为绝对 SGR 转义串（复位 + 设置）。与 cell.ts buildStyle 同语义，
+ * 但放在 renderer 内便于段1/2/3 三处复用（消息行、流式块、状态栏）。 */
+function styleToAnsi(style: Style): string {
+  if (!style || styleKey(style) === '') return '';
+  let s = '[0m'; // 先复位，再绝对设置（避免与上一段样式叠加）
+  if (style.bold) s += '[1m';
+  if (style.dim) s += '[2m';
+  if (style.italic) s += '[3m';
+  if (style.underline) s += '[4m';
+  s += fg(style.fg);
+  s += bg(style.bg);
+  return s;
+}
+
+/**
+ * 把一行 cells 序列化为带 SGR 的字符串：只在 styleKey 变化时发样式字节
+ * （同 Claude Code stylePool.transition 思路），结尾复位。 */
+function cellsToStyledString(cells: Cell[]): string {
+  let out = '';
+  let lastKey = '';
+  for (const cell of cells) {
+    if (cell.char === ' ') continue; // 跳过宽字符占位
+    const key = styleKey(cell.style);
+    if (key !== lastKey) {
+      out += styleToAnsi(cell.style);
+      lastKey = key;
+    }
+    out += cell.char;
+  }
+  if (lastKey !== '') out += '[0m'; // 尾部复位
+  return out;
+}
+
 
 /**
  * 把 base style 合并到 cell 的 style 之上：cell 自身属性优先，base 仅补齐空缺。
