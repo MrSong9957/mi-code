@@ -1,3 +1,4 @@
+/* eslint-disable no-control-regex */
 import { describe, it, expect } from 'vitest';
 import { Renderer } from '../renderer/renderer.js';
 import { isWideCodePoint } from '../renderer/cell.js';
@@ -25,7 +26,6 @@ class FakeTerminal {
       const ch = s[i]!;
       if (ch === '\x1b') {
         if (s[i + 1] === '[') {
-          // eslint-disable-next-line no-control-regex
           const m = s.slice(i).match(/^\x1b\[([0-9;?]*)([A-Za-z])/);
           if (m) { this.csi(m[1], m[2]); i += m[0].length; continue; }
         }

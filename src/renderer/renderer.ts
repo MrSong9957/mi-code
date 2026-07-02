@@ -15,7 +15,7 @@
 
 import { MessageBuffer, type MessageRole } from './message-buffer.js';
 import { buildStatusBar, type StatusBarState, type ToolStatus } from './status-bar.js';
-import { stringToCells, stringWidth, styleKey, type Cell, type Style } from './cell.js';
+import { stringWidth, styleKey, type Cell, type Style } from './cell.js';
 import { fg, bg } from './colors.js';
 import { renderMarkdown } from './markdown.js';
 import { showCursor, hideCursor } from './ansi.js';
@@ -36,7 +36,6 @@ export interface RendererOptions {
 }
 
 const DEFAULT_PROMPT = '❯  ';
-const PROMPT_STYLE: Style = { fg: 'green', bold: true };
 /** 输入区最大行数 */
 const MAX_INPUT_LINES = 3;
 /** 计算输入区实际行数（至少 1 行，最多 MAX_INPUT_LINES 行） */
