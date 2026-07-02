@@ -215,6 +215,21 @@ export class MessageBuffer {
     this.lines = [];
     this.messages = [];
   }
+
+  /** 截断到前 lineCount 行（保留 [0, lineCount)，丢弃之后的行）。
+   *  用于 redraw 时保留历史轮、丢弃当前轮待重建的行。 */
+  truncateTo(lineCount: number): void {
+    if (lineCount < 0) lineCount = 0;
+    if (lineCount >= this.lines.length) return;
+    this.lines.length = lineCount;
+    // 同步清理 messages 元信息（startLine >= lineCount 的 entry 删除）
+    this.messages = this.messages.filter(m => m.startLine < lineCount);
+  }
+
+  /** 当前总行数（= allLines().length）。 */
+  get lineCountTotal(): number {
+    return this.lines.length;
+  }
 }
 
 /**

@@ -186,6 +186,18 @@ export class Renderer {
     this.writer('[1;' + this.computeContentRows() + 'r'); // 重设 scroll region
   }
 
+
+  /** 截断 MessageBuffer 到前 lineCount 行（保留历史，丢弃之后）。
+   *  redraw 用：截断到当前轮起点，再重放当前轮 snapshot。不清屏（commit 自然重画）。 */
+  truncateMessagesTo(lineCount: number): void {
+    this.messages.truncateTo(lineCount);
+    this.lastFlushedLine = Math.min(this.lastFlushedLine, lineCount);
+  }
+
+  /** 当前 MessageBuffer 总行数。 */
+  get messageLineCount(): number {
+    return this.messages.lineCountTotal;
+  }
   // ═══════ 输入态 / 状态栏 ═══════
 
   setInput(text: string, cursorPos: number): void {

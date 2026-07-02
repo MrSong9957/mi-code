@@ -9,9 +9,11 @@ import type { Block } from '../../ui/types.js';
 function mockRenderer() {
   const prints: { text: string; role?: string; style?: Record<string, unknown> }[] = [];
   const streamMarks: { text: string; isFinal: boolean }[] = [];
+  let lineCount = 0;
   const renderer = {
     printMessage: vi.fn((text: string, role?: string, style?: Record<string, unknown>) => {
       prints.push({ text, role, style });
+      lineCount++;
     }),
     appendStreamingMarkdown: vi.fn((text: string, isFinal: boolean) => {
       streamMarks.push({ text, isFinal });
@@ -20,7 +22,9 @@ function mockRenderer() {
     finalizeStreaming: vi.fn(),
     appendStreaming: vi.fn(),
     flushNow: vi.fn(),
-    clearMessages: vi.fn(),
+    clearMessages: vi.fn(() => { lineCount = 0; }),
+    truncateMessagesTo: vi.fn((n: number) => { lineCount = n; }),
+    get messageLineCount() { return lineCount; },
   };
   return { renderer, prints, streamMarks };
 }
