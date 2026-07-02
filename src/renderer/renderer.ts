@@ -375,32 +375,80 @@ export class Renderer {
   private renderFull(next: Screen, viewportY: number): void {
     this.writer(hideCursor());
     const vs = new VirtualScreen({ x: 0, y: 0 });
-    vs.raw('\x1b[2J\x1b[H'); // 擦屏 + 回原点
-    // 从 viewportY 起画到末尾（用 LF 推进，对齐 commit 的行推进机制）
-    for (let y = viewportY; y < next.rows; y++) {
+    vs.raw("\x1b[2J\x1b[H"); // 擦屏 + 回原点
+    // Task 1：只画消息区（viewportY .. 消息行末）。底部区交给 refreshFooter 用 CUP 绝对定位画。
+    // 旧实现把页脚也画进画布 + 末尾用 vs.moveTo 做 CUB/CUU 光标恢复——那是满屏乱码的根源，
+    // 现删掉这两段（页脚绘制 + 光标恢复），消除大数值 CUB/CUU。
+    const inputLineCount = getInputLineCount(this.input);
+    const footerHeight = 2 + inputLineCount + 1;
+    const msgEndY = next.rows - footerHeight; // 消息区在画布上的末行（不含页脚）
+    for (let y = viewportY; y < msgEndY; y++) {
       while (vs.cursor.y < y - viewportY) vs.lineFeed();
       vs.moveTo(0, y - viewportY);
       vs.eraseLine();
       for (let x = 0; x < this.cols; x++) {
         const cell = next.getCell(x, y);
-        if (cell.char === ' ' || cell.char === ' ') continue;
+        if (cell.char === "\u0000" || cell.char === " ") continue;
         vs.moveTo(x, y - viewportY);
         vs.writeCell(cell);
       }
     }
-    // 光标回输入框（可视坐标 = screen 坐标 - viewportY）
-    const inputLineCount = getInputLineCount(this.input);
-    const footerHeight = 2 + inputLineCount + 1;
-    const inputStartY = next.rows - footerHeight + 1;
-    const cursor = this.computeInputCursorPos();
-    const cursorVY = inputStartY + cursor.row - viewportY;
-    while (vs.cursor.y < cursorVY) vs.lineFeed();
-    vs.moveTo(cursor.col, cursorVY);
     const buf = vs.flush();
     if (buf) this.writer(buf);
+    // Task 1 接线：先显示光标，再用 CUP 绝对定位刷新底部区（最后写，使最后一帧=完整底部区）。
     this.writer(showCursor());
+    this.refreshFooter();
   }
 
+  /** 底部区刷新器（CUP 绝对定位）：把页脚（上边框 + 输入框 + 下边框 + 状态栏）
+   *  直接用 CSI CUP（\x1b[r;1H）写到屏幕最后 footerHeight 行，不依赖光标当前位置，
+   *  避开画布 diff 在满屏后坐标脱钩的问题。Task 1 简化样式（不加 SGR 颜色）。
+   *
+   *  实现：把所有字节攒到一个字符串里，单次 this.writer 原子输出（对齐 Renderer 的
+   *  单次写不变式），也让"最后一帧"=完整底部区内容。画完页脚后把光标 CUP 到输入框
+   *  逻辑位置，使后续 commit diff 段（相对移动）的光标起点正确。 */
+  private refreshFooter(): void {
+    const inputLineCount = getInputLineCount(this.input);
+    const footerHeight = 2 + inputLineCount + 1;
+    const borderTopRow = this.rows - footerHeight + 1;
+    const inputStartRow = borderTopRow + 1;
+    const borderBottomRow = inputStartRow + inputLineCount;
+    const statusRow = borderBottomRow + 1;
+    const borderCount = Math.ceil(this.cols / 1);
+    const cursor = this.computeInputCursorPos();
+    let out = "";
+    // 上边框
+    out += "\x1b[" + borderTopRow + ";1H\x1b[2K";
+    out += BORDER_CHAR.repeat(borderCount);
+    // 输入框
+    const inputLines = this.input.split("\n");
+    for (let li = 0; li < inputLineCount; li++) {
+      const row = inputStartRow + li;
+      const line = inputLines[li] ?? "";
+      out += "\x1b[" + row + ";1H\x1b[2K";
+      if (li === 0) out += this.prompt;
+      out += line;
+    }
+    // 下边框
+    out += "\x1b[" + borderBottomRow + ";1H\x1b[2K";
+    out += BORDER_CHAR.repeat(borderCount);
+    // 状态栏
+    out += "\x1b[" + statusRow + ";1H\x1b[2K";
+    const statusCells = buildStatusBar({
+      mode: this.statusInfo.mode, model: this.statusInfo.model,
+      branch: this.statusInfo.branch, dir: this.statusInfo.dir,
+      contextUsage: this.statusInfo.contextUsage,
+      cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
+    });
+    for (const cell of statusCells) {
+      if (cell.char !== "\u0000") out += cell.char;
+    }
+    // 光标 CUP 到输入框逻辑位置（与 commit 的 prevCursorY/X 对齐，使后续 diff 段光标起点正确）
+    const cursorRow = inputStartRow + cursor.row;
+    const cursorCol = cursor.col + 1; // 1-based
+    out += "\x1b[" + cursorRow + ";" + cursorCol + "H";
+    this.writer(out);
+  }
   /** 计算输入框光标的 (行偏移, 列) （0-based，行偏移相对于 inputStartY）。 */
   private computeInputCursorPos(): { row: number; col: number } {
     const lines = this.input.split('\n');
