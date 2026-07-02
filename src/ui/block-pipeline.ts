@@ -269,6 +269,7 @@ export class BlockPipeline {
     this.renderer.clearMessages();
     this.hasContent = false;
     this.assistantGapApplied = true; // redraw 内部不重复加 assistant gap
+    this.renderer.sealStreaming(); // 封口当前流式块，避免重放的 appendStreamingMarkdown 截断前一块
     for (const entry of this.turnSnapshot) {
       entry.render();
     }

@@ -178,8 +178,12 @@ export class Renderer {
   /** 清空消息区。 */
   clearMessages(): void {
     this.messages.clear();
-    // 追加游标失准（旧行已清空）→ 整屏重画，重置 lastFlushedLine 从头追加。
-    this.renderFull();
+    this.lastFlushedLine = 0;
+    // 不触发 renderFull——由调用方（如 BlockPipeline.redraw 的 flushNow）统一画，
+    // 避免中间帧（清屏后立即画空屏，再重放又画）导致闪烁/重复。
+    this.writer(hideCursor());
+    this.writer('[2J[H'); // 清屏（清掉旧内容，准备重放）
+    this.writer('[1;' + this.computeContentRows() + 'r'); // 重设 scroll region
   }
 
   // ═══════ 输入态 / 状态栏 ═══════
