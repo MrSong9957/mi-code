@@ -238,19 +238,19 @@ export class Renderer {
   private commit(): void {
     if (!this.entered) return;
     this.writer(hideCursor());
-    // 消息区：在 scroll region 内重画（CUP 到 region 顶 + 清屏到屏末 + 逐行写）。
-    // 流式块（setStreamingRows 截断重建）也能正确显示——每帧重画整个消息区，不依赖 lastFlushedLine 增量。
-    // scroll region 隔离：LF 只在 region 内滚动，满屏时旧行进 scrollback，footer 不受影响。
+    // 消息区：逐行 CUP + eraseLine + 写（不清整屏，避免闪烁）。
+    // 每帧重画可视区最后 contentRows 行；流式块（setStreamingRows 截断）也能正确显示。
+    // scroll region 隔离 footer；满屏时旧行靠 region 滚动进 scrollback。
     const contentRows0 = Math.max(1, this.rows - (2 + getInputLineCount(this.input) + 1));
-    this.writer('[1;1H');             // CUP 到消息区顶部（scroll region 顶）
-    this.writer('[J');                  // 清屏从光标到屏末（在 scroll region 内，不碰 scrollback）
     const allLines = this.messages.allLines();
-    // 只画可视区内的最后 contentRows0 行（旧行靠 scroll region 的滚动语义保留在 scrollback）
     const startLine = Math.max(0, allLines.length - contentRows0);
     for (let i = startLine; i < allLines.length; i++) {
-      this.writeMsgLine(allLines[i]!);
+      const screenRow = (i - startLine) + 1; // 1-based，scroll region 内行号
+      this.writer('[' + screenRow + ';1H');  // CUP 到该行
+      this.writer('[2K');                          // eraseLine（单行，不闪）
+      this.writer(cellsToStyledString(allLines[i]!.cells));      // 写内容（带 SGR）
     }
-    this.lastFlushedLine = allLines.length;  // 记账（resize/清屏判断用）
+    this.lastFlushedLine = allLines.length;
 
   
     // 段 3：底部区刷新器
