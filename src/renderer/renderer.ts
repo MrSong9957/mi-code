@@ -107,6 +107,8 @@ export class Renderer {
       clearTimeout(this.throttleTimer);
       this.throttleTimer = null;
     }
+    // 重置 scroll region 为全屏（DECSTBM 默认），避免残留影响后续输出
+    this.writer('\x1b[r');
     this.writer(showCursor());
   }
 
@@ -334,9 +336,19 @@ export class Renderer {
   private renderFull(): void {
     this.writer(hideCursor());
     this.writer('\x1b[2J\x1b[H'); // 全清屏（首帧/resize）
+    // 设置 scroll region：消息区（rows 1..contentRows，1-based）。
+    // footer 区在 region 之外，消息追加器的 LF 只在 region 内滚动，
+    // 不会推进到 footer；footer 由 refreshFooter 用 CUP（不受 region 限制）重画。
+    this.writer('\x1b[1;' + this.computeContentRows() + 'r');
     this.lastFlushedLine = 0;
     this.streamingBlockStartRow = null;
     this.commit();
+  }
+
+  /** 消息区行数（= 终端高度 - 页脚高度）；scroll region 顶部固定为 1。 */
+  private computeContentRows(): number {
+    const footerHeight = 2 + getInputLineCount(this.input) + 1;
+    return Math.max(1, this.rows - footerHeight);
   }
 
   /** 底部区刷新器（CUP 绝对定位）：把页脚（上边框 + 输入框 + 下边框 + 状态栏）

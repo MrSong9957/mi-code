@@ -11,7 +11,8 @@ import { describe, it, expect } from 'vitest';
 import { Renderer } from '../renderer/renderer.js';
 import { isWideCodePoint } from '../renderer/cell.js';
 
-/** 会模拟真实终端的 FakeTerminal：\n 在视口底部触发滚动（顶行进 scrollback）。 */
+/** 会模拟真实终端的 FakeTerminal：\n 在视口底部触发滚动（顶行进 scrollback）。
+ *  含 scroll region（DECSTBM）支持：\n 在 region 底部触发 region 内滚动。 */
 class FakeTerminal {
   rows: number;
   cols: number;
@@ -19,9 +20,12 @@ class FakeTerminal {
   scrollback: string[] = [];
   row = 0;
   col = 0;
+  scrollTop = 0;
+  scrollBottom: number;
   constructor(rows: number, cols: number) {
     this.rows = rows;
     this.cols = cols;
+    this.scrollBottom = rows - 1;
     this.grid = Array.from({ length: rows }, () => new Array(cols).fill(' '));
   }
   write(s: string): void {
@@ -47,12 +51,13 @@ class FakeTerminal {
       i++;
     }
   }
-  /** 换行：视口底部则整体上滚（顶行进 scrollback）——模拟终端原生滚动 */
+  /** 换行：视口底部则整体上滚（顶行进 scrollback）——模拟终端原生滚动。
+   *  若设了 scroll region，则只在 region 内滚动（顶行=scrollTop 进 scrollback）。 */
   private lf(): void {
-    if (this.row >= this.rows - 1) {
-      this.scrollback.push((this.grid[0] ?? []).map(c => (c === '\u0000' ? '' : c)).join(''));
-      for (let r = 0; r < this.rows - 1; r++) this.grid[r] = this.grid[r + 1];
-      this.grid[this.rows - 1] = new Array(this.cols).fill(' ');
+    if (this.row >= this.scrollBottom) {
+      this.scrollback.push((this.grid[this.scrollTop] ?? []).map(c => (c === '\u0000' ? '' : c)).join(''));
+      for (let r = this.scrollTop; r < this.scrollBottom; r++) this.grid[r] = this.grid[r + 1]!;
+      this.grid[this.scrollBottom] = new Array(this.cols).fill(' ');
       this.col = 0;
     } else {
       this.row++;
@@ -85,6 +90,16 @@ class FakeTerminal {
       if (mode === 0) { clearFromCol(this.row, this.col); for (let rr = this.row + 1; rr < this.rows; rr++) clear(rr); }
       else if (mode === 1) { for (let rr = 0; rr < this.row; rr++) clear(rr); clearFromCol(this.row, 0); }
       else if (mode === 2) { for (let rr = 0; rr < this.rows; rr++) clear(rr); }
+    } else if (cmd === 'r') {
+      // DECSTBM：设置 scroll region。params = "top;bottom" 或空（重置全屏）。
+      if (params === '') { this.scrollTop = 0; this.scrollBottom = this.rows - 1; }
+      else {
+        const [top, bottom] = params.split(';').map(x => parseInt(x || '1', 10));
+        this.scrollTop = (top || 1) - 1;
+        this.scrollBottom = (bottom || this.rows) - 1;
+      }
+      this.row = this.scrollTop; // DECSTBM 后光标回 region 顶
+      this.col = 0;
     }
   }
   line(r: number): string {
@@ -112,12 +127,17 @@ describe('主屏增长画布渲染器', () => {
       r.enter();
       for (let i = 1; i <= 10; i++) { r.printMessage(`msg-${i}`, 'system', {}); r.flushNow(); }
       // 动态 footer：输入 1 行 → footer=4（border+input+border+status）→ 消息区 6 行
-      // 最早的消息进 scrollback（msg-1..4）
+      // （scroll region = rows 1..6）。10 条消息 → 末条 LF 触发 region 内滚动，
+      // 早期消息进 scrollback（msg-1..5），可视区保留最近 5 条（msg-6..10）。
       expect(t.scrollback.some(l => l.includes('msg-1'))).toBe(true);
-      expect(t.scrollback.some(l => l.includes('msg-4'))).toBe(true);
-      // 最新消息在可视区（rows 0-5）
-      expect(t.line(0)).toContain('msg-5');
-      expect(t.line(5)).toContain('msg-10');
+      expect(t.scrollback.some(l => l.includes('msg-5'))).toBe(true);
+      // 最新消息在可视区消息行（不在 footer 区）
+      const visibleMsgs = Array.from({ length: 6 }, (_, i) => t.line(i));
+      expect(visibleMsgs.some(l => l.includes('msg-10'))).toBe(true);
+      expect(visibleMsgs.some(l => l.includes('msg-6'))).toBe(true);
+      // 消息不串入 footer 区
+      const footer = [t.line(6), t.line(7), t.line(8), t.line(9)];
+      expect(footer.every(l => !l.includes('msg'))).toBe(true);
       // 页脚（row6=border, row7=input, row8=border, row9=status）
       expect(t.line(7)).toContain('❯');
       expect(t.line(9)).toContain('MDL');
