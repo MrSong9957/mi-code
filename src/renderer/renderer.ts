@@ -72,7 +72,6 @@ export class Renderer {
   /** 消息追加器「已写到哪里」（allLines 的游标；只增不减） */
   private lastFlushedLine = 0;
   /** 流式重写器的块起始行（Task 3 用，本 Task 先声明） */
-  private streamingBlockStartRow: number | null = null;
 
   /** 节流状态 */
   private scheduled = false;
@@ -111,6 +110,12 @@ export class Renderer {
     this.writer(showCursor());
   }
 
+  private writeMsgLine(line: { cells: Cell[]; role: MessageRole }): void {
+    this.writer('\x1b[2K'); // 擦当前行
+    this.writer(cellsToStyledString(line.cells)); // 带 SGR 颜色写出
+    this.writer('\r\n'); // CR+LF（满屏时触发终端原生滚动）
+  }
+
   // ═══════ 消息输出 ═══════
 
   /** 固化一条消息（按 \n 拆行，经 Markdown 渲染成带样式 cells，每行独立消息）。
@@ -119,7 +124,6 @@ export class Renderer {
    *  这样 MessageFormatter 的 ● (magenta) / ⎿ (dim) 才能真正着色。 */
   printMessage(text: string, role: MessageRole, style: Style = {}): void {
     // 新内容到来前，先把冻结的流式块用 CR+LF 固化进消息流（交还段1 追加）。
-    this.commitPendingStreamingBlock();
     const rows = text === '' ? [[]] : renderMarkdown(text, this.cols);
     const hasStyle = style && Object.keys(style).length > 0;
     const styledRows = hasStyle
@@ -141,15 +145,10 @@ export class Renderer {
     opts: { indent?: number; firstLinePrefix?: string; firstLineStyle?: Style } =
       { indent: 2, firstLinePrefix: '● ', firstLineStyle: { fg: 'magenta' } },
   ): void {
-    // 首次 delta：记录当前 assistant 块的起始行（封口前由流式重写器原地退格重写）。
-    if (this.streamingBlockStartRow === null) {
-      this.streamingBlockStartRow = this.messages.allLines().length;
-    }
+    // 纯追加策略：setStreamingRows 更新 MessageBuffer（markdown 重渲染），
+    // commit 段1 自然追加新增行。不维护 streamingBlockStartRow，不退格重写。
     const rows = renderMarkdown(text, this.cols, !isFinal);
     this.messages.setStreamingRows(rows, opts);
-    // isFinal 不在此清空 streamingBlockStartRow：块保持「冻结但未固化」状态，仍由段2 维持可见。
-    // 真正固化（用 CR+LF 追加进流）推迟到下一条内容（printMessage/sealStreaming）调用
-    // commitPendingStreamingBlock()——避免 isFinal 这一帧就把块写进即将被清空的帧缓冲。
     this.scheduleRender();
   }
 
@@ -172,7 +171,6 @@ export class Renderer {
    *  比 finalizeStreaming 温和——不触发额外 commit 帧，减少渲染竞态。 */
   sealStreaming(): void {
     // 封口分隔符前，先把冻结的流式块固化进消息流（与 printMessage 同语义）。
-    this.commitPendingStreamingBlock();
     this.messages.appendLine('', 'system', {});
     this.scheduleRender();
   }
@@ -240,29 +238,21 @@ export class Renderer {
   private commit(): void {
     if (!this.entered) return;
     this.writer(hideCursor());
-    // 消息区光标归位：CUP 到下一未写消息行，但夹在可视区内（rows - footerHeight）。
-    // 未溢出时精准定位（修段3 把光标留在底部区导致的「消息写进页脚」），
-    // 溢出后夹到底部内容行——段1 的换行（LF）自然触发原生滚动进 scrollback（对齐 log-update）。
-    const footerHeight0 = 2 + getInputLineCount(this.input) + 1;
-    const contentRows = Math.max(1, this.rows - footerHeight0);
-    const cupRow = Math.min(this.lastFlushedLine + 1, contentRows);
-    this.writer('\x1b[' + cupRow + ';1H');
-
-    // 段 1：消息追加器（只增不减）
+    // 消息区：在 scroll region 内重画（CUP 到 region 顶 + 清屏到屏末 + 逐行写）。
+    // 流式块（setStreamingRows 截断重建）也能正确显示——每帧重画整个消息区，不依赖 lastFlushedLine 增量。
+    // scroll region 隔离：LF 只在 region 内滚动，满屏时旧行进 scrollback，footer 不受影响。
+    const contentRows0 = Math.max(1, this.rows - (2 + getInputLineCount(this.input) + 1));
+    this.writer('[1;1H');             // CUP 到消息区顶部（scroll region 顶）
+    this.writer('[J');                  // 清屏从光标到屏末（在 scroll region 内，不碰 scrollback）
     const allLines = this.messages.allLines();
-    // 流式中：块行 [streamingBlockStartRow, allLines.length) 由段2 退格重写「原地」拥有，
-    // 段1 只追加块之前已封口的行（不越界进块），避免双重写出 + 误把可变块推进 scrollback。
-    const appendLimit = this.streamingBlockStartRow !== null ? this.streamingBlockStartRow : allLines.length;
-    while (this.lastFlushedLine < appendLimit) {
-      this.writeMsgLine(allLines[this.lastFlushedLine]!);
-      this.lastFlushedLine++;
+    // 只画可视区内的最后 contentRows0 行（旧行靠 scroll region 的滚动语义保留在 scrollback）
+    const startLine = Math.max(0, allLines.length - contentRows0);
+    for (let i = startLine; i < allLines.length; i++) {
+      this.writeMsgLine(allLines[i]!);
     }
+    this.lastFlushedLine = allLines.length;  // 记账（resize/清屏判断用）
 
-    // 段 2：流式重写器（活跃时原地退格重写当前块）
-    if (this.streamingBlockStartRow !== null) {
-      this.rewriteStreamingBlock();
-    }
-
+  
     // 段 3：底部区刷新器
     this.refreshFooter();
 
@@ -272,62 +262,6 @@ export class Renderer {
     const inputScreenRow = this.rows - footerHeight + 1 + cursor.row; // 1-based
     this.writer('\x1b[' + inputScreenRow + ';' + (cursor.col + 1) + 'H');
     this.writer(showCursor());
-  }
-
-  /** 消息追加器：把一行消息写出（擦当前行 → 写 cells → CR+LF）。
-   *  CR+LF 在视口底部触发终端原生滚动进 scrollback（与 Claude Code log-update 同款语义）。 */
-  private writeMsgLine(line: { cells: Cell[]; role: MessageRole }): void {
-    this.writer('\x1b[2K'); // 擦当前行
-    this.writer(cellsToStyledString(line.cells)); // 带 SGR 颜色写出
-    this.writer('\r\n'); // CR+LF（满屏时触发终端原生滚动）
-  }
-
-  /** 流式重写器：原地退格（CUU）重写当前 assistant 块。
-   *  块行 [streamingBlockStartRow, allLines.length) 永远是「当前最新文本」，每帧退回到块起点
-   *  逐行 eraseLine 重画——回溯范围仅限单块行数，绝不跨屏/进 scrollback。
-   *  块未封口期间段1 不触碰这些行（appendLimit 卡在 streamingBlockStartRow），故不推进进 scrollback；
-   *  封口（streamingBlockStartRow=null）后由段1 以 CR+LF 追加，永久固化。 */
-  /** 固化冻结的流式块：把它从「段2 原地重写」状态转为「段1 CR+LF 追加」永久记录。
-   *  在 isFinal 后由下一条内容（printMessage/sealStreaming）调用——此时段1 会从
-   *  streamingBlockStartRow 起逐行追加整块（连同随后推入的新行），用 LF 触发原生滚动进 scrollback。 */
-  private commitPendingStreamingBlock(): void {
-    if (this.streamingBlockStartRow === null) return;
-    // 把追加游标回退到块起点（仅当 SBSR < LFL）：下一帧段1 从 SBSR 起重新 CR+LF 追加整块。
-    // 用 min（单调不退）而非无条件赋值：多个块在同步合帧（无中间 timer 触发 commit）场景
-    // 下连续封口时，后块的 SBSR 较大，无条件 LFL=SBSR 会把游标前推、跳过前块导致丢行；
-    // min 保留最早未固化块的起点，让段1 一次性追回所有待固化块。
-    if (this.streamingBlockStartRow < this.lastFlushedLine) {
-      this.lastFlushedLine = this.streamingBlockStartRow;
-    }
-    this.streamingBlockStartRow = null;
-  }
-
-  private rewriteStreamingBlock(): void {
-    if (this.streamingBlockStartRow === null) return;
-    const allLines = this.messages.allLines();
-    const currentLineCount = allLines.length - this.streamingBlockStartRow;
-    if (currentLineCount <= 0) return;
-    // 降级：块超可视区 → 封口已写部分，后续增量由段1 纯追加（视觉等价顺序输出）。
-    const footerHeight = 2 + getInputLineCount(this.input) + 1;
-    if (currentLineCount >= this.rows - footerHeight) {
-      this.streamingBlockStartRow = allLines.length;
-      return;
-    }
-    // 先 CUP 到块底（allLines.length 行，0-based → 1-based +1），再 CUU 回块起点。
-    // CUP 归位使退格量确定（不依赖上一帧光标），CUU currentLineCount 精准回到 streamingBlockStartRow。
-    this.writer('\x1b[' + (allLines.length + 1) + ';1H');
-    this.writer('\x1b[' + currentLineCount + 'A');
-    // 逐行 eraseLine + 重写；最后一行不写 CR+LF（避免推进光标把块顶进 scrollback）。
-    for (let i = 0; i < currentLineCount; i++) {
-      this.writer('\x1b[2K');
-      const line = allLines[this.streamingBlockStartRow + i]!;
-      this.writer(cellsToStyledString(line.cells)); // 带 SGR 颜色写出
-      if (i < currentLineCount - 1) this.writer('\r\n');
-    }
-    // 擦除块底以下到屏末（ED）：清掉块收缩/重排后多出的残留旧行，顺带擦掉旧页脚
-    // （段3 refreshFooter 紧随其后用 CUP 重画，故安全）。
-    this.writer('\x1b[J');
-    // 注意：不推进 lastFlushedLine（块未固化）；封口后段1 会重新 CR+LF 追加整块。
   }
 
   /** 全清屏 + 委托 commit（首帧 / resize 调用）。
@@ -340,7 +274,6 @@ export class Renderer {
     // 不会推进到 footer；footer 由 refreshFooter 用 CUP（不受 region 限制）重画。
     this.writer('\x1b[1;' + this.computeContentRows() + 'r');
     this.lastFlushedLine = 0;
-    this.streamingBlockStartRow = null;
     this.commit();
   }
 
