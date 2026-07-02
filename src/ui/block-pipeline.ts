@@ -34,10 +34,6 @@ export interface PipelineRenderer {
   sealStreaming(): void;
   flushNow(): void;
   clearMessages(): void;
-  /** 截断 MessageBuffer 到前 lineCount 行（保留历史，丢弃当前轮待重建的行） */
-  truncateMessagesTo(lineCount: number): void;
-  /** 当前 MessageBuffer 总行数 */
-  readonly messageLineCount: number;
 }
 
 /** assistant 流式块的固定格式契约（hanging indent：● 第0列 + 续行 INDENT.nested 空格） */
@@ -77,8 +73,6 @@ export class BlockPipeline {
   private expandable = new ExpandableBlockStore();
   /** 当前 turn 的渲染快照（用于 redraw 重放） */
   private turnSnapshot: SnapshotEntry[] = [];
-  /** 当前 turn 在 MessageBuffer 的起始行（redraw 时截断到这里保留历史） */
-  private turnStartLine = 0;
   /** 块 id 计数器（生成唯一 id） */
   private idCounter = 0;
 
@@ -94,7 +88,6 @@ export class BlockPipeline {
       case 'user_input':
         this.openBlock();
         // 记录当前轮起点（redraw 时截断到这里，保留历史轮）
-        this.turnStartLine = this.renderer.messageLineCount;
         this.snapshot(() => this.print(MessageFormatter.format('input', {}, block.text)));
         this.print(MessageFormatter.format('input', {}, block.text));
         break;
@@ -274,12 +267,9 @@ export class BlockPipeline {
    * 注意：clearMessages 会清屏，之前的 scrollback 丢失（toggle 的已知代价）。
    */
   redraw(): void {
-    // 截断到当前轮起点（保留历史轮），不清屏不清全部 MessageBuffer。
-    // 重放当前轮 snapshot（含展开/折叠后的 expandable 行），commit 自然重画可视区。
-    this.renderer.sealStreaming(); // 封口当前流式块
-    this.renderer.truncateMessagesTo(this.turnStartLine);
-    this.hasContent = this.turnStartLine > 0;
-    this.assistantGapApplied = true; // redraw 内部不重复加 assistant gap
+    this.renderer.clearMessages();
+    this.hasContent = false;
+    this.assistantGapApplied = true;
     for (const entry of this.turnSnapshot) {
       entry.render();
     }
@@ -307,7 +297,6 @@ export class BlockPipeline {
     this.pendingToolInputs.clear();
     this.expandable.clear();
     this.turnSnapshot = [];
-    this.turnStartLine = 0;
     this.renderer.clearMessages();
   }
 
@@ -321,7 +310,6 @@ export class BlockPipeline {
     this.pendingToolInputs.clear();
     this.expandable.clear();
     this.turnSnapshot = [];
-    this.turnStartLine = this.renderer.messageLineCount; // 下一轮起点=当前行数
     // hasContent 保持 true（屏幕上仍有历史内容，新块前要加空行）
   }
 }

@@ -6,8 +6,7 @@ import { isWideCodePoint } from '../renderer/cell.js';
 
 class FakeTerminal {
   rows: number; cols: number; grid: string[][]; scrollback: string[] = []; row = 0; col = 0;
-  scrollTop = 0; scrollBottom: number;
-  constructor(r: number, c: number) { this.rows = r; this.cols = c; this.scrollBottom = r - 1; this.grid = Array.from({ length: r }, () => new Array(c).fill(' ')); }
+  constructor(r: number, c: number) { this.rows = r; this.cols = c; this.grid = Array.from({ length: r }, () => new Array(c).fill(' ')); }
   write(s: string): void {
     let i = 0;
     while (i < s.length) {
@@ -31,10 +30,10 @@ class FakeTerminal {
     }
   }
   private lf(): void {
-    if (this.row >= this.scrollBottom) {
-      this.scrollback.push((this.grid[this.scrollTop] ?? []).map(c => (c === '\u0000' ? '' : c)).join(''));
-      for (let r = this.scrollTop; r < this.scrollBottom; r++) this.grid[r] = this.grid[r + 1]!;
-      this.grid[this.scrollBottom] = new Array(this.cols).fill(' ');
+    if (this.row >= this.rows - 1) {
+      this.scrollback.push((this.grid[0] ?? []).map(c => (c === '\u0000' ? '' : c)).join(''));
+      for (let r = 0; r < this.rows - 1; r++) this.grid[r] = this.grid[r + 1];
+      this.grid[this.rows - 1] = new Array(this.cols).fill(' ');
       this.col = 0;
     } else { this.row++; this.col = 0; }
   }
@@ -54,28 +53,7 @@ class FakeTerminal {
     else if (cmd === 'D') this.col = Math.max(0, this.col - n);
     else if (cmd === 'G') this.col = Math.max(0, Math.min(this.cols - 1, n - 1));
     else if (cmd === 'K') { const row = this.grid[this.row]; if (row) for (let x = this.col; x < this.cols; x++) row[x] = ' '; }
-    // ED（擦屏）：对齐真实 ANSI 语义。
-    //   无参/0：从光标到屏末（当前行光标列→行尾 + 之后所有行全擦）。
-    //   1：从屏首到光标。2：全屏。
-    // 旧实现把任意 J 都当全屏擦（流式重写器的 \x1b[J 用于清块底残留），会误擦整屏。
-    else if (cmd === 'J') {
-      const mode = params === '' ? 0 : n;
-      const clear = (rr: number) => { this.grid[rr] = new Array(this.cols).fill(' '); };
-      const clearFromCol = (rr: number, fromCol: number) => { const row = this.grid[rr]; if (row) for (let x = fromCol; x < this.cols; x++) row[x] = ' '; };
-      if (mode === 0) { clearFromCol(this.row, this.col); for (let rr = this.row + 1; rr < this.rows; rr++) clear(rr); }
-      else if (mode === 1) { for (let rr = 0; rr < this.row; rr++) clear(rr); clearFromCol(this.row, 0); }
-      else if (mode === 2) { for (let rr = 0; rr < this.rows; rr++) clear(rr); }
-    } else if (cmd === 'r') {
-      // DECSTBM：设置 scroll region。params = "top;bottom" 或空（重置全屏）。
-      if (params === '') { this.scrollTop = 0; this.scrollBottom = this.rows - 1; }
-      else {
-        const [top, bottom] = params.split(';').map(x => parseInt(x || '1', 10));
-        this.scrollTop = (top || 1) - 1;
-        this.scrollBottom = (bottom || this.rows) - 1;
-      }
-      this.row = this.scrollTop; // DECSTBM 后光标回 region 顶
-      this.col = 0;
-    }
+    else if (cmd === 'J') { for (let rr = 0; rr < this.rows; rr++) this.grid[rr] = new Array(this.cols).fill(' '); }
   }
   line(r: number): string { return (this.grid[r] ?? []).map(c => (c === '\u0000' ? '' : c)).join('').replace(/\s+$/, ''); }
 }

@@ -1,0 +1,10 @@
+{
+  "id": "ad97d317",
+  "command": "ping localhost",
+  "status": "completed",
+  "startedAt": "2026-07-02T10:32:18.704Z",
+  "outputFile": "D:\\Files\\Projects\\mi-code\\.runtime-tasks\\ad97d317.log",
+  "lastActivityAt": 1782988341775,
+  "finishedAt": "2026-07-02T10:32:21.792Z",
+  "preview": "\r\n���� Ping SRY [::1] ���� 32 �ֽڵ�����:\r\n���� ::1 �Ļظ�: ʱ��<1ms \r\n���� ::1 �Ļظ�: ʱ��<1ms \r\n���� ::1 �Ļظ�: ʱ��<1ms \r\n���� ::1 �Ļظ�: ʱ��<1ms \r\n\r\n::1 �� Ping ͳ����Ϣ:\r\n    ���ݰ�: �ѷ��� = 4���ѽ��� = 4����ʧ = 0 (0% ��ʧ)��\r\n�����г̵Ĺ���ʱ��(�Ժ���Ϊ��λ):\r\n    ��� = 0ms��� = 0ms��ƽ�� = 0ms\r\n"
+}

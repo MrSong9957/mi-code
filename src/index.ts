@@ -146,8 +146,6 @@ const pipeline = new BlockPipeline({
   sealStreaming: () => layout.rawSealStreaming(),
   flushNow: () => layout.commit(),
   clearMessages: () => layout.rawClearMessages(),
-  truncateMessagesTo: (n) => layout.rawTruncateMessagesTo(n),
-  get messageLineCount() { return layout.messageLineCount; },
 });
 
 /** 把一行文本作为"系统消息"固化进消息区（非模型内容：banner / hook / 提示等，直走 UILayout，不经 pipeline）。 */

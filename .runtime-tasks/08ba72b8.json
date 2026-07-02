@@ -1,0 +1,10 @@
+{
+  "id": "08ba72b8",
+  "command": "echo \"这是一个后台任务测试\" && sleep 5 && echo \"后台任务完成\"",
+  "status": "error",
+  "startedAt": "2026-07-02T10:58:51.732Z",
+  "outputFile": "D:\\Files\\Projects\\mi-code\\.runtime-tasks\\08ba72b8.log",
+  "lastActivityAt": 1782989931758,
+  "finishedAt": "2026-07-02T10:58:51.767Z",
+  "preview": "\"����һ����̨�������\" \r\n'sleep' �����ڲ����ⲿ���Ҳ���ǿ����еĳ���\r\n���������ļ���\r\n"
+}

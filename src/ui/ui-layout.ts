@@ -236,16 +236,6 @@ export class UILayout {
     this.renderer.clearMessages();
   }
 
-  /** 透传：截断 MessageBuffer 到前 lineCount 行（保留历史，丢弃之后） */
-  rawTruncateMessagesTo(lineCount: number): void {
-    this.renderer.truncateMessagesTo(lineCount);
-  }
-
-  /** 透传：当前 MessageBuffer 总行数 */
-  get messageLineCount(): number {
-    return this.renderer.messageLineCount;
-  }
-
   /**
    * 进入渲染模式
    */

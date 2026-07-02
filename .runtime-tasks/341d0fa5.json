@@ -1,0 +1,10 @@
+{
+  "id": "341d0fa5",
+  "command": "echo \"Windows后台任务测试\" && timeout /t 2 && echo \"Windows后台任务完成\"",
+  "status": "error",
+  "startedAt": "2026-07-02T15:27:56.964Z",
+  "outputFile": "D:\\Files\\Projects\\mi-code\\.runtime-tasks\\341d0fa5.log",
+  "lastActivityAt": 1783006077001,
+  "finishedAt": "2026-07-02T15:27:57.009Z",
+  "preview": "\"Windows��̨�������\" \r\n����: ��֧���������¶��������˳��˽��̡�\r\n"
+}
