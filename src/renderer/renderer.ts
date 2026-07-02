@@ -1,28 +1,28 @@
-// 主屏增长画布渲染器（对齐 Claude Code 默认行为：主屏 + 原生 scrollback + 页脚钉底）
+// 主屏 + DECSTBM 滚动区域 + 纯追加渲染器
 //
 // 物理本质（第一性原理）：
-// - 把"内容"当成一张可变高度的格子纸（screen.height = 消息行数 + 页脚高度，随内容增长）。
-// - 终端只显示这张纸的最后 `rows` 行（viewport）。纸上更靠上的行**自然滚进终端 scrollback**，
-//   用户用终端滚动条翻阅（丝滑、原生）。
-// - 页脚（状态栏 + 输入框）钉在纸的最底两行 → 永远在 viewport 底部可见。
+// - 不进备用屏，留在主屏——保留终端**原生 scrollback**（用户可用滚动条翻历史、
+//   鼠标拖选复制，无需开鼠标追踪、无需自建虚拟滚动）。
+// - 用 DECSTBM（滚动区域 `\x1b[top;bottom r`）把屏幕分成两段：
+//     · 消息区 [0, contentRows)：LF 在 region 底部触发滚动，旧行**进原生 scrollback**，
+//       region 外的页脚钉死不动。
+//     · 页脚 [contentRows, rows)：上边框 + 输入框 + 下边框 + 状态栏，永远在屏底可见。
+// - **纯追加**：消息一行行写进 region，写完 + LF 后永不回头改（CUP 够不着已进 scrollback 的行）。
+//   流式 Markdown 也只追加 delta（接受折行临时不完美）。
+// - 页脚变化（输入/工具状态）时，CUP 到 region 外逐行 eraseLine + 重写——region 外 CUP
+//   不触发滚动，安全。
 //
-// 每帧（commit）：
-//   ① 按当前消息 + 页脚，在内存画一张新 screen（高度 = 内容高度）。
-//   ② viewportY = max(0, contentHeight - rows)（已进 scrollback 的行数）。
-//   ③ diff(prevScreen, nextScreen) 只比对 y >= viewportY 的可视行；y < viewportY 变了 → fullReset。
-//   ④ 内容增长（新行）靠光标 LF（\n）自然滚动进 scrollback。
-//   ⑤ 末尾把光标送到页脚输入框的逻辑光标处。
-//   ⑥ 单次 writer(buf)，原子。
-//
-// 这是 Claude Code log-update.ts 的同款算法（viewportY + fullReset + 增长 LF）。
+// 这是 TUI「页脚钉底 + 消息可滚 + 原生选取」的经典手法（less/man/vim 分屏同款）。
 
-import { Screen } from './screen.js';
-import { VirtualScreen } from './virtual-screen.js';
-import { MessageBuffer, type MessageRole } from './message-buffer.js';
+import { MessageBuffer, wrapCells, type MessageRole } from './message-buffer.js';
 import { buildStatusBar, type StatusBarState, type ToolStatus } from './status-bar.js';
-import { stringToCells, stringWidth, styleKey, type Cell, type Style } from './cell.js';
+import { stringToCells, stringWidth, styleKey as styleKeyOf, styleTransitionByKey, type Cell, type Style } from './cell.js';
 import { renderMarkdown } from './markdown.js';
-import { showCursor, hideCursor, enterAltScreen, exitAltScreen } from './ansi.js';
+import { WriteBuffer } from './write-buffer.js';
+import {
+  showCursor, hideCursor, cup, cr, eraseLine,
+  setScrollRegion, resetScrollRegion,
+} from './ansi.js';
 
 /** 写出接口（默认 process.stdout.write；测试注入 fake） */
 export type Writer = (s: string) => void;
@@ -56,11 +56,12 @@ export class Renderer {
   private rows: number;
   private cols: number;
   private writer: Writer;
+  private buffer: WriteBuffer;
   private statusInfo: Pick<StatusBarState, 'model' | 'branch' | 'dir' | 'mode' | 'contextUsage'>;
   private prompt: string;
   private frameIntervalMs: number;
 
-  /** 消息缓冲（存全部消息行；画布按它建） */
+  /** 消息缓冲（存全部消息行；纯追加模型下主要供 inspectFrame 诊断用） */
   private messages: MessageBuffer;
 
   /** 输入态 */
@@ -74,22 +75,29 @@ export class Renderer {
 
   /** 是否已启动 */
   private entered = false;
-  /** 上一帧的 screen（diff 用）+ 它的高度（增长判定） */
-  private prevScreen: Screen | null = null;
-  private prevHeight = 0;
-  /** 上一帧光标在 screen 坐标系里的位置（VirtualScreen 相对记账起点） */
-  private prevCursorY = 0;
-  private prevCursorX = 0;
+  /** 流式 Markdown：已发送到终端的累积文本长度（delta 追加用） */
+  private lastStreamedLen = 0;
+  /** 流式块首行前缀（● 等）是否已加（避免每段重复加前缀） */
+  private streamingPrefixApplied = false;
+  /** 流式：当前视觉行的列位置（下一字符写到哪一列）。跨 token 续写同一行用。 */
+  private streamCol = 0;
+  /** 流式：当前块续行的缩进列数（折行后续行回退到此列）。 */
+  private streamIndent = 0;
+  /** 消息区光标 Y（region 内 0-based，受 regionBottom 钳位）。纯追加模型的核心记账：
+   *  每条消息写到 messageRow，写完 LF 推进；到 region 底部时 LF 触发滚动（messageRow 钉底）。 */
+  private messageRow = 0;
 
-  /** 节流状态 */
-  private scheduled = false;
-  private trailingPending = false;
-  private throttleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 流式是否活跃（流式块开始 → isFinal 期间为 true）。
+   *  用于：1) 流式期间光标保持 hidden；2) 跳过 MessageBuffer push；3) 页脚懒重绘。 */
+  private streamingActive = false;
+  /** 页脚是否需要重绘（setInput / setToolStatus / setHint 时标记，流式结束后统一重绘） */
+  private footerDirty = false;
 
   constructor(opts: RendererOptions) {
     this.rows = opts.rows;
     this.cols = opts.cols;
     this.writer = opts.writer;
+    this.buffer = new WriteBuffer(opts.writer);
     this.statusInfo = opts.status;
     this.prompt = opts.prompt ?? DEFAULT_PROMPT;
     this.frameIntervalMs = opts.frameIntervalMs ?? 16;
@@ -98,165 +106,332 @@ export class Renderer {
 
   // ═══════ 生命周期 ═══════
 
-  /** 启动：主屏模式，隐藏光标（自己管位置），画首帧。 */
+  /** 启动：主屏模式，设 scroll region，画首帧页脚。 */
   enter(): void {
     if (this.entered) return;
     this.entered = true;
-    this.writer(enterAltScreen()); // 进入备用屏（画布diff的正确运行环境）
-    this.writer(hideCursor());
-    this.commit();
+    this.messageRow = 0;
+    this.resetStreamingState();
+    // 消息区 scroll region：[0, contentRows)，页脚钉 region 外
+    this.applyScrollRegion();
+    // 清消息区（region 内），保留 scrollback 不动
+    this.buffer.write(cup(0, 0));
+    this.buffer.write('\x1b[J'); // 擦从光标到屏底（含页脚占位），首帧干净起点
+    // 画页脚
+    this.drawFooter();
+    // 光标到输入框
+    this.placeCursorInInput();
+    this.buffer.write(showCursor());
+    this.buffer.flush();
   }
 
-  /** 退出：恢复光标可见。幂等。 */
+  /** 退出：重置 scroll region（恢复全屏滚动），恢复光标。幂等。 */
   exit(): void {
     if (!this.entered) return;
     this.entered = false;
-    if (this.throttleTimer) {
-      clearTimeout(this.throttleTimer);
-      this.throttleTimer = null;
-    }
-    this.writer(showCursor());
-    this.writer(exitAltScreen()); // 退出备用屏，恢复主屏
+    this.buffer.write(showCursor());
+    this.buffer.write(resetScrollRegion()); // 恢复全屏滚动
+    this.buffer.flush();
   }
 
-  // ═══════ 消息输出 ═══════
+  /** 设置 scroll region [0, contentRows)。DECSTBM 设完光标会移到 region 左上角。 */
+  private applyScrollRegion(): void {
+    this.buffer.write(setScrollRegion(0, this.contentRows() - 1));
+  }
 
-  /** 固化一条消息（按 \n 拆行，经 Markdown 渲染成带样式 cells，每行独立消息）。
-   *  传入的 style 作为「基础层」叠加到每个 cell：cell 自身已有的 style 属性优先
-   *  （避免覆盖 Markdown 解析出的标题/代码等颜色），未设置的属性由 style 补齐。
-   *  这样 MessageFormatter 的 ● (magenta) / ⎿ (dim) 才能真正着色。 */
+  /** 消息区行数 = 终端行数 - 页脚高度。 */
+  private contentRows(): number {
+    const inputLineCount = getInputLineCount(this.input);
+    const footerHeight = 2 + inputLineCount + 1; // 上边框 + 输入区 + 下边框 + 状态栏
+    return Math.max(1, this.rows - footerHeight);
+  }
+
+  // ═══════ 消息输出（纯追加）═══════
+
+  /**
+   * 固化一条消息（按 \n 拆行，经 Markdown 渲染成带样式 cells）。
+   * 纯追加：每行写进消息区 region + LF，写完永不回头改。
+   * style 作为基础层叠加到每个 cell（cell 自身 style 优先）。
+   */
   printMessage(text: string, role: MessageRole, style: Style = {}): void {
+    if (!this.entered) return;
     const rows = text === '' ? [[]] : renderMarkdown(text, this.cols);
     const hasStyle = style && Object.keys(style).length > 0;
+    // 缓冲到 MessageBuffer（诊断/快照用）——流式期间跳过以减少开销
     const styledRows = hasStyle
       ? rows.map(r => r.map(c => ({ ...c, style: mergeBaseStyle(c.style, style) })))
       : rows;
-    this.messages.push(styledRows.map(r => ({ cells: r, role })));
-    this.scheduleRender();
+    if (!this.streamingActive) {
+      this.messages.push(styledRows.map(r => ({ cells: r, role })));
+    }
+    // 每个 Markdown 逻辑行手动折行（≤ cols，不触发 DECAWM），每个视觉行占一个屏幕行
+    const visualLines: Cell[][] = [];
+    for (const row of styledRows) {
+      for (const vl of wrapCells(row, this.cols)) visualLines.push(vl);
+    }
+    // 逐视觉行写进 region：CUP 到 messageRow，写一行 + LF 推进（到底部触发滚动进 scrollback）
+    this.buffer.write(hideCursor());
+    const regionBottom = this.contentRows() - 1;
+    for (const vl of visualLines) {
+      this.buffer.write(cup(this.messageRow, 0));
+      this.writeCellsLine(vl);
+      this.buffer.write(cr() + '\n'); // CR+LF：LF 在 region 底部触发原生滚动
+      if (this.messageRow < regionBottom) this.messageRow++;
+    }
+    this.buffer.write('\x1b[0m'); // 样式复位
+    // 标记页脚需重绘（消息滚动后页脚可能被覆盖，延迟到 flushFrame 统一重绘）
+    this.footerDirty = true;
+    if (!this.streamingActive) {
+      this.buffer.write(showCursor());
+      this.flushFrame();
+    }
   }
 
-  /** 流式 Markdown：累积文本经 renderMarkdown 转 cells，替换当前 assistant 消息。 */
-  /** 流式 Markdown：累积文本经 renderMarkdown 转 cells，替换当前 assistant 消息。
-   *  统一块格式：首行加 `● ` 前缀、所有行加 2 空格缩进（与 thinking/tool 块对齐）。
-   *  软换行续行也带 2 空格缩进（不顶到 0 列）。 */
-  /** 流式 Markdown：累积文本经 renderMarkdown 转 cells，替换当前 assistant 消息。
-   *  opts 控制块格式（前缀/缩进/样式）；缺省时用 assistant 默认契约（● 第0列 + 续行2空格）。 */
+  /**
+   * 流式 Markdown：纯追加 delta（只发未发送的部分）。
+   * 调用方传累积全文 text，本方法内部算 delta = text.slice(lastStreamedLen)。
+   *
+   * 关键：跨 token 续写同一视觉行（用 streamCol 记账当前列），而非每个 token 换行。
+   * 手动折行（写满 cols 才 LF），messageRow 按真实视觉行推进。
+   * 首次调用加 opts.firstLinePrefix（如 ● ）+ indent 缩进；续行回退到 indent 列。
+   * isFinal 时封口（LF + 分隔），重置所有流式状态。
+   *
+   * 性能优化：流式期间光标保持 hidden（不逐 token hide/show），页脚懒重绘。
+   */
   appendStreamingMarkdown(
     text: string,
     isFinal: boolean,
-    opts: { indent?: number; firstLinePrefix?: string; firstLineStyle?: Style } =
-      { indent: 2, firstLinePrefix: '● ', firstLineStyle: { fg: 'magenta' } },
+    opts: { indent?: number; firstLinePrefix?: string; firstLineStyle?: Style } = {},
   ): void {
-    const rows = renderMarkdown(text, this.cols, !isFinal);
-    this.messages.setStreamingRows(rows, opts);
-    this.scheduleRender();
+    if (!this.entered) return;
+    const delta = text.slice(this.lastStreamedLen);
+    this.lastStreamedLen = text.length;
+    const regionBottom = this.contentRows() - 1;
+    const indent = opts.indent ?? 0;
+    if (delta.length > 0) {
+      // 流式开始时：隐藏光标（整个流式块期间保持 hidden）
+      if (!this.streamingActive) {
+        this.streamingActive = true;
+        this.buffer.write(hideCursor());
+      }
+      // 块首行前缀（● 等）只加一次，加在 streamCol 当前位置
+      // 注意：首行不加 indent（悬挂缩进：● 在第 0 列，续行才缩进到 indent 列）
+      if (!this.streamingPrefixApplied) {
+        this.streamIndent = indent;
+        const prefix = opts.firstLinePrefix ?? '';
+        if (prefix) {
+          this.streamWriteCells(stringToCells(prefix, opts.firstLineStyle ?? {}), regionBottom);
+        }
+        this.streamingPrefixApplied = true;
+      }
+      // delta 按 \n 拆段：段内续写当前行，段间强制换行
+      const segments = delta.split('\n');
+      for (let si = 0; si < segments.length; si++) {
+        if (si > 0) {
+          // 段间换行：LF 推进，续行回退到 indent 列
+          this.streamLineFeed(regionBottom);
+          if (indent > 0) {
+            this.streamWriteCells(stringToCells(' '.repeat(indent), {}), regionBottom);
+          }
+        }
+        const seg = segments[si]!;
+        if (seg.length > 0) {
+          this.streamWriteCells(stringToCells(seg, {}), regionBottom);
+        }
+      }
+      this.buffer.write('\x1b[0m');
+      this.buffer.flush();
+    }
+    if (isFinal) {
+      // 封口：LF 推进一行，下次 append 从新行起
+      this.streamLineFeed(regionBottom);
+      this.resetStreamingState();
+      this.streamingActive = false;
+      this.footerDirty = true;
+      this.buffer.write(showCursor());
+      this.flushFrame();
+    }
   }
 
-  /** 流式追加纯文本（thinking 等）。 */
+  /**
+   * 流式写一组 cells 到当前视觉行（streamCol 起），写满 cols 则换行（LF + 回 indent）。
+   * 维护 streamCol / messageRow。词边界不回退（纯追加，不回头改）——超长词强制断。
+   */
+  private streamWriteCells(cells: Cell[], regionBottom: number): void {
+    for (const cell of cells) {
+      const w = stringWidth(cell.char);
+      // 当前行放不下 → 先换行
+      if (this.streamCol + w > this.cols && this.streamCol > 0) {
+        this.streamLineFeed(regionBottom);
+        // 续行回退到 indent 列（补缩进空格）
+        if (this.streamIndent > 0) {
+          const padCells = stringToCells(' '.repeat(this.streamIndent), {});
+          // 直接写缩进（streamCol 已在 LF 后归 0，这里手动推进）
+          this.buffer.write(cup(this.messageRow, 0));
+          let padKey = '';
+          for (const pc of padCells) {
+            const k = styleKeyOf(pc.style);
+            if (k !== padKey) { this.buffer.write(styleTransitionByKey(padKey, k)); padKey = k; }
+            this.buffer.write(pc.char);
+          }
+          this.streamCol = this.streamIndent;
+        }
+      }
+      // 定位到 (messageRow, streamCol) 并写一个 cell
+      this.buffer.write(cup(this.messageRow, this.streamCol));
+      const key = styleKeyOf(cell.style);
+      // 简化：每个 cell 发自己的样式（流式期间样式不优化，可接受）
+      this.buffer.write(styleTransitionByKey('', key));
+      this.buffer.write(cell.char);
+      this.streamCol += w;
+    }
+  }
+
+  /** 流式换行：CR+LF，messageRow++（到 region 底部触发滚动），streamCol 归 0。 */
+  private streamLineFeed(regionBottom: number): void {
+    this.buffer.write(cr() + '\n');
+    if (this.messageRow < regionBottom) this.messageRow++;
+    this.streamCol = 0;
+  }
+
+  /** 重置流式状态（seal/finalize/clear 后）。 */
+  private resetStreamingState(): void {
+    this.lastStreamedLen = 0;
+    this.streamingPrefixApplied = false;
+    this.streamCol = 0;
+    this.streamIndent = 0;
+  }
+
+  /** 流式追加纯文本（thinking 等）——纯追加 + 手动折行，语义同 appendStreamingMarkdown。 */
   appendStreaming(text: string, style: Style = {}): void {
-    this.messages.appendText(text, 'assistant', style);
-    this.scheduleRender();
+    if (!this.entered) return;
+    if (text.length > 0) {
+      const regionBottom = this.contentRows() - 1;
+      if (!this.streamingActive) {
+        this.streamingActive = true;
+        this.buffer.write(hideCursor());
+      }
+      const segments = text.split('\n');
+      for (let si = 0; si < segments.length; si++) {
+        if (si > 0) this.streamLineFeed(regionBottom);
+        const seg = segments[si]!;
+        if (seg.length > 0) this.streamWriteCells(stringToCells(seg, style), regionBottom);
+      }
+      this.buffer.write('\x1b[0m');
+      this.buffer.flush();
+    }
   }
 
-  /** 流式结束：把当前 assistant 消息"封口"（下次 appendStreaming 会新建一条）。 */
+  /** 流式结束：封口（LF + 分隔）。 */
   finalizeStreaming(): void {
-    this.flushNow();
-    // 插入一个空的 system 消息作为分隔符，确保下一次 appendStreamingMarkdown
-    // 不会替换已固化的 assistant 消息（setStreamingRows 检查最后一条的 role）。
-    this.messages.appendLine('', 'system', {});
-    this.scheduleRender();
+    if (!this.entered) return;
+    const regionBottom = this.contentRows() - 1;
+    this.streamLineFeed(regionBottom);
+    this.resetStreamingState();
+    this.streamingActive = false;
+    this.footerDirty = true;
+    this.buffer.write(showCursor());
+    this.flushFrame();
   }
 
-  /** 封口流式（仅插分隔符，不强制 flushNow）：供 pipeline 在 assistant isFinal 后调用。
-   *  比 finalizeStreaming 温和——不触发额外 commit 帧，减少渲染竞态。 */
+  /** 封口流式（插分隔符，温和版）。纯追加模型下 = 一个空行分隔。 */
   sealStreaming(): void {
-    this.messages.appendLine('', 'system', {});
-    this.scheduleRender();
+    if (!this.entered) return;
+    const regionBottom = this.contentRows() - 1;
+    this.streamLineFeed(regionBottom);
+    this.resetStreamingState();
+    this.streamingActive = false;
+    this.footerDirty = true;
+    this.buffer.write(showCursor());
+    this.flushFrame();
   }
 
-  /** 清空消息区。 */
+  /** 清空消息区（仅清 region 内可视区，不动 scrollback）。 */
   clearMessages(): void {
+    if (!this.entered) return;
     this.messages.clear();
-    this.scheduleRender();
+    this.resetStreamingState();
+    this.streamingActive = false;
+    this.messageRow = 0;
+    this.buffer.write(hideCursor());
+    // 擦消息区 region 内所有行
+    for (let y = 0; y < this.contentRows(); y++) {
+      this.buffer.write(cup(y, 0));
+      this.buffer.write(eraseLine());
+    }
+    this.buffer.write(cup(0, 0));
+    this.drawFooter();
+    this.placeCursorInInput();
+    this.buffer.write(showCursor());
+    this.buffer.flush();
   }
 
-  // ═══════ 输入态 / 状态栏 ═══════
+  // ═══════ 输入态 / 状态栏（只重画页脚）═══════
 
   setInput(text: string, cursorPos: number): void {
     this.input = text;
     const max = [...text].length;
     this.cursorPos = Math.max(0, Math.min(cursorPos, max));
-    this.scheduleRender();
+    this.applyScrollRegion();
+    this.footerDirty = true;
+    this.flushFrame();
   }
 
   setToolStatus(name: string, status: ToolStatus['status']): void {
     this.tool = { name, status };
-    this.scheduleRender();
+    this.footerDirty = true;
+    this.flushFrame();
   }
   clearToolStatus(): void {
     this.tool = null;
-    this.scheduleRender();
+    this.footerDirty = true;
+    this.flushFrame();
   }
   setHint(hint: string | undefined): void {
     this.hint = hint;
-    this.scheduleRender();
+    this.footerDirty = true;
+    this.flushFrame();
   }
   getPrompt(): string {
     return this.prompt;
   }
 
-  // ═══════ 节流 + commit ═══════
+  // ═══════ flush ══════
 
-  private scheduleRender(): void {
-    if (this.scheduled) {
-      this.trailingPending = true;
-      return;
+  /** 刷新缓冲区：页脚脏标记时重绘页脚，然后一次性写出所有缓冲的 ANSI 序列。 */
+  flushFrame(): void {
+    if (this.footerDirty) {
+      this.drawFooter();
+      this.footerDirty = false;
     }
-    this.scheduled = true;
-    this.commit();
-    this.throttleTimer = setTimeout(() => {
-      this.throttleTimer = null;
-      this.scheduled = false;
-      if (this.trailingPending) {
-        this.trailingPending = false;
-        this.scheduleRender();
-      }
-    }, this.frameIntervalMs);
+    // drawFooter 会把光标移到状态栏行，必须重新定位到输入框
+    this.placeCursorInInput();
+    this.buffer.flush();
   }
 
   flushNow(): void {
-    this.commit();
+    this.flushFrame();
   }
 
-  /** 画一帧：构建增长 screen → 逐行 diff（跳 scrollback，用 LF 推进新行）→ 光标回输入框 → 单次写。
-   *  算法对齐 Claude Code log-update.ts：增长靠 LF（触发终端滚动进 scrollback），
-   *  不是 cursor-down（在底部静默失败不滚动）。 */
-  private commit(): void {
-    if (!this.entered) return;
-    this.writer(hideCursor());
+  // ═══════ 页脚绘制 + 光标定位 ═══════
 
-    // ① 构建新 screen：高度 = 消息行数 + 页脚高度（至少 1 行）
-    // 思考指示器作为消息的一部分，不单独占行
-    const msgLines = this.messages.allLines();
+  /**
+   * 画页脚：CUP 到 region 外逐行 eraseLine + 写。
+   * region 外 CUP 不触发滚动，安全。
+   * 页脚布局（从 contentRows 起）：上边框 / 输入区(inputLineCount 行) / 下边框 / 状态栏。
+   */
+  private drawFooter(): void {
+    if (!this.entered) return;
+    const contentRows = this.contentRows();
     const inputLineCount = getInputLineCount(this.input);
-    const footerHeight = 2 + inputLineCount + 1;
-    const contentHeight = msgLines.length + footerHeight;
-    const next = new Screen(Math.max(1, contentHeight), this.cols);
-    for (let i = 0; i < msgLines.length; i++) {
-      this.writeCellsRow(next, i, msgLines[i]!.cells, 0);
-    }
-    // 页脚钉在 screen 底部（上边框 + 输入区 + 下边框 + 状态栏）
-    const baseY = next.rows - footerHeight;
-    const borderTopY = baseY;
-    const inputStartY = baseY + 1;
-    const borderBottomY = baseY + 1 + inputLineCount;
+    const borderTopY = contentRows;
+    const inputStartY = contentRows + 1;
+    const borderBottomY = inputStartY + inputLineCount;
     const statusY = borderBottomY + 1;
-    const cursor = this.computeInputCursorPos();
+
     // 上边框
-    const borderCount = Math.ceil(this.cols / stringWidth(BORDER_CHAR));
-    const borderCells = stringToCells(BORDER_CHAR.repeat(borderCount), BORDER_STYLE);
-    this.writeCellsRow(next, borderTopY, borderCells, 0);
-    // 输入区（实际行数）
+    this.writeFooterLine(borderTopY, BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
+    // 输入区
     const inputLines = this.input.split('\n');
     for (let li = 0; li < inputLineCount; li++) {
       const y = inputStartY + li;
@@ -264,10 +439,10 @@ export class Renderer {
       const cells = li === 0
         ? [...stringToCells(this.prompt, PROMPT_STYLE), ...stringToCells(line, {})]
         : stringToCells(line, {});
-      this.writeCellsRow(next, y, cells, 0);
+      this.writeFooterCells(y, cells);
     }
     // 下边框
-    this.writeCellsRow(next, borderBottomY, borderCells, 0);
+    this.writeFooterLine(borderBottomY, BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
     // 状态栏
     const statusCells = buildStatusBar({
       mode: this.statusInfo.mode, model: this.statusInfo.model,
@@ -275,132 +450,67 @@ export class Renderer {
       contextUsage: this.statusInfo.contextUsage,
       cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
     });
-    this.writeCellsRow(next, statusY, statusCells, 0);
-
-    // ③ 首帧或 resize 后 prev 失准：整屏重画
-    if (!this.prevScreen) {
-      this.renderFull(next, Math.max(0, next.rows - this.rows));
-      this.prevScreen = next;
-      this.prevHeight = next.rows;
-      this.prevCursorY = inputStartY + cursor.row;
-      this.prevCursorX = cursor.col;
-      return;
-    }
-
-    const prev = this.prevScreen;
-    // ═══════ 对齐 Claude Code log-update.ts 的两段式 diff ═══════
-    // 1) 现有行(0..prevHeight)：用 cursorMove(相对) 重画变化格；y < viewportY 的够不着 → fullReset
-    // 2) 增长行(prevHeight..nextHeight)：用 CR+LF 推进——LF 在视口底部触发滚动进 scrollback
-    // 3) 光标恢复：用 LF 到输入框行（创建底部行 / 触发溢出滚动）
-    const prevHeight = prev.rows;
-    const cursorAtBottom = this.prevCursorY >= prevHeight;
-    const prevHadScrollback = cursorAtBottom && prevHeight >= this.rows;
-    const growing = next.rows > prevHeight;
-    const cursorRestoreScroll = prevHadScrollback ? 1 : 0;
-    // viewportY：已进 scrollback 的行数。growing 用 prev 状态；非 growing 用 max(prev,next)
-    const viewportY = growing
-      ? Math.max(0, prevHeight - this.rows + cursorRestoreScroll)
-      : Math.max(prevHeight, next.rows) - this.rows + cursorRestoreScroll;
-
-    const vs = new VirtualScreen({ x: this.prevCursorX, y: this.prevCursorY });
-    let needsFullReset = false;
-
-    // —— 第 1 段：现有行 diff（cursorMove 相对移动；跳过 scrollback 行）——
-    const commonRows = Math.min(prevHeight, next.rows);
-    for (let y = 0; y < commonRows; y++) {
-      for (let x = 0; x < this.cols; x++) {
-        const pc = prev.getCell(x, y);
-        const nc = next.getCell(x, y);
-        if (pc.char === nc.char && styleKey(pc.style) === styleKey(nc.style)) continue;
-        // 变化但在 scrollback → fullReset
-        if (y < viewportY) { needsFullReset = true; break; }
-        vs.moveTo(x, y); // 相对移动（cursor-up/down/forward/back）
-        if (nc.char === ' ') continue;
-        vs.writeCell(nc);
-      }
-      if (needsFullReset) break;
-    }
-
-    if (needsFullReset) {
-      this.renderFull(next, Math.max(0, next.rows - this.rows));
-    } else {
-      // —— 第 1.5 段：缩小时清理旧行（next.rows..prevHeight 的行在新 screen 中不存在）——
-      if (!growing && next.rows < prevHeight) {
-        for (let y = next.rows; y < prevHeight; y++) {
-          if (y < viewportY) { needsFullReset = true; break; }
-          vs.moveTo(0, y);
-          vs.eraseLine();
-        }
-      }
-
-      // —— 第 2 段：增长行（prevHeight..next.rows）用 CR+LF 推进 ——
-      if (growing) {
-        // 对齐 Claude Code log-update.ts：稳定增长走增量 LF，绝不全清屏。
-        // 虚拟光标记画布绝对坐标（不钳位），靠 LF 在视口底部的滚动语义推进。
-        // 关键不变式（Claude Code L544-560）：行间只用 CR+LF，绝不用 CUD（cursor-down）——
-        // CUD 在视口底部静默失败，会让虚拟/真实光标永久脱钩。行内只用水平移动（dy=0）。
-        for (let y = prevHeight; y < next.rows; y++) {
-          // LF 推进到目标行：cursor.y 线性增长到画布绝对值 y（不钳位）。
-          // LF 在视口底部触发终端原生滚动，旧行进 scrollback，物理光标钉底。
-          while (vs.cursor.y < y) vs.lineFeed();
-          // cursor.y === y，moveTo 的 dy=0，不发垂直 CUD（仅回列 0）
-          vs.moveTo(0, y);
-          for (let x = 0; x < this.cols; x++) {
-            const nc = next.getCell(x, y);
-            if (nc.char === ' ' || nc.char === ' ') continue;
-            // 行内水平移动：cursor.y 仍 === y，dy=0，只发 CUF
-            vs.moveTo(x, y);
-            vs.writeCell(nc);
-          }
-        }
-      }
-      // —— 第 3 段：光标恢复到输入框（画布绝对坐标 + LF）——
-      // 对齐 Claude Code ink.tsx L425-448：目标行用画布绝对坐标（inputStartY+row），
-      // 用 LF 推进（不用 CUU）。此前增长段 cursor.y 已是画布绝对值。
-      const cursorTargetY = inputStartY + cursor.row;
-      while (vs.cursor.y < cursorTargetY) vs.lineFeed();
-      vs.moveTo(cursor.col, cursorTargetY);
-      const buf = vs.flush();
-      if (buf) this.writer(buf);
-      this.writer(showCursor());
-    }
-
-    // ⑥ 记账
-    this.prevScreen = next;
-    this.prevHeight = next.rows;
-    this.prevCursorY = inputStartY + cursor.row;
-    this.prevCursorX = cursor.col;
+    this.writeFooterCells(statusY, statusCells);
+    this.buffer.write('\x1b[0m');
   }
 
-  /** 整屏重画（首帧 / fullReset）：擦屏 + 回原点 + 从 viewportY 起用 LF 推进画可视行 + 光标回输入框。
-   *  fullReset 会闪（主屏固有代价）。 */
-  private renderFull(next: Screen, viewportY: number): void {
-    this.writer(hideCursor());
-    const vs = new VirtualScreen({ x: 0, y: 0 });
-    vs.raw('\x1b[2J\x1b[H'); // 擦屏 + 回原点
-    // 从 viewportY 起画到末尾（用 LF 推进，对齐 commit 的行推进机制）
-    for (let y = viewportY; y < next.rows; y++) {
-      while (vs.cursor.y < y - viewportY) vs.lineFeed();
-      vs.moveTo(0, y - viewportY);
-      vs.eraseLine();
-      for (let x = 0; x < this.cols; x++) {
-        const cell = next.getCell(x, y);
-        if (cell.char === ' ' || cell.char === ' ') continue;
-        vs.moveTo(x, y - viewportY);
-        vs.writeCell(cell);
+  /** 写页脚某行（CUP + eraseLine + 截断到 cols + 写文本 + 样式）。 */
+  private writeFooterLine(y: number, text: string, style: Style): void {
+    this.writeFooterCells(y, stringToCells(text, style));
+  }
+
+  /** 写页脚某行的 cells：CUP 到行首 + eraseLine + 逐 cell（带 SGR）截断到 cols。 */
+  private writeFooterCells(y: number, cells: Cell[]): void {
+    this.buffer.write(cup(y, 0));
+    this.buffer.write(eraseLine());
+    this.writeCellsAt(cells, 0);
+  }
+
+  /** 从当前光标位置起写一组 cells（带 SGR 样式转换），截断到 cols。 */
+  private writeCellsAt(cells: Cell[], _startX: number): void {
+    let curKey = '';
+    let x = 0;
+    for (const cell of cells) {
+      const w = stringWidth(cell.char);
+      if (x + w > this.cols) break;
+      const key = styleKeyOf(cell.style);
+      if (key !== curKey) {
+        this.buffer.write(styleTransitionByKey(curKey, key));
+        curKey = key;
       }
+      this.buffer.write(cell.char);
+      x += w;
     }
-    // 光标回输入框（可视坐标 = screen 坐标 - viewportY）
-    const inputLineCount = getInputLineCount(this.input);
-    const footerHeight = 2 + inputLineCount + 1;
-    const inputStartY = next.rows - footerHeight + 1;
+    this.buffer.write('\x1b[0m');
+  }
+
+  /**
+   * 写消息区一行（纯追加，不 CUP——顺着当前光标）。
+   * 光标应在行首。写完光标在行尾（调用方负责发 LF 推进）。
+   */
+  private writeCellsLine(cells: Cell[]): void {
+    let curKey = '';
+    let x = 0;
+    for (const cell of cells) {
+      const w = stringWidth(cell.char);
+      if (x + w > this.cols) break;
+      const key = styleKeyOf(cell.style);
+      if (key !== curKey) {
+        this.buffer.write(styleTransitionByKey(curKey, key));
+        curKey = key;
+      }
+      this.buffer.write(cell.char);
+      x += w;
+    }
+    this.buffer.write('\x1b[0m');
+  }
+
+  /** 光标定位到输入框逻辑位置（屏幕坐标）。 */
+  private placeCursorInInput(): void {
+    if (!this.entered) return;
     const cursor = this.computeInputCursorPos();
-    const cursorVY = inputStartY + cursor.row - viewportY;
-    while (vs.cursor.y < cursorVY) vs.lineFeed();
-    vs.moveTo(cursor.col, cursorVY);
-    const buf = vs.flush();
-    if (buf) this.writer(buf);
-    this.writer(showCursor());
+    const inputStartY = this.contentRows() + 1;
+    this.buffer.write(cup(inputStartY + cursor.row, cursor.col));
   }
 
   /** 计算输入框光标的 (行偏移, 列) （0-based，行偏移相对于 inputStartY）。 */
@@ -414,29 +524,12 @@ export class Renderer {
         const beforeWidth = stringWidth([...lines[i]!].slice(0, remaining).join(''));
         return { row: i, col: promptW + beforeWidth };
       }
-      remaining -= lineLen + 1; // +1 for the '\n'
+      remaining -= lineLen + 1;
     }
-    // 光标在末尾
     const lastRow = Math.max(0, lines.length - 1);
     const lastLine = lines[lastRow]!;
     const promptW = lastRow === 0 ? stringWidth(this.prompt) : 0;
     return { row: lastRow, col: promptW + stringWidth(lastLine) };
-  }
-
-  /** 把一组 cells 从某行某列起铺进 screen（宽字符占两格）。 */
-  private writeCellsRow(frame: Screen, y: number, cells: Cell[], startX: number): void {
-    let x = startX;
-    for (const cell of cells) {
-      if (x >= this.cols) break;
-      frame.setCell(x, y, cell);
-      const w = stringWidth(cell.char);
-      if (w === 2 && x + 1 < this.cols) {
-        frame.setCell(x + 1, y, { char: ' ', style: cell.style });
-        x += 2;
-      } else {
-        x += 1;
-      }
-    }
   }
 
   // ═══════ resize ═══════
@@ -445,54 +538,29 @@ export class Renderer {
     this.rows = rows;
     this.cols = cols;
     this.messages.setWrapCols(cols);
-    // resize 后 prevScreen 失准 → 下一帧 fullReset
-    this.prevScreen = null;
-    this.scheduleRender();
+    if (this.entered) {
+      // 重设 scroll region + 重画页脚（消息区内容保留原样，可能需手动调整）
+      this.applyScrollRegion();
+      this.footerDirty = true;
+      this.placeCursorInInput();
+      this.flushFrame();
+    }
   }
 
-  /** 调试/测试：返回当前 screen 各行文本（不含样式）。 */
+  /** 调试/测试：返回当前消息缓冲各行文本（不含样式）。 */
   inspectFrame(): string[] {
-    const msgLines = this.messages.allLines();
-    const inputLineCount = getInputLineCount(this.input);
-    const footerHeight = 2 + inputLineCount + 1;
-    const contentHeight = msgLines.length + footerHeight;
-    const probe = new Screen(Math.max(1, contentHeight), this.cols);
-    for (let i = 0; i < msgLines.length; i++) {
-      this.writeCellsRow(probe, i, msgLines[i]!.cells, 0);
-    }
-    const baseY = probe.rows - footerHeight;
-    const inputStartY = baseY + 1;
-    const borderBottomY = baseY + 1 + inputLineCount;
-    const statusY = borderBottomY + 1;
-    const statusCells = buildStatusBar({
-      model: this.statusInfo.model, branch: this.statusInfo.branch, dir: this.statusInfo.dir,
-      cols: this.cols, tool: this.tool ?? undefined, hint: this.hint,
-    });
-    this.writeCellsRow(probe, statusY, statusCells, 0);
-    const inputLines = this.input.split('\n');
-    for (let li = 0; li < inputLineCount; li++) {
-      const line = inputLines[li] ?? '';
-      const cells = li === 0
-        ? [...stringToCells(this.prompt, PROMPT_STYLE), ...stringToCells(line, {})]
-        : stringToCells(line, {});
-      this.writeCellsRow(probe, inputStartY + li, cells, 0);
-    }
-    const lines: string[] = [];
-    for (let y = 0; y < probe.rows; y++) {
+    return this.messages.allLines().map(row => {
       let line = '';
-      for (let x = 0; x < this.cols; x++) {
-        const ch = probe.getCell(x, y).char;
-        line += ch === ' ' ? '' : ch;
+      for (const cell of row.cells) {
+        line += cell.char === '' ? '' : cell.char;
       }
-      lines.push(line.replace(/\s+$/, ''));
-    }
-    return lines;
+      return line.replace(/\s+$/, '');
+    });
   }
 }
 
 /**
  * 把 base style 合并到 cell 的 style 之上：cell 自身属性优先，base 仅补齐空缺。
- * 用于 printMessage：让传入的 ● magenta / ⎿ dim 等样式着色，又不破坏 Markdown 颜色。
  */
 function mergeBaseStyle(cellStyle: Style, base: Style): Style {
   return { ...base, ...cellStyle };

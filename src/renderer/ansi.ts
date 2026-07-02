@@ -137,3 +137,34 @@ export function bsu(): string {
 export function esu(): string {
   return '\x1b[?2026l';
 }
+
+// ═══════ 滚动区域 DECSTBM + 光标存取 ═══════
+//
+// 主屏纯追加模型的核心：把消息区限定在一个 scroll region 里，region 内 LF
+// 触发的滚动只影响 region（旧行进原生 scrollback），region 外的页脚钉死不动。
+// 这是 TUI「页脚钉底 + 消息可滚」的经典手法，所有主流终端（xterm/iTerm2/
+// WezTerm/Windows Terminal/kitty）语义一致。
+
+/**
+ * 设置滚动区域（DECSTBM），0-based 输入。
+ * top..bottom（含两端）是可滚动区；LF 在 region 底部只滚 region，region 外不动。
+ * 设置后光标会移到 region 左上角（终端标准行为）。
+ */
+export function setScrollRegion(top: number, bottom: number): string {
+  return `\x1b[${top + 1};${bottom + 1}r`;
+}
+
+/** 重置滚动区域为全屏（空参数 DECSTBM）。 */
+export function resetScrollRegion(): string {
+  return '\x1b[r';
+}
+
+/** 保存光标位置（DECSC \x1b[s）——alt screen 覆盖层进/出时保存主屏光标。 */
+export function saveCursor(): string {
+  return '\x1b[s';
+}
+
+/** 恢复光标位置（DECRC \x1b[u）——覆盖层退出后恢复主屏光标。 */
+export function restoreCursor(): string {
+  return '\x1b[u';
+}

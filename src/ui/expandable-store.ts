@@ -70,6 +70,17 @@ export class ExpandableBlockStore {
     return block.expanded ? block.fullLines : block.summaryLines;
   }
 
+  /** 最后一个块的完整展开内容（ctrl+o 临时 alt screen 覆盖层渲染用）。无块返回 null。 */
+  getLastFullLines(): FormattedLine[] | null {
+    const last = this.blocks[this.blocks.length - 1];
+    return last ? last.fullLines : null;
+  }
+
+  /** 最后一个块的类型（'thinking' | 'tool_result'）。无块返回 null。 */
+  getLastKind(): 'thinking' | 'tool_result' | null {
+    return this.blocks[this.blocks.length - 1]?.kind ?? null;
+  }
+
   /** 清空所有块（新 turn 开始时） */
   clear(): void {
     this.blocks = [];

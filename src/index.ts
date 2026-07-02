@@ -17,6 +17,10 @@ import { streamingQuery } from './agent/streaming-query.js';
 import { StreamEventBus } from './agent/stream-event-bus.js';
 import { UILayout } from './ui/index.js';
 import { BlockPipeline } from './ui/block-pipeline.js';
+import {
+  enterAltScreen, exitAltScreen, saveCursor, restoreCursor,
+  cursorHome, eraseScreen, showCursor, hideCursor,
+} from './renderer/ansi.js';
 import { ConfigStore } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
 import { TodoManager } from './agent/todo.js';
@@ -182,6 +186,84 @@ function syncInput(): void {
 }
 
 // ─────────────────────────────────────────────────────────────
+// ctrl+o 临时 alt screen 覆盖层：显示可折叠块（thinking/tool_result）的完整内容
+//
+// 主屏 + scrollback 模式下，已进 scrollback 的行 CUP 够不着，无法就地展开。
+// 改为进 alt screen 全屏显示完整内容，按 q/ctrl+o/ESC 返回主屏。
+// 主屏 scrollback 在 alt screen 切换时自动保存/恢复，完好无损。
+// ─────────────────────────────────────────────────────────────
+
+/** 覆盖层是否激活（激活时 handleInput 把按键路由给 handleOverlayInput） */
+let overlayActive = false;
+
+/**
+ * 进入 alt screen，渲染可折叠块的完整内容，置 overlayActive=true 等待退出键。
+ * 内容超出屏高的部分用户用 alt screen 滚轮/滚动条看（alt screen 无 scrollback，
+ * 但一次性写出，按 q 退出即可——这一轮不分页，后续可优化）。
+ */
+function showExpandOverlay(lines: { content: string }[], kind: 'thinking' | 'tool_result'): void {
+  overlayActive = true;
+  const out = process.stdout;
+  out.write(saveCursor());
+  out.write(enterAltScreen());
+  out.write(eraseScreen() + cursorHome());
+  out.write(hideCursor());
+
+  const { cols } = readTermSize();
+  const title = kind === 'thinking' ? 'Thinking' : 'Tool result';
+  // 标题行
+  out.write(`\x1b[1m${title}\x1b[0m\r\n`);
+  out.write('━'.repeat(Math.min(cols, 60)) + '\r\n');
+
+  // 内容行：每行截断到 cols
+  for (const line of lines) {
+    const text = line.content;
+    const truncated = [...text].reduce((acc, ch) => {
+      const next = acc + ch;
+      // 简单按字符数截断（显示宽度近似）
+      return [...next].length <= cols ? next : acc;
+    }, '');
+    out.write(truncated + '\r\n');
+  }
+
+  // 底部提示
+  out.write('\r\n');
+  out.write(`\x1b[2m按 q / ctrl+o / ESC 返回\x1b[0m`);
+  out.write(showCursor());
+}
+
+/**
+ * 处理覆盖层期间的按键：q(0x71)/ctrl+o(0x0f)/ESC(0x1b)/Ctrl+C(0x03) 退出覆盖层。
+ * 其他按键忽略。
+ */
+function handleOverlayInput(data: Buffer): void {
+  for (let i = 0; i < data.length; i++) {
+    const byte = data[i]!;
+    // Ctrl+C —— 退出覆盖层后正常退出进程
+    if (byte === 0x03) {
+      closeExpandOverlay();
+      layout.exit();
+      process.exit(0);
+    }
+    // q / Ctrl+O / ESC —— 关闭覆盖层，回主屏
+    if (byte === 0x71 || byte === 0x0f || byte === 0x1b) {
+      closeExpandOverlay();
+      return;
+    }
+  }
+}
+
+/** 关闭覆盖层：退出 alt screen + 恢复光标 + 清 overlayActive。 */
+function closeExpandOverlay(): void {
+  const out = process.stdout;
+  out.write(hideCursor());
+  out.write(exitAltScreen());
+  out.write(restoreCursor());
+  out.write(showCursor());
+  overlayActive = false;
+}
+
+// ─────────────────────────────────────────────────────────────
 // 输入处理：Buffer 原始字节，手动解码 UTF-8
 //
 // 竞态修复：handler 顶部把数据并入 pending 缓冲（不丢弃），异步处理函数清空并消费它，
@@ -205,6 +287,12 @@ if (process.stdin.isTTY) {
       const data = pending;
       pending = Buffer.alloc(0);
 
+      // 覆盖层模式：所有按键路由给覆盖层处理器（只认 q/ctrl+o 退出、Ctrl+C）
+      if (overlayActive) {
+        handleOverlayInput(data);
+        return;
+      }
+
       for (let i = 0; i < data.length; ) {
         const byte = data[i]!;
 
@@ -227,10 +315,13 @@ if (process.stdin.isTTY) {
           i++; continue;
         }
 
-        // Ctrl+O —— 展开/折叠最后一个可折叠块（thinking / tool_result）
+        // Ctrl+O —— 临时 alt screen 覆盖层：显示最后一个可折叠块的完整内容
+        // 主屏 + scrollback 模式下，已进 scrollback 的行 CUP 够不着，无法就地展开。
+        // 改为进 alt screen 全屏显示完整内容，按 q/ctrl+o 返回主屏（主屏完好无损）。
         if (byte === 0x0f) {
-          if (pipeline.toggleLastExpandable()) {
-            pipeline.redraw();
+          const expandable = pipeline.getLastExpandableFullLines();
+          if (expandable) {
+            showExpandOverlay(expandable.lines, expandable.kind);
             syncInput();
           }
           i++; continue;

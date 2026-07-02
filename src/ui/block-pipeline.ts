@@ -46,12 +46,6 @@ const ASSISTANT_FORMAT = {
 /** tool_result 预览的最大行数（与 message-formatter 的 OUTPUT_PREVIEW_LINES 一致） */
 const RESULT_PREVIEW_LINES = 4;
 
-/** 快照条目：记录已渲染块的信息，用于 redraw 重放 */
-interface SnapshotEntry {
-  /** 该块的渲染方式 */
-  render: () => void;
-}
-
 /**
  * BlockPipeline：唯一输出管道。
  *
@@ -69,10 +63,8 @@ export class BlockPipeline {
   private pendingToolInputs = new Map<string, Record<string, unknown>>();
   /** thinking 文本累积（供 ctrl+o 展开用） */
   private thinkingBuffer = '';
-  /** 可折叠块存储（thinking + tool_result 的 summary/full + expanded 状态） */
+  /** 可折叠块存储（thinking + tool_result 的 summary/full）——ctrl+o 临时 alt screen 覆盖层渲染用 */
   private expandable = new ExpandableBlockStore();
-  /** 当前 turn 的渲染快照（用于 redraw 重放） */
-  private turnSnapshot: SnapshotEntry[] = [];
   /** 块 id 计数器（生成唯一 id） */
   private idCounter = 0;
 
@@ -87,8 +79,6 @@ export class BlockPipeline {
     switch (block.kind) {
       case 'user_input':
         this.openBlock();
-        // 记录当前轮起点（redraw 时截断到这里，保留历史轮）
-        this.snapshot(() => this.print(MessageFormatter.format('input', {}, block.text)));
         this.print(MessageFormatter.format('input', {}, block.text));
         break;
 
@@ -96,7 +86,6 @@ export class BlockPipeline {
         // 第一个模型块：强制加空行（前面总有 banner/用户输入等非模型内容）
         this.openModelBlock();
         this.thinkingActive = true;
-        this.snapshot(() => this.print(MessageFormatter.format('thinking')));
         this.print(MessageFormatter.format('thinking'));
         break;
 
@@ -122,8 +111,6 @@ export class BlockPipeline {
               }))
             : summaryLines; // 无思考内容时 full = summary
           this.expandable.add({ id, kind: 'thinking', summaryLines, fullLines });
-          // 快照：redraw 时按 expanded 选 summary/full
-          this.snapshot(() => this.print(this.expandable.getLines(id)));
           this.print(summaryLines);
         }
         this.thinkingBuffer = '';
@@ -143,9 +130,6 @@ export class BlockPipeline {
           this.renderer.sealStreaming();
           this.hasContent = true;
           this.assistantGapApplied = false; // 下一个 assistant 块重新加空行
-          // 快照：redraw 时重发最终文本（isFinal=true 会重新走流式渲染 + 封口）
-          const finalText = block.text;
-          this.snapshot(() => this.renderer.appendStreamingMarkdown(finalText, true, ASSISTANT_FORMAT));
         }
         break;
       }
@@ -155,10 +139,6 @@ export class BlockPipeline {
         // 缓存 input 供后续 tool_result 计算 diff（按 name 匹配；
         // 写工具串行执行，安全。读工具不读 input，不受影响。）
         this.pendingToolInputs.set(block.name, block.input);
-        this.snapshot(() => this.print(MessageFormatter.format('tool_call', {
-          toolName: block.name,
-          toolInput: block.input,
-        })));
         this.print(MessageFormatter.format('tool_call', {
           toolName: block.name,
           toolInput: block.input,
@@ -175,7 +155,7 @@ export class BlockPipeline {
 
         // 若输出被截断（有 rawOutput 且超预览行数），注册可折叠块
         if (meta.rawOutput !== undefined && meta.rawOutput !== '') {
-          const { totalLines, truncated } = summarizeOutput(meta.rawOutput, RESULT_PREVIEW_LINES);
+          const { truncated } = summarizeOutput(meta.rawOutput, RESULT_PREVIEW_LINES);
           if (truncated) {
             const id = `tool-${++this.idCounter}`;
             // fullLines：完整输出按行，首行带 ⎿，续行 3 空格
@@ -185,14 +165,12 @@ export class BlockPipeline {
               indent: INDENT.nested,
             }));
             this.expandable.add({ id, kind: 'tool_result', summaryLines, fullLines });
-            this.snapshot(() => this.print(this.expandable.getLines(id)));
             this.print(summaryLines);
             this.hasContent = true;
             break;
           }
         }
         // 未截断：直接渲染，不需注册（无可展开内容）
-        this.snapshot(() => this.print(summaryLines));
         this.print(summaryLines);
         this.hasContent = true;
         break;
@@ -204,7 +182,6 @@ export class BlockPipeline {
         // 同步渲染（emit 即落屏），避免异步 printLine 穿插进下一轮流式内容。
         const hookLines = [{ content: block.text, style: BLOCK_STYLES.dim, indent: INDENT.nested }];
         this.openBlock();
-        this.snapshot(() => this.print(hookLines));
         this.print(hookLines);
         break;
       }
@@ -248,32 +225,16 @@ export class BlockPipeline {
     }
   }
 
-  /** 记录一个块的渲染闭包到快照（供 redraw 重放） */
-  private snapshot(render: () => void): void {
-    this.turnSnapshot.push({ render });
-  }
-
   /**
-   * ctrl+o：切换最后一个可折叠块的展开态。
-   * 返回 true 表示有变化（调用方应 redraw）。
+   * ctrl+o 临时 alt screen 覆盖层：取最后一个可折叠块的完整展开内容。
+   * 返回 { lines, kind } 或 null（无可展开块）。index.ts 的 ctrl+o 处理器
+   * 用它进 alt screen 渲染完整内容，按 q 返回主屏（主屏 scrollback 完好）。
    */
-  toggleLastExpandable(): boolean {
-    return this.expandable.toggleLast();
-  }
-
-  /**
-   * 重绘：clearMessages + 按当前快照重放所有块。
-   * 可折叠块按 expanded 状态选 summary/full 行。
-   * 注意：clearMessages 会清屏，之前的 scrollback 丢失（toggle 的已知代价）。
-   */
-  redraw(): void {
-    this.renderer.clearMessages();
-    this.hasContent = false;
-    this.assistantGapApplied = true;
-    for (const entry of this.turnSnapshot) {
-      entry.render();
-    }
-    this.renderer.flushNow();
+  getLastExpandableFullLines(): { lines: FormattedLine[]; kind: 'thinking' | 'tool_result' } | null {
+    const lines = this.expandable.getLastFullLines();
+    const kind = this.expandable.getLastKind();
+    if (!lines || !kind) return null;
+    return { lines, kind };
   }
 
   /** 把 FormattedLine[] 下沉到 renderer（带样式） */
@@ -296,20 +257,18 @@ export class BlockPipeline {
     this.thinkingBuffer = '';
     this.pendingToolInputs.clear();
     this.expandable.clear();
-    this.turnSnapshot = [];
     this.renderer.clearMessages();
   }
 
   /**
-   * 仅重置 turn 状态（可折叠块存储 + 快照），不清屏。
-   * 新 turn 开始时调用——上一 turn 的展开状态/快照不再需要，
+   * 仅重置 turn 状态（可折叠块存储），不清屏。
+   * 新 turn 开始时调用——上一 turn 的可折叠块不再需要，
    * 但屏幕上的历史消息保留（不清屏）。
    */
   clearTurnState(): void {
     this.thinkingBuffer = '';
     this.pendingToolInputs.clear();
     this.expandable.clear();
-    this.turnSnapshot = [];
     // hasContent 保持 true（屏幕上仍有历史内容，新块前要加空行）
   }
 }

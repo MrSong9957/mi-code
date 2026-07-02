@@ -200,78 +200,56 @@ describe('BlockPipeline', () => {
     });
   });
 
-  describe('ctrl+o 展开/折叠（toggleLastExpandable + redraw）', () => {
-    it('thinking_end 注册可折叠块，折叠态显示摘要', () => {
+  describe('ctrl+o 临时 alt screen 覆盖层（getLastExpandableFullLines）', () => {
+    it('thinking_end 注册可折叠块，折叠态显示摘要（主屏不展开，完整内容靠覆盖层）', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
       p.emit({ kind: 'thinking_delta', content: '完整思考内容' });
       p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
-      // 折叠态：应含 Thought for 摘要
+      // 折叠态（主屏）：应含 Thought for 摘要
       expect(prints.some(p => p.text.includes('Thought for'))).toBe(true);
     });
 
-    it('toggleLastExpandable 切换最后一个块，redraw 后显示完整内容', () => {
-      const { renderer, prints } = mockRenderer();
-      const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'thinking_start' });
-      p.emit({ kind: 'thinking_delta', content: '完整思考内容' });
-      p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
-      // 折叠态：不含「完整思考内容」
-      expect(prints.some(p => p.text.includes('完整思考内容'))).toBe(false);
-      // 展开
-      expect(p.toggleLastExpandable()).toBe(true);
-      prints.length = 0;
-      p.redraw();
-      // 展开后：应含「完整思考内容」
-      expect(prints.some(p => p.text.includes('完整思考内容'))).toBe(true);
-    });
-
-    it('toggleLastExpandable 再切回折叠，redraw 后恢复摘要', () => {
-      const { renderer, prints } = mockRenderer();
-      const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'thinking_start' });
-      p.emit({ kind: 'thinking_delta', content: '完整思考内容' });
-      p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
-      p.toggleLastExpandable(); // 展开
-      p.toggleLastExpandable(); // 折叠
-      prints.length = 0;
-      p.redraw();
-      // 折叠后：不含完整内容，含摘要
-      expect(prints.some(p => p.text.includes('完整思考内容'))).toBe(false);
-      expect(prints.some(p => p.text.includes('Thought for'))).toBe(true);
-    });
-
-    it('tool_result 截断时注册可折叠块', () => {
-      const { renderer, prints } = mockRenderer();
-      const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
-      // 超过 4 行的输出 → 截断 → 注册可折叠
-      p.emit({ kind: 'tool_result', name: 'run_bash', output: 'l1\nl2\nl3\nl4\nl5\nl6\nl7' });
-      // 折叠态：含折叠提示 +N 行
-      expect(prints.some(p => p.text.includes('行') || p.text.includes('lines'))).toBe(true);
-      // 展开
-      p.toggleLastExpandable();
-      prints.length = 0;
-      p.redraw();
-      // 展开后：应含 l7（被截断的内容）
-      expect(prints.some(p => p.text.includes('l7'))).toBe(true);
-    });
-
-    it('无块时 toggleLastExpandable 返回 false', () => {
+    it('getLastExpandableFullLines 返回 thinking 完整内容（覆盖层渲染用）', () => {
       const { renderer } = mockRenderer();
       const p = new BlockPipeline(renderer);
-      expect(p.toggleLastExpandable()).toBe(false);
+      p.emit({ kind: 'thinking_start' });
+      p.emit({ kind: 'thinking_delta', content: '完整思考内容' });
+      p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
+      const expandable = p.getLastExpandableFullLines();
+      expect(expandable).not.toBeNull();
+      expect(expandable!.kind).toBe('thinking');
+      // 完整内容应在 fullLines 里（覆盖层会渲染这些）
+      expect(expandable!.lines.some(l => l.content.includes('完整思考内容'))).toBe(true);
     });
 
-    it('clearTurnState 清空快照，toggle 后无变化', () => {
+    it('tool_result 截断时注册可折叠块，getLastExpandableFullLines 返回完整输出', () => {
+      const { renderer } = mockRenderer();
+      const p = new BlockPipeline(renderer);
+      p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
+      p.emit({ kind: 'tool_result', name: 'run_bash', output: 'l1\nl2\nl3\nl4\nl5\nl6\nl7' });
+      const expandable = p.getLastExpandableFullLines();
+      expect(expandable).not.toBeNull();
+      expect(expandable!.kind).toBe('tool_result');
+      // 完整输出含 l7（被截断的内容，覆盖层可见）
+      expect(expandable!.lines.some(l => l.content.includes('l7'))).toBe(true);
+    });
+
+    it('无可折叠块时 getLastExpandableFullLines 返回 null', () => {
+      const { renderer } = mockRenderer();
+      const p = new BlockPipeline(renderer);
+      expect(p.getLastExpandableFullLines()).toBeNull();
+    });
+
+    it('clearTurnState 清空可折叠块，getLastExpandableFullLines 返回 null', () => {
       const { renderer } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
       p.emit({ kind: 'thinking_delta', content: '内容' });
       p.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
       p.clearTurnState();
-      expect(p.toggleLastExpandable()).toBe(false); // 快照已清，无可折叠块
+      expect(p.getLastExpandableFullLines()).toBeNull();
     });
   });
 });

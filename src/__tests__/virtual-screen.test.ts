@@ -121,6 +121,44 @@ describe('VirtualScreen', () => {
     });
   });
 
+  describe('lineFeed —— 屏幕相对钳位（alt screen 模式）', () => {
+    it('默认无 rows 限制：lineFeed 持续增 y（兼容旧行为）', () => {
+      const vs = new VirtualScreen();
+      for (let i = 0; i < 100; i++) vs.lineFeed();
+      expect(vs.cursor.y).toBe(100);
+      expect(vs.cursor.x).toBe(0);
+    });
+
+    it('指定 rows=5：y 增到 4（rows-1）后不再增（屏幕相对，物理光标钉底）', () => {
+      const vs = new VirtualScreen({ x: 0, y: 0 }, 5);
+      for (let i = 0; i < 10; i++) vs.lineFeed();
+      expect(vs.cursor.y).toBe(4); // 钳位在 rows-1，不脱钩
+    });
+
+    it('指定 rows=5：从 y=2 起 lineFeed，到 y=4 停', () => {
+      const vs = new VirtualScreen({ x: 0, y: 2 }, 5);
+      vs.lineFeed(); // y=3
+      vs.lineFeed(); // y=4
+      vs.lineFeed(); // 钳位：仍 y=4
+      vs.lineFeed(); // 钳位：仍 y=4
+      expect(vs.cursor.y).toBe(4);
+    });
+
+    it('rows=1（极小屏）：lineFeed 不增 y', () => {
+      const vs = new VirtualScreen({ x: 0, y: 0 }, 1);
+      vs.lineFeed();
+      expect(vs.cursor.y).toBe(0);
+    });
+
+    it('lineFeed 仍发 CR+LF 字节（触发终端滚动），只是 cursor.y 不增', () => {
+      const vs = new VirtualScreen({ x: 0, y: 4 }, 5);
+      vs.lineFeed();
+      const out = vs.flush();
+      expect(out).toBe('\r\n');
+      expect(vs.cursor.y).toBe(4); // 钳位
+    });
+  });
+
   describe('reset —— 重置光标与缓冲', () => {
     it('清空缓冲并把光标设回指定点', () => {
       const vs = new VirtualScreen({ x: 9, y: 9 });

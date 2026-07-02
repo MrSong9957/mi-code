@@ -238,7 +238,7 @@ export class MessageBuffer {
  * 词边界换行：遇到超宽时回退到最近的空格处断行，避免单词中间断开。
  * 宽字符不拆半：若本行剩余宽度不足以容纳下一个宽字符，换到下一行。
  */
-function wrapCells(cells: Cell[], wrapCols: number, hangingIndent: number = 0, leadLock: number = 0): Cell[][] {
+export function wrapCells(cells: Cell[], wrapCols: number, hangingIndent: number = 0, leadLock: number = 0): Cell[][] {
   if (cells.length === 0) return [[]];
   if (wrapCols <= 0) return [cells];
   // 软换行续行的前置缩进 cells（让续行与首行对齐，不顶到 0 列）

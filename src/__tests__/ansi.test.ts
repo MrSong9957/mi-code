@@ -13,6 +13,8 @@ import {
   bsu, esu,
   enableMouseTracking, disableMouseTracking,
   enableAutowrap, disableAutowrap,
+  setScrollRegion, resetScrollRegion,
+  saveCursor, restoreCursor,
 } from '../renderer/ansi.js';
 
 describe('ansi primitives', () => {
@@ -104,6 +106,23 @@ describe('ansi primitives', () => {
     });
     it('disableMouseTracking（反序：先 1006 再 1000）', () => {
       expect(disableMouseTracking()).toBe('\x1b[?1006l\x1b[?1000l');
+    });
+  });
+
+  describe('滚动区域 DECSTBM + 光标存取', () => {
+    it('setScrollRegion(top, bottom) 0-based → 1-based（DECSTBM \\x1b[top;bottom r）', () => {
+      // top=0, bottom=20 → region 覆盖行 0..20（1-based 1..21）
+      expect(setScrollRegion(0, 20)).toBe('\x1b[1;21r');
+    });
+    it('setScrollRegion(2, 9) → \\x1b[3;10r', () => {
+      expect(setScrollRegion(2, 9)).toBe('\x1b[3;10r');
+    });
+    it('resetScrollRegion() 重置为全屏（空参数 DECSTBM）', () => {
+      expect(resetScrollRegion()).toBe('\x1b[r');
+    });
+    it('saveCursor / restoreCursor（DECSC/DECRC）', () => {
+      expect(saveCursor()).toBe('\x1b[s');
+      expect(restoreCursor()).toBe('\x1b[u');
     });
   });
 });

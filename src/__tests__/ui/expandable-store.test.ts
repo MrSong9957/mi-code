@@ -91,4 +91,33 @@ describe('ExpandableBlockStore', () => {
     store.add({ id: 't2', kind: 'tool_result', summaryLines: [line('s')], fullLines: [line('f')] });
     expect(store.lastId()).toBe('t2');
   });
+
+  it('getLastFullLines 返回最后块的完整展开内容（ctrl+o 覆盖层渲染用）', () => {
+    const store = new ExpandableBlockStore();
+    // 空 store → null
+    expect(store.getLastFullLines()).toBeNull();
+    store.add({
+      id: 't1', kind: 'thinking',
+      summaryLines: [line('摘要')],
+      fullLines: [line('完整1'), line('完整2')],
+    });
+    // 单块 → 该块 fullLines
+    expect(store.getLastFullLines()!.map(l => l.content)).toEqual(['完整1', '完整2']);
+    store.add({
+      id: 'tool-1', kind: 'tool_result',
+      summaryLines: [line('tool摘要')],
+      fullLines: [line('tool完整1'), line('tool完整2'), line('tool完整3')],
+    });
+    // 多块 → 最后一块（tool-1）的 fullLines
+    expect(store.getLastFullLines()!.map(l => l.content)).toEqual(['tool完整1', 'tool完整2', 'tool完整3']);
+  });
+
+  it('getLastKind 返回最后块的类型（覆盖层标题用）', () => {
+    const store = new ExpandableBlockStore();
+    expect(store.getLastKind()).toBeNull();
+    store.add({ id: 't1', kind: 'thinking', summaryLines: [line('s')], fullLines: [line('f')] });
+    expect(store.getLastKind()).toBe('thinking');
+    store.add({ id: 'tool-1', kind: 'tool_result', summaryLines: [line('s')], fullLines: [line('f')] });
+    expect(store.getLastKind()).toBe('tool_result');
+  });
 });

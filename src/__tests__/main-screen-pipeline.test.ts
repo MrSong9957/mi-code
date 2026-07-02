@@ -6,34 +6,45 @@ import { isWideCodePoint } from '../renderer/cell.js';
 
 class FakeTerminal {
   rows: number; cols: number; grid: string[][]; scrollback: string[] = []; row = 0; col = 0;
-  constructor(r: number, c: number) { this.rows = r; this.cols = c; this.grid = Array.from({ length: r }, () => new Array(c).fill(' ')); }
+  /** scroll region 边界（含两端，0-based）；默认全屏 */
+  private regionTop = 0;
+  private regionBottom: number;
+  constructor(r: number, c: number) { this.rows = r; this.cols = c; this.grid = Array.from({ length: r }, () => new Array(c).fill(' ')); this.regionBottom = r - 1; }
   write(s: string): void {
     let i = 0;
     while (i < s.length) {
       const ch = s[i]!;
       if (ch === '\x1b') {
         if (s[i + 1] === '[') {
-          const m = s.slice(i).match(/^\x1b\[([0-9;?]*)([A-Za-z])/);
-          if (m) { this.csi(m[1], m[2]); i += m[0].length; continue; }
+          const m = s.slice(i).match(/^\x1b\[([0-9;?]*)([A-Za-z<])/);
+          if (m) {
+            if (m[2] !== '<') this.csi(m[1], m[2]);
+            i += m[0].length; continue;
+          }
         }
         i++; continue;
       }
       if (ch === '\r') { this.col = 0; i++; continue; }
       if (ch === '\n') { this.lf(); i++; continue; }
       const w = isWideCodePoint(ch.codePointAt(0) ?? 0) ? 2 : 1;
+      // DECAWM 自动换行：写满一行后，下个字符自动换到下一行（模拟真实终端）
+      if (this.col + w > this.cols && this.col > 0) {
+        this.lf();
+      }
       if (this.row < this.rows && this.col < this.cols) {
         this.grid[this.row]![this.col] = ch;
         if (w === 2 && this.col + 1 < this.cols) this.grid[this.row]![this.col + 1] = '\u0000';
       }
-      this.col = Math.min(this.cols, this.col + w);
+      this.col += w;
       i++;
     }
   }
+  /** LF：光标在 region 底部 → 只 region 内上滚（顶行进 scrollback）；否则 row++ */
   private lf(): void {
-    if (this.row >= this.rows - 1) {
-      this.scrollback.push((this.grid[0] ?? []).map(c => (c === '\u0000' ? '' : c)).join(''));
-      for (let r = 0; r < this.rows - 1; r++) this.grid[r] = this.grid[r + 1];
-      this.grid[this.rows - 1] = new Array(this.cols).fill(' ');
+    if (this.row >= this.regionBottom) {
+      this.scrollback.push((this.grid[this.regionTop] ?? []).map(c => (c === '\u0000' ? '' : c)).join(''));
+      for (let r = this.regionTop; r < this.regionBottom; r++) this.grid[r] = this.grid[r + 1];
+      this.grid[this.regionBottom] = new Array(this.cols).fill(' ');
       this.col = 0;
     } else { this.row++; this.col = 0; }
   }
@@ -44,6 +55,17 @@ class FakeTerminal {
       const [r, c] = params.split(';').map(x => parseInt(x || '1', 10));
       this.row = Math.max(0, Math.min(this.rows - 1, (r || 1) - 1));
       this.col = Math.max(0, Math.min(this.cols - 1, (c || 1) - 1));
+      return;
+    }
+    // DECSTBM：设置 scroll region（1-based 输入 → 0-based 内部）
+    if (cmd === 'r') {
+      if (params === '') { this.regionTop = 0; this.regionBottom = this.rows - 1; }
+      else {
+        const [t, b] = params.split(';').map(x => parseInt(x || '1', 10));
+        this.regionTop = (t || 1) - 1;
+        this.regionBottom = (b || this.rows) - 1;
+      }
+      this.row = this.regionTop; this.col = 0; // DECSTBM 设完光标移到 region 左上角
       return;
     }
     const n = parseInt(params || '1', 10);
@@ -134,8 +156,8 @@ describe('BlockPipeline 超屏渲染（症状 A+B：坐标错乱 / 横向拉伸 
   });
 });
 
-describe('ctrl+o 展开/折叠', () => {
-  it('thinking 折叠态显示摘要，展开后显示完整内容', () => {
+describe('ctrl+o 临时 alt screen 覆盖层（getLastExpandableFullLines）', () => {
+  it('thinking 折叠态主屏显示摘要，完整内容经 getLastExpandableFullLines 取出', () => {
     const t = new FakeTerminal(20, 70);
     const r = new Renderer({ rows: 20, cols: 70, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
     r.enter();
@@ -144,18 +166,17 @@ describe('ctrl+o 展开/折叠', () => {
     p.emit({ kind: 'thinking_delta', content: '这是被折叠的完整思考内容，应该只在展开后显示。' });
     p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
     r.flushNow();
-    const before = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
-    expect(before.some(l => l.includes('Thought for'))).toBe(true);
-    expect(before.some(l => l.includes('被折叠的完整思考'))).toBe(false);
-    // 展开
-    p.toggleLastExpandable();
-    p.redraw();
-    r.flushNow();
-    const after = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
-    expect(after.some(l => l.includes('被折叠的完整思考'))).toBe(true);
+    // 主屏折叠态：含摘要，不含完整思考（完整内容不在主屏）
+    const screen = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
+    expect(screen.some(l => l.includes('Thought for'))).toBe(true);
+    // 完整内容经覆盖层 API 取出（ctrl+o 进 alt screen 渲染）
+    const expandable = p.getLastExpandableFullLines();
+    expect(expandable).not.toBeNull();
+    expect(expandable!.kind).toBe('thinking');
+    expect(expandable!.lines.some(l => l.content.includes('被折叠的完整思考'))).toBe(true);
   });
 
-  it('tool_result 截断时折叠显示预览，展开后显示全部', () => {
+  it('tool_result 截断时折叠显示预览，完整输出经覆盖层 API 取出', () => {
     const t = new FakeTerminal(20, 70);
     const r = new Renderer({ rows: 20, cols: 70, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
     r.enter();
@@ -163,36 +184,21 @@ describe('ctrl+o 展开/折叠', () => {
     p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
     p.emit({ kind: 'tool_result', name: 'run_bash', output: 'f1\nf2\nf3\nf4\nf5\nf6\nf7' });
     r.flushNow();
-    const before = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
-    expect(before.some(l => l.includes('f7'))).toBe(false); // 折叠态不含 f7
-    // 展开
-    p.toggleLastExpandable();
-    p.redraw();
-    r.flushNow();
-    const after = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
-    expect(after.some(l => l.includes('f7'))).toBe(true); // 展开后含 f7
+    // 主屏折叠态不含 f7（被截断）
+    const screen = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
+    expect(screen.some(l => l.includes('f7'))).toBe(false);
+    // 完整输出（含 f7）经覆盖层 API 取出
+    const expandable = p.getLastExpandableFullLines();
+    expect(expandable).not.toBeNull();
+    expect(expandable!.kind).toBe('tool_result');
+    expect(expandable!.lines.some(l => l.content.includes('f7'))).toBe(true);
   });
 
-  it('再按 ctrl+o 折叠回摘要', () => {
+  it('ctrl+o 覆盖层不破坏主屏内容（主屏 scrollback 完好，用户输入仍在）', () => {
     const t = new FakeTerminal(20, 70);
     const r = new Renderer({ rows: 20, cols: 70, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
     r.enter();
     const p = new BlockPipeline(r);
-    p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
-    p.emit({ kind: 'tool_result', name: 'run_bash', output: 'f1\nf2\nf3\nf4\nf5\nf6\nf7' });
-    r.flushNow();
-    p.toggleLastExpandable(); p.redraw(); r.flushNow(); // 展开
-    p.toggleLastExpandable(); p.redraw(); r.flushNow(); // 折叠
-    const lines = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
-    expect(lines.some(l => l.includes('f7'))).toBe(false); // 折叠后不含 f7
-  });
-
-  it('ctrl+o 重绘后用户输入消息仍在（user_input 纳入 turnSnapshot）', () => {
-    const t = new FakeTerminal(20, 70);
-    const r = new Renderer({ rows: 20, cols: 70, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
-    r.enter();
-    const p = new BlockPipeline(r);
-    // user_input 必须经 pipeline.emit（纳入快照），否则 ctrl+o 重绘会丢失
     p.emit({ kind: 'user_input', text: '你好世界' });
     p.emit({ kind: 'thinking_start' });
     p.emit({ kind: 'thinking_delta', content: '思考内容' });
@@ -200,16 +206,12 @@ describe('ctrl+o 展开/折叠', () => {
     p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
     p.emit({ kind: 'tool_result', name: 'run_bash', output: 'f1\nf2\nf3\nf4\nf5\nf6\nf7' });
     r.flushNow();
-    // 重绘前确认用户输入在
-    const before = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
-    expect(before.some(l => l.includes('你好世界')), '重绘前应有用户输入').toBe(true);
-    // ctrl+o 展开
-    p.toggleLastExpandable();
-    p.redraw();
-    r.flushNow();
-    // 重绘后用户输入仍应在（核心断言）
-    const after = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
-    expect(after.some(l => l.includes('你好世界')), `ctrl+o 重绘后应保留用户输入，实际：${JSON.stringify(after.slice(0, 8))}`).toBe(true);
+    // 取覆盖层内容（ctrl+o 会进 alt screen 渲染它，主屏不动）
+    const expandable = p.getLastExpandableFullLines();
+    expect(expandable).not.toBeNull();
+    // 主屏内容完好：用户输入仍在（覆盖层不碰主屏）
+    const screen = [...t.scrollback, ...Array.from({ length: 20 }, (_, i) => t.line(i))];
+    expect(screen.some(l => l.includes('你好世界')), '主屏应保留用户输入').toBe(true);
   });
 });
 
@@ -266,27 +268,31 @@ describe('多轮 agent loop 累积渲染（真实乱码根因）', () => {
     expect(statusCount, `状态栏应只出现 1 次，实际 ${statusCount} 次`).toBe(1);
   });
 
-  it('累积后 scrollback 保留历史（LF 推进，非全清屏丢失）', () => {
+  it('累积后历史进原生 scrollback（纯追加 + DECSTBM，用户用滚动条翻历史）', () => {
     const t = new FakeTerminal(14, 70);
     const r = new Renderer({ rows: 14, cols: 70, writer: s => t.write(s), status: { model: 'mimo', branch: 'master', dir: '~/mi-code', mode: 'Act', contextUsage: 0 } });
     r.enter();
     const p = new BlockPipeline(r);
 
-    // 2 轮，确保第1轮内容滚进 scrollback
+    // 2 轮，第1轮内容会超出可视区进原生 scrollback
     for (let turn = 1; turn <= 2; turn++) {
       p.emit({ kind: 'assistant_text', text: `第${turn}轮标记文本`, isFinal: true });
       p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: `cmd-${turn}` } });
       p.emit({ kind: 'tool_result', name: 'run_bash', output: `out-${turn}-1\nout-${turn}-2\nout-${turn}-3\nout-${turn}-4\nout-${turn}-5\nout-${turn}-6` });
     }
     r.flushNow();
-    r.exit();
 
-    // scrollback 应非空（历史通过 LF 滚进，而非被全清屏擦掉）
-    expect(t.scrollback.length, `scrollback 应保留历史，实际长度 ${t.scrollback.length}`).toBeGreaterThan(0);
-    // 第1轮标记应能在 scrollback + visible 全集中找到
-    const all = [...t.scrollback, ...Array.from({ length: 14 }, (_, i) => t.line(i))];
-    expect(all.some(l => l.includes('第1轮标记文本')), '第1轮内容应在 scrollback/可视区').toBe(true);
-    expect(all.some(l => l.includes('第2轮标记文本')), '第2轮内容应在 scrollback/可视区').toBe(true);
+    // 第2轮最新工具调用/结果在可视区（assistant_text 已随滚动进 scrollback）
+    const visible = Array.from({ length: 14 }, (_, i) => t.line(i));
+    expect(visible.some(l => l.includes('cmd-2')), '第2轮最新工具调用应可见').toBe(true);
+    // 第1轮内容进原生 scrollback（用户用终端滚动条翻阅，不丢失）
+    expect(t.scrollback.some(l => l.includes('第1轮标记文本')), '第1轮应进 scrollback').toBe(true);
+    // 两轮内容都在（scrollback + 可视区）
+    const all = [...t.scrollback, ...visible];
+    expect(all.some(l => l.includes('第1轮标记文本'))).toBe(true);
+    expect(all.some(l => l.includes('第2轮标记文本'))).toBe(true);
+
+    r.exit();
   });
 });
 
