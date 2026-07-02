@@ -1,24 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { HistoryManager } from '../history.js'
-import { existsSync, rmSync, readFileSync, appendFileSync } from 'fs'
+import { existsSync, rmSync, readFileSync, appendFileSync, mkdtempSync } from 'fs'
 import { join } from 'path'
-import { homedir } from 'os'
+import { tmpdir } from 'os'
 
 describe('HistoryManager', () => {
-  const testHistoryPath = join(homedir(), '.micode', 'history.jsonl.test')
+  let tempDir: string
+  let originalUserprofile: string | undefined
+  let testHistoryPath: string
   let manager: HistoryManager
 
   beforeEach(() => {
-    if (existsSync(testHistoryPath)) {
-      rmSync(testHistoryPath)
-    }
+    // 物理本质：给每个测试发一个一次性的"临时储物柜"，
+    // 测完整体清空，绝不碰用户真实主目录（避免 ENOENT 残留与污染）
+    tempDir = mkdtempSync(join(tmpdir(), 'mi-code-history-test-'))
+    // Windows 上 os.homedir() 读取 USERPROFILE，重写它让默认路径落进临时目录
+    originalUserprofile = process.env.USERPROFILE
+    process.env.USERPROFILE = tempDir
+    testHistoryPath = join(tempDir, '.micode', 'history.jsonl.test')
     manager = new HistoryManager(testHistoryPath)
   })
 
   afterEach(() => {
-    if (existsSync(testHistoryPath)) {
-      rmSync(testHistoryPath)
-    }
+    if (originalUserprofile !== undefined) process.env.USERPROFILE = originalUserprofile
+    else delete process.env.USERPROFILE
+    rmSync(tempDir, { recursive: true, force: true })
   })
 
   it('should create HistoryManager instance', () => {
@@ -81,15 +87,12 @@ describe('HistoryManager', () => {
     })
 
     it('should create parent directory if it does not exist', async () => {
-      const deepPath = join(homedir(), '.micode', 'sub', 'deep', 'history.jsonl.test')
+      const deepPath = join(tempDir, '.micode', 'sub', 'deep', 'history.jsonl.test')
       const deepManager = new HistoryManager(deepPath)
 
-      try {
-        await deepManager.addEntry('test', 'proj1')
-        expect(existsSync(deepPath)).toBe(true)
-      } finally {
-        if (existsSync(deepPath)) rmSync(deepPath)
-      }
+      await deepManager.addEntry('test', 'proj1')
+      expect(existsSync(deepPath)).toBe(true)
+      // 清理由 afterEach 的 recursive rm 统一负责，无需在此单独删叶子文件
     })
   })
 
@@ -161,12 +164,16 @@ describe('HistoryManager', () => {
     })
 
     it('should skip corrupted JSON lines', async () => {
+      // 先通过 addEntry 建立合法文件（appendFileSync 只能追加到已存在文件）
+      await manager.addEntry('valid', 'proj1')
       appendFileSync(testHistoryPath, 'not valid json\n')
-      appendFileSync(testHistoryPath, JSON.stringify({ input: 'valid', project: 'proj1', sessionId: 's', timestamp: 1 }) + '\n')
+      appendFileSync(testHistoryPath, JSON.stringify({ input: 'valid2', project: 'proj1', sessionId: 's', timestamp: 1 }) + '\n')
 
       const history = await manager.getHistory('proj1')
-      expect(history).toHaveLength(1)
+      // 损坏行被跳过，两条合法行保留
+      expect(history).toHaveLength(2)
       expect(history[0].input).toBe('valid')
+      expect(history[1].input).toBe('valid2')
     })
   })
 
@@ -283,7 +290,7 @@ describe('HistoryManager', () => {
 
   describe('cleanup', () => {
     it('should do nothing when file does not exist', async () => {
-      const freshManager = new HistoryManager(join(homedir(), '.micode', 'nonexistent.jsonl'))
+      const freshManager = new HistoryManager(join(tempDir, '.micode', 'nonexistent.jsonl'))
       await expect(freshManager.cleanup()).resolves.toBeUndefined()
     })
 

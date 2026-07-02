@@ -21,6 +21,8 @@ import { ConfigStore } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
 import { TodoManager } from './agent/todo.js';
 import { createTaskTool } from './agent/tools/task-tool.js';
+import { createSpawnSelfOrganizingTool } from './agent/tools/spawn-self-organizing-tool.js';
+import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
 import { parseBlockPrefix } from './commands/parser.js';
 import { PermissionChecker } from './permission/index.js';
@@ -29,6 +31,9 @@ import { TeammateManager, createSendMessageTool, createReadInboxTool, Negotiatio
 import { ScheduleManager } from './agent/scheduler/index.js';
 import { WorktreeManager } from './worktree/index.js';
 import { TaskBoard } from './task-board/index.js';
+import { BackgroundManager } from './background/index.js';
+import { MemoryManager } from './memory/index.js';
+import { createMemoryWriteTool, createMemoryReadTool, createMemoryListTool } from './agent/tools/memory-tool.js';
 import { HistoryManager } from './history.js';
 
 const VERSION = "1.0.0";
@@ -61,6 +66,9 @@ const worktreeManager = new WorktreeManager(process.cwd());
 worktreeManager.recover();
 const taskBoard = new TaskBoard();
 taskBoard.load(process.cwd());
+const backgroundManager = new BackgroundManager(process.cwd());
+const memoryManager = new MemoryManager(process.cwd());
+const inboxManager = new InboxManager();
 const historyManager = new HistoryManager();
 const currentProject = process.cwd();
 
@@ -74,10 +82,12 @@ function getShortDir(): string {
 const GIT_BRANCH = getGitBranch();
 const SHORT_DIR = getShortDir();
 
-const childToolRegistry = createDefaultRegistry(todoManager, undefined, undefined, undefined, taskBoard, worktreeManager);
-const toolRegistry = createDefaultRegistry(todoManager, undefined, undefined, undefined, taskBoard, worktreeManager);
+const childToolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, backgroundManager, taskBoard, worktreeManager);
+const toolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, backgroundManager, taskBoard, worktreeManager);
 const taskTool = createTaskTool(childToolRegistry, worktreeManager, SMALL_MODEL);
 toolRegistry.register(taskTool.definition, taskTool.executor);
+const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, { model: SMALL_MODEL });
+toolRegistry.register(spawnSoTool.definition, spawnSoTool.executor);
 const loadSkillTool = createLoadSkillTool(skillRegistry);
 toolRegistry.register(loadSkillTool.definition, loadSkillTool.executor);
 const sendMessageTool = createSendMessageTool(teammateManager);
@@ -92,6 +102,12 @@ const submitPlanTool = createSubmitPlanTool(negotiationManager);
 toolRegistry.register(submitPlanTool.definition, submitPlanTool.executor);
 const approvePlanTool = createApprovePlanTool(negotiationManager);
 toolRegistry.register(approvePlanTool.definition, approvePlanTool.executor);
+const memWrite = createMemoryWriteTool(memoryManager);
+toolRegistry.register(memWrite.definition, memWrite.executor);
+const memRead = createMemoryReadTool(memoryManager);
+toolRegistry.register(memRead.definition, memRead.executor);
+const memList = createMemoryListTool(memoryManager);
+toolRegistry.register(memList.definition, memList.executor);
 
 // ─────────────────────────────────────────────────────────────
 // 渲染器：备用屏全屏画布（状态栏 + 输入框钉死底部，消息区上方流式刷新）
@@ -519,8 +535,9 @@ process.stdout.on('resize', () => {
   layout.resize(rows, cols);
 });
 
-// 进程退出兜底：恢复光标
+// 进程退出兜底：恢复光标 + 清理后台子进程
 function cleanupOnExit(): void {
+  backgroundManager.killAll();
   layout.exit();
 }
 process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });

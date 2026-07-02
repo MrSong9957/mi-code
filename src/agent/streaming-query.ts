@@ -28,6 +28,7 @@ import {
   handleError,
   FailureInbox,
 } from './recovery.js';
+import { jitteredBackoff, sleep } from './backoff.js';
 
 /** 流式查询消息（所有可能的输出类型） */
 export type StreamMessage =
@@ -172,6 +173,11 @@ export async function* streamingQuery(
           message: String(error),
           recoverable: true,
         });
+        // 429 限流需要退避延迟，否则立即重试会触发二次限流甚至封禁
+        if (errorType === 'rate_limited_429') {
+          const delay = jitteredBackoff(recoveryState.retryAttempt);
+          await sleep(delay);
+        }
         continue;
       } else {
         // 无法恢复，抛出错误
