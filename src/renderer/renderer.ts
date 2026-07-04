@@ -24,7 +24,7 @@ import { FrameScheduler } from './frame-scheduler.js';
 import { Spinner } from './spinner.js';
 import {
   showCursor, hideCursor, cup, cr, eraseLine,
-  setScrollRegion, resetScrollRegion,
+  setScrollRegion, resetScrollRegion, setCursorStyle,
 } from './ansi.js';
 
 /** 写出接口（默认 process.stdout.write；测试注入 fake） */
@@ -116,12 +116,14 @@ export class Renderer {
 
   // ═══════ 生命周期 ═══════
 
-  /** 启动：主屏模式，设 scroll region，画首帧页脚。 */
+  /** 启动：主屏模式，设 scroll region，画首帧页脚，设块状光标。 */
   enter(): void {
     if (this.entered) return;
     this.entered = true;
     this.messageRow = 0;
     this.resetStreamingState();
+    // 光标样式：steady 块状（2），对齐 Claude Code
+    this.buffer.write(setCursorStyle(2));
     // 消息区 scroll region：[0, contentRows)，页脚钉 region 外
     this.applyScrollRegion();
     // 清消息区（region 内），保留 scrollback 不动
@@ -142,6 +144,7 @@ export class Renderer {
     if (!this.entered) return;
     this.entered = false;
     this.buffer.write(showCursor());
+    this.buffer.write(setCursorStyle(0));  // 恢复默认光标样式（闪烁块）
     this.buffer.write(resetScrollRegion()); // 恢复全屏滚动
     this.buffer.write('\x1b[H');            // 光标归位左上角，shell 提示符干净出现
     this.buffer.flushRaw(); // exit 必须立即送出，进程即将退出，不能被揭幕延迟

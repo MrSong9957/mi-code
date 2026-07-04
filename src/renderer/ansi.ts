@@ -168,3 +168,13 @@ export function saveCursor(): string {
 export function restoreCursor(): string {
   return '\x1b[u';
 }
+
+// ═══════ 光标样式（DECSCUSR \x1b[N q）═══════
+//
+// N 值：0=默认(闪烁块) / 1=闪烁块 / 2=steady块 / 3=闪烁下划线 / 4=steady下划线
+// mi-code 用 steady 块状（2）保持光标稳定可见，退出时恢复默认（0）。
+
+/** 设置光标样式。n: 0=默认 / 1=闪烁块 / 2=steady块 / 3=闪烁下划线 / 4=steady下划线 */
+export function setCursorStyle(n: number): string {
+  return `\x1b[${n} q`;
+}

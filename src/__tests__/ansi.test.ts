@@ -15,6 +15,7 @@ import {
   enableAutowrap, disableAutowrap,
   setScrollRegion, resetScrollRegion,
   saveCursor, restoreCursor,
+  setCursorStyle,
 } from '../renderer/ansi.js';
 
 describe('ansi primitives', () => {
@@ -123,6 +124,10 @@ describe('ansi primitives', () => {
     it('saveCursor / restoreCursor（DECSC/DECRC）', () => {
       expect(saveCursor()).toBe('\x1b[s');
       expect(restoreCursor()).toBe('\x1b[u');
+    });
+    it('setCursorStyle：DECSCUSR 光标样式', () => {
+      expect(setCursorStyle(0)).toBe('\x1b[0 q'); // 默认
+      expect(setCursorStyle(2)).toBe('\x1b[2 q'); // steady 块状
     });
   });
 });
