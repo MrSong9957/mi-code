@@ -19,6 +19,7 @@ import { buildStatusBar, type StatusBarState, type ToolStatus } from './status-b
 import { stringToCells, stringWidth, styleKey as styleKeyOf, styleTransitionByKey, type Cell, type Style } from './cell.js';
 import { renderMarkdown } from './markdown.js';
 import { WriteBuffer } from './write-buffer.js';
+import { supportsSyncUpdate } from './capabilities.js';
 import {
   showCursor, hideCursor, cup, cr, eraseLine,
   setScrollRegion, resetScrollRegion,
@@ -97,7 +98,8 @@ export class Renderer {
     this.rows = opts.rows;
     this.cols = opts.cols;
     this.writer = opts.writer;
-    this.buffer = new WriteBuffer(opts.writer);
+    // 探测终端是否支持 DEC 2026 同步更新；支持则 flush 包裹 BSU/ESU 防闪烁
+    this.buffer = new WriteBuffer(opts.writer, { useSyncUpdate: supportsSyncUpdate() });
     this.statusInfo = opts.status;
     this.prompt = opts.prompt ?? DEFAULT_PROMPT;
     this.frameIntervalMs = opts.frameIntervalMs ?? 16;
@@ -122,7 +124,7 @@ export class Renderer {
     // 光标到输入框
     this.placeCursorInInput();
     this.buffer.write(showCursor());
-    this.buffer.flush();
+    this.buffer.flushRaw(); // enter 必须立即可见，不走 BSU 揭幕延迟
   }
 
   /** 退出：恢复终端默认状态。主屏模式下：恢复光标可见 → 重置 scroll region → 光标归位左上角。
@@ -134,7 +136,7 @@ export class Renderer {
     this.buffer.write(showCursor());
     this.buffer.write(resetScrollRegion()); // 恢复全屏滚动
     this.buffer.write('\x1b[H');            // 光标归位左上角，shell 提示符干净出现
-    this.buffer.flush();
+    this.buffer.flushRaw(); // exit 必须立即送出，进程即将退出，不能被揭幕延迟
   }
 
   /** 设置 scroll region [0, contentRows)。DECSTBM 设完光标会移到 region 左上角。 */
@@ -366,7 +368,7 @@ export class Renderer {
     this.drawFooter();
     this.placeCursorInInput();
     this.buffer.write(showCursor());
-    this.buffer.flush();
+    this.buffer.flushRaw(); // clearMessages 后立即重建，不走 BSU 避免空屏闪烁
   }
 
   // ═══════ 输入态 / 状态栏（只重画页脚）═══════
