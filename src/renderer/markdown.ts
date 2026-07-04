@@ -12,18 +12,18 @@ import { type Cell, type Style, stringToCells } from './cell.js';
 import { highlightCode } from './highlight.js';
 
 const STY_HEADING: Style[] = [
-  { bold: true, fg: 'accent' },    // #
-  { bold: true, fg: 'warn' },      // ##
-  { bold: true, fg: 'success' },   // ### 及以上
+  { bold: true, fg: 'brand' },      // #（cyan 主色）
+  { bold: true, fg: 'warning' },    // ##
+  { bold: true, fg: 'success' },    // ### 及以上
 ];
 const STY_BOLD: Style = { bold: true };
 const STY_ITALIC: Style = { italic: true };
-const STY_CODE: Style = { fg: 'warn' };
+const STY_CODE: Style = { fg: 'warning' };
 const STY_QUOTE: Style = { dim: true };
 const STY_HR: Style = { dim: true };
 const STY_LINK: Style = { underline: true };
 const STY_URL: Style = { dim: true };
-const STY_LIST_MARKER: Style = { fg: 'warn' };
+const STY_LIST_MARKER: Style = { fg: 'warning' };
 const STY_CHECK_DONE: Style = { fg: 'success' };
 const STY_TABLE_HEADER: Style = { bold: true };
 const STY_TABLE_BORDER: Style = { dim: true };

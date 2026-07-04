@@ -1,143 +1,153 @@
-// 单测：theme.ts —— Theme 接口、dark 主题（truecolor + 降级）、REGISTRY
+// 单测：theme.ts —— Theme 类型、dark 主题、REGISTRY、getTheme/setTheme
 //
-// 物理本质：theme 是「色票本」——给每个语义角色（强调、错误、提示等）
-// 贴上一组颜色标签（truecolor RGB / 256 色 / 16 色三套备）。
-// 换主题就是换一本色票本，所有组件自动跟随变色。
+// 物理本质：theme 是「色票本」——给每个语义角色（品牌、文本、错误等）
+// 贴上一个 16 色 ANSI 名标签。换主题就是换一本色票本，所有组件自动跟随变色。
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  darkTheme,
+  dark,
   THEME_REGISTRY,
+  getCurrentTheme,
   getTheme,
   setTheme,
-  resolveTokenRgb,
-  resolveTokenAnsi16,
-  type ColorToken,
+  getActiveThemeName,
+  resolveThemeColor,
   type Theme,
 } from '../renderer/theme.js';
 
 describe('theme', () => {
-  describe('darkTheme 默认主题（Claude Code 风格 truecolor）', () => {
-    it('name 为 "dark"', () => {
-      expect(darkTheme.name).toBe('dark');
+  describe('dark 默认主题（保持 cyan 主色，16 色）', () => {
+    it('品牌色 brand = ansi:cyan（mi-code 主色，不换橙）', () => {
+      expect(dark.brand).toBe('ansi:cyan');
     });
 
-    it('所有 ColorToken 都有定义', () => {
-      const required: ColorToken[] = [
-        'accent', 'brand', 'success', 'warn', 'error',
-        'muted', 'text', 'prompt', 'border',
-      ];
-      for (const token of required) {
-        expect(darkTheme.tokens[token], `token ${token} 未定义`).toBeDefined();
-      }
+    it('brandDim = ansi:cyanBright（主色亮化）', () => {
+      expect(dark.brandDim).toBe('ansi:cyanBright');
     });
 
-    it('brand = claude 橙 rgb(215,119,87)（assistant ● / banner / 工具名）', () => {
-      expect(darkTheme.tokens.brand.rgb).toEqual([215, 119, 87]);
+    it('brandShimmer = ansi:white（动画用最亮）', () => {
+      expect(dark.brandShimmer).toBe('ansi:white');
     });
 
-    it('accent = 浅蓝紫 rgb(177,185,249)（边框/状态栏强调）', () => {
-      expect(darkTheme.tokens.accent.rgb).toEqual([177, 185, 249]);
+    it('text = ansi:white', () => {
+      expect(dark.text).toBe('ansi:white');
     });
 
-    it('success = 亮绿 rgb(78,186,101)', () => {
-      expect(darkTheme.tokens.success.rgb).toEqual([78, 186, 101]);
+    it('textDim = ansi:blackBright（gray）', () => {
+      expect(dark.textDim).toBe('ansi:blackBright');
     });
 
-    it('warn = 琥珀 rgb(255,193,7)', () => {
-      expect(darkTheme.tokens.warn.rgb).toEqual([255, 193, 7]);
+    it('subtle = ansi:blackBright', () => {
+      expect(dark.subtle).toBe('ansi:blackBright');
     });
 
-    it('error = 亮红 rgb(255,107,128)', () => {
-      expect(darkTheme.tokens.error.rgb).toEqual([255, 107, 128]);
+    it('success = ansi:green', () => {
+      expect(dark.success).toBe('ansi:green');
     });
 
-    it('muted = 中灰 rgb(153,153,153)', () => {
-      expect(darkTheme.tokens.muted.rgb).toEqual([153, 153, 153]);
+    it('error = ansi:red', () => {
+      expect(dark.error).toBe('ansi:red');
     });
 
-    it('text = 浅灰 rgb(230,230,230)（非纯白，降低刺眼感）', () => {
-      expect(darkTheme.tokens.text.rgb).toEqual([230, 230, 230]);
+    it('warning = ansi:yellow', () => {
+      expect(dark.warning).toBe('ansi:yellow');
     });
 
-    it('prompt = 亮绿 rgb(78,186,101)', () => {
-      expect(darkTheme.tokens.prompt.rgb).toEqual([78, 186, 101]);
+    it('info = ansi:blue', () => {
+      expect(dark.info).toBe('ansi:blue');
     });
 
-    it('border = 中灰 rgb(136,136,136)', () => {
-      expect(darkTheme.tokens.border.rgb).toEqual([136, 136, 136]);
+    it('border = ansi:cyan', () => {
+      expect(dark.border).toBe('ansi:cyan');
     });
 
-    it('每个 token 都有 ansi16 降级值', () => {
-      const required: ColorToken[] = [
-        'accent', 'brand', 'success', 'warn', 'error',
-        'muted', 'text', 'prompt', 'border',
-      ];
-      for (const token of required) {
-        const ansi16 = darkTheme.tokens[token].ansi16;
-        // text 的 ansi16 为空串（默认前景），其余应为 FG_MAP key
-        if (token === 'text') {
-          expect(ansi16).toBe('');
-        } else {
-          expect(ansi16, `token ${token} 缺 ansi16 降级`).toBeTruthy();
-        }
-      }
+    it('borderFocused = ansi:white', () => {
+      expect(dark.borderFocused).toBe('ansi:white');
+    });
+
+    it('background 默认透明（undefined）', () => {
+      expect(dark.background).toBeUndefined();
+    });
+
+    it('代码高亮 token 齐全', () => {
+      expect(dark.codeKeyword).toBe('ansi:magenta');
+      expect(dark.codeString).toBe('ansi:green');
+      expect(dark.codeComment).toBe('ansi:blackBright');
+      expect(dark.codeFunction).toBe('ansi:yellow');
+      expect(dark.codeNumber).toBe('ansi:cyan');
+      expect(dark.codeOperator).toBe('ansi:white');
     });
   });
 
   describe('THEME_REGISTRY', () => {
     it('包含 dark 主题', () => {
-      expect(THEME_REGISTRY.get('dark')).toBe(darkTheme);
+      expect(THEME_REGISTRY.dark).toBe(dark);
     });
   });
 
-  describe('getTheme / setTheme', () => {
+  describe('getCurrentTheme / getTheme / setTheme', () => {
     beforeEach(() => {
       setTheme('dark');
     });
 
-    it('getTheme 默认返回 darkTheme', () => {
-      expect(getTheme()).toBe(darkTheme);
+    it('getCurrentTheme 默认返回 dark', () => {
+      expect(getCurrentTheme()).toBe(dark);
+    });
+
+    it('getTheme("dark") 返回 dark 主题', () => {
+      expect(getTheme('dark')).toBe(dark);
+    });
+
+    it('getTheme(unknown) 回退 dark', () => {
+      expect(getTheme('nonexistent')).toBe(dark);
     });
 
     it('setTheme("dark") 返回 true', () => {
       expect(setTheme('dark')).toBe(true);
     });
 
-    it('setTheme(unknown) 返回 false 且不改变当前主题', () => {
-      const before = getTheme();
-      expect(setTheme('nonexistent-theme')).toBe(false);
-      expect(getTheme()).toBe(before);
+    it('setTheme(unknown) 返回 false 且不改当前主题', () => {
+      const before = getCurrentTheme();
+      expect(setTheme('nonexistent')).toBe(false);
+      expect(getCurrentTheme()).toBe(before);
+    });
+
+    it('getActiveThemeName 返回当前主题名', () => {
+      expect(getActiveThemeName()).toBe('dark');
     });
   });
 
-  describe('resolveTokenRgb / resolveTokenAnsi16', () => {
+  describe('resolveThemeColor', () => {
     beforeEach(() => {
       setTheme('dark');
     });
 
-    it('resolveTokenRgb("brand") → [215,119,87]', () => {
-      expect(resolveTokenRgb('brand')).toEqual([215, 119, 87]);
+    it('semantic token → 主题值（brand → ansi:cyan）', () => {
+      expect(resolveThemeColor('brand')).toBe('ansi:cyan');
     });
 
-    it('resolveTokenRgb("text") → [230,230,230]', () => {
-      expect(resolveTokenRgb('text')).toEqual([230, 230, 230]);
+    it('semantic token error → ansi:red', () => {
+      expect(resolveThemeColor('error')).toBe('ansi:red');
     });
 
-    it('resolveTokenRgb 未知 token → null', () => {
-      expect(resolveTokenRgb('nonexistent' as ColorToken)).toBeNull();
+    it('直接 ansi:xxx 名原样返回', () => {
+      expect(resolveThemeColor('ansi:magenta')).toBe('ansi:magenta');
     });
 
-    it('resolveTokenAnsi16("brand") → "magenta"', () => {
-      expect(resolveTokenAnsi16('brand')).toBe('magenta');
+    it('text → ansi:white（主题值）', () => {
+      expect(resolveThemeColor('text')).toBe('ansi:white');
     });
 
-    it('resolveTokenAnsi16("text") → ""（默认前景）', () => {
-      expect(resolveTokenAnsi16('text')).toBe('');
+    it('未知 token → 空串', () => {
+      expect(resolveThemeColor('nonexistent')).toBe('');
     });
 
-    it('resolveTokenAnsi16 未知 token → ""', () => {
-      expect(resolveTokenAnsi16('nonexistent' as ColorToken)).toBe('');
+    it('undefined → 空串', () => {
+      expect(resolveThemeColor(undefined)).toBe('');
+    });
+
+    it('codeKeyword → ansi:magenta', () => {
+      expect(resolveThemeColor('codeKeyword')).toBe('ansi:magenta');
     });
   });
 });

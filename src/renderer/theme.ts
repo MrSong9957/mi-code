@@ -1,106 +1,138 @@
-// 主题层：semantic token → 多级颜色表示（truecolor RGB + 256 + 16 降级）
+// 主题层：语义化 token 集中管理
 //
-// 物理本质：色票本，每格贴三张色卡。
-// 每个语义角色（强调、错误、提示等）在色票本上占一格，写三张色卡：
-//   - rgb：truecolor 精确色（现代终端）
-//   - ansi256：256 色近似索引（老终端）
-//   - ansi16：16 色命名（最保守兜底）
-// 组件代码只认"角色"（如 brand），换主题或换终端能力都能自动挑合适的色卡。
+// 物理本质：色票本。每个语义角色（品牌色、文本、错误等）在色票本上占一格，
+// 写着对应的 16 色 ANSI 名（如 'ansi:cyan'）。组件代码只认角色（如 brand），
+// 不认具体颜色。换主题就是换一本色票本，所有组件自动跟随变色。
 //
-// dark 主题色值对齐 Claude Code（D:\Files\GitHub\claude-code-source-code\src\utils\theme.ts）。
+// 设计原则（必须遵守）：
+// 1. 保持 cyan 主色：brand = cyan，mi-code 的品牌色
+// 2. 保持 16 色 ANSI：不升级 truecolor/256，与现有渲染器兼容
+// 3. 语义化命名：代码用 brand/success/error，不用 cyan/green/red
 
-/** semantic token：语义化的颜色角色名 */
-export type ColorToken =
-  | 'accent'   // 主强调（边框 / 状态栏 / 进度条）
-  | 'brand'    // 品牌色（assistant ● / banner / 工具名 / spinner）
-  | 'success'  // 成功（提示符 / 工具完成 / 字符串 / ☑）
-  | 'warn'     // 警告（标题 / 数字 / 工具运行中）
-  | 'error'    // 错误（spinner stall）
-  | 'muted'    // 低调灰
-  | 'text'     // 默认前景
-  | 'prompt'   // 输入提示符
-  | 'border';  // 边框
-
-/** RGB 三元组 */
-export type Rgb = readonly [number, number, number];
-
-/** 色卡：一个 token 的多级颜色表示 */
-export interface ColorSpec {
-  /** truecolor 精确色 [r,g,b] */
-  rgb: Rgb;
-  /** 16 色 ANSI 命名（colors.ts FG_MAP 的 key，如 'cyan'/'green'...）；空串=默认前景 */
-  ansi16: string;
-}
-
-/** 主题：token → 色卡 */
+/** MiCode Theme 类型
+ *  语义化 token，值是 16 色 ANSI 名（'ansi:cyan' / 'ansi:whiteBright' 等）。
+ *  'ansi:' 前缀由 colors.ts 解析时剥除，映射到 FG_MAP。 */
 export interface Theme {
-  name: string;
-  tokens: Record<ColorToken, ColorSpec>;
+  // 品牌色
+  brand: string;           // 主色（cyan）
+  brandDim: string;        // 主色的 dim 版本
+  brandShimmer: string;    // 主色的亮化版本（spinner 动画用）
+
+  // 文本色
+  text: string;            // 正文文本
+  textDim: string;         // dim 文本（注释、次要信息）
+  subtle: string;          // 更淡的文本（状态栏）
+
+  // 语义色
+  success: string;         // 成功、完成
+  error: string;           // 错误、失败
+  warning: string;         // 警告、提醒
+  info: string;            // 信息、提示
+
+  // 边框色
+  border: string;          // 普通边框
+  borderFocused: string;   // 聚焦状态边框
+
+  // 背景色（可选）
+  background?: string;     // 输入框背景（undefined = 透明）
+  backgroundFocused?: string;
+
+  // 代码高亮
+  codeKeyword?: string;
+  codeString?: string;
+  codeComment?: string;
+  codeFunction?: string;
+  codeNumber?: string;
+  codeOperator?: string;
 }
 
-/** dark 主题：对齐 Claude Code dark 配色
- *  - brand 用 claude 橙（rgb(215,119,87)），是 Claude 的标志性品牌色
- *  - accent 用 permission 浅蓝紫（rgb(177,185,249)），比 cyan 柔和现代
- *  - text 用浅灰（rgb(230,230,230)）而非纯白，降低长时间阅读刺眼感
- *  ansi16 降级保持原 mi-code 风格（视觉接近）。 */
-export const darkTheme: Theme = {
-  name: 'dark',
-  tokens: {
-    // 主强调：浅蓝紫（Claude Code permission/suggestion）
-    accent:   { rgb: [177, 185, 249], ansi16: 'cyan' },
-    // 品牌色：claude 橙（Claude Code claude token）
-    brand:    { rgb: [215, 119, 87],  ansi16: 'magenta' },
-    // 成功：亮绿（Claude Code success）
-    success:  { rgb: [78, 186, 101],  ansi16: 'green' },
-    // 警告：琥珀黄（Claude Code warning）
-    warn:     { rgb: [255, 193, 7],   ansi16: 'yellow' },
-    // 错误：亮红（Claude Code error）
-    error:    { rgb: [255, 107, 128], ansi16: 'red' },
-    // 低调灰：中灰（Claude Code inactive）
-    muted:    { rgb: [153, 153, 153], ansi16: 'gray' },
-    // 主文本：浅灰（非纯白，降刺眼）
-    text:     { rgb: [230, 230, 230], ansi16: '' },
-    // 输入提示符：亮绿（与 success 同源，❯ 用绿色是终端传统）
-    prompt:   { rgb: [78, 186, 101],  ansi16: 'green' },
-    // 边框：中灰（Claude Code promptBorder rgb(136,136,136)）
-    border:   { rgb: [136, 136, 136], ansi16: 'gray' },
-  },
+/** MiCode 暗色主题（默认）
+ *  颜色值使用 ANSI 16 色名称，便于渲染器解析。
+ *  保持 cyan 品牌色，与升级前视觉零变化。 */
+export const dark: Theme = {
+  // 品牌色
+  brand: 'ansi:cyan',
+  brandDim: 'ansi:cyanBright',
+  brandShimmer: 'ansi:white',
+
+  // 文本色
+  text: 'ansi:white',
+  textDim: 'ansi:blackBright',  // gray
+  subtle: 'ansi:blackBright',
+
+  // 语义色
+  success: 'ansi:green',
+  error: 'ansi:red',
+  warning: 'ansi:yellow',
+  info: 'ansi:blue',
+
+  // 边框色
+  border: 'ansi:cyan',
+  borderFocused: 'ansi:white',
+
+  // 背景色（透明）
+  background: undefined,
+  backgroundFocused: undefined,
+
+  // 代码高亮
+  codeKeyword: 'ansi:magenta',
+  codeString: 'ansi:green',
+  codeComment: 'ansi:blackBright',
+  codeFunction: 'ansi:yellow',
+  codeNumber: 'ansi:cyan',
+  codeOperator: 'ansi:white',
 };
 
-/** 主题注册表：name → Theme */
-export const THEME_REGISTRY = new Map<string, Theme>([
-  ['dark', darkTheme],
-]);
+/** 主题注册表：未来加主题只需在这里添加条目 */
+export const THEME_REGISTRY: Record<string, Theme> = {
+  dark,
+  // light: lightTheme,       // 未来扩展
+  // 'dark-ansi': darkAnsiTheme,
+};
 
-let activeTheme: Theme = darkTheme;
+let activeThemeName = 'dark';
+let activeTheme: Theme = dark;
 
 /** 获取当前激活主题 */
-export function getTheme(): Theme {
+export function getCurrentTheme(): Theme {
   return activeTheme;
 }
 
-/** 切换激活主题。成功返回 true；主题不存在返回 false 且不改变当前主题。 */
+/** 根据名称获取主题（不存在则回退 dark） */
+export function getTheme(name: string): Theme {
+  return THEME_REGISTRY[name] ?? THEME_REGISTRY.dark;
+}
+
+/** 切换激活主题。成功返回 true；主题不存在返回 false。 */
 export function setTheme(name: string): boolean {
-  const t = THEME_REGISTRY.get(name);
+  const t = THEME_REGISTRY[name];
   if (!t) return false;
   activeTheme = t;
+  activeThemeName = name;
   return true;
 }
 
-/** 把 semantic token 解析成 RGB 三元组。未知 token 返回 null。 */
-export function resolveTokenRgb(token: ColorToken): Rgb | null {
-  const spec = activeTheme.tokens[token];
-  return spec ? spec.rgb : null;
+/** 获取当前主题名 */
+export function getActiveThemeName(): string {
+  return activeThemeName;
 }
 
-/** 把 semantic token 解析成 16 色 ANSI 命名（colors.ts FG_MAP 的 key）。
- *  未知 token 或 text（默认前景）返回空串。 */
-export function resolveTokenAnsi16(token: ColorToken): string {
-  const spec = activeTheme.tokens[token];
-  return spec ? spec.ansi16 : '';
-}
+// ═══════ token 解析（向后兼容 colors.ts 的 fg/bg 接口） ═══════
+//
+// colors.ts 的 fg(token) 接受两种入参：
+//  1. semantic token key（'brand' / 'error' / ...）→ 查当前主题
+//  2. 直接 ANSI 名（'ansi:cyan' / 'cyan'）→ 直接用
+// 返回值是 'ansi:xxx' 格式的字符串，由 colors.ts 剥 'ansi:' 前缀查 FG_MAP。
 
-/** @deprecated 用 resolveTokenRgb / resolveTokenAnsi16 代替。保留兼容旧测试。 */
-export function resolveToken(token: ColorToken): string {
-  return resolveTokenAnsi16(token);
+/** 把 semantic token 解析成 'ansi:xxx' 格式颜色名。
+ *  未知 token 返回空串（= 无颜色码，默认前景）。
+ *  非 token（已是 'ansi:xxx' 或 'cyan' 等直接颜色名）原样返回。 */
+export function resolveThemeColor(token: string | undefined): string {
+  if (!token) return '';
+  // 已是 'ansi:xxx' 格式，原样返回
+  if (token.startsWith('ansi:')) return token;
+  // semantic token：查主题
+  const t = activeTheme as Record<string, string | undefined>;
+  const v = t[token];
+  return v ?? '';
 }

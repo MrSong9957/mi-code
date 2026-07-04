@@ -43,7 +43,7 @@ export interface RendererOptions {
 }
 
 const DEFAULT_PROMPT = '❯  ';
-const PROMPT_STYLE: Style = { fg: 'prompt', bold: true };
+const PROMPT_STYLE: Style = { fg: 'success', bold: true };
 /** 输入区最大行数 */
 const MAX_INPUT_LINES = 3;
 /** 计算输入区实际行数（至少 1 行，最多 MAX_INPUT_LINES 行） */

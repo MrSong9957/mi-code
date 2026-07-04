@@ -29,10 +29,10 @@ export interface StatusBarState {
 }
 
 const DIM: Style = { dim: true };
-const ACCENT: Style = { fg: 'accent' };
-const WARN: Style = { fg: 'warn' };
+const ACCENT: Style = { fg: 'brand' };      // 主色 cyan（mode/工具完成/进度条）
+const WARN: Style = { fg: 'warning' };       // 工具运行中
 const ERR: Style = { fg: 'error' };
-const BAR_FILL: Style = { fg: 'accent' };
+const BAR_FILL: Style = { fg: 'brand' };
 const BAR_EMPTY: Style = { dim: true };
 
 /** 构建进度条文本（10 格 + 百分比） */

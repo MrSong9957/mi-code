@@ -13,30 +13,30 @@ function text(cells: Cell[]): string {
 
 describe('highlightCode', () => {
   describe('JavaScript / TypeScript', () => {
-    it('关键字上色（accent = cyan）', () => {
+    it('关键字上色（codeKeyword = magenta）', () => {
       const cells = highlightCode('const x = 1;', 'js');
       // const 应被识别为关键字
       const kw = cells.slice(0, 5); // "const"
-      expect(kw.every(c => c.style.fg === 'accent')).toBe(true);
+      expect(kw.every(c => c.style.fg === 'codeKeyword')).toBe(true);
     });
 
-    it('字符串上色（success = green）', () => {
+    it('字符串上色（codeString = green）', () => {
       const cells = highlightCode('const s = "hello";', 'js');
-      // "hello" 区域应为 success
+      // "hello" 区域应为 codeString
       const strCells = cells.filter(c => c.char === 'h' || c.char === 'e' || c.char === 'l' || c.char === 'o');
-      expect(strCells.some(c => c.style.fg === 'success')).toBe(true);
+      expect(strCells.some(c => c.style.fg === 'codeString')).toBe(true);
     });
 
-    it('行注释上色（muted/dim）', () => {
+    it('行注释上色（codeComment/dim）', () => {
       const cells = highlightCode('// a comment\nx', 'js');
       const commentCells = cells.slice(0, cells.findIndex(c => c.char === '\n'));
-      expect(commentCells.some(c => c.style.dim || c.style.fg === 'muted')).toBe(true);
+      expect(commentCells.some(c => c.style.dim || c.style.fg === 'codeComment')).toBe(true);
     });
 
-    it('数字上色（warn = yellow）', () => {
+    it('数字上色（codeNumber = yellow）', () => {
       const cells = highlightCode('const n = 42;', 'js');
       const numCell = cells.find(c => c.char === '4');
-      expect(numCell?.style.fg).toBe('warn');
+      expect(numCell?.style.fg).toBe('codeNumber');
     });
 
     it('文本内容不丢字符（高亮后拼接 == 原文）', () => {
@@ -53,13 +53,13 @@ describe('highlightCode', () => {
       // # comment 部分应有注释样式
       const hashIdx = cells.findIndex(c => c.char === '#');
       const after = cells.slice(hashIdx);
-      expect(after.some(c => c.style.dim || c.style.fg === 'muted')).toBe(true);
+      expect(after.some(c => c.style.dim || c.style.fg === 'codeComment')).toBe(true);
     });
 
     it('python：def/return 关键字 + # 注释', () => {
       const cells = highlightCode('def f():\n  return 1 # x', 'py');
       const defCells = cells.slice(0, 3);
-      expect(defCells.every(c => c.style.fg === 'accent')).toBe(true);
+      expect(defCells.every(c => c.style.fg === 'codeKeyword')).toBe(true);
       expect(text(cells)).toBe('def f():\n  return 1 # x');
     });
 
@@ -67,7 +67,7 @@ describe('highlightCode', () => {
       const cells = highlightCode('{"a": 1}', 'json');
       expect(text(cells)).toBe('{"a": 1}');
       const one = cells.find(c => c.char === '1');
-      expect(one?.style.fg).toBe('warn');
+      expect(one?.style.fg).toBe('codeNumber');
     });
   });
 
@@ -75,8 +75,8 @@ describe('highlightCode', () => {
     it('未知语言不报错，返回原文（单色 dim cyan）', () => {
       const cells = highlightCode('some unknown code', 'xyz-lang');
       expect(text(cells)).toBe('some unknown code');
-      // 降级为单色（全部 dim 或 accent，至少不崩）
-      expect(cells.every(c => c.style.dim || c.style.fg === 'accent' || Object.keys(c.style).length === 0)).toBe(true);
+      // 降级为单色（全部 dim 或 brand，至少不崩）
+      expect(cells.every(c => c.style.dim || c.style.fg === 'brand' || Object.keys(c.style).length === 0)).toBe(true);
     });
     it('空 lang 当未知处理', () => {
       const cells = highlightCode('plain text', '');
@@ -93,8 +93,8 @@ describe('highlightCode', () => {
       const firstConst = cells.slice(0, 5);
       const secondConstStart = code.indexOf('\n') + 1;
       const secondConst = cells.slice(secondConstStart, secondConstStart + 5);
-      expect(firstConst.every(c => c.style.fg === 'accent')).toBe(true);
-      expect(secondConst.every(c => c.style.fg === 'accent')).toBe(true);
+      expect(firstConst.every(c => c.style.fg === 'codeKeyword')).toBe(true);
+      expect(secondConst.every(c => c.style.fg === 'codeKeyword')).toBe(true);
     });
 
     it('块注释 /* */ 跨行（js）', () => {

@@ -25,8 +25,8 @@ export const BLOCK_STYLES = {
   magenta: { fg: 'brand' },
   /** 嵌套内容（⎿ 行、摘要行）：dim */
   dim: { dim: true },
-  /** 用户输入提示符（❯）：prompt（green）+ bold + 灰底高亮（贴近 Claude Code） */
-  greenBold: { fg: 'prompt', bold: true, bg: 'gray' },
+  /** 用户输入提示符（❯）：success（green）+ bold + 灰底高亮（贴近 Claude Code） */
+  greenBold: { fg: 'success', bold: true, bg: 'gray' },
   /** 错误：error（red） */
   red: { fg: 'error' },
   /** 默认：无样式 */

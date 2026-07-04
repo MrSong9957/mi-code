@@ -91,10 +91,10 @@ describe('Spinner', () => {
       expect(r.text).toContain('Thinking…');
     });
 
-    it('active 时 render 样式 fg = brand（claude 橙）', () => {
+    it('active 时 render 样式 fg = brandShimmer（white 亮化）', () => {
       const s = new Spinner();
       s.start('x');
-      expect(s.render().style.fg).toBe('brand');
+      expect(s.render().style.fg).toBe('brandShimmer');
     });
 
     it('stalled 时 render 样式 fg = error（红色警告）', () => {
@@ -140,7 +140,7 @@ describe('Spinner', () => {
       expect(s.getState().stalled).toBe(false);
     });
 
-    it('stalled 后 onToken 恢复正常（stalled=false, fg=accent）', () => {
+    it('stalled 后 onToken 恢复正常（stalled=false, fg=brandShimmer）', () => {
       const s = new Spinner();
       s.start('x');
       vi.advanceTimersByTime(3100);
@@ -148,7 +148,7 @@ describe('Spinner', () => {
       expect(s.getState().stalled).toBe(true);
       s.onToken();
       expect(s.getState().stalled).toBe(false);
-      expect(s.render().style.fg).toBe('brand');
+      expect(s.render().style.fg).toBe('brandShimmer');
     });
 
     it('stop 清除 stall 状态', () => {

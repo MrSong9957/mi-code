@@ -37,7 +37,7 @@ describe('BlockPipeline', () => {
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'user_input', text: '你好' });
       expect(prints[0].text).toBe('❯ 你好');
-      expect(prints[0].style).toMatchObject({ fg: 'prompt', bold: true });
+      expect(prints[0].style).toMatchObject({ fg: 'success', bold: true });
     });
 
     it('thinking_start → printMessage("● Thinking…", magenta)；首个模型块前有空行', () => {

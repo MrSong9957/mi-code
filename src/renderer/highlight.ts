@@ -9,15 +9,15 @@
 
 import { stringToCells, type Cell, type Style } from './cell.js';
 
-/** token 类别 → 样式 */
+/** token 类别 → 样式（用 theme 的 code* 语义 token） */
 const STYLE: Record<string, Style> = {
-  keyword: { fg: 'accent', bold: true },
-  string: { fg: 'success' },
-  comment: { fg: 'muted', dim: true },
-  number: { fg: 'warn' },
-  punct: { fg: 'muted' },
+  keyword: { fg: 'codeKeyword', bold: true },
+  string: { fg: 'codeString' },
+  comment: { fg: 'codeComment', dim: true },
+  number: { fg: 'codeNumber' },
+  punct: { fg: 'codeOperator' },
   plain: {},
-  fallback: { fg: 'accent', dim: true }, // 未知语言降级单色
+  fallback: { fg: 'brand', dim: true }, // 未知语言降级单色
 };
 
 /** 语言规则 */

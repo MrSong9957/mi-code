@@ -13,10 +13,8 @@ import {
   stringWidth,
   stringToCells,
 } from '../renderer/cell.js';
-import { setColorLevel } from '../renderer/colors.js';
 
 describe('cell module', () => {
-  setColorLevel('ansi16'); // 测试固定 16 色模式，断言 \x1b[3Xm 码
   describe('Style 与 Cell 构造', () => {
     it('EMPTY_CELL 是空格 + 默认样式', () => {
       expect(EMPTY_CELL.char).toBe(' ');

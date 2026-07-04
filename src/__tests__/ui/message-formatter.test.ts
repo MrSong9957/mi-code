@@ -119,7 +119,7 @@ describe('MessageFormatter', () => {
     it('input → ❯ green bold', () => {
       const lines = MessageFormatter.format('input', {}, '你是谁？');
       expect(lines[0].content).toBe('❯ 你是谁？');
-      expect(lines[0].style.fg).toBe('prompt');
+      expect(lines[0].style.fg).toBe('success');
       expect(lines[0].style.bold).toBe(true);
     });
   });
