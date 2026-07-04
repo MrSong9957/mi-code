@@ -127,13 +127,23 @@ class FakeTerminal {
 }
 
 describe('主屏 + scroll region + 纯追加渲染器', () => {
-  describe('主屏模式（不进 alt screen，不开鼠标追踪）', () => {
-    it('enter 不输出 alt screen（?1049h）', () => {
+  describe('alt screen 模式（退出自动恢复主屏原样）', () => {
+    it('enter 输出 alt screen（?1049h）—— 进备用屏，主屏原样保留', () => {
       const frames: string[] = [];
       const r = new Renderer({ rows: 10, cols: 40, writer: s => frames.push(s), status: { model: 'M', branch: 'b' } });
       r.enter();
       const all = frames.join('');
-      expect(all).not.toContain('\x1b[?1049h');
+      expect(all).toContain('\x1b[?1049h');
+    });
+
+    it('exit 输出退出 alt screen（?1049l）—— 切回主屏恢复原样', () => {
+      const frames: string[] = [];
+      const r = new Renderer({ rows: 10, cols: 40, writer: s => frames.push(s), status: { model: 'M', branch: 'b' } });
+      r.enter();
+      frames.length = 0;
+      r.exit();
+      const all = frames.join('');
+      expect(all).toContain('\x1b[?1049l');
     });
 
     it('enter 不开鼠标追踪（?1000h）', () => {

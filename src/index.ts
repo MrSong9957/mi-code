@@ -18,7 +18,7 @@ import { StreamEventBus } from './agent/stream-event-bus.js';
 import { UILayout } from './ui/index.js';
 import { BlockPipeline } from './ui/block-pipeline.js';
 import {
-  enterAltScreen, exitAltScreen, saveCursor, restoreCursor,
+  saveCursor, restoreCursor,
   cursorHome, eraseScreen, showCursor, hideCursor,
 } from './renderer/ansi.js';
 import { ConfigStore } from './config/index.js';
@@ -200,16 +200,17 @@ function syncInput(): void {
 let overlayActive = false;
 
 /**
- * 进入 alt screen，渲染可折叠块的完整内容，置 overlayActive=true 等待退出键。
- * 内容超出屏高的部分用户用 alt screen 滚轮/滚动条看（alt screen 无 scrollback，
- * 但一次性写出，按 q 退出即可——这一轮不分页，后续可优化）。
+ * 渲染可折叠块的完整内容（overlay 覆盖当前屏），置 overlayActive=true 等待退出键。
+ *
+ * 主渲染已在 alt screen 内，overlay 不能再进第二层 alt screen（终端只支持一层）。
+ * 改用 saveCursor + 全屏 eraseScreen 覆盖当前 alt screen 内容，restoreCursor 恢复。
+ * 退出时清屏 + restoreCursor 恢复原渲染状态，下一帧 requestFrame 重画。
  */
 function showExpandOverlay(lines: { content: string }[], kind: 'thinking' | 'tool_result'): void {
   overlayActive = true;
   const out = process.stdout;
-  out.write(saveCursor());
-  out.write(enterAltScreen());
-  out.write(eraseScreen() + cursorHome());
+  out.write(saveCursor());      // 保存当前光标（alt screen 内的位置）
+  out.write(eraseScreen() + cursorHome()); // 清当前 alt screen 全屏
   out.write(hideCursor());
 
   const { cols } = readTermSize();
@@ -256,14 +257,18 @@ function handleOverlayInput(data: Buffer): void {
   }
 }
 
-/** 关闭覆盖层：退出 alt screen + 恢复光标 + 清 overlayActive。 */
+/** 关闭覆盖层：清屏 + 恢复光标 + 触发重画恢复原渲染状态。 */
 function closeExpandOverlay(): void {
   const out = process.stdout;
   out.write(hideCursor());
-  out.write(exitAltScreen());
-  out.write(restoreCursor());
+  out.write(eraseScreen() + cursorHome());
+  out.write(restoreCursor());  // 恢复 overlay 前的光标位置
   out.write(showCursor());
   overlayActive = false;
+  // 触发重画：footerDirty + requestFrame，恢复 alt screen 内的原渲染内容
+  // （eraseScreen 清掉了内容，但消息区已写的在 messageRow 记账里，重画页脚即可；
+  //  消息区内容已进 alt screen 但被擦了——这里需要重画整个消息区，简化处理：标记 footerDirty）
+  layout.setHint(undefined); // 触发 requestFrame
 }
 
 // ─────────────────────────────────────────────────────────────

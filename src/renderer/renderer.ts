@@ -25,6 +25,7 @@ import { Spinner } from './spinner.js';
 import {
   showCursor, hideCursor, cup, cr, eraseLine,
   setScrollRegion, resetScrollRegion, setCursorStyle,
+  enterAltScreen, exitAltScreen,
 } from './ansi.js';
 
 /** 写出接口（默认 process.stdout.write；测试注入 fake） */
@@ -116,47 +117,41 @@ export class Renderer {
 
   // ═══════ 生命周期 ═══════
 
-  /** 启动：主屏模式，设 scroll region，画首帧页脚，设块状光标。 */
+  /** 启动：进 alt screen（主屏原样保留，退出时自动恢复），设 scroll region，画首帧页脚。
+   *  alt screen 模式对齐 Claude Code：退出时 \x1b[?1049l 切回主屏，恢复进入前原样。 */
   enter(): void {
     if (this.entered) return;
     this.entered = true;
     this.messageRow = 0;
     this.resetStreamingState();
+    // 进 alt screen（保存主屏光标 + 切备用屏 + 清备用屏）
+    this.buffer.write(enterAltScreen());
     // 光标样式：steady 块状（2），对齐 Claude Code
     this.buffer.write(setCursorStyle(2));
     // 消息区 scroll region：[0, contentRows)，页脚钉 region 外
-    this.applyScrollRegion();
-    // 清消息区（region 内），保留 scrollback 不动
+    this.buffer.write(setScrollRegion(0, this.contentRows() - 1));
+    // 清备用屏（alt screen 本来是空的，但保险起见）
     this.buffer.write(cup(0, 0));
-    this.buffer.write('\x1b[J'); // 擦从光标到屏底（含页脚占位），首帧干净起点
+    this.buffer.write('\x1b[J');
     // 画页脚
     this.drawFooter();
     // 光标到输入框
     this.placeCursorInInput();
     this.buffer.write(showCursor());
-    this.buffer.flushRaw(); // enter 必须立即可见，不走 BSU 揭幕延迟
+    this.buffer.flushRaw();
   }
 
-  /** 退出：恢复终端默认状态。主屏模式下：恢复光标可见 → 重置 scroll region → 光标归位左上角。
-   *  方案 B：不清屏（保留对话内容供回顾），只清 footer 残留 + 光标到对话末尾。
-   *  shell 提示符紧跟对话内容出现，footer（边框/状态栏/spinner）被擦掉不残留。
-   *  幂等。 */
+  /** 退出：恢复光标 + 重置 scroll region + 退出 alt screen（切回主屏恢复原样）。
+   *  alt screen 模式下退出时 \x1b[?1049l 自动恢复主屏进入前的内容，无需手动清屏。 */
   exit(): void {
     if (!this.entered) return;
     this.entered = false;
     this.buffer.write(showCursor());
-    this.buffer.write(setCursorStyle(0));  // 恢复默认光标样式（闪烁块）
-    this.buffer.write(resetScrollRegion()); // 恢复全屏滚动（region 外才能 CUP 擦行）
-    // 清 footer 区域残留（边框/输入框/状态栏/spinner 占位）
-    const contentRows = this.contentRows();
-    for (let y = contentRows; y < this.rows; y++) {
-      this.buffer.write(cup(y, 0));
-      this.buffer.write(eraseLine());
-    }
-    // 光标定位到对话内容末尾下方（messageRow 是最后写的行，shell 提示符紧跟其后）
-    const exitRow = Math.min(this.messageRow + 1, this.rows - 1);
-    this.buffer.write(cup(exitRow, 0));
-    this.buffer.flushRaw(); // exit 必须立即送出，进程即将退出，不能被揭幕延迟
+    this.buffer.write(setCursorStyle(0));   // 恢复默认光标样式
+    this.buffer.write(resetScrollRegion()); // 恢复全屏滚动
+    // 退出 alt screen：切回主屏，恢复进入前的光标和内容
+    this.buffer.write(exitAltScreen());
+    this.buffer.flushRaw();
   }
 
   /** 设置 scroll region [0, contentRows)。DECSTBM 设完光标会移到 region 左上角。 */
