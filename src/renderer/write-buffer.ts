@@ -49,7 +49,8 @@ export class WriteBuffer {
     if (this.chunks.length === 0) return;
     const body = this.chunks.join('');
     this.chunks.length = 0;
-    this.writer(this.useSyncUpdate ? `${bsu()}${body}${esu()}` : body);
+    const final = this.useSyncUpdate ? `${bsu()}${body}${esu()}` : body;
+    this.writer(final);
   }
 
   /** 将缓冲区内容一次性写出，**不走 BSU/ESU**。

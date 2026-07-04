@@ -64,7 +64,8 @@ describe('VirtualScreen', () => {
       const out = vs.flush();
       expect(out).toContain('A');
       expect(out).toContain('\x1b[31m'); // fg red
-      expect(out).toContain('\x1b[0m');   // reset
+      // reset 不再由 buildStyle 末尾发（bug 修复：buildStyle 末尾的 reset 会立即清掉刚设的 fg）
+      // VirtualScreen 的 reset 由调用方在 flush 后自行处理
       expect(vs.cursor.x).toBe(1);
     });
     it('宽字符写入后光标右移 2', () => {

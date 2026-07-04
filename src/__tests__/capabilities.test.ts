@@ -31,9 +31,9 @@ describe('capabilities', () => {
   });
 
   describe('supportsSyncUpdate', () => {
-    it('Windows Terminal（WT_SESSION 存在）→ true', () => {
+    it('Windows Terminal（WT_SESSION 存在）→ false（WT 的 BSU 实现不稳定，保守降级）', () => {
       process.env.WT_SESSION = 'some-guid';
-      expect(supportsSyncUpdate()).toBe(true);
+      expect(supportsSyncUpdate()).toBe(false);
     });
 
     it('COLORTERM=truecolor → true（现代终端基本支持 2026）', () => {
@@ -95,7 +95,7 @@ describe('capabilities', () => {
 
     it('NO_COLOR 设置时不影响同步更新判断（颜色关了但 2026 仍可用）', () => {
       process.env.NO_COLOR = '1';
-      process.env.WT_SESSION = 'guid';
+      process.env.COLORTERM = 'truecolor';  // 用 COLORTERM 而非 WT_SESSION（WT 已禁用 BSU）
       expect(supportsSyncUpdate()).toBe(true);
     });
 

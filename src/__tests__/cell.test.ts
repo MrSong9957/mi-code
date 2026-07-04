@@ -61,10 +61,10 @@ describe('cell module', () => {
       expect(packStyle({})).toBe('');
       expect(packStyle(undefined)).toBe('');
     });
-    it('包含 fg → 含 SGR 前景码并以 reset 结尾', () => {
+    it('包含 fg → 含 SGR 前景码（reset 由调用方负责，不在 buildStyle 末尾）', () => {
       const s = packStyle({ fg: 'red' });
       expect(s).toContain('\x1b[31m');
-      expect(s.endsWith('\x1b[0m')).toBe(true);
+      // buildStyle 不在末尾加 reset——reset 由 writeCellsAt/writeCellsLine 行尾统一发
     });
     it('bold + fg 组合', () => {
       const s = packStyle({ bold: true, fg: 'green' });

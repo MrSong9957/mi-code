@@ -119,7 +119,7 @@ function buildStyle(style: Style): string {
   if (style.underline) s += '\x1b[4m';
   if (style.fg) s += fg(style.fg);
   if (style.bg) s += bg(style.bg);
-  return s ? s + RESET : '';
+  return s;
 }
 
 // packStyle 结果缓存（样式种类有限，命中率高）
