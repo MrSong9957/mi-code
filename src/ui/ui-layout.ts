@@ -178,6 +178,28 @@ export class UILayout {
     this.renderer.setHint(hint);
   }
 
+  // ═══════ spinner 控制（透传给 renderer）══════
+
+  /** 启动 spinner 显示 label。 */
+  startSpinner(label: string): void {
+    this.renderer.startSpinner(label);
+  }
+
+  /** 运行中切换 spinner 文案。 */
+  setSpinnerLabel(label: string): void {
+    this.renderer.setSpinnerLabel(label);
+  }
+
+  /** 收到 token：重置 spinner stall 计时器。 */
+  spinnerOnToken(): void {
+    this.renderer.spinnerOnToken();
+  }
+
+  /** 停止 spinner。 */
+  stopSpinner(): void {
+    this.renderer.stopSpinner();
+  }
+
   /**
    * 获取提示符
    */

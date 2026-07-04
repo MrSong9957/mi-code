@@ -435,6 +435,8 @@ if (process.stdin.isTTY) {
                 // clearTurnState 已在 user_input emit 前调用（见上方）。
                 // thinking_start 复用同一 turn 的快照，不再重置。
                 pipeline.emit({ kind: 'thinking_start' });
+                // spinner：thinking 开始就转，钉死页脚区（不进 scrollback）
+                layout.startSpinner('Thinking…');
 
                 const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
                 if (apiKey) {
@@ -444,9 +446,15 @@ if (process.stdin.isTTY) {
                   // 工具显示经统一管道：emit Block，pipeline 内部缓存 input + 计算 diff。
                   eventBus.onToolCall(d => {
                     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input });
+                    // spinner：工具运行时切换文案，继续转
+                    layout.setSpinnerLabel(`Running ${d.name}`);
                   });
                   eventBus.onToolResult(d => {
                     pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output });
+                  });
+                  // turn 结束（end_turn/error/max_turns/user_abort）→ 停 spinner
+                  eventBus.onLoopEnd(() => {
+                    layout.stopSpinner();
                   });
                   const tools = Array.from(toolRegistry.tools.values()).map(t => t.definition);
                   const ac = new AbortController();
@@ -487,9 +495,13 @@ if (process.stdin.isTTY) {
                             pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
                             thinkingContent = '';
                             thinkingActive = false;
+                            // spinner：思考结束，切换到"生成中"（通常接 text/tool，spinner 继续转）
+                            layout.setSpinnerLabel('Generating…');
                           }
                         } else if ('type' in msg && msg.type === 'content_block_delta') {
                           const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
+                          // 任何 delta（thinking/text）都重置 spinner stall 计时器
+                          if (delta.content) layout.spinnerOnToken();
                           if (delta.deltaType === 'text' && delta.content) {
                             // 兜底：若 content_block_stop 信号缺失（如旧版 API），首个 text 时固化思考。
                             // 正常路径已由 content_block_stop 处理（thinkingContent 此时为空，不触发）。
@@ -533,6 +545,8 @@ if (process.stdin.isTTY) {
                       }
                     } catch (err) {
                       layout.send('error', `[Error] ${err}`);
+                      // 错误时确保 spinner 停止（loop_end 可能未发出）
+                      layout.stopSpinner();
                     } finally {
                       isProcessing = false;
                       // 如果还在思考状态（没有收到文本），显示内容并折叠
@@ -547,6 +561,8 @@ if (process.stdin.isTTY) {
                   })();
                 } else {
                   layout.send('error', `[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`);
+                  // 无 API key：thinking_start 已启动 spinner，但循环不会跑，必须显式停
+                  layout.stopSpinner();
                   isProcessing = false;
                   layout.setHint(undefined);
                   syncInput();
@@ -629,9 +645,10 @@ process.stdout.on('resize', () => {
   layout.resize(rows, cols);
 });
 
-// 进程退出兜底：恢复光标 + 清理后台子进程
+// 进程退出兜底：恢复光标 + 清理后台子进程 + 停 spinner/调度器
 function cleanupOnExit(): void {
   backgroundManager.killAll();
+  layout.stopSpinner();  // 清 spinner 定时器，避免退出后 setInterval 泄漏
   layout.exit();
 }
 process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });
