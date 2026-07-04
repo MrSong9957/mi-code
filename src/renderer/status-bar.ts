@@ -34,7 +34,7 @@ export interface StatusBarState {
 const SEP: Style = { fg: 'rgb:140,140,140' };               // 分隔符 │ 中灰（不用 dim）
 const MODE: Style = { fg: 'rgb:120,230,230', bold: true };   // 模式 —— 高亮 cyan
 const MODEL: Style = { fg: 'rgb:140,190,255', bold: true };  // 模型名 —— 高亮 blue
-const DIR: Style = { fg: 'rgb:235,235,235', bold: true };    // 路径 —— 高亮白
+const DIR: Style = { fg: 'rgb:200,160,255', bold: true };    // 路径 —— 高亮紫（区别于其他段）
 const BRANCH: Style = { fg: 'rgb:255,225,110', bold: true }; // git 分支 —— 高亮 yellow
 const TOOL_RUN: Style = { fg: 'rgb:255,225,110', bold: true };   // 工具运行中
 const TOOL_DONE: Style = { fg: 'rgb:140,235,140', bold: true };  // 工具完成
