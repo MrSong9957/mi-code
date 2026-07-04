@@ -138,15 +138,24 @@ export class Renderer {
   }
 
   /** 退出：恢复终端默认状态。主屏模式下：恢复光标可见 → 重置 scroll region → 光标归位左上角。
-   *  不清屏（\x1b[2J 会擦掉 scrollback 历史行，违背保留历史的设计）。
-   *  对齐 Claude Code 主屏路径清理序列。幂等。 */
+   *  方案 B：不清屏（保留对话内容供回顾），只清 footer 残留 + 光标到对话末尾。
+   *  shell 提示符紧跟对话内容出现，footer（边框/状态栏/spinner）被擦掉不残留。
+   *  幂等。 */
   exit(): void {
     if (!this.entered) return;
     this.entered = false;
     this.buffer.write(showCursor());
     this.buffer.write(setCursorStyle(0));  // 恢复默认光标样式（闪烁块）
-    this.buffer.write(resetScrollRegion()); // 恢复全屏滚动
-    this.buffer.write('\x1b[H');            // 光标归位左上角，shell 提示符干净出现
+    this.buffer.write(resetScrollRegion()); // 恢复全屏滚动（region 外才能 CUP 擦行）
+    // 清 footer 区域残留（边框/输入框/状态栏/spinner 占位）
+    const contentRows = this.contentRows();
+    for (let y = contentRows; y < this.rows; y++) {
+      this.buffer.write(cup(y, 0));
+      this.buffer.write(eraseLine());
+    }
+    // 光标定位到对话内容末尾下方（messageRow 是最后写的行，shell 提示符紧跟其后）
+    const exitRow = Math.min(this.messageRow + 1, this.rows - 1);
+    this.buffer.write(cup(exitRow, 0));
     this.buffer.flushRaw(); // exit 必须立即送出，进程即将退出，不能被揭幕延迟
   }
 
