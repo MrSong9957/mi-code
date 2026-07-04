@@ -36,6 +36,8 @@ export interface FormattedLine {
   content: string;    // 格式化后的内容（含前缀、缩进）
   style: UIMessageStyle;
   indent: number;     // 缩进空格数
+  /** raw=true 时跳过 Markdown 渲染，原样显示（工具输出等不该被 md 误判的内容） */
+  raw?: boolean;
 }
 
 /** 消息样式 */

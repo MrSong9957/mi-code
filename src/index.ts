@@ -145,7 +145,7 @@ const layout = new UILayout({
  * pipeline 直接调 layout 的 raw* 原语（透传到 Renderer），不走 layout.send。
  */
 const pipeline = new BlockPipeline({
-  printMessage: (text, role, style) => layout.rawPrintMessage(text, (role ?? 'system') as 'user' | 'assistant' | 'system', style ?? {}),
+  printMessage: (text, role, style, raw) => layout.rawPrintMessage(text, (role ?? 'system') as 'user' | 'assistant' | 'system', style ?? {}, raw),
   appendStreamingMarkdown: (text, isFinal, opts) => layout.rawAppendStreamingMarkdown(text, isFinal, opts ?? {}),
   sealStreaming: () => layout.rawSealStreaming(),
   flushNow: () => layout.commit(),

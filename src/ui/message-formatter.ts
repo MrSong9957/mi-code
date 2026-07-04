@@ -128,7 +128,8 @@ export class MessageFormatter {
       return [{ content: `⎿  ${parts.join(', ')}`, style: BLOCK_STYLES.dim, indent: 2 }];
     }
 
-    // 路径 2：Bash 等原始输出摘要
+    // 路径 2：Bash 等原始输出摘要（raw=true，跳过 Markdown 渲染——
+    // 工具输出可能含 --- / # / * 等 markdown 特殊字符，不该被误判为 hr/标题/粗体）
     if (meta.rawOutput !== undefined && meta.rawOutput !== '') {
       const { preview, totalLines, truncated } = summarizeOutput(meta.rawOutput, OUTPUT_PREVIEW_LINES);
       const lines: FormattedLine[] = [];
@@ -136,12 +137,12 @@ export class MessageFormatter {
       const previewLines = preview.split('\n');
       previewLines.forEach((pl, i) => {
         const prefix = i === 0 ? '⎿  ' : '   ';
-        lines.push({ content: `${prefix}${pl}`, style: BLOCK_STYLES.dim, indent: 2 });
+        lines.push({ content: `${prefix}${pl}`, style: BLOCK_STYLES.dim, indent: 2, raw: true });
       });
       // 截断时追加折叠提示
       if (truncated) {
         const hidden = totalLines - OUTPUT_PREVIEW_LINES;
-        lines.push({ content: `   +${hidden} 行 (ctrl+o to expand)`, style: BLOCK_STYLES.dim, indent: 2 });
+        lines.push({ content: `   +${hidden} 行 (ctrl+o to expand)`, style: BLOCK_STYLES.dim, indent: 2, raw: true });
       }
       return lines;
     }

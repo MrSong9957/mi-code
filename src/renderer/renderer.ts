@@ -169,10 +169,15 @@ export class Renderer {
    * 固化一条消息（按 \n 拆行，经 Markdown 渲染成带样式 cells）。
    * 纯追加：每行写进消息区 region + LF，写完永不回头改。
    * style 作为基础层叠加到每个 cell（cell 自身 style 优先）。
+   *
+   * raw=true 时跳过 Markdown 渲染，原样显示文本（用于工具输出等不该被
+   * Markdown 误判的内容，如 frontmatter 的 --- 不被当成 hr）。
    */
-  printMessage(text: string, role: MessageRole, style: Style = {}): void {
+  printMessage(text: string, role: MessageRole, style: Style = {}, raw: boolean = false): void {
     if (!this.entered) return;
-    const rows = text === '' ? [[]] : renderMarkdown(text, this.cols);
+    const rows = text === '' ? [[]]
+      : raw ? [stringToCells(text, {})]
+      : renderMarkdown(text, this.cols);
     const hasStyle = style && Object.keys(style).length > 0;
     // 缓冲到 MessageBuffer（诊断/快照用）——流式期间跳过以减少开销
     const styledRows = hasStyle
@@ -465,13 +470,18 @@ export class Renderer {
   // ═══════ flush ══════
 
   /** 实际刷新逻辑：页脚脏标记时重绘页脚，然后一次性写出所有缓冲的 ANSI 序列。
-   *  由 FrameScheduler 在 tick 时调用（合并多源请求），或由 flushNow 立即调用。 */
+   *  由 FrameScheduler 在 tick 时调用（合并多源请求），或由 flushNow 立即调用。
+   *
+   *  流式期间（streamingActive）跳过 drawFooter：流式 token 在 messageRow 推进，
+   *  此时画 footer 的 borderTopY（=contentRows）可能落在消息区，造成"边框画在消息中间"。
+   *  footerDirty 保留，流式封口（sealStreaming/finalizeStreaming）时统一重画。 */
   private doFlush(): void {
-    if (this.footerDirty) {
+    if (this.footerDirty && !this.streamingActive) {
       this.drawFooter();
       this.footerDirty = false;
     }
-    // drawFooter 会把光标移到状态栏行，必须重新定位到输入框
+    // drawFooter 会把光标移到状态栏行，必须重新定位到输入框。
+    // 流式期间不画 footer，但光标定位仍需执行（保持输入框光标正确）。
     this.placeCursorInInput();
     this.buffer.flush();
   }

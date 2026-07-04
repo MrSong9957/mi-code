@@ -24,7 +24,7 @@ import type { Style } from '../renderer/cell.js';
  * PipelineRenderer：pipeline 依赖的 Renderer 子集（最小接口，便于 mock）。
  */
 export interface PipelineRenderer {
-  printMessage(text: string, role?: string, style?: Record<string, unknown>): void;
+  printMessage(text: string, role?: string, style?: Record<string, unknown>, raw?: boolean): void;
   appendStreamingMarkdown(
     text: string,
     isFinal: boolean,
@@ -158,11 +158,12 @@ export class BlockPipeline {
           const { truncated } = summarizeOutput(meta.rawOutput, RESULT_PREVIEW_LINES);
           if (truncated) {
             const id = `tool-${++this.idCounter}`;
-            // fullLines：完整输出按行，首行带 ⎿，续行 3 空格
+            // fullLines：完整输出按行，首行带 ⎿，续行 3 空格（raw=true，不走 md）
             const fullLines = meta.rawOutput.split('\n').map((l, i) => ({
               content: `${i === 0 ? '⎿  ' : '   '}${l}`,
               style: BLOCK_STYLES.dim,
               indent: INDENT.nested,
+              raw: true,
             }));
             this.expandable.add({ id, kind: 'tool_result', summaryLines, fullLines });
             this.print(summaryLines);
@@ -237,10 +238,10 @@ export class BlockPipeline {
     return { lines, kind };
   }
 
-  /** 把 FormattedLine[] 下沉到 renderer（带样式） */
-  private print(lines: { content: string; style: UIMessageStyle }[]): void {
+  /** 把 FormattedLine[] 下沉到 renderer（带样式，透传 raw 标记） */
+  private print(lines: FormattedLine[]): void {
     for (const line of lines) {
-      this.renderer.printMessage(line.content, 'system', line.style as Record<string, unknown>);
+      this.renderer.printMessage(line.content, 'system', line.style as Record<string, unknown>, line.raw === true);
     }
   }
 

@@ -230,8 +230,8 @@ export class UILayout {
   // send()（会重复套 gap/format 逻辑）。pipeline 自己管 gap + 格式契约。
 
   /** 透传：固化一条带样式的消息（pipeline 用，自带 style 参数） */
-  rawPrintMessage(text: string, role: MessageRole, style: Style): void {
-    this.renderer.printMessage(text, role, style);
+  rawPrintMessage(text: string, role: MessageRole, style: Style, raw: boolean = false): void {
+    this.renderer.printMessage(text, role, style, raw);
   }
 
   /** 透传：流式 Markdown（pipeline 传 opts 控制块格式） */
