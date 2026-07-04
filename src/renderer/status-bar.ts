@@ -28,20 +28,20 @@ export interface StatusBarState {
   hint?: string;
 }
 
-const DIM: Style = { dim: true };
-// 状态栏配色：用 truecolor RGB（绕过终端配色方案映射，深底下颜色精确明亮）
-// RGB 值对齐 Claude Code dark 主题的高亮色，确保深色背景下高对比可读
-const SEP: Style = { fg: 'rgb:102,102,102' };              // 分隔符 │ 中灰（低调但不暗）
-const MODE: Style = { fg: 'rgb:88,204,204', bold: true };   // 模式 —— 明亮 cyan
-const MODEL: Style = { fg: 'rgb:110,170,255', bold: true }; // 模型名 —— 明亮 blue
-const DIR: Style = { fg: 'rgb:220,220,220', bold: true };   // 路径 —— 明亮白
-const BRANCH: Style = { fg: 'rgb:240,200,80', bold: true }; // git 分支 —— 明亮 yellow
-const TOOL_RUN: Style = { fg: 'rgb:240,200,80', bold: true };   // 工具运行中 —— 明亮 yellow
-const TOOL_DONE: Style = { fg: 'rgb:110,210,110', bold: true }; // 工具完成 —— 明亮 green
-const ERR: Style = { fg: 'rgb:255,110,130', bold: true };       // 错误 —— 明亮 red
-const BAR_FILL: Style = { fg: 'rgb:88,204,204', bold: true };   // 进度条填充 —— 明亮 cyan
-const BAR_EMPTY: Style = { fg: 'rgb:102,102,102' };             // 进度条空白 —— 中灰
-const HINT: Style = { fg: 'rgb:110,210,110', bold: true };      // 提示 —— 明亮 green
+// 状态栏配色：truecolor RGB（绕过终端配色映射）+ bold 提亮
+// 全部高亮度 RGB 值（每通道 >= 180），确保深色背景下高对比可读
+// 注意：不用 dim 属性——dim 是粘性的，会污染后续段的渲染
+const SEP: Style = { fg: 'rgb:140,140,140' };               // 分隔符 │ 中灰（不用 dim）
+const MODE: Style = { fg: 'rgb:120,230,230', bold: true };   // 模式 —— 高亮 cyan
+const MODEL: Style = { fg: 'rgb:140,190,255', bold: true };  // 模型名 —— 高亮 blue
+const DIR: Style = { fg: 'rgb:235,235,235', bold: true };    // 路径 —— 高亮白
+const BRANCH: Style = { fg: 'rgb:255,225,110', bold: true }; // git 分支 —— 高亮 yellow
+const TOOL_RUN: Style = { fg: 'rgb:255,225,110', bold: true };   // 工具运行中
+const TOOL_DONE: Style = { fg: 'rgb:140,235,140', bold: true };  // 工具完成
+const ERR: Style = { fg: 'rgb:255,130,150', bold: true };        // 错误
+const BAR_FILL: Style = { fg: 'rgb:120,230,230', bold: true };   // 进度条填充
+const BAR_EMPTY: Style = { fg: 'rgb:140,140,140' };              // 进度条空白
+const HINT: Style = { fg: 'rgb:140,235,140', bold: true };       // 提示
 
 /** 构建进度条文本（10 格 + 百分比） */
 function buildProgressBar(ratio: number, totalWidth = 10): string {
@@ -79,7 +79,7 @@ export function buildStatusBar(state: StatusBarState): Cell[] {
 
   // 模型
   segments.push({ text: state.model, style: MODEL });
-  segments.push({ text: sep, style: DIM });
+  segments.push({ text: sep, style: SEP });
 
   // 路径（最后 2 个层级）
   if (state.dir) {

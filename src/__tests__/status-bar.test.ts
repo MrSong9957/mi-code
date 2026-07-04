@@ -61,11 +61,14 @@ describe('buildStatusBar', () => {
   });
 
   describe('样式', () => {
-    it('状态栏整体带 dim 样式（低调）', () => {
+    it('状态栏用 RGB 明亮色（不再用 dim 压暗）', () => {
       const cells = buildStatusBar({
         model: 'm', branch: 'b', cols: 80,
       } as StatusBarState);
-      expect(cells.some(c => c.style.dim)).toBe(true);
+      // 不应有任何 cell 带 dim（dim 会污染后续渲染，已移除）
+      expect(cells.every(c => !c.style.dim)).toBe(true);
+      // 应有 RGB 颜色（truecolor 明亮色）
+      expect(cells.some(c => typeof c.style.fg === 'string' && c.style.fg.startsWith('rgb:'))).toBe(true);
     });
     it('工具运行中相关标记带颜色（醒目）', () => {
       const cells = buildStatusBar({
