@@ -40,14 +40,14 @@ export interface RendererOptions {
 }
 
 const DEFAULT_PROMPT = '❯  ';
-const PROMPT_STYLE: Style = { fg: 'green', bold: true };
+const PROMPT_STYLE: Style = { fg: 'prompt', bold: true };
 /** 输入区最大行数 */
 const MAX_INPUT_LINES = 3;
 /** 计算输入区实际行数（至少 1 行，最多 MAX_INPUT_LINES 行） */
 function getInputLineCount(input: string): number {
   return Math.min(MAX_INPUT_LINES, Math.max(1, input.split('\n').length));
 }
-/** 边框样式 */
+/** 边框样式（dim 即可，视觉与改造前一致——原为 { dim: true } 无 fg） */
 const BORDER_STYLE: Style = { dim: true };
 /** 边框字符（Box Drawing U+2500，isWideCodePoint 已按宽度 1 处理） */
 const BORDER_CHAR = '─';
@@ -125,12 +125,15 @@ export class Renderer {
     this.buffer.flush();
   }
 
-  /** 退出：重置 scroll region（恢复全屏滚动），恢复光标。幂等。 */
+  /** 退出：恢复终端默认状态。主屏模式下：恢复光标可见 → 重置 scroll region → 光标归位左上角。
+   *  不清屏（\x1b[2J 会擦掉 scrollback 历史行，违背保留历史的设计）。
+   *  对齐 Claude Code 主屏路径清理序列。幂等。 */
   exit(): void {
     if (!this.entered) return;
     this.entered = false;
     this.buffer.write(showCursor());
     this.buffer.write(resetScrollRegion()); // 恢复全屏滚动
+    this.buffer.write('\x1b[H');            // 光标归位左上角，shell 提示符干净出现
     this.buffer.flush();
   }
 

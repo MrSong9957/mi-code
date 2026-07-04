@@ -9,7 +9,7 @@ describe('MessageFormatter', () => {
     it('thinking → ● Thinking… (magenta, indent 0)', () => {
       const lines = MessageFormatter.format('thinking', {});
       expect(lines[0].content).toBe('● Thinking…');
-      expect(lines[0].style.fg).toBe('magenta');
+      expect(lines[0].style.fg).toBe('brand');
       expect(lines[0].indent).toBe(0);
     });
 
@@ -28,7 +28,7 @@ describe('MessageFormatter', () => {
     it('assistant → ● + content (magenta)', () => {
       const lines = MessageFormatter.format('assistant', {}, '**我是一个AI助手**');
       expect(lines[0].content).toBe('● **我是一个AI助手**');
-      expect(lines[0].style.fg).toBe('magenta');
+      expect(lines[0].style.fg).toBe('brand');
     });
 
     // ─────────────── tool_call：从 toolInput 提取参数 ───────────────
@@ -38,7 +38,7 @@ describe('MessageFormatter', () => {
         toolInput: { command: 'npm test' },
       });
       expect(lines[0].content).toBe('● Bash(npm test)');
-      expect(lines[0].style.fg).toBe('magenta');
+      expect(lines[0].style.fg).toBe('brand');
       expect(lines[0].indent).toBe(0);
     });
 
@@ -113,13 +113,13 @@ describe('MessageFormatter', () => {
     it('error → red', () => {
       const lines = MessageFormatter.format('error', {}, '[Error] No API Key');
       expect(lines[0].content).toBe('[Error] No API Key');
-      expect(lines[0].style.fg).toBe('red');
+      expect(lines[0].style.fg).toBe('error');
     });
 
     it('input → ❯ green bold', () => {
       const lines = MessageFormatter.format('input', {}, '你是谁？');
       expect(lines[0].content).toBe('❯ 你是谁？');
-      expect(lines[0].style.fg).toBe('green');
+      expect(lines[0].style.fg).toBe('prompt');
       expect(lines[0].style.bold).toBe(true);
     });
   });

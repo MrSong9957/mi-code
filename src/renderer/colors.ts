@@ -1,7 +1,15 @@
 // ANSI 终端控制码工具模块
 //
-// 物理本质：调色盘。
-// 提供前景色、背景色、样式（粗体/斜体/下划线）的 ANSI 转义码生成。
+// 物理本质：颜料挤出机 + 色票本查表。
+// 给它一个颜色名（如 'cyan'）或语义 token（如 'accent'），
+// 它挤出对应的 ANSI 颜料管代码（如 \x1b[36m）。
+//
+// theme 化后支持两种入参：
+//  1. 直接颜色名（'cyan' / 'green' / ...）——走 FG_MAP，向后兼容
+//  2. semantic token（'accent' / 'brand' / ...）——先查 theme 解析成颜色名再查 FG_MAP
+// 优先级：FG_MAP 直接命中 > theme token（保证旧代码传 'cyan' 不被误判）
+
+import { resolveToken, type ColorToken } from './theme.js';
 
 // ═══════ 样式码 ═══════
 
@@ -11,7 +19,7 @@ export const DIM = '\x1b[2m';
 export const ITALIC = '\x1b[3m';
 export const UNDERLINE = '\x1b[4m';
 
-// ═══════ 前景色 ═══════
+// ═══════ 颜色码表（16 色） ═══════
 
 const FG_MAP: Record<string, string> = {
   black: '30', red: '31', green: '32', yellow: '33',
@@ -21,76 +29,60 @@ const FG_MAP: Record<string, string> = {
   magentaBright: '95', cyanBright: '96', whiteBright: '97',
 };
 
-// ═══════ 背景色 ═══════
-
 const BG_MAP: Record<string, string> = {
   black: '40', red: '41', green: '42', yellow: '43',
   blue: '44', magenta: '45', cyan: '46', white: '47',
   gray: '100', grey: '100',
 };
 
-// ═══════ 组合色（前景+样式）═══════
+// ═══════ token / 颜色名解析 ═══════
 
-/** 预定义的组合色常量，覆盖 code-highlighter / markdown-renderer / tool-status-panel 所需 */
-// 注意：ANSI 对象在模块加载时调用 fg() 计算 ANSI 转义码，这是有意设计——常量在导入时确定，避免运行时重复计算
-export const ANSI = {
-  // 样式
-  reset: RESET,
-  bold: BOLD,
-  dim: DIM,
-  italic: ITALIC,
-  underline: UNDERLINE,
-
-  // 基础前景色
-  cyan: fg('cyan'),
-  yellow: fg('yellow'),
-  green: fg('green'),
-  red: fg('red'),
-  blue: fg('blue'),
-  magenta: fg('magenta'),
-  gray: fg('gray'),
-  white: fg('white'),
-
-  // 组合样式
-  heading1: `${BOLD}${fg('cyan')}`,
-  heading2: `${BOLD}${fg('yellow')}`,
-  heading3: `${BOLD}${fg('green')}`,
-  code_inline: fg('yellow'),
-  code_block: fg('cyan'),
-  quote: fg('cyan'),
-  list: fg('yellow'),
-  link: `${UNDERLINE}${fg('blue')}`,
-  string: fg('green'),
-  comment: fg('gray'),
-  keyword: fg('cyan'),
-  number: fg('yellow'),
-  border: fg('cyan'),
-} as const;
+/**
+ * 把入参（颜色名 or semantic token）解析成 FG_MAP/BG_MAP 的 key。
+ * 优先级：FG_MAP 直接命中 > theme token。
+ * - 'cyan' → 'cyan'（直接命中）
+ * - 'accent' → 'cyan'（经 theme 解析）
+ * - 'unknown' → ''（未知，返回空 = 无颜色码）
+ */
+function resolveColorName(input: string | undefined): string {
+  if (!input) return '';
+  // 1. 直接颜色名命中（向后兼容优先）
+  if (FG_MAP[input] || BG_MAP[input]) return input;
+  // 2. semantic token：查 theme
+  const resolved = resolveToken(input as ColorToken);
+  return resolved;
+}
 
 // ═══════ 辅助函数 ═══════
 
-/** 前景色转义码 */
+/** 前景色转义码。入参可是颜色名（'cyan'）或 semantic token（'accent'）。 */
 export function fg(color: string | undefined): string {
-  if (!color) return '';
-  return `\x1b[${FG_MAP[color] ?? ''}m`;
+  const name = resolveColorName(color);
+  if (!name) return '';
+  return `\x1b[${FG_MAP[name] ?? ''}m`;
 }
 
-/** 背景色转义码 */
+/** 背景色转义码。入参可是颜色名或 semantic token。 */
 export function bg(color: string | undefined): string {
-  if (!color) return '';
-  return `\x1b[${BG_MAP[color] ?? ''}m`;
+  const name = resolveColorName(color);
+  if (!name) return '';
+  return `\x1b[${BG_MAP[name] ?? ''}m`;
 }
 
-// ═══════ 兼容旧接口 ═══════
+// ═══════ 原始码接口（供 setCell 等手动构建转义序列） ═══════
 
-/** 返回原始 ANSI 码（如 '31'），用于 setCell 等需要手动构建转义序列的场景 */
+/** 返回原始 ANSI 码（如 '31'），用于 setCell 等需要手动构建转义序列的场景。
+ *  支持颜色名和 semantic token。 */
 export function fgAnsi(color: string | undefined): string {
-  if (!color) return '';
-  return FG_MAP[color] ?? '';
+  const name = resolveColorName(color);
+  if (!name) return '';
+  return FG_MAP[name] ?? '';
 }
 
-/** 返回原始 ANSI 码（如 '41'），用于 setCell 等需要手动构建转义序列的场景 */
+/** 返回原始 ANSI 码（如 '41'），用于 setCell 等需要手动构建转义序列的场景。
+ *  支持颜色名和 semantic token。 */
 export function bgAnsi(color: string | undefined): string {
-  if (!color) return '';
-  return BG_MAP[color] ?? '';
+  const name = resolveColorName(color);
+  if (!name) return '';
+  return BG_MAP[name] ?? '';
 }

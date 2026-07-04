@@ -157,16 +157,19 @@ function printLine(text: string): void {
   layout.send('system', text);
 }
 
-/** 把一行带样式的消息固化进消息区（非模型内容，按样式路由 UILayout 类型）。 */
-function printStyled(text: string, style: Record<string, unknown>): void {
-  if ((style as Record<string, unknown>).fg === 'green' && (style as Record<string, unknown>).bold) {
+/** 把一行带样式的消息固化进消息区（非模型内容）。
+ *  显式 role 路由到 UILayout 类型，避免"用颜色反推类型"的反模式（theme 化后颜色会变）。
+ *  - 'banner'/'system' → layout.send('system')：普通系统消息，无 ❯ 前缀。
+ *  - 'error'           → layout.send('error')：错误消息（红色）。
+ *  - 'input'           → layout.send('input')：用户输入回显（带 ❯ 前缀，自动去重）。 */
+function printStyled(text: string, role: 'system' | 'error' | 'input', style?: Record<string, unknown>): void {
+  void style; // style 当前未使用（样式由 UILayout 按 role 决定），保留参数供未来扩展
+  if (role === 'input') {
     // input 类型：UILayout 会添加 ❯ 前缀，所以去掉原始文本中的 ❯
     const cleanText = text.replace(/^❯\s*/, '');
     layout.send('input', cleanText);
-  } else if ((style as Record<string, unknown>).fg === 'red') {
-    layout.send('error', text);
   } else {
-    layout.send('system', text);
+    layout.send(role, text);
   }
 }
 
@@ -637,10 +640,10 @@ process.on('exit', () => { cleanupOnExit(); });
 
 // 一次性 banner（进消息区）
 printLine('');
-printStyled(' ▐▛███▜▌   MiCode v' + VERSION, { fg: 'cyan' });
-printStyled('▝▜█████▛▘  TypeScript CLI · Node.js Runtime', { fg: 'cyan' });
-printStyled('  ▘▘ ▝▝    ' + process.cwd(), { fg: 'cyan' });
-printStyled(`model: ${MODEL}  ·  dir: ${SHORT_DIR}  ·  branch: ${GIT_BRANCH}`, { dim: true });
+printStyled(' ▐▛███▜▌   MiCode v' + VERSION, 'system');
+printStyled('▝▜█████▛▘  TypeScript CLI · Node.js Runtime', 'system');
+printStyled('  ▘▘ ▝▝    ' + process.cwd(), 'system');
+printStyled(`model: ${MODEL}  ·  dir: ${SHORT_DIR}  ·  branch: ${GIT_BRANCH}`, 'system');
 printLine('');
 
 // SessionStart hook：返回的 message 经渲染器画进消息区（hook 不直写终端）
@@ -651,7 +654,7 @@ setInterval(() => {
   scheduler.check();
   const notifications = scheduler.drain();
   for (const n of notifications) {
-    printStyled(`[scheduled:${n.scheduleId}] ${n.prompt}`, { fg: 'magenta' });
+    printStyled(`[scheduled:${n.scheduleId}] ${n.prompt}`, 'system');
   }
 }, 60000);
 

@@ -18,21 +18,21 @@ function hasStyle(cells: Cell[], pred: (s: Cell['style']) => boolean): boolean {
 
 describe('renderMarkdown', () => {
   describe('标题', () => {
-    it('# 一级标题：bold + cyan，去掉 # 符号', () => {
+    it('# 一级标题：bold + accent(cyan)，去掉 # 符号', () => {
       const lines = renderMarkdown('# Title');
       expect(lines).toHaveLength(1);
       expect(lineText(lines[0]!)).toBe('Title');
-      expect(hasStyle(lines[0]!, s => s.bold === true && s.fg === 'cyan')).toBe(true);
+      expect(hasStyle(lines[0]!, s => s.bold === true && s.fg === 'accent')).toBe(true);
     });
-    it('## 二级标题：bold + yellow', () => {
+    it('## 二级标题：bold + warn(yellow)', () => {
       const lines = renderMarkdown('## Sub');
       expect(lineText(lines[0]!)).toBe('Sub');
-      expect(hasStyle(lines[0]!, s => s.bold === true && s.fg === 'yellow')).toBe(true);
+      expect(hasStyle(lines[0]!, s => s.bold === true && s.fg === 'warn')).toBe(true);
     });
-    it('### 三级及以上：bold + green', () => {
+    it('### 三级及以上：bold + success(green)', () => {
       const lines = renderMarkdown('### Deep');
       expect(lineText(lines[0]!)).toBe('Deep');
-      expect(hasStyle(lines[0]!, s => s.bold === true && s.fg === 'green')).toBe(true);
+      expect(hasStyle(lines[0]!, s => s.bold === true && s.fg === 'success')).toBe(true);
     });
     it('# 后必须有空格才算标题（#word 不算）', () => {
       const lines = renderMarkdown('#word');
@@ -54,11 +54,11 @@ describe('renderMarkdown', () => {
       const iCell = lines[0]!.find(c => c.char === 'i');
       expect(iCell?.style.italic).toBe(true);
     });
-    it('`行内代码` → fg yellow，去掉反引号', () => {
+    it('`行内代码` → fg warn(yellow)，去掉反引号', () => {
       const lines = renderMarkdown('use `map` here');
       expect(lineText(lines[0]!)).toBe('use map here');
       const mCell = lines[0]!.find(c => c.char === 'm');
-      expect(mCell?.style.fg).toBe('yellow');
+      expect(mCell?.style.fg).toBe('warn');
     });
     it('混合行内标记', () => {
       const lines = renderMarkdown('**a** and `b` and *c*');
@@ -74,9 +74,9 @@ describe('renderMarkdown', () => {
       const codeLine = lines.find(l => lineText(l).includes('const'));
       expect(codeLine).toBeDefined();
       expect(lineText(codeLine!)).toBe('const x = 1;');
-      // const 应被高亮成关键字（cyan bold）
+      // const 应被高亮成关键字（accent bold）
       const cCell = codeLine!.find(c => c.char === 'c');
-      expect(cCell?.style.fg).toBe('cyan');
+      expect(cCell?.style.fg).toBe('accent');
     });
     it('无 lang 的代码块也能渲染', () => {
       const md = '```\nplain code\n```';

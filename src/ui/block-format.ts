@@ -21,14 +21,14 @@ export const INDENT = { block: 0, nested: 2 } as const;
  * 物理本质：每种块复用同一把「画笔」，避免每次 new 对象导致 styleEq 失败。
  */
 export const BLOCK_STYLES = {
-  /** 顶层块标题（● 行）：magenta */
-  magenta: { fg: 'magenta' },
+  /** 顶层块标题（● 行）：brand（magenta） */
+  magenta: { fg: 'brand' },
   /** 嵌套内容（⎿ 行、摘要行）：dim */
   dim: { dim: true },
-  /** 用户输入提示符（❯）：green + bold + 灰底高亮（贴近 Claude Code） */
-  greenBold: { fg: 'green', bold: true, bg: 'gray' },
-  /** 错误：red */
-  red: { fg: 'red' },
+  /** 用户输入提示符（❯）：prompt（green）+ bold + 灰底高亮（贴近 Claude Code） */
+  greenBold: { fg: 'prompt', bold: true, bg: 'gray' },
+  /** 错误：error（red） */
+  red: { fg: 'error' },
   /** 默认：无样式 */
   default: {},
 } as const;

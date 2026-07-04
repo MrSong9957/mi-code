@@ -11,13 +11,13 @@ import { stringToCells, type Cell, type Style } from './cell.js';
 
 /** token 类别 → 样式 */
 const STYLE: Record<string, Style> = {
-  keyword: { fg: 'cyan', bold: true },
-  string: { fg: 'green' },
-  comment: { fg: 'gray', dim: true },
-  number: { fg: 'yellow' },
-  punct: { fg: 'gray' },
+  keyword: { fg: 'accent', bold: true },
+  string: { fg: 'success' },
+  comment: { fg: 'muted', dim: true },
+  number: { fg: 'warn' },
+  punct: { fg: 'muted' },
   plain: {},
-  fallback: { fg: 'cyan', dim: true }, // 未知语言降级单色
+  fallback: { fg: 'accent', dim: true }, // 未知语言降级单色
 };
 
 /** 语言规则 */

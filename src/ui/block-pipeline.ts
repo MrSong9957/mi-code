@@ -40,7 +40,7 @@ export interface PipelineRenderer {
 const ASSISTANT_FORMAT = {
   indent: INDENT.nested,
   firstLinePrefix: '● ',
-  firstLineStyle: { fg: 'magenta' } as Style,
+  firstLineStyle: { fg: 'brand' } as Style,
 };
 
 /** tool_result 预览的最大行数（与 message-formatter 的 OUTPUT_PREVIEW_LINES 一致） */
