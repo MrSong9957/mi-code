@@ -692,6 +692,14 @@ if (cliOpts.list) {
   // 进入渲染模式（隐藏光标 + 画首帧）
   layout.enter();
 
+  // 一次性 banner（进消息区）—— 必须在 resume 回显之前，让 banner 在屏幕顶部
+  printLine('');
+  printStyled(' ▐▛███▜▌   MiCode v' + VERSION, 'system');
+  printStyled('▝▜█████▛▘  TypeScript CLI · Node.js Runtime', 'system');
+  printStyled('  ▘▘ ▝▝    ' + process.cwd(), 'system');
+  printStyled(`model: ${MODEL}  ·  dir: ${SHORT_DIR}  ·  branch: ${GIT_BRANCH}`, 'system');
+  printLine('');
+
   // resume 时回显历史消息到消息区（让用户看到之前的对话）
   if (sessionMessages.length > 0) {
     printLine(`\x1b[2m── resumed ${sessionMessages.length} messages ──\x1b[0m`);
@@ -737,13 +745,7 @@ process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });
 process.on('SIGTERM', () => { cleanupOnExit(); process.exit(0); });
 process.on('exit', () => { cleanupOnExit(); });
 
-// 一次性 banner（进消息区）
-printLine('');
-printStyled(' ▐▛███▜▌   MiCode v' + VERSION, 'system');
-printStyled('▝▜█████▛▘  TypeScript CLI · Node.js Runtime', 'system');
-printStyled('  ▘▘ ▝▝    ' + process.cwd(), 'system');
-printStyled(`model: ${MODEL}  ·  dir: ${SHORT_DIR}  ·  branch: ${GIT_BRANCH}`, 'system');
-printLine('');
+// banner 已移到 layout.enter() 之后（resume 回显之前，确保 banner 在屏幕顶部）
 
 // SessionStart hook：返回的 message 经渲染器画进消息区（hook 不直写终端）
 void hookRunner.run({ name: 'SessionStart', payload: {} }).then(r => { if (r.message) printLine(r.message); });
