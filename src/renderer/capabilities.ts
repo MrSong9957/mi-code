@@ -21,10 +21,12 @@ export function supportsSyncUpdate(): boolean {
     return process.env.COLORTERM === 'truecolor';
   }
 
-  // Windows Terminal（WT_SESSION 环境变量是它的指纹）
-  if (process.env.WT_SESSION) return true;
+  // Windows Terminal（WT_SESSION）：DEC 2026 支持不稳定（部分版本会丢失
+  // SGR 颜色属性或整帧渲染异常），保守降级为 false。仅 COLORTERM/明确信号才启用。
+  // 见 https://github.com/microsoft/terminal/issues 对 2026 的历史 bug
+  // if (process.env.WT_SESSION) return true;  // 注释掉：WT 的 BSU 不可靠
 
-  // COLORTERM=truecolor：现代终端强信号
+  // COLORTERM=truecolor：现代终端强信号（WezTerm/iTerm2 等透传过来）
   if (process.env.COLORTERM === 'truecolor') return true;
 
   // TERM_PROGRAM 已知支持 2026 的终端
