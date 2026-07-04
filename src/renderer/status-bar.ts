@@ -29,19 +29,19 @@ export interface StatusBarState {
 }
 
 const DIM: Style = { dim: true };
-// 状态栏各段配色：Bright 变体 + bold 提升深色背景下可读性
-// （单 Bright 在某些 Windows Terminal 配色下仍偏暗，加 bold 让字重更亮更醒目）
-const SEP: Style = { fg: 'ansi:blackBright' };              // 分隔符 │ 用暗灰（不加 bold，保持低调）
-const MODE: Style = { fg: 'ansi:cyanBright', bold: true };   // 模式（Act/Plan）—— 亮 cyan + 粗体
-const MODEL: Style = { fg: 'ansi:blueBright', bold: true };  // 模型名 —— 亮 blue + 粗体
-const DIR: Style = { fg: 'ansi:whiteBright', bold: true };   // 路径 —— 亮白 + 粗体
-const BRANCH: Style = { fg: 'ansi:yellowBright', bold: true };// git 分支 —— 亮 yellow + 粗体
-const TOOL_RUN: Style = { fg: 'ansi:yellowBright', bold: true };   // 工具运行中
-const TOOL_DONE: Style = { fg: 'ansi:greenBright', bold: true };   // 工具完成
-const ERR: Style = { fg: 'ansi:redBright', bold: true };           // 错误
-const BAR_FILL: Style = { fg: 'ansi:cyanBright', bold: true };     // 进度条填充
-const BAR_EMPTY: Style = { fg: 'ansi:blackBright' };               // 进度条空白
-const HINT: Style = { fg: 'ansi:greenBright', bold: true };        // 提示
+// 状态栏配色：用 truecolor RGB（绕过终端配色方案映射，深底下颜色精确明亮）
+// RGB 值对齐 Claude Code dark 主题的高亮色，确保深色背景下高对比可读
+const SEP: Style = { fg: 'rgb:102,102,102' };              // 分隔符 │ 中灰（低调但不暗）
+const MODE: Style = { fg: 'rgb:88,204,204', bold: true };   // 模式 —— 明亮 cyan
+const MODEL: Style = { fg: 'rgb:110,170,255', bold: true }; // 模型名 —— 明亮 blue
+const DIR: Style = { fg: 'rgb:220,220,220', bold: true };   // 路径 —— 明亮白
+const BRANCH: Style = { fg: 'rgb:240,200,80', bold: true }; // git 分支 —— 明亮 yellow
+const TOOL_RUN: Style = { fg: 'rgb:240,200,80', bold: true };   // 工具运行中 —— 明亮 yellow
+const TOOL_DONE: Style = { fg: 'rgb:110,210,110', bold: true }; // 工具完成 —— 明亮 green
+const ERR: Style = { fg: 'rgb:255,110,130', bold: true };       // 错误 —— 明亮 red
+const BAR_FILL: Style = { fg: 'rgb:88,204,204', bold: true };   // 进度条填充 —— 明亮 cyan
+const BAR_EMPTY: Style = { fg: 'rgb:102,102,102' };             // 进度条空白 —— 中灰
+const HINT: Style = { fg: 'rgb:110,210,110', bold: true };      // 提示 —— 明亮 green
 
 /** 构建进度条文本（10 格 + 百分比） */
 function buildProgressBar(ratio: number, totalWidth = 10): string {

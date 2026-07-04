@@ -64,8 +64,20 @@ function resolveColorName(input: string | undefined): string {
 
 // ═══════ fg / bg 主接口 ═══════
 
-/** 前景色转义码。入参可是 semantic token、'ansi:xxx' 或直接颜色名。 */
+/** 前景色转义码。入参可是 semantic token、'ansi:xxx'、'rgb:R,G,B' 或直接颜色名。 */
 export function fg(color: string | undefined): string {
+  if (!color) return '';
+  // truecolor RGB：rgb:R,G,B → \x1b[38;2;R;G;Bm（绕过终端配色映射，颜色精确可控）
+  if (color.startsWith('rgb:')) {
+    const parts = color.slice(4).split(',');
+    if (parts.length === 3) {
+      const [r, g, b] = parts.map(p => parseInt(p.trim(), 10));
+      if (!Number.isNaN(r) && !Number.isNaN(g) && !Number.isNaN(b)) {
+        return `\x1b[38;2;${r};${g};${b}m`;
+      }
+    }
+    return '';
+  }
   const name = resolveColorName(color);
   if (!name) return '';
   return `\x1b[${FG_MAP[name] ?? ''}m`;
@@ -73,6 +85,17 @@ export function fg(color: string | undefined): string {
 
 /** 背景色转义码。语义同 fg()。 */
 export function bg(color: string | undefined): string {
+  if (!color) return '';
+  if (color.startsWith('rgb:')) {
+    const parts = color.slice(4).split(',');
+    if (parts.length === 3) {
+      const [r, g, b] = parts.map(p => parseInt(p.trim(), 10));
+      if (!Number.isNaN(r) && !Number.isNaN(g) && !Number.isNaN(b)) {
+        return `\x1b[48;2;${r};${g};${b}m`;
+      }
+    }
+    return '';
+  }
   const name = resolveColorName(color);
   if (!name) return '';
   return `\x1b[${BG_MAP[name] ?? ''}m`;
