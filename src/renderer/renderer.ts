@@ -50,8 +50,8 @@ const MAX_INPUT_LINES = 3;
 function getInputLineCount(input: string): number {
   return Math.min(MAX_INPUT_LINES, Math.max(1, input.split('\n').length));
 }
-/** 边框样式（dim 即可，视觉与改造前一致——原为 { dim: true } 无 fg） */
-const BORDER_STYLE: Style = { dim: true };
+/** 边框样式：border 灰 + dim，对齐 Claude Code promptBorder rgb(136,136,136) */
+const BORDER_STYLE: Style = { fg: 'border', dim: true };
 /** 边框字符（Box Drawing U+2500，isWideCodePoint 已按宽度 1 处理） */
 const BORDER_CHAR = '─';
 

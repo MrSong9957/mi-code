@@ -5,7 +5,7 @@
 // 但老终端不认这条指令会把 \x1b[?2026h 当垃圾字符显示，所以要先探测。
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { supportsSyncUpdate } from '../renderer/capabilities.js';
+import { supportsSyncUpdate, detectColorLevel } from '../renderer/capabilities.js';
 
 describe('capabilities', () => {
   const envBackup: Record<string, string | undefined> = {};
@@ -106,6 +106,64 @@ describe('capabilities', () => {
     it('dumb 终端 → false', () => {
       process.env.TERM = 'dumb';
       expect(supportsSyncUpdate()).toBe(false);
+    });
+  });
+
+  describe('detectColorLevel', () => {
+    it('COLORTERM=truecolor → truecolor', () => {
+      process.env.COLORTERM = 'truecolor';
+      expect(detectColorLevel()).toBe('truecolor');
+    });
+
+    it('WT_SESSION（Windows Terminal）→ truecolor', () => {
+      process.env.WT_SESSION = 'guid';
+      expect(detectColorLevel()).toBe('truecolor');
+    });
+
+    it('TERM_PROGRAM=WezTerm → truecolor', () => {
+      process.env.TERM_PROGRAM = 'WezTerm';
+      expect(detectColorLevel()).toBe('truecolor');
+    });
+
+    it('TERM_PROGRAM=iTerm.app → truecolor', () => {
+      process.env.TERM_PROGRAM = 'iTerm.app';
+      expect(detectColorLevel()).toBe('truecolor');
+    });
+
+    it('TERM=xterm-kitty → truecolor', () => {
+      process.env.TERM = 'xterm-kitty';
+      expect(detectColorLevel()).toBe('truecolor');
+    });
+
+    it('TERM 含 256color → ansi256', () => {
+      process.env.TERM = 'xterm-256color';
+      expect(detectColorLevel()).toBe('ansi256');
+    });
+
+    it('TMUX + COLORTERM=truecolor → truecolor', () => {
+      process.env.TMUX = '/tmp/tmux-1000/default,1234,0';
+      process.env.COLORTERM = 'truecolor';
+      expect(detectColorLevel()).toBe('truecolor');
+    });
+
+    it('TMUX 无 truecolor 信号 → ansi256', () => {
+      process.env.TMUX = '/tmp/tmux-1000/default,1234,0';
+      process.env.TERM = 'screen-256color';
+      expect(detectColorLevel()).toBe('ansi256');
+    });
+
+    it('NO_COLOR → ansi16', () => {
+      process.env.NO_COLOR = '1';
+      expect(detectColorLevel()).toBe('ansi16');
+    });
+
+    it('dumb → ansi16', () => {
+      process.env.TERM = 'dumb';
+      expect(detectColorLevel()).toBe('ansi16');
+    });
+
+    it('无任何信号 → ansi16（保守）', () => {
+      expect(detectColorLevel()).toBe('ansi16');
     });
   });
 });

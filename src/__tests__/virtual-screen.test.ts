@@ -8,8 +8,10 @@
 import { describe, it, expect } from 'vitest';
 import { VirtualScreen } from '../renderer/virtual-screen.js';
 import { makeCell } from '../renderer/cell.js';
+import { setColorLevel } from '../renderer/colors.js';
 
 describe('VirtualScreen', () => {
+  setColorLevel('ansi16'); // 测试固定 16 色模式，断言 \x1b[3Xm 码
   describe('初始状态', () => {
     it('默认光标在 (0,0)', () => {
       const vs = new VirtualScreen();

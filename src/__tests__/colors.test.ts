@@ -1,16 +1,19 @@
-// 单测：colors.ts —— fg/bg ANSI 码生成 + theme token 解析
+// 单测：colors.ts —— fg/bg ANSI 码生成 + theme token 解析 + truecolor/256/16 三级
 //
-// 物理本质：fg/bg 是"颜料挤出机"——给它一个颜色名或语义 token，
-// 它挤出对应的 ANSI 颜料管代码（如 \x1b[36m）。
-// theme 化后，'accent' / 'cyan' 两种入参都能挤出同一管颜料。
+// 物理本质：fg/bg 是"颜料挤出机"——给它一个 token（或颜色名），
+// 按当前终端能力挤出对应的颜料管代码：
+//   - truecolor：\x1b[38;2;R;G;Bm（1600 万色）
+//   - ansi256：\x1b[38;5;Nm（256 色）
+//   - ansi16：\x1b[36m（16 色，最保守）
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { fg, bg, fgAnsi, bgAnsi, RESET, BOLD, DIM } from '../renderer/colors.js';
+import { fg, bg, setColorLevel, getColorLevel, RESET, BOLD, DIM } from '../renderer/colors.js';
 import { setTheme } from '../renderer/theme.js';
 
 describe('colors', () => {
   beforeEach(() => {
     setTheme('dark');
+    setColorLevel('ansi16'); // 测试默认 16 色，向后兼容
   });
 
   describe('样式码常量', () => {
@@ -21,93 +24,114 @@ describe('colors', () => {
     });
   });
 
-  describe('fg() 直接颜色名（兼容旧接口）', () => {
-    it('cyan → \\x1b[36m', () => {
+  describe('ansi16 模式（16 色，向后兼容）', () => {
+    it('fg(accent) → \\x1b[36m（cyan）', () => {
+      expect(fg('accent')).toBe('\x1b[36m');
+    });
+    it('fg(brand) → \\x1b[35m（magenta）', () => {
+      expect(fg('brand')).toBe('\x1b[35m');
+    });
+    it('fg(success) → \\x1b[32m（green）', () => {
+      expect(fg('success')).toBe('\x1b[32m');
+    });
+    it('fg(warn) → \\x1b[33m（yellow）', () => {
+      expect(fg('warn')).toBe('\x1b[33m');
+    });
+    it('fg(error) → \\x1b[31m（red）', () => {
+      expect(fg('error')).toBe('\x1b[31m');
+    });
+    it('fg(muted) → \\x1b[90m（gray）', () => {
+      expect(fg('muted')).toBe('\x1b[90m');
+    });
+    it('fg(border) → \\x1b[90m（gray）', () => {
+      expect(fg('border')).toBe('\x1b[90m');
+    });
+    it('fg(text) → 空串（默认前景，无码）', () => {
+      expect(fg('text')).toBe('');
+    });
+    it('直接颜色名 cyan 仍兼容', () => {
       expect(fg('cyan')).toBe('\x1b[36m');
     });
-    it('green → \\x1b[32m', () => {
-      expect(fg('green')).toBe('\x1b[32m');
-    });
-    it('red → \\x1b[31m', () => {
-      expect(fg('red')).toBe('\x1b[31m');
-    });
-    it('magenta → \\x1b[35m', () => {
-      expect(fg('magenta')).toBe('\x1b[35m');
-    });
-    it('gray → \\x1b[90m', () => {
-      expect(fg('gray')).toBe('\x1b[90m');
-    });
-    it('yellow → \\x1b[33m', () => {
-      expect(fg('yellow')).toBe('\x1b[33m');
-    });
-    it('undefined / 未知颜色 → 空串', () => {
+    it('undefined / 未知 → 空串', () => {
       expect(fg(undefined)).toBe('');
       expect(fg('nonexistent')).toBe('');
     });
   });
 
-  describe('fg() theme token 解析', () => {
-    it('accent → 等价于 cyan（\\x1b[36m）', () => {
-      expect(fg('accent')).toBe('\x1b[36m');
+  describe('truecolor 模式（RGB）', () => {
+    beforeEach(() => {
+      setColorLevel('truecolor');
     });
-    it('brand → 等价于 magenta（\\x1b[35m）', () => {
-      expect(fg('brand')).toBe('\x1b[35m');
+
+    it('fg(brand) → \\x1b[38;2;215;119;87m（claude 橙）', () => {
+      expect(fg('brand')).toBe('\x1b[38;2;215;119;87m');
     });
-    it('success → 等价于 green（\\x1b[32m）', () => {
-      expect(fg('success')).toBe('\x1b[32m');
+
+    it('fg(accent) → \\x1b[38;2;177;185;249m（浅蓝紫）', () => {
+      expect(fg('accent')).toBe('\x1b[38;2;177;185;249m');
     });
-    it('warn → 等价于 yellow（\\x1b[33m）', () => {
-      expect(fg('warn')).toBe('\x1b[33m');
+
+    it('fg(error) → \\x1b[38;2;255;107;128m', () => {
+      expect(fg('error')).toBe('\x1b[38;2;255;107;128m');
     });
-    it('error → 等价于 red（\\x1b[31m）', () => {
-      expect(fg('error')).toBe('\x1b[31m');
+
+    it('fg(text) → \\x1b[38;2;230;230;230m（浅灰）', () => {
+      expect(fg('text')).toBe('\x1b[38;2;230;230;230m');
     });
-    it('muted → 等价于 gray（\\x1b[90m）', () => {
-      expect(fg('muted')).toBe('\x1b[90m');
+
+    it('直接颜色名 cyan → truecolor 近似 RGB', () => {
+      // cyan 的 RGB 近似 [0,255,255]
+      expect(fg('cyan')).toBe('\x1b[38;2;0;255;255m');
     });
-    it('prompt → 等价于 green（\\x1b[32m）', () => {
-      expect(fg('prompt')).toBe('\x1b[32m');
-    });
-    it('border → 等价于 gray（\\x1b[90m）', () => {
-      expect(fg('border')).toBe('\x1b[90m');
-    });
-    it('text → 空串（无 fg 码）', () => {
-      expect(fg('text')).toBe('');
+
+    it('undefined / 未知 → 空串', () => {
+      expect(fg(undefined)).toBe('');
+      expect(fg('nonexistent')).toBe('');
     });
   });
 
-  describe('fg() 优先级：FG_MAP 直接命中 > theme token', () => {
-    // 'cyan' 既是 FG_MAP key 又不是 theme token，应直接走 FG_MAP。
-    // 如果未来有 token 叫 'cyan'（不会发生，但理论上），FG_MAP 优先保证向后兼容。
-    it('直接颜色名 cyan 不被误判为 token', () => {
-      expect(fg('cyan')).toBe('\x1b[36m');
+  describe('ansi256 模式（256 色）', () => {
+    beforeEach(() => {
+      setColorLevel('ansi256');
+    });
+
+    it('fg(brand) → \\x1b[38;5;N（claude 橙的 256 色近似）', () => {
+      const out = fg('brand');
+      expect(out).toMatch(/^\x1b\[38;5;\d+m$/);
+    });
+
+    it('fg(accent) → \\x1b[38;5;N', () => {
+      const out = fg('accent');
+      expect(out).toMatch(/^\x1b\[38;5;\d+m$/);
+    });
+
+    it('fg(text) → \\x1b[38;5;N（浅灰的 256 色近似）', () => {
+      const out = fg('text');
+      expect(out).toMatch(/^\x1b\[38;5;\d+m$/);
+    });
+  });
+
+  describe('setColorLevel / getColorLevel', () => {
+    it('默认 ansi16', () => {
+      setColorLevel('ansi16');
+      expect(getColorLevel()).toBe('ansi16');
+    });
+    it('可切换 truecolor', () => {
+      setColorLevel('truecolor');
+      expect(getColorLevel()).toBe('truecolor');
     });
   });
 
   describe('bg() 背景色', () => {
-    it('bg gray → \\x1b[100m', () => {
+    it('ansi16: bg(gray) → \\x1b[100m', () => {
       expect(bg('gray')).toBe('\x1b[100m');
     });
-    it('bg undefined → 空串', () => {
+    it('truecolor: bg(accent) → \\x1b[48;2;177;185;249m', () => {
+      setColorLevel('truecolor');
+      expect(bg('accent')).toBe('\x1b[48;2;177;185;249m');
+    });
+    it('undefined → 空串', () => {
       expect(bg(undefined)).toBe('');
-    });
-    it('bg 也支持 theme token（accent → cyan 背景 \\x1b[46m）', () => {
-      expect(bg('accent')).toBe('\x1b[46m');
-    });
-  });
-
-  describe('fgAnsi / bgAnsi（原始码，供 setCell 手动构建）', () => {
-    it('fgAnsi cyan → "36"', () => {
-      expect(fgAnsi('cyan')).toBe('36');
-    });
-    it('fgAnsi accent → "36"（token 解析）', () => {
-      expect(fgAnsi('accent')).toBe('36');
-    });
-    it('bgAnsi gray → "100"', () => {
-      expect(bgAnsi('gray')).toBe('100');
-    });
-    it('fgAnsi undefined → 空串', () => {
-      expect(fgAnsi(undefined)).toBe('');
     });
   });
 });

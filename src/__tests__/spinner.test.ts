@@ -91,10 +91,10 @@ describe('Spinner', () => {
       expect(r.text).toContain('Thinking…');
     });
 
-    it('active 时 render 样式 fg = accent', () => {
+    it('active 时 render 样式 fg = brand（claude 橙）', () => {
       const s = new Spinner();
       s.start('x');
-      expect(s.render().style.fg).toBe('accent');
+      expect(s.render().style.fg).toBe('brand');
     });
 
     it('stalled 时 render 样式 fg = error（红色警告）', () => {
@@ -148,7 +148,7 @@ describe('Spinner', () => {
       expect(s.getState().stalled).toBe(true);
       s.onToken();
       expect(s.getState().stalled).toBe(false);
-      expect(s.render().style.fg).toBe('accent');
+      expect(s.render().style.fg).toBe('brand');
     });
 
     it('stop 清除 stall 状态', () => {

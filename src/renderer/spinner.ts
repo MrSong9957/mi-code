@@ -95,12 +95,12 @@ export class Spinner {
   }
 
   /** 渲染当前帧文本 + 样式。inactive 返回空。
-   *  - 正常：accent 色 + "⠋ label"
+   *  - 正常：brand 色（claude 橙）+ "⠋ label"，对齐 Claude Code
    *  - stall：error 色（红色警告） */
   render(): SpinnerRender {
     if (!this.active) return { text: '', style: {} };
     const frame = SPINNER_FRAMES[this.frameIndex]!;
-    const style: Style = this.stalled ? { fg: 'error' } : { fg: 'accent' };
+    const style: Style = this.stalled ? { fg: 'error' } : { fg: 'brand' };
     return { text: `${frame} ${this.label}`, style };
   }
 }

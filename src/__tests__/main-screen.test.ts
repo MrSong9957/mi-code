@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import { Renderer } from '../renderer/renderer.js';
 import { isWideCodePoint } from '../renderer/cell.js';
+import { setColorLevel } from '../renderer/colors.js';
 
 /** 模拟真实终端的 FakeTerminal：支持 DECSTBM scroll region。 */
 class FakeTerminal {
@@ -127,6 +128,7 @@ class FakeTerminal {
 }
 
 describe('主屏 + scroll region + 纯追加渲染器', () => {
+  setColorLevel('ansi16'); // 测试固定 16 色模式，断言 \x1b[3Xm 码
   describe('主屏模式（不进 alt screen，不开鼠标追踪）', () => {
     it('enter 不输出 alt screen（?1049h）', () => {
       const frames: string[] = [];
