@@ -29,17 +29,18 @@ export interface StatusBarState {
 }
 
 const DIM: Style = { dim: true };
-// 状态栏各段配色：每段不同色，提升信息辨识度
-const MODE: Style = { fg: 'brand' };         // 模式（Act/Plan）—— cyan 主色
-const MODEL: Style = { fg: 'info' };         // 模型名 —— blue
-const DIR: Style = { fg: 'textDim' };        // 路径 —— gray（次要信息）
-const BRANCH: Style = { fg: 'warning' };     // git 分支 —— yellow（常用需醒目）
-const TOOL_RUN: Style = { fg: 'warning' };   // 工具运行中 —— yellow
-const TOOL_DONE: Style = { fg: 'success' };  // 工具完成 —— green
-const ERR: Style = { fg: 'error' };          // 错误 —— red
-const BAR_FILL: Style = { fg: 'brand' };     // 进度条填充 —— cyan
-const BAR_EMPTY: Style = { dim: true };      // 进度条空白 —— dim
-const HINT: Style = { fg: 'success' };       // 提示 —— green
+// 状态栏各段配色：用 Bright 变体提升深色背景下的可读性（标准暗色太暗）
+const SEP: Style = { fg: 'ansi:blackBright', dim: true };  // 分隔符 │ 用暗灰
+const MODE: Style = { fg: 'ansi:cyanBright', bold: true };  // 模式（Act/Plan）—— 亮 cyan + 粗体，最醒目
+const MODEL: Style = { fg: 'ansi:blueBright' };            // 模型名 —— 亮 blue
+const DIR: Style = { fg: 'ansi:whiteBright' };             // 路径 —— 亮白（替代 gray，深底下灰太暗）
+const BRANCH: Style = { fg: 'ansi:yellowBright' };         // git 分支 —— 亮 yellow
+const TOOL_RUN: Style = { fg: 'ansi:yellowBright' };       // 工具运行中 —— 亮 yellow
+const TOOL_DONE: Style = { fg: 'ansi:greenBright' };       // 工具完成 —— 亮 green
+const ERR: Style = { fg: 'ansi:redBright' };               // 错误 —— 亮 red
+const BAR_FILL: Style = { fg: 'ansi:cyanBright' };         // 进度条填充 —— 亮 cyan
+const BAR_EMPTY: Style = { fg: 'ansi:blackBright', dim: true }; // 进度条空白 —— 暗灰
+const HINT: Style = { fg: 'ansi:greenBright' };            // 提示 —— 亮 green
 
 /** 构建进度条文本（10 格 + 百分比） */
 function buildProgressBar(ratio: number, totalWidth = 10): string {
@@ -66,13 +67,13 @@ export function buildStatusBar(state: StatusBarState): Cell[] {
       : state.tool.status === 'error' ? ERR
         : TOOL_DONE;
     segments.push({ text: `${mark} ${state.tool.name}`, style: sty });
-    segments.push({ text: sep, style: DIM });
+    segments.push({ text: sep, style: SEP });
   }
 
   // 模式
   if (state.mode) {
     segments.push({ text: state.mode, style: MODE });
-    segments.push({ text: sep, style: DIM });
+    segments.push({ text: sep, style: SEP });
   }
 
   // 模型
@@ -84,7 +85,7 @@ export function buildStatusBar(state: StatusBarState): Cell[] {
     const parts = state.dir.replace(/\\/g, '/').split('/').filter(Boolean);
     const short = parts.slice(-2).join('/');
     segments.push({ text: '~/' + short, style: DIR });
-    segments.push({ text: sep, style: DIM });
+    segments.push({ text: sep, style: SEP });
   }
 
   // 分支
@@ -92,14 +93,14 @@ export function buildStatusBar(state: StatusBarState): Cell[] {
 
   // 上下文窗口进度条
   if (state.contextUsage !== undefined) {
-    segments.push({ text: sep, style: DIM });
+    segments.push({ text: sep, style: SEP });
     const bar = buildProgressBar(state.contextUsage);
     segments.push({ text: bar, style: BAR_FILL });
   }
 
   // 提示
   if (state.hint) {
-    segments.push({ text: sep, style: DIM });
+    segments.push({ text: sep, style: SEP });
     segments.push({ text: state.hint, style: HINT });
   }
 

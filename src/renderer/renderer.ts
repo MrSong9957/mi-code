@@ -515,18 +515,26 @@ export class Renderer {
   /**
    * 画页脚：CUP 到 region 外逐行 eraseLine + 写。
    * region 外 CUP 不触发滚动，安全。
-   * 页脚布局（从 contentRows 起）：上边框 / 输入区(inputLineCount 行) / 下边框 / spinner行 / 状态栏。
+   * 页脚布局（从 contentRows 起）：spinner行 / 上边框 / 输入区(inputLineCount 行) / 下边框 / 状态栏。
+   * spinner 在输入框上方（用户期望：转圈动画紧邻输入框上方，不在下方）。
    */
   private drawFooter(): void {
     if (!this.entered) return;
     const contentRows = this.contentRows();
     const inputLineCount = getInputLineCount(this.input);
-    const borderTopY = contentRows;
-    const inputStartY = contentRows + 1;
+    const spinnerY = contentRows;                    // spinner 紧贴消息区下方（输入框上方）
+    const borderTopY = contentRows + 1;              // 上边框
+    const inputStartY = contentRows + 2;             // 输入区
     const borderBottomY = inputStartY + inputLineCount;
-    const spinnerY = borderBottomY + 1;   // spinner 行（下边框与状态栏之间）
-    const statusY = spinnerY + 1;          // 状态栏在最底
+    const statusY = borderBottomY + 1;               // 状态栏在最底
 
+    // spinner 行（上边框上方；inactive 时空行占位保持布局稳定）
+    const spinnerRender = this.spinner.render();
+    if (spinnerRender.text) {
+      this.writeFooterCells(spinnerY, stringToCells(spinnerRender.text, spinnerRender.style));
+    } else {
+      this.writeFooterLine(spinnerY, '', {});
+    }
     // 上边框
     this.writeFooterLine(borderTopY, BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
     // 输入区
@@ -541,13 +549,6 @@ export class Renderer {
     }
     // 下边框
     this.writeFooterLine(borderBottomY, BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
-    // spinner 行（下边框与状态栏之间；inactive 时空行占位保持布局稳定）
-    const spinnerRender = this.spinner.render();
-    if (spinnerRender.text) {
-      this.writeFooterCells(spinnerY, stringToCells(spinnerRender.text, spinnerRender.style));
-    } else {
-      this.writeFooterLine(spinnerY, '', {});
-    }
     // 状态栏
     const statusCells = buildStatusBar({
       mode: this.statusInfo.mode, model: this.statusInfo.model,

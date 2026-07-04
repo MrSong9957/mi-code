@@ -170,10 +170,10 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       const t = new FakeTerminal(10, 40);
       const r = new Renderer({ rows: 10, cols: 40, writer: s => t.write(s), status: { model: 'MDL', branch: 'main' } });
       r.enter();
-      // footer=5: row5 border, row6 input, row7 border, row8 spinner(空), row9 status
-      expect(t.line(5)).toContain('─');
-      expect(t.line(6)).toContain('❯');
-      expect(t.line(7)).toContain('─');
+      // footer=5: row5 spinner(空), row6 border, row7 input, row8 border, row9 status
+      expect(t.line(6)).toContain('─');
+      expect(t.line(7)).toContain('❯');
+      expect(t.line(8)).toContain('─');
       expect(t.line(9)).toContain('MDL');
     });
   });
@@ -222,8 +222,8 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       r.enter();
       r.setInput('hello world', 5);
       r.flushNow();
-      // input 在 row6（contentRows=5, inputStartY=6）
-      expect(t.line(6)).toContain('hello world');
+      // input 在 row7（spinner@5, border@6, inputStartY=7）
+      expect(t.line(7)).toContain('hello world');
     });
 
     it('setInput 后状态栏仍存在（钉底）', () => {
@@ -325,10 +325,10 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       const r = new Renderer({ rows: 10, cols: 40, writer: s => t.write(s), status: { model: 'M', branch: 'b' } });
       r.enter();
       r.flushNow();
-      // spinner 行在 row8（borderBottomY=7, spinnerY=8）
+      // spinner 行在 row5（spinnerY=contentRows=5，输入框上方）
       // inactive 时该行应为空（不含 spinner 帧）
-      expect(t.line(8)).not.toContain('⠋');
-      expect(t.line(8)).not.toContain('⠙');
+      expect(t.line(5)).not.toContain('⠋');
+      expect(t.line(5)).not.toContain('⠙');
     });
 
     it('startSpinner 后 spinner 行显示帧字符 + label', () => {
@@ -338,7 +338,7 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       r.startSpinner('Thinking…');
       r.flushNow();
       // spinner 行应含帧字符和 label
-      const spinnerLine = t.line(8);
+      const spinnerLine = t.line(5);
       expect(spinnerLine).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
       expect(spinnerLine).toContain('Thinking…');
       r.stopSpinner(); // 清定时器
@@ -352,8 +352,8 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       r.flushNow();
       r.stopSpinner();
       r.flushNow();
-      expect(t.line(8)).not.toContain('⠋');
-      expect(t.line(8)).not.toContain('Thinking');
+      expect(t.line(5)).not.toContain('⠋');
+      expect(t.line(5)).not.toContain('Thinking');
     });
 
     it('setSpinnerLabel 运行中切换文案', () => {
@@ -364,7 +364,7 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       r.flushNow();
       r.setSpinnerLabel('Running bash…');
       r.flushNow();
-      expect(t.line(8)).toContain('Running bash');
+      expect(t.line(5)).toContain('Running bash');
       r.stopSpinner();
     });
   });
