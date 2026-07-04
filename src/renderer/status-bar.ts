@@ -29,18 +29,19 @@ export interface StatusBarState {
 }
 
 const DIM: Style = { dim: true };
-// 状态栏各段配色：用 Bright 变体提升深色背景下的可读性（标准暗色太暗）
-const SEP: Style = { fg: 'ansi:blackBright', dim: true };  // 分隔符 │ 用暗灰
-const MODE: Style = { fg: 'ansi:cyanBright', bold: true };  // 模式（Act/Plan）—— 亮 cyan + 粗体，最醒目
-const MODEL: Style = { fg: 'ansi:blueBright' };            // 模型名 —— 亮 blue
-const DIR: Style = { fg: 'ansi:whiteBright' };             // 路径 —— 亮白（替代 gray，深底下灰太暗）
-const BRANCH: Style = { fg: 'ansi:yellowBright' };         // git 分支 —— 亮 yellow
-const TOOL_RUN: Style = { fg: 'ansi:yellowBright' };       // 工具运行中 —— 亮 yellow
-const TOOL_DONE: Style = { fg: 'ansi:greenBright' };       // 工具完成 —— 亮 green
-const ERR: Style = { fg: 'ansi:redBright' };               // 错误 —— 亮 red
-const BAR_FILL: Style = { fg: 'ansi:cyanBright' };         // 进度条填充 —— 亮 cyan
-const BAR_EMPTY: Style = { fg: 'ansi:blackBright', dim: true }; // 进度条空白 —— 暗灰
-const HINT: Style = { fg: 'ansi:greenBright' };            // 提示 —— 亮 green
+// 状态栏各段配色：Bright 变体 + bold 提升深色背景下可读性
+// （单 Bright 在某些 Windows Terminal 配色下仍偏暗，加 bold 让字重更亮更醒目）
+const SEP: Style = { fg: 'ansi:blackBright' };              // 分隔符 │ 用暗灰（不加 bold，保持低调）
+const MODE: Style = { fg: 'ansi:cyanBright', bold: true };   // 模式（Act/Plan）—— 亮 cyan + 粗体
+const MODEL: Style = { fg: 'ansi:blueBright', bold: true };  // 模型名 —— 亮 blue + 粗体
+const DIR: Style = { fg: 'ansi:whiteBright', bold: true };   // 路径 —— 亮白 + 粗体
+const BRANCH: Style = { fg: 'ansi:yellowBright', bold: true };// git 分支 —— 亮 yellow + 粗体
+const TOOL_RUN: Style = { fg: 'ansi:yellowBright', bold: true };   // 工具运行中
+const TOOL_DONE: Style = { fg: 'ansi:greenBright', bold: true };   // 工具完成
+const ERR: Style = { fg: 'ansi:redBright', bold: true };           // 错误
+const BAR_FILL: Style = { fg: 'ansi:cyanBright', bold: true };     // 进度条填充
+const BAR_EMPTY: Style = { fg: 'ansi:blackBright' };               // 进度条空白
+const HINT: Style = { fg: 'ansi:greenBright', bold: true };        // 提示
 
 /** 构建进度条文本（10 格 + 百分比） */
 function buildProgressBar(ratio: number, totalWidth = 10): string {

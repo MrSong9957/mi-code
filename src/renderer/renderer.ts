@@ -615,7 +615,8 @@ export class Renderer {
   private placeCursorInInput(): void {
     if (!this.entered) return;
     const cursor = this.computeInputCursorPos();
-    const inputStartY = this.contentRows() + 1;
+    // 输入区起点 = contentRows + 2（spinner 占 +0，上边框占 +1，输入区从 +2 开始）
+    const inputStartY = this.contentRows() + 2;
     this.buffer.write(cup(inputStartY + cursor.row, cursor.col));
   }
 
