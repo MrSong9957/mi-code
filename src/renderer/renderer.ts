@@ -20,6 +20,7 @@ import { stringToCells, stringWidth, styleKey as styleKeyOf, styleTransitionByKe
 import { renderMarkdown } from './markdown.js';
 import { WriteBuffer } from './write-buffer.js';
 import { supportsSyncUpdate } from './capabilities.js';
+import { FrameScheduler } from './frame-scheduler.js';
 import {
   showCursor, hideCursor, cup, cr, eraseLine,
   setScrollRegion, resetScrollRegion,
@@ -58,6 +59,7 @@ export class Renderer {
   private cols: number;
   private writer: Writer;
   private buffer: WriteBuffer;
+  private scheduler: FrameScheduler;
   private statusInfo: Pick<StatusBarState, 'model' | 'branch' | 'dir' | 'mode' | 'contextUsage'>;
   private prompt: string;
   private frameIntervalMs: number;
@@ -100,6 +102,9 @@ export class Renderer {
     this.writer = opts.writer;
     // 探测终端是否支持 DEC 2026 同步更新；支持则 flush 包裹 BSU/ESU 防闪烁
     this.buffer = new WriteBuffer(opts.writer, { useSyncUpdate: supportsSyncUpdate() });
+    // 帧调度器：合并多源 flush 请求（按键/流式/spinner），idle 自动停摆省 CPU。
+    // doFlush 承载原 flushFrame 逻辑（drawFooter + placeCursor + buffer.flush）。
+    this.scheduler = new FrameScheduler(() => this.doFlush());
     this.statusInfo = opts.status;
     this.prompt = opts.prompt ?? DEFAULT_PROMPT;
     this.frameIntervalMs = opts.frameIntervalMs ?? 16;
@@ -188,7 +193,7 @@ export class Renderer {
     this.footerDirty = true;
     if (!this.streamingActive) {
       this.buffer.write(showCursor());
-      this.flushFrame();
+      this.requestFrame();
     }
   }
 
@@ -245,7 +250,9 @@ export class Renderer {
         }
       }
       this.buffer.write('\x1b[0m');
-      this.buffer.flush();
+      // 流式 delta 走帧调度合并（80ms 内多个 token 合并成一帧，减少写屏次数）。
+      // 不直接 buffer.flush()：避免与按键/spinner 的 flush 交叉写屏闪烁。
+      this.requestFrame();
     }
     if (isFinal) {
       // 封口：LF 推进一行，下次 append 从新行起
@@ -254,7 +261,7 @@ export class Renderer {
       this.streamingActive = false;
       this.footerDirty = true;
       this.buffer.write(showCursor());
-      this.flushFrame();
+      this.requestFrame();
     }
   }
 
@@ -323,7 +330,7 @@ export class Renderer {
         if (seg.length > 0) this.streamWriteCells(stringToCells(seg, style), regionBottom);
       }
       this.buffer.write('\x1b[0m');
-      this.buffer.flush();
+      this.requestFrame(); // 流式 delta 走帧调度合并
     }
   }
 
@@ -336,7 +343,7 @@ export class Renderer {
     this.streamingActive = false;
     this.footerDirty = true;
     this.buffer.write(showCursor());
-    this.flushFrame();
+    this.requestFrame();
   }
 
   /** 封口流式（插分隔符，温和版）。纯追加模型下 = 一个空行分隔。 */
@@ -348,7 +355,7 @@ export class Renderer {
     this.streamingActive = false;
     this.footerDirty = true;
     this.buffer.write(showCursor());
-    this.flushFrame();
+    this.requestFrame();
   }
 
   /** 清空消息区（仅清 region 内可视区，不动 scrollback）。 */
@@ -379,23 +386,23 @@ export class Renderer {
     this.cursorPos = Math.max(0, Math.min(cursorPos, max));
     this.applyScrollRegion();
     this.footerDirty = true;
-    this.flushFrame();
+    this.requestFrame();
   }
 
   setToolStatus(name: string, status: ToolStatus['status']): void {
     this.tool = { name, status };
     this.footerDirty = true;
-    this.flushFrame();
+    this.requestFrame();
   }
   clearToolStatus(): void {
     this.tool = null;
     this.footerDirty = true;
-    this.flushFrame();
+    this.requestFrame();
   }
   setHint(hint: string | undefined): void {
     this.hint = hint;
     this.footerDirty = true;
-    this.flushFrame();
+    this.requestFrame();
   }
   getPrompt(): string {
     return this.prompt;
@@ -403,8 +410,9 @@ export class Renderer {
 
   // ═══════ flush ══════
 
-  /** 刷新缓冲区：页脚脏标记时重绘页脚，然后一次性写出所有缓冲的 ANSI 序列。 */
-  flushFrame(): void {
+  /** 实际刷新逻辑：页脚脏标记时重绘页脚，然后一次性写出所有缓冲的 ANSI 序列。
+   *  由 FrameScheduler 在 tick 时调用（合并多源请求），或由 flushNow 立即调用。 */
+  private doFlush(): void {
     if (this.footerDirty) {
       this.drawFooter();
       this.footerDirty = false;
@@ -414,8 +422,24 @@ export class Renderer {
     this.buffer.flush();
   }
 
+  /** 请求下一帧刷新（标记脏，延迟到下次 scheduler tick 合并）。
+   *  内部方法（setInput/printMessage 等）用这个，避免高频调用直接刷屏闪烁。 */
+  private requestFrame(): void {
+    this.scheduler.requestFrame();
+  }
+
+  /** 立即强制刷新（绕过调度，用于 enter/exit/resize/测试断言）。 */
+  flushFrame(): void {
+    this.scheduler.flushNow();
+  }
+
   flushNow(): void {
-    this.flushFrame();
+    this.scheduler.flushNow();
+  }
+
+  /** 销毁渲染器：停止帧调度器（清 setInterval）。进程退出前调用。 */
+  destroy(): void {
+    this.scheduler.stop();
   }
 
   // ═══════ 页脚绘制 + 光标定位 ═══════
@@ -548,7 +572,7 @@ export class Renderer {
       this.applyScrollRegion();
       this.footerDirty = true;
       this.placeCursorInInput();
-      this.flushFrame();
+      this.flushFrame(); // resize 必须立即重画，不走延迟调度
     }
   }
 

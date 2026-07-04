@@ -184,6 +184,7 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       r.enter();
       // contentRows=6，写 10 条消息 → 前 4 条进 scrollback
       for (let i = 1; i <= 10; i++) { r.printMessage(`msg-${i}`, 'system', {}); }
+      r.flushNow();
       // 最早的消息进 scrollback（scrollback 行含尾部空格，用 includes 匹配）
       expect(t.scrollback.some(l => l.includes('msg-1'))).toBe(true);
       // 最新消息在可视区（region 内）
@@ -199,9 +200,11 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       r.enter();
       frames.length = 0;
       r.printMessage('first', 'system', {});
+      r.flushNow();
       const firstOut = frames.join('');
       frames.length = 0;
       r.printMessage('second', 'system', {});
+      r.flushNow();
       const secondOut = frames.join('');
       // 第二条消息输出里应含 'second' 文本，不应含 CUU(上移) 去 'first' 那行
       expect(secondOut).toContain('second');
@@ -217,6 +220,7 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       const r = new Renderer({ rows: 10, cols: 40, writer: s => t.write(s), status: { model: 'M', branch: 'b' } });
       r.enter();
       r.setInput('hello world', 5);
+      r.flushNow();
       // input 在 row7
       expect(t.line(7)).toContain('hello world');
     });
@@ -226,6 +230,7 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       const r = new Renderer({ rows: 10, cols: 40, writer: s => t.write(s), status: { model: 'MDL', branch: 'b' } });
       r.enter();
       r.setInput('abc', 1);
+      r.flushNow();
       expect(t.line(9)).toContain('MDL');
     });
   });
@@ -239,10 +244,12 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       frames.length = 0;
       // 第一次：全文 "hello"（带前缀 ●  + 缩进，实际可见文本含 hello）
       r.appendStreamingMarkdown('hello', false);
+      r.flushNow();
       const firstText = stripAnsi(frames.join(''));
       frames.length = 0;
       // 第二次：全文 "hello world"（只 delta " world" 应被输出）
       r.appendStreamingMarkdown('hello world', false);
+      r.flushNow();
       const secondText = stripAnsi(frames.join(''));
       // 第一次输出了 hello
       expect(firstText).toContain('hello');
@@ -292,6 +299,7 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       r.enter();
       frames.length = 0;
       r.printMessage('● Bash(npm test)', 'system', { fg: 'magenta' });
+      r.flushNow();
       const all = frames.join('');
       expect(/\[35m/.test(all)).toBe(true);
       expect(all).toContain('Bash(npm test)');
@@ -303,6 +311,7 @@ describe('主屏 + scroll region + 纯追加渲染器', () => {
       r.enter();
       frames.length = 0;
       r.printMessage('⎿  Done', 'system', { dim: true });
+      r.flushNow();
       const all = frames.join('');
       expect(/\[2m/.test(all)).toBe(true);
       expect(all).toContain('Done');
