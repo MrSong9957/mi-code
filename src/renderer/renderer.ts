@@ -21,6 +21,7 @@ import { renderMarkdown } from './markdown.js';
 import { WriteBuffer } from './write-buffer.js';
 import { supportsSyncUpdate } from './capabilities.js';
 import { FrameScheduler } from './frame-scheduler.js';
+import { Spinner } from './spinner.js';
 import {
   showCursor, hideCursor, cup, cr, eraseLine,
   setScrollRegion, resetScrollRegion,
@@ -60,6 +61,8 @@ export class Renderer {
   private writer: Writer;
   private buffer: WriteBuffer;
   private scheduler: FrameScheduler;
+  private spinner = new Spinner();
+  private spinnerTimer: ReturnType<typeof setInterval> | null = null;
   private statusInfo: Pick<StatusBarState, 'model' | 'branch' | 'dir' | 'mode' | 'contextUsage'>;
   private prompt: string;
   private frameIntervalMs: number;
@@ -149,10 +152,11 @@ export class Renderer {
     this.buffer.write(setScrollRegion(0, this.contentRows() - 1));
   }
 
-  /** 消息区行数 = 终端行数 - 页脚高度。 */
+  /** 消息区行数 = 终端行数 - 页脚高度。
+   *  页脚布局：上边框 + 输入区(inputLineCount) + 下边框 + spinner行 + 状态栏。 */
   private contentRows(): number {
     const inputLineCount = getInputLineCount(this.input);
-    const footerHeight = 2 + inputLineCount + 1; // 上边框 + 输入区 + 下边框 + 状态栏
+    const footerHeight = 2 + inputLineCount + 1 + 1; // 上边框 + 输入区 + 下边框 + spinner + 状态栏
     return Math.max(1, this.rows - footerHeight);
   }
 
@@ -404,6 +408,53 @@ export class Renderer {
     this.footerDirty = true;
     this.requestFrame();
   }
+
+  // ═══════ spinner 控制（钉死页脚区，不进 scrollback） ═══════
+
+  /** 启动 spinner 显示 label，并开始 120ms 帧循环。
+   *  每次 tick 推进 spinner 帧 + requestFrame 触发页脚重绘（spinner 行在页脚区）。
+   *  幂等：重复 start 会先停旧定时器再启新的。 */
+  startSpinner(label: string): void {
+    this.spinner.start(label);
+    this.stopSpinnerTimer();
+    this.spinnerTimer = setInterval(() => {
+      this.spinner.tick();
+      this.footerDirty = true;
+      this.requestFrame();
+    }, 120);
+    this.footerDirty = true;
+    this.requestFrame();
+  }
+
+  /** 运行中切换 spinner 文案（不停 spinner）。 */
+  setSpinnerLabel(label: string): void {
+    if (!this.spinner.isActive()) return;
+    this.spinner.setLabel(label);
+    this.footerDirty = true;
+    this.requestFrame();
+  }
+
+  /** 收到 token：重置 spinner stall 计时器（避免 3 秒无 token 变红）。 */
+  spinnerOnToken(): void {
+    this.spinner.onToken();
+  }
+
+  /** 停止 spinner（熄灭）+ 清帧循环定时器。 */
+  stopSpinner(): void {
+    this.spinner.stop();
+    this.stopSpinnerTimer();
+    this.footerDirty = true;
+    this.requestFrame();
+  }
+
+  /** 清 spinner 帧循环定时器（内部）。 */
+  private stopSpinnerTimer(): void {
+    if (this.spinnerTimer !== null) {
+      clearInterval(this.spinnerTimer);
+      this.spinnerTimer = null;
+    }
+  }
+
   getPrompt(): string {
     return this.prompt;
   }
@@ -437,8 +488,9 @@ export class Renderer {
     this.scheduler.flushNow();
   }
 
-  /** 销毁渲染器：停止帧调度器（清 setInterval）。进程退出前调用。 */
+  /** 销毁渲染器：停止帧调度器和 spinner 定时器（清 setInterval）。进程退出前调用。 */
   destroy(): void {
+    this.stopSpinnerTimer();
     this.scheduler.stop();
   }
 
@@ -447,7 +499,7 @@ export class Renderer {
   /**
    * 画页脚：CUP 到 region 外逐行 eraseLine + 写。
    * region 外 CUP 不触发滚动，安全。
-   * 页脚布局（从 contentRows 起）：上边框 / 输入区(inputLineCount 行) / 下边框 / 状态栏。
+   * 页脚布局（从 contentRows 起）：上边框 / 输入区(inputLineCount 行) / 下边框 / spinner行 / 状态栏。
    */
   private drawFooter(): void {
     if (!this.entered) return;
@@ -456,7 +508,8 @@ export class Renderer {
     const borderTopY = contentRows;
     const inputStartY = contentRows + 1;
     const borderBottomY = inputStartY + inputLineCount;
-    const statusY = borderBottomY + 1;
+    const spinnerY = borderBottomY + 1;   // spinner 行（下边框与状态栏之间）
+    const statusY = spinnerY + 1;          // 状态栏在最底
 
     // 上边框
     this.writeFooterLine(borderTopY, BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
@@ -472,6 +525,13 @@ export class Renderer {
     }
     // 下边框
     this.writeFooterLine(borderBottomY, BORDER_CHAR.repeat(this.cols), BORDER_STYLE);
+    // spinner 行（下边框与状态栏之间；inactive 时空行占位保持布局稳定）
+    const spinnerRender = this.spinner.render();
+    if (spinnerRender.text) {
+      this.writeFooterCells(spinnerY, stringToCells(spinnerRender.text, spinnerRender.style));
+    } else {
+      this.writeFooterLine(spinnerY, '', {});
+    }
     // 状态栏
     const statusCells = buildStatusBar({
       mode: this.statusInfo.mode, model: this.statusInfo.model,

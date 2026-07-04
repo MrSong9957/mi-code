@@ -111,7 +111,8 @@ describe('BlockPipeline 超屏渲染（症状 A+B：坐标错乱 / 横向拉伸 
 
     // 断言 2：footer（上边框+输入+下边框+状态栏 = 4 行）钉在底部；
     // border（─）不应串入内容区（可视区上半部分）。
-    const FOOTER_HEIGHT = 4;
+    // footerHeight=5: 上边框 + 输入区 + 下边框 + spinner行 + 状态栏
+    const FOOTER_HEIGHT = 5;
     const contentArea = visible.slice(0, visible.length - FOOTER_HEIGHT);
     const borderInContent = contentArea.filter(l => l.includes('─'));
     expect(borderInContent, `border 不应串入内容区，实际：${JSON.stringify(borderInContent)}`).toEqual([]);
@@ -256,9 +257,9 @@ describe('多轮 agent loop 累积渲染（真实乱码根因）', () => {
     const stretched = visible.filter(l => (l.match(/●/g) ?? []).length > 1);
     expect(stretched, `不应有横向拉伸行，实际：${JSON.stringify(stretched)}`).toEqual([]);
 
-    // 断言 3：footer（上border+输入+下border+状态栏=4行）钉在底部，
+    // 断言 3：footer（上border+输入+下border+spinner+状态栏=5行）钉在底部，
     // border 不应串入内容区（可视区上半部分）
-    const FOOTER_HEIGHT = 4;
+    const FOOTER_HEIGHT = 5;
     const contentArea = visible.slice(0, visible.length - FOOTER_HEIGHT);
     const borderInContent = contentArea.filter(l => l.includes('─'));
     expect(borderInContent, `border 不应串入内容区，实际：${JSON.stringify(borderInContent)}`).toEqual([]);
