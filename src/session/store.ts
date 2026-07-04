@@ -7,6 +7,7 @@
 // 格式：每行一个 JSON 对象 { role, content, timestamp }
 
 import { readFile, appendFile, mkdir, readdir, stat } from 'fs/promises';
+import { readFileSync, readdirSync, statSync, existsSync as existsSyncFs } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
@@ -110,5 +111,45 @@ export class SessionStore {
   /** 会话文件完整路径 */
   private sessionPath(sessionId: string): string {
     return join(this.sessionsDir, `${sessionId}.jsonl`);
+  }
+
+  // ═══════ 同步版本（启动时用，避免顶层 await） ═══════
+
+  /** 同步读取整个会话消息列表。不存在返回空数组。 */
+  loadSync(sessionId: string): Message[] {
+    const filePath = this.sessionPath(sessionId);
+    if (!existsSyncFs(filePath)) return [];
+    const text = readFileSync(filePath, 'utf8');
+    const messages: Message[] = [];
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const rec = JSON.parse(trimmed) as SessionRecord;
+        messages.push({ role: rec.role, content: rec.content as Message['content'] });
+      } catch {
+        // 跳过损坏行
+      }
+    }
+    return messages;
+  }
+
+  /** 同步获取最近一个会话的 id。无会话返回 null。 */
+  getLastSessionIdSync(): string | null {
+    if (!existsSyncFs(this.sessionsDir)) return null;
+    let latest: { id: string; mtime: number } | null = null;
+    for (const file of readdirSync(this.sessionsDir)) {
+      if (!file.endsWith('.jsonl')) continue;
+      const id = file.slice(0, -6);
+      try {
+        const st = statSync(join(this.sessionsDir, file));
+        if (!latest || st.mtimeMs > latest.mtime) {
+          latest = { id, mtime: st.mtimeMs };
+        }
+      } catch {
+        // 跳过
+      }
+    }
+    return latest ? latest.id : null;
   }
 }

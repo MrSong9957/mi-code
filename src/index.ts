@@ -682,15 +682,41 @@ if (cliOpts.list) {
     process.exit(0);
   });
 } else {
-  // --resume <id> 或 --continue：加载历史会话
-  const resumeId = cliOpts.resume ?? (cliOpts.continueLatest ? await sessionStore.getLastSessionId() : null);
+  // --resume <id> 或 --continue：加载历史会话（同步读取，避免顶层 await）
+  const resumeId = cliOpts.resume ?? (cliOpts.continueLatest ? sessionStore.getLastSessionIdSync() : null);
   if (resumeId) {
-    sessionMessages = await sessionStore.load(resumeId);
+    sessionMessages = sessionStore.loadSync(resumeId);
     sessionId = resumeId;
   }
 
   // 进入渲染模式（隐藏光标 + 画首帧）
   layout.enter();
+
+  // resume 时回显历史消息到消息区（让用户看到之前的对话）
+  if (sessionMessages.length > 0) {
+    printLine(`\x1b[2m── resumed ${sessionMessages.length} messages ──\x1b[0m`);
+    for (const m of sessionMessages) {
+      if (m.role === 'user') {
+        const text = typeof m.content === 'string' ? m.content : '(结构化内容)';
+        pipeline.emit({ kind: 'user_input', text });
+      } else {
+        // assistant：从 content 提取文本
+        const text = typeof m.content === 'string'
+          ? m.content
+          : Array.isArray(m.content)
+            ? m.content
+                .filter((b): b is { type: 'text'; text: string } =>
+                  typeof b === 'object' && b !== null && (b as { type?: string }).type === 'text')
+                .map(b => b.text)
+                .join('')
+            : '';
+        if (text) {
+          pipeline.emit({ kind: 'assistant_text', text, isFinal: true });
+        }
+      }
+    }
+    printLine('');
+  }
 
 
 // 终端尺寸变化 → UILayout fullReset 重排
