@@ -1,0 +1,3 @@
+allowBuilds:
+  ecc-universal: true
+  esbuild: true
