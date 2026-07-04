@@ -131,8 +131,8 @@ export function resolveThemeColor(token: string | undefined): string {
   if (!token) return '';
   // 已是 'ansi:xxx' 格式，原样返回
   if (token.startsWith('ansi:')) return token;
-  // semantic token：查主题
-  const t = activeTheme as Record<string, string | undefined>;
+  // semantic token：查主题（经 unknown 中转绕过 TS 严格索引检查）
+  const t = activeTheme as unknown as Record<string, string | undefined>;
   const v = t[token];
   return v ?? '';
 }
