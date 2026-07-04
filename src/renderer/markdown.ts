@@ -160,12 +160,26 @@ function parseLine(line: string, cols: number = 80, streaming: boolean = false):
     return [...pad(indent), ...marker, ...content];
   }
 
-  // 普通段落（流式阶段跳过内联格式，避免未闭合标记闪烁）
-  if (streaming) return makeCells(line, {});
+  // 普通段落（流式阶段剥离 ** / * / ` 标记符号，避免显示丑陋的星号；
+  // 完整粗体/斜体效果由 isFinal 时的整段重画补上，流式期间先保证文本干净）
+  if (streaming) return makeCells(stripInlineMarkers(line), {});
   return parseInline(line, { base: {} });
 }
 
 // ═══════ 行内解析（粗/斜/行内代码/链接）═══════
+
+/**
+ * 流式期间剥离行内标记符号（** / __ / * / _ / `），保留文字内容。
+ * 不解析样式（流式 delta 可能截断标记，无法可靠配对），只去掉符号避免丑陋显示。
+ * 完整粗体/斜体效果由 isFinal 时整段重画补上。
+ */
+function stripInlineMarkers(line: string): string {
+  return line
+    .replace(/\*\*(.+?)\*\*/g, '$1')   // **粗体** → 粗体
+    .replace(/__(.+?)__/g, '$1')        // __粗体__ → 粗体
+    .replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '$1')  // *斜体* → 斜体（不吞 ** 的部分）
+    .replace(/`([^`]+?)`/g, '$1');      // `代码` → 代码
+}
 
 interface InlineCtx {
   base: Style;

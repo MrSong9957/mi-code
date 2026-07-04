@@ -29,11 +29,17 @@ export interface StatusBarState {
 }
 
 const DIM: Style = { dim: true };
-const ACCENT: Style = { fg: 'brand' };      // 主色 cyan（mode/工具完成/进度条）
-const WARN: Style = { fg: 'warning' };       // 工具运行中
-const ERR: Style = { fg: 'error' };
-const BAR_FILL: Style = { fg: 'brand' };
-const BAR_EMPTY: Style = { dim: true };
+// 状态栏各段配色：每段不同色，提升信息辨识度
+const MODE: Style = { fg: 'brand' };         // 模式（Act/Plan）—— cyan 主色
+const MODEL: Style = { fg: 'info' };         // 模型名 —— blue
+const DIR: Style = { fg: 'textDim' };        // 路径 —— gray（次要信息）
+const BRANCH: Style = { fg: 'warning' };     // git 分支 —— yellow（常用需醒目）
+const TOOL_RUN: Style = { fg: 'warning' };   // 工具运行中 —— yellow
+const TOOL_DONE: Style = { fg: 'success' };  // 工具完成 —— green
+const ERR: Style = { fg: 'error' };          // 错误 —— red
+const BAR_FILL: Style = { fg: 'brand' };     // 进度条填充 —— cyan
+const BAR_EMPTY: Style = { dim: true };      // 进度条空白 —— dim
+const HINT: Style = { fg: 'success' };       // 提示 —— green
 
 /** 构建进度条文本（10 格 + 百分比） */
 function buildProgressBar(ratio: number, totalWidth = 10): string {
@@ -56,33 +62,33 @@ export function buildStatusBar(state: StatusBarState): Cell[] {
     const mark = state.tool.status === 'running' ? '⏳'
       : state.tool.status === 'error' ? '✗'
         : '✓';
-    const sty = state.tool.status === 'running' ? WARN
+    const sty = state.tool.status === 'running' ? TOOL_RUN
       : state.tool.status === 'error' ? ERR
-        : ACCENT;
+        : TOOL_DONE;
     segments.push({ text: `${mark} ${state.tool.name}`, style: sty });
     segments.push({ text: sep, style: DIM });
   }
 
   // 模式
   if (state.mode) {
-    segments.push({ text: state.mode, style: ACCENT });
+    segments.push({ text: state.mode, style: MODE });
     segments.push({ text: sep, style: DIM });
   }
 
   // 模型
-  segments.push({ text: state.model, style: DIM });
+  segments.push({ text: state.model, style: MODEL });
   segments.push({ text: sep, style: DIM });
 
   // 路径（最后 2 个层级）
   if (state.dir) {
     const parts = state.dir.replace(/\\/g, '/').split('/').filter(Boolean);
     const short = parts.slice(-2).join('/');
-    segments.push({ text: '~/' + short, style: DIM });
+    segments.push({ text: '~/' + short, style: DIR });
     segments.push({ text: sep, style: DIM });
   }
 
   // 分支
-  segments.push({ text: state.branch, style: DIM });
+  segments.push({ text: state.branch, style: BRANCH });
 
   // 上下文窗口进度条
   if (state.contextUsage !== undefined) {
@@ -94,7 +100,7 @@ export function buildStatusBar(state: StatusBarState): Cell[] {
   // 提示
   if (state.hint) {
     segments.push({ text: sep, style: DIM });
-    segments.push({ text: state.hint, style: ACCENT });
+    segments.push({ text: state.hint, style: HINT });
   }
 
   // 拼成 cells

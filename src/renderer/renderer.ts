@@ -258,7 +258,10 @@ export class Renderer {
         }
         const seg = segments[si]!;
         if (seg.length > 0) {
-          this.streamWriteCells(stringToCells(seg, {}), regionBottom);
+          // 流式 delta 走 markdown streaming 模式（剥离 ** / * / ` 标记，避免丑陋星号）
+          const segRows = renderMarkdown(seg, this.cols, true);
+          const segCells = segRows.length > 0 ? segRows[0]! : stringToCells(seg, {});
+          this.streamWriteCells(segCells, regionBottom);
         }
       }
       this.buffer.write('\x1b[0m');
