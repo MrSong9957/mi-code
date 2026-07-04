@@ -52,6 +52,16 @@ export interface StreamingQueryOptions {
    * 留空时 needsL4 仅发警告（保持旧行为），不实际压缩。
    */
   compactClient?: StreamingLLMClient;
+  /**
+   * 初始历史消息（resume 时传入之前的会话）。
+   * 若提供，本次查询会在这些历史基础上继续，而非从单条 user 消息开始。
+   */
+  initialMessages?: Message[];
+  /**
+   * 查询结束时回调，传入最终的完整消息列表（含本次新增）。
+   * 用于会话持久化（落盘到 JSONL）。
+   */
+  onMessages?: (messages: Message[]) => void;
 }
 
 /**
@@ -82,16 +92,22 @@ export async function* streamingQuery(
     eventBus,
     model = 'claude-sonnet-4-20250514',
     compactClient,
+    initialMessages,
+    onMessages,
   } = options;
 
   const engine = new QueryEngine(client);
-  let messages: Message[] = [{ role: 'user', content: userMessage }];
+  // 初始历史：resume 时传入之前的会话 + 本次 user 消息；否则从单条 user 消息开始
+  let messages: Message[] = initialMessages && initialMessages.length > 0
+    ? [...initialMessages, { role: 'user' as const, content: userMessage }]
+    : [{ role: 'user' as const, content: userMessage }];
   let turnCount = 0;
 
   // 错误恢复状态
   const recoveryState = createRecoveryState(model, maxTokens);
   const failureInbox = new FailureInbox();
 
+  try {
   while (turnCount < maxTurns) {
     // Abort 检查
     if (signal.aborted) {
@@ -317,4 +333,8 @@ export async function* streamingQuery(
 
   // 达到最大轮数
   eventBus?.emitLoopEnd({ reason: 'max_turns' });
+  } finally {
+    // 无论正常结束/错误/中断，都把最终消息列表回调出去（供会话持久化落盘）
+    if (onMessages) onMessages(messages);
+  }
 }

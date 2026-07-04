@@ -76,6 +76,18 @@ const inboxManager = new InboxManager();
 const historyManager = new HistoryManager();
 const currentProject = process.cwd();
 
+// CLI argv 解析（--resume/--continue/--list）
+import { parseCliArgs } from './cli.js';
+import { SessionStore } from './session/store.js';
+import { randomUUID } from 'crypto';
+import type { Message } from './agent/types.js';
+const cliOpts = parseCliArgs();
+const sessionStore = new SessionStore();
+// 会话 ID：resume 时用恢复的 id，否则新建
+let sessionId: string = randomUUID();
+// 当前会话累积消息（resume 时预载，streamingQuery onMessages 时更新）
+let sessionMessages: Message[] = [];
+
 function getGitBranch(): string {
   try { return execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8' }).trim(); }
   catch { return 'no-git'; }
@@ -467,6 +479,8 @@ if (process.stdin.isTTY) {
                   (async () => {
                     // 当前 assistant 回合的累积文本（流式 Markdown 渲染用）
                     let assistantText = '';
+                    // 已落盘的消息数量（onMessages 只 append 新增部分；初始 = 已 resume 的历史长度）
+                    let persistedCount = sessionMessages.length;
                     // content block 的 index → blockType 映射（追踪每个块类型，用于 content_block_stop 分派）
                     const blockTypes = new Map<number, string>();
                     // 当前是否处于 thinking 块（控制 thinking_start/end 配对，避免重复）
@@ -479,6 +493,17 @@ if (process.stdin.isTTY) {
                         maxTurns: 10,
                         eventBus,
                         compactClient,
+                        initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
+                        onMessages: (finalMessages) => {
+                          // 落盘：只 append 本次新增的消息（闭包内跟踪已持久化数量）
+                          // persistedCount 在闭包外声明（每次 turn 重置）
+                          const newMsgs = finalMessages.slice(persistedCount);
+                          sessionMessages = finalMessages;
+                          persistedCount = finalMessages.length;
+                          for (const m of newMsgs) {
+                            void sessionStore.append(sessionId, m);
+                          }
+                        },
                       })) {
                         // AI 输出期间：累积 token，经 pipeline 渲染进消息区
                         if ('type' in msg && msg.type === 'content_block_start') {
@@ -641,8 +666,32 @@ if (process.stdin.isTTY) {
 // 启动
 // ─────────────────────────────────────────────────────────────
 
-// 进入渲染模式（隐藏光标 + 画首帧）
-layout.enter();
+// CLI 参数处理：--list 列出会话后退出（不进 TUI）
+if (cliOpts.list) {
+  sessionStore.list().then(sessions => {
+    if (sessions.length === 0) {
+      console.log('No sessions found.');
+    } else {
+      console.log('Sessions (most recent first):');
+      for (const s of sessions) {
+        const preview = s.firstUserInput.slice(0, 40);
+        console.log(`  ${s.id}  ${preview}  (${s.messageCount} msgs)`);
+      }
+      console.log('\nResume with: micode --resume <id>  or  micode --continue');
+    }
+    process.exit(0);
+  });
+} else {
+  // --resume <id> 或 --continue：加载历史会话
+  const resumeId = cliOpts.resume ?? (cliOpts.continueLatest ? await sessionStore.getLastSessionId() : null);
+  if (resumeId) {
+    sessionMessages = await sessionStore.load(resumeId);
+    sessionId = resumeId;
+  }
+
+  // 进入渲染模式（隐藏光标 + 画首帧）
+  layout.enter();
+
 
 // 终端尺寸变化 → UILayout fullReset 重排
 process.stdout.on('resize', () => {
@@ -655,6 +704,8 @@ function cleanupOnExit(): void {
   backgroundManager.killAll();
   layout.stopSpinner();  // 清 spinner 定时器，避免退出后 setInterval 泄漏
   layout.exit();
+  // 退出 alt screen 后，在主屏打印 resume hint（对齐 Claude Code）
+  process.stdout.write(`\x1b[2mResume this session with:\nmicode --resume ${sessionId}\n\x1b[0m`);
 }
 process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });
 process.on('SIGTERM', () => { cleanupOnExit(); process.exit(0); });
@@ -682,3 +733,4 @@ setInterval(() => {
 
 // 首次显示输入框
 syncInput();
+} // end of else（非 --list 分支，进入 TUI）
