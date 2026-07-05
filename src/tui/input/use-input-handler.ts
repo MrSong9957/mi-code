@@ -82,8 +82,16 @@ export function useInputHandler(
       return;
     }
 
-    // 其它控制序列（Tab/Esc/PageUp 等）本期忽略；可打印字符才 insert
-    if (input !== '' && !key.ctrl && !key.meta && !key.escape && !key.tab) {
+    // 其它控制序列（Tab/Esc/PageUp 等）本期忽略；可打印字符才 insert。
+    // ⚠️ 鼠标 SGR 序列（\x1b[<button;col;rowM|m）的受害者防御：
+    // Ink 的 parseKeypress 不识别鼠标，会把整段 \x1b[<...> 当作 sequence（name=""），
+    // 经 useInput 以 input 形式送达——且 Ink 会先剥离开头的 \x1b（use-input.js
+    // 的 "strip escape prefix" 逻辑），所以到达这里的 input 形如 "[<0;10;5M"。
+    // 若不拦截会把这些残码当文本插入输入框（表现为鼠标左右键/滚轮在输入框输出乱码）。
+    // 拒绝仍含 \x1b 或匹配 SGR 鼠标残码模式（\[<digits;digits;digits>M|m）的 input；
+    // 正常可打印字符（含多字节 UTF-8）绝不匹配，故不误伤。
+    const isMouseOrControlSeq = input.includes('\x1b') || /^\[<\d+;\d+;\d+[Mm]/.test(input);
+    if (input !== '' && !key.ctrl && !key.meta && !key.escape && !key.tab && !isMouseOrControlSeq) {
       s.insert(input);
     }
   });

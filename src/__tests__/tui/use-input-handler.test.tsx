@@ -88,3 +88,40 @@ describe('useInputHandler（键事件 → store）', () => {
     expect(store.getState().text).toBe('abc');
   });
 });
+
+describe('useInputHandler（鼠标序列不得污染输入框）', () => {
+  // 鼠标 SGR 序列经 Ink useInput 时，parseKeypress 把整个 \x1b[<...> 当作 sequence
+  // （name=""），会落到 insert 分支把转义码当文本插入。必须在 insert 前拦截含控制字符的 input。
+  const mouseSeqs = [
+    ['左键按下', '\x1b[<0;10;5M'],
+    ['释放', '\x1b[<0;10;5m'],
+    ['滚轮上', '\x1b[<64;10;5M'],
+    ['滚轮下', '\x1b[<65;10;5M'],
+    ['拖拽', '\x1b[<32;10;6M'],
+  ];
+  for (const [label, seq] of mouseSeqs) {
+    it(`鼠标${label}序列不写入输入框`, () => {
+      const store = createInputStore();
+      const { stdin } = render(React.createElement(InputProbe, { store }));
+      stdin.write(seq);
+      expect(store.getState().text, `鼠标${label}序列不应被 insert`).toBe('');
+    });
+  }
+
+  it('连续多个鼠标事件后输入框仍空', () => {
+    const store = createInputStore();
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    stdin.write('\x1b[<0;10;5M');
+    stdin.write('\x1b[<32;10;6M');
+    stdin.write('\x1b[<64;10;7M');
+    stdin.write('\x1b[<0;10;8m');
+    expect(store.getState().text).toBe('');
+  });
+
+  it('正常可打印字符仍能输入（不误伤）', () => {
+    const store = createInputStore();
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    stdin.write('hi');
+    expect(store.getState().text).toBe('hi');
+  });
+});
