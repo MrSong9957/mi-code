@@ -16,9 +16,6 @@ import { Box, Text } from 'ink';
 import { StatusBar } from './StatusBar.js';
 import type { StatusBarData } from '../types.js';
 
-const BORDER_COLOR = 'gray';
-const PROMPT_COLOR = 'green';
-
 export interface FooterProps {
   input: string;
   cursor: number;
@@ -30,12 +27,12 @@ export function Footer({ input, status, cols }: FooterProps): React.ReactElement
   const border = '─'.repeat(Math.max(0, cols));
   return (
     <Box flexShrink={0} flexDirection="column">
-      <Text color={BORDER_COLOR}>{border}</Text>
+      <Text color="gray">{border}</Text>
       <Text>
-        <Text color={PROMPT_COLOR} bold>{'❯ '}</Text>
+        <Text color="green" bold>❯ </Text>
         {input}
       </Text>
-      <Text color={BORDER_COLOR}>{border}</Text>
+      <Text color="gray">{border}</Text>
       <StatusBar status={status} />
     </Box>
   );

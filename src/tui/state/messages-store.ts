@@ -103,10 +103,9 @@ export function createMessagesStore(): MessagesStore {
           }],
         };
       }
-      const { streamingText: _st, ...rest } = last;
-      void _st;
-      const updated = { ...rest, lines, finalized: true } as TuiMessage;
-      delete updated.streamingText;
+      const { streamingText: _removed, ...rest } = last;
+      void _removed;
+      const updated: TuiMessage = { ...rest, lines, finalized: true };
       return { messages: [...s.messages.slice(0, -1), updated] };
     }),
 

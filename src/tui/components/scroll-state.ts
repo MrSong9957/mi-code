@@ -36,9 +36,7 @@ export function computeScrollState(input: ScrollStateInput): ScrollState {
 
 /** 把 scrollTop 钳位到 [0, maxScroll] */
 export function clampScrollTop(scrollTop: number, maxScroll: number): number {
-  if (scrollTop < 0) return 0;
-  if (scrollTop > maxScroll) return maxScroll;
-  return scrollTop;
+  return Math.max(0, Math.min(maxScroll, scrollTop));
 }
 
 /** 从完整列表切片出当前可视区间 [scrollTop, scrollTop+visibleRows) */

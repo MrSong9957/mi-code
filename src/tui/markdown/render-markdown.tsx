@@ -62,22 +62,17 @@ function flattenText(tokens: Token[]): string {
   return tokens.map(t => ('text' in t ? String(t.text) : '')).join('');
 }
 
-/** 高亮代码块：cli-highlight 按 lang；失败/无 lang 降级 cyan */
+/** 高亮代码块：cli-highlight 按 lang；失败/无 lang 降级原样（由外层 <Text color="cyan"> 着色） */
 function highlightCode(code: string, lang?: string): React.ReactNode {
+  if (!lang || lang.trim() === '') return code;
   try {
-    if (lang && lang.trim() !== '') {
-      const highlighted = highlight(code, { language: lang, ignoreIllegals: true });
-      // cli-highlight 默认输出 ANSI 转义码；Ink <Text> 不解析 ANSI。
-      // 本期简化：strip ANSI，统一用 cyan 显示（颜色丢失但内容保留）。
-      // 二期可解析 ANSI 映射到 Ink 样式。
-      // eslint-disable-next-line no-control-regex
-      const stripped = highlighted.replace(/\x1b\[[0-9;]*m/g, '');
-      return stripped;
-    }
+    const highlighted = highlight(code, { language: lang, ignoreIllegals: true });
+    // cli-highlight 输出 ANSI；Ink <Text> 不解析 → strip 后由外层 <Text color="cyan"> 统一着色
+    // eslint-disable-next-line no-control-regex
+    return highlighted.replace(/\x1b\[[0-9;]*m/g, '');
   } catch {
-    // 高亮失败：降级原样
+    return code; // lang 不识别或解析失败：降级原样
   }
-  return code;
 }
 
 /** block token → 一组 React 节点（每条占独立行） */
