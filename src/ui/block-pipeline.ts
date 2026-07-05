@@ -18,17 +18,21 @@ import type { Block, FormattedLine, UIMessageStyle } from './types.js';
 import { INDENT, BLOCK_STYLES, buildToolResultBlock, summarizeOutput } from './block-format.js';
 import { MessageFormatter } from './message-formatter.js';
 import { ExpandableBlockStore } from './expandable-store.js';
-import type { Style } from '../renderer/cell.js';
 
 /**
- * PipelineRenderer：pipeline 依赖的 Renderer 子集（最小接口，便于 mock）。
+ * PipelineRenderer：pipeline 依赖的下游渲染/投递接口（最小接口，便于 mock）。
+ *
+ * 注意：这是「格式化数据 → 渲染目标」的边界。旧实现是手写 ANSI Renderer；
+ * Ink 重构后由 store adapter 实现同一接口（把 FormattedLine 推进 zustand store）。
+ * 样式用语义 token（UIMessageStyle：fg=brand/success/error、dim、bold…），
+ * 由渲染侧映射到具体着色（旧 Renderer 的 theme / Ink 的 <Text color>）。
  */
 export interface PipelineRenderer {
   printMessage(text: string, role?: string, style?: Record<string, unknown>, raw?: boolean): void;
   appendStreamingMarkdown(
     text: string,
     isFinal: boolean,
-    opts?: { indent?: number; firstLinePrefix?: string; firstLineStyle?: Style },
+    opts?: { indent?: number; firstLinePrefix?: string; firstLineStyle?: UIMessageStyle },
   ): void;
   /** 封口流式（插分隔符，不强制 flushNow）——比 finalizeStreaming 温和 */
   sealStreaming(): void;
@@ -40,11 +44,38 @@ export interface PipelineRenderer {
 const ASSISTANT_FORMAT = {
   indent: INDENT.nested,
   firstLinePrefix: '● ',
-  firstLineStyle: { fg: 'brand' } as Style,
+  firstLineStyle: { fg: 'brand' } as UIMessageStyle,
 };
 
 /** tool_result 预览的最大行数（与 message-formatter 的 OUTPUT_PREVIEW_LINES 一致） */
 const RESULT_PREVIEW_LINES = 4;
+
+/**
+ * 工具块缓冲项：一个 tool_call 等待它的 result（+ hook）的"配对货架格子"。
+ *
+ * call 进缓冲区时填 callLines；result 到达时填 resultLines + 注册可折叠块，
+ * 然后立即 flush 该项（call→result→hook 成对 print）。
+ */
+interface BufferedTool {
+  /** 唯一键：tool_use id（无 id 时生成临时 id） */
+  toolUseId: string;
+  /** 工具名（用于无 id 时按 name 回退匹配） */
+  name: string;
+  /** 原始 input（result 到达时算 diff 用） */
+  input: Record<string, unknown>;
+  /** call 行（已格式化，待 print） */
+  callLines: FormattedLine[];
+  /** result 行（到齐后填；undefined 表示 result 尚未到达） */
+  resultLines?: FormattedLine[];
+  /** ctrl+o 可折叠块的完整展开行（result 被截断时才有） */
+  expandableFullLines?: FormattedLine[];
+  /** 可折叠块 id（注册用，截断时才有） */
+  expandableId?: string;
+  /** 可折叠块 kind（'tool_result'） */
+  hasExpandable?: boolean;
+  /** hook 行（PostToolUse 日志，跟在 result 后） */
+  hookLines?: FormattedLine[];
+}
 
 /**
  * BlockPipeline：唯一输出管道。
@@ -59,8 +90,20 @@ export class BlockPipeline {
   private hasContent = false;
   private assistantGapApplied = false;
   private thinkingActive = false;
-  /** tool_call → tool_result 的 input 缓存（按 name 匹配，算 diff 用） */
-  private pendingToolInputs = new Map<string, Record<string, unknown>>();
+  /**
+   * 工具块缓冲区（方案 C：视觉位置修复）。
+   *
+   * 物理本质：快递中转站的"配对货架"。
+   * tool_call 进来时把包裹（call 行）放上货架等它的回执（result）；
+   * tool_result 到达时凭 toolUseId 找到对应包裹，**成对出货**——
+   * call 行紧跟其 result 行，不让 result 跑到别人 call 下面。
+   *
+   * 为什么需要缓冲：streaming-query 阶段 1 在同一 microtask 背靠背 emit 完所有 call，
+   * 阶段 3 才 emit result。若 emit 即落屏，5 个 call 已经印上屏幕，
+   * result 来的时候只能追加屏幕底部——视觉脱节。
+   * 缓冲吸收这个时序，等配对再 flush，保证 call→result→call→result 交替。
+   */
+  private toolBuffer: BufferedTool[] = [];
   /** thinking 文本累积（供 ctrl+o 展开用） */
   private thinkingBuffer = '';
   /** 可折叠块存储（thinking + tool_result 的 summary/full）——ctrl+o 临时 alt screen 覆盖层渲染用 */
@@ -79,14 +122,14 @@ export class BlockPipeline {
     switch (block.kind) {
       case 'user_input':
         this.openBlock();
-        this.print(MessageFormatter.format('input', {}, block.text));
+        this.print(MessageFormatter.format('input', {}, block.text), 'user');
         break;
 
       case 'thinking_start':
         // 第一个模型块：强制加空行（前面总有 banner/用户输入等非模型内容）
         this.openModelBlock();
         this.thinkingActive = true;
-        this.print(MessageFormatter.format('thinking'));
+        this.print(MessageFormatter.format('thinking'), 'assistant');
         break;
 
       case 'thinking_delta':
@@ -111,7 +154,7 @@ export class BlockPipeline {
               }))
             : summaryLines; // 无思考内容时 full = summary
           this.expandable.add({ id, kind: 'thinking', summaryLines, fullLines });
-          this.print(summaryLines);
+          this.print(summaryLines, 'assistant');
         }
         this.thinkingBuffer = '';
         this.thinkingActive = false;
@@ -134,56 +177,85 @@ export class BlockPipeline {
         break;
       }
 
-      case 'tool_call':
-        this.openModelBlock();
-        // 缓存 input 供后续 tool_result 计算 diff（按 name 匹配；
-        // 写工具串行执行，安全。读工具不读 input，不受影响。）
-        this.pendingToolInputs.set(block.name, block.input);
-        this.print(MessageFormatter.format('tool_call', {
+      case 'tool_call': {
+        // 不立即 print——进缓冲区等 result，配对后成对 flush（视觉位置修复）。
+        // openModelBlock 推迟到 flushTool 时调用，避免空行位置错乱。
+        const toolUseId = block.toolUseId ?? `auto-${this.idCounter++}-${block.name}`;
+        const callLines = MessageFormatter.format('tool_call', {
           toolName: block.name,
           toolInput: block.input,
-        }));
+        });
+        this.toolBuffer.push({
+          toolUseId,
+          name: block.name,
+          input: block.input,
+          callLines,
+        });
         break;
+      }
 
       case 'tool_result': {
-        // tool_result 续接 tool_call，不单独开新块（不加空行）
-        // input 优先用 Block 自带的，否则从 tool_call 缓存按 name 取回
-        const input = block.input ?? this.pendingToolInputs.get(block.name);
-        this.pendingToolInputs.delete(block.name);
+        // 配对：从缓冲区找到这个 result 对应的 call 项。
+        //   1. 有 toolUseId → 精确匹配（并行场景根治）
+        //   2. 没 id → 取缓冲区第一个未配对的项（FIFO，streaming-executor 保证顺序）
+        //   3. 缓冲区空 → 没有对应 call，直接立即渲染（兜底，理论上不该发生）
+        let idx = -1;
+        if (block.toolUseId) {
+          idx = this.toolBuffer.findIndex(t => t.toolUseId === block.toolUseId);
+        }
+        if (idx < 0) {
+          // FIFO：第一个还没 result 的项
+          idx = this.toolBuffer.findIndex(t => t.resultLines === undefined);
+        }
+        if (idx < 0) {
+          // 兜底：没找到对应 call，立即渲染（不丢失 result）
+          // 这种情况极少：result 先于 call、或 hook 之外的非工具 result
+          this.openBlock();
+          const meta = buildToolResultBlock(block.name, block.input, block.output);
+          const summaryLines = MessageFormatter.format('tool_result', meta);
+          this.print(summaryLines, 'tool');
+          this.hasContent = true;
+          break;
+        }
+
+        const item = this.toolBuffer[idx]!;
+        // input 优先级：result 自带 > 配对 call 缓存的 input
+        const input = block.input ?? item.input;
         const meta = buildToolResultBlock(block.name, input, block.output);
         const summaryLines = MessageFormatter.format('tool_result', meta);
+        item.resultLines = summaryLines;
 
-        // 若输出被截断（有 rawOutput 且超预览行数），注册可折叠块
+        // 处理可折叠块（截断时注册）
         if (meta.rawOutput !== undefined && meta.rawOutput !== '') {
           const { truncated } = summarizeOutput(meta.rawOutput, RESULT_PREVIEW_LINES);
           if (truncated) {
             const id = `tool-${++this.idCounter}`;
-            // fullLines：完整输出按行，首行带 ⎿，续行 3 空格（raw=true，不走 md）
             const fullLines = meta.rawOutput.split('\n').map((l, i) => ({
               content: `${i === 0 ? '⎿  ' : '   '}${l}`,
               style: BLOCK_STYLES.dim,
               indent: INDENT.nested,
               raw: true,
             }));
-            this.expandable.add({ id, kind: 'tool_result', summaryLines, fullLines });
-            this.print(summaryLines);
-            this.hasContent = true;
-            break;
+            item.expandableId = id;
+            item.expandableFullLines = fullLines;
+            item.hasExpandable = true;
           }
         }
-        // 未截断：直接渲染，不需注册（无可展开内容）
-        this.print(summaryLines);
-        this.hasContent = true;
+
+        // 配对完成 → 立即 flush 该项
+        this.flushTool(idx);
         break;
       }
 
       case 'hook': {
         // PostToolUse hook 日志：紧跟 tool_result 的附属信息。
-        // 开新块（加块间空行）+ dim 样式 + nested 缩进，与 tool_result 的 ⎿ 行视觉对齐。
-        // 同步渲染（emit 即落屏），避免异步 printLine 穿插进下一轮流式内容。
+        //
+        // 时序：index.ts 的消息循环里，tool_result 事件 emit 之后同步 await hook，
+        // 然后 emit hook 块。所以 hook 到达时，对应工具的 call+result 刚 flush 完，
+        // 屏幕底部就是它的 result 行——hook 立即 print 自然紧跟其后。
+        // 不另加块间空行（result→hook 是同一工具的附属，视觉上紧贴）。
         const hookLines = [{ content: block.text, style: BLOCK_STYLES.dim, indent: INDENT.nested }];
-        this.openBlock();
-        this.print(hookLines);
+        this.print(hookLines, 'tool');
         break;
       }
 
@@ -238,10 +310,53 @@ export class BlockPipeline {
     return { lines, kind };
   }
 
-  /** 把 FormattedLine[] 下沉到 renderer（带样式，透传 raw 标记） */
-  private print(lines: FormattedLine[]): void {
+  /** 把 FormattedLine[] 下沉到 renderer（带样式，透传 raw 标记）。
+   *  role 透传给 renderer（Ink 侧 store adapter 据此断块/分组）；默认 'system'。 */
+  private print(lines: FormattedLine[], role: string = 'system'): void {
     for (const line of lines) {
-      this.renderer.printMessage(line.content, 'system', line.style as Record<string, unknown>, line.raw === true);
+      this.renderer.printMessage(line.content, role, line.style as Record<string, unknown>, line.raw === true);
+    }
+  }
+
+  /**
+   * flush 单个缓冲工具项：call 行紧跟其 result 行（+ hook）成对落屏。
+   *
+   * 物理：从货架上取下这个配对完成的包裹，按"call→result→hook"顺序摆上交付台。
+   * 落屏后从缓冲区移除（已交付）。
+   */
+  private flushTool(idx: number): void {
+    const item = this.toolBuffer[idx];
+    if (!item) return;
+    // 块间空行：首个工具前由 openModelBlock 处理（与 thinking/assistant_text 之间也加空行）
+    this.openModelBlock();
+    // call 行（● Read(...)）
+    this.print(item.callLines, 'tool');
+    // result 行（⎿ ...）——续接 call，不另加空行
+    if (item.resultLines) {
+      this.print(item.resultLines, 'tool');
+      // 注册可折叠块（截断时）
+      if (item.hasExpandable && item.expandableId && item.expandableFullLines) {
+        this.expandable.add({
+          id: item.expandableId,
+          kind: 'tool_result',
+          summaryLines: item.resultLines,
+          fullLines: item.expandableFullLines,
+        });
+      }
+    }
+    this.hasContent = true;
+    // 从缓冲区移除（已交付）。注意：hook 来时这一项已经没了，hook 走立即 print 兜底。
+    this.toolBuffer.splice(idx, 1);
+  }
+
+  /**
+   * flush 所有未配对的 call（防丢失）。
+   * clear() / clearTurnState() 时调用——result 没到的 call 也得渲染出来。
+   */
+  private flushAllPending(): void {
+    // 按 call 到达顺序（缓冲区顺序）逐个 flush；没 result 的项只渲染 call 行
+    while (this.toolBuffer.length > 0) {
+      this.flushTool(0);
     }
   }
 
@@ -252,11 +367,12 @@ export class BlockPipeline {
 
   /** 清空（新 turn 开始时） */
   clear(): void {
+    // 先把未交付的工具块 flush 出去，避免丢失
+    this.flushAllPending();
     this.hasContent = false;
     this.assistantGapApplied = false;
     this.thinkingActive = false;
     this.thinkingBuffer = '';
-    this.pendingToolInputs.clear();
     this.expandable.clear();
     this.renderer.clearMessages();
   }
@@ -267,8 +383,9 @@ export class BlockPipeline {
    * 但屏幕上的历史消息保留（不清屏）。
    */
   clearTurnState(): void {
+    // flush 未交付的工具块（防丢失）
+    this.flushAllPending();
     this.thinkingBuffer = '';
-    this.pendingToolInputs.clear();
     this.expandable.clear();
     // hasContent 保持 true（屏幕上仍有历史内容，新块前要加空行）
   }
