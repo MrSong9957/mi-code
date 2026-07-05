@@ -8,7 +8,7 @@
 //   - 末尾不稳定段（未换行的尾巴）：每次重渲染
 // 大幅降低长流式输出的渲染开销。
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { Box } from 'ink';

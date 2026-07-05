@@ -40,7 +40,6 @@ export function ScrollBox({ messages, visibleRows }: ScrollBoxProps): React.Reac
     if (!userScrolledAwayRef.current && scrollTopRaw !== state.maxScroll) {
       setScrollTop(state.maxScroll);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, state.maxScroll]);
 
   // 鼠标滚轮：监听 stdin raw data，解析 SGR 滚轮

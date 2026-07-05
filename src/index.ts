@@ -27,7 +27,6 @@ import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
 import { parseBlockPrefix } from './commands/parser.js';
 import { PermissionChecker } from './permission/index.js';
-import type { PermissionMode } from './permission/index.js';
 import { WRITE_TOOLS } from './permission/types.js';
 import { HookRunner, preToolSafetyCheck, postToolLogger, sessionStartLogger } from './hooks/index.js';
 import { TeammateManager, createSendMessageTool, createReadInboxTool, NegotiationManager, createShutdownRequestTool, createRespondRequestTool, createSubmitPlanTool, createApprovePlanTool } from './agent/team/index.js';
@@ -214,12 +213,6 @@ childToolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
 // ask_user_question 同样需要给子代理（plan 角色白名单含此工具）
 const askToolChild = createAskUserTool(askManager);
 childToolRegistry.register(askToolChild.definition, askToolChild.executor);
-
-/** 同步输入态（Ink 响应式模型下：inputStore 是单一数据源，App 自动重渲染）。
- *  保留函数签名兼容旧调用点，现为 no-op。input/cursorPos 模块变量仅供 handleUserSubmit 读取。 */
-function syncInput(): void {
-  // no-op: ConnectedApp 订阅 inputStore 自动重渲染
-}
 
 /**
  * 用户提交输入（回车）。从旧 handleInput 的 byte===0x0d 块提取，接入 bootstrap 的 onSubmit 回调。

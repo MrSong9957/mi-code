@@ -70,6 +70,7 @@ function highlightCode(code: string, lang?: string): React.ReactNode {
       // cli-highlight 默认输出 ANSI 转义码；Ink <Text> 不解析 ANSI。
       // 本期简化：strip ANSI，统一用 cyan 显示（颜色丢失但内容保留）。
       // 二期可解析 ANSI 映射到 Ink 样式。
+      // eslint-disable-next-line no-control-regex
       const stripped = highlighted.replace(/\x1b\[[0-9;]*m/g, '');
       return stripped;
     }

@@ -10,7 +10,9 @@
 // 本期只识别滚轮（button 基位 64/65），返回 'up'/'down'；其它返回 null。
 // 鼠标按下/拖拽（selection）留待后续期。
 
-/** SGR 鼠标序列正则：\x1b[<button;col;row(M|m) */
+/** SGR 鼠标序列正则：\x1b[<button;col;row(M|m)
+ *  含控制字符 \x1b（终端转义序列固有），eslint no-control-regex 不适用 */
+// eslint-disable-next-line no-control-regex
 const SGR_MOUSE_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
 
 export type WheelDirection = 'up' | 'down';

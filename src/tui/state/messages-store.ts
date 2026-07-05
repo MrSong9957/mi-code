@@ -36,7 +36,7 @@ export interface MessagesState {
 }
 
 export function createMessagesStore(): MessagesStore {
-  return createStore<MessagesState>((set, get) => ({
+  return createStore<MessagesState>((set) => ({
     messages: [],
     _idCounter: 0,
 
