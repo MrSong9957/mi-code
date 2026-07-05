@@ -9,6 +9,7 @@
 
 import React from 'react';
 import { useStore } from 'zustand/react';
+import { useShallow } from 'zustand/react/shallow';
 import { App } from './App.js';
 import { useInputHandler } from './input/use-input-handler.js';
 import { useAltScreen } from './hooks/useAltScreen.js';
@@ -40,12 +41,14 @@ export function ConnectedApp({
   const messages = useStore(messagesStore, (s) => s.messages);
   const inputText = useStore(inputStore, (s) => s.text);
   const cursor = useStore(inputStore, (s) => s.cursor);
-  const status = useStore(statusStore, (s) => ({
+  // 返回对象字面量的 selector 必须用 useShallow 包裹：zustand v5 useStore 走 useSyncExternalStore
+  // 的 Object.is 比较，对象每次新引用会触发无限重渲染。useShallow 改为浅比较字段。
+  const status = useStore(statusStore, useShallow((s) => ({
     mode: s.mode, model: s.model, dir: s.dir, branch: s.branch, contextPct: s.contextPct,
-  }));
-  const logo = useStore(logoStore, (s) => ({
+  })));
+  const logo = useStore(logoStore, useShallow((s) => ({
     version: s.version, dir: s.dir,
-  }));
+  })));
 
   return (
     <App
