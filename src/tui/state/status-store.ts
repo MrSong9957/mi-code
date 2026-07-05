@@ -1,61 +1,35 @@
 // src/tui/state/status-store.ts
-// 状态栏 + spinner + hint 的统一状态（zustand vanilla）
+// 状态栏 tokens + elapsed 状态（zustand vanilla，charter §顶层布局 L89）
 //
-// 物理本质：footer 状态栏的「仪表盘数据源」。
-// 替代旧 Renderer 的 setStatus/setHint/startSpinner/setSpinnerLabel/stopSpinner 五个方法——
-// 它们散落旧代码各处（index.ts ~15 个调用点），本 store 收敛成一个状态对象，
-// App 订阅它渲染 Footer 的 StatusBar。
+// 物理本质：footer 状态栏的「计数器」。
+// 只承载 charter 规定的两个字段：本次 turn 的累计输出 token + 已耗时秒数。
+// mode/model/branch/dir 等静态信息不在状态栏，移至 LogoData（固定 LOGO 区）。
 //
-// 字段（对齐 StatusBarData）：
-// - mode/model/branch/dir/contextUsage：静态/半静态状态栏字段
-// - toolStatus：当前运行中的工具（spinner 显示），undefined = 空闲
-// - hint：提示文本（翻页/权限/todo），undefined = 无提示
+// 数据源：
+// - tokenCount：index.ts agent loop 捕获 message_delta.outputTokens → setTokens
+// - elapsedSec：index.ts handleUserSubmit 起 setInterval 每秒 → setElapsed
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { StatusBarData } from '../types.js';
 
-export interface StatusInit {
-  mode: string;
-  model: string;
-  branch: string;
-  dir: string;
-  contextUsage: number;
-}
-
 export interface StatusState extends StatusBarData {
-  setStatus: (partial: Partial<Pick<StatusBarData, 'mode' | 'model' | 'branch' | 'dir' | 'contextUsage'>>) => void;
-  startSpinner: (label: string) => void;
-  setSpinnerLabel: (label: string) => void;
-  stopSpinner: () => void;
-  setHint: (hint: string | undefined) => void;
-  setContextUsage: (usage: number) => void;
+  /** 更新 token 计数（上游传累计值，store 直接覆盖） */
+  setTokens: (n: number) => void;
+  /** 更新已耗时（秒） */
+  setElapsed: (sec: number) => void;
+  /** 新 turn 开始时清零（tokenCount + elapsedSec 归 0） */
+  resetTurn: () => void;
 }
 
 export type StatusStore = StoreApi<StatusState>;
 
-export function createStatusStore(init: StatusInit): StatusStore {
+export function createStatusStore(): StatusStore {
   return createStore<StatusState>((set) => ({
-    mode: init.mode,
-    model: init.model,
-    branch: init.branch,
-    dir: init.dir,
-    contextUsage: init.contextUsage,
-    toolStatus: undefined,
-    hint: undefined,
+    tokenCount: 0,
+    elapsedSec: 0,
 
-    setStatus: (partial) => set(partial),
-
-    startSpinner: (label) => set({ toolStatus: { name: label, status: 'running' } }),
-
-    setSpinnerLabel: (label) => set((s) => {
-      if (!s.toolStatus) return s;
-      return { toolStatus: { name: label, status: s.toolStatus.status } };
-    }),
-
-    stopSpinner: () => set({ toolStatus: undefined }),
-
-    setHint: (hint) => set({ hint }),
-
-    setContextUsage: (usage) => set({ contextUsage: usage }),
+    setTokens: (n) => set({ tokenCount: n }),
+    setElapsed: (sec) => set({ elapsedSec: sec }),
+    resetTurn: () => set({ tokenCount: 0, elapsedSec: 0 }),
   }));
 }

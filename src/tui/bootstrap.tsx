@@ -6,13 +6,13 @@
 // bootstrap 内部用 Ink render() 挂载 <ConnectedApp/>，后者订阅 stores 自动重渲染。
 //
 // 装配内容：
-// - messagesStore / inputStore / statusStore（zustand vanilla stores）
+// - messagesStore / inputStore / statusStore / logoStore（zustand vanilla stores）
 // - pipeline = new BlockPipeline(new PipelineToStoreAdapter(messagesStore))
 // - onSubmit 回调：inputStore 提交时通知 index.ts 的 agent 驱动逻辑
 // - render(<ConnectedApp onExit={cleanup}/>) 进 alt screen
 // - cleanup：unmount Ink + exitAltScreen（进程级 SIGINT/exit 兜底由 index.ts 注册）
 //
-// 返回 BootstrapHandle：{ pipeline, messagesStore, inputStore, statusStore,
+// 返回 BootstrapHandle：{ pipeline, messagesStore, inputStore, statusStore, logoStore,
 //   printLine, printStyled, cleanup }。
 
 import React from 'react';
@@ -21,14 +21,16 @@ import { BlockPipeline } from '../ui/block-pipeline.js';
 import { createMessagesStore } from './state/messages-store.js';
 import { createInputStore } from './state/input-store.js';
 import { createStatusStore } from './state/status-store.js';
+import { createLogoStore } from './state/logo-store.js';
 import { PipelineToStoreAdapter } from './state/pipeline-adapter.js';
 import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
+import type { LogoData as TuiLogoData } from './types.js';
 
 export interface BootstrapOptions {
-  /** 初始状态栏数据（mode/model/branch/dir/contextUsage） */
-  status: { mode: string; model: string; branch: string; dir: string; contextUsage: number };
+  /** LOGO 区初始数据（version/dir/model/branch/mode） */
+  logo: TuiLogoData;
   /** 用户提交输入时回调（index.ts 在此驱动 agent loop） */
   onSubmit: (text: string) => void;
   /** 退出时回调（index.ts 在此做 session 落盘等，再 process.exit） */
@@ -40,6 +42,7 @@ export interface BootstrapHandle {
   messagesStore: ReturnType<typeof createMessagesStore>;
   inputStore: ReturnType<typeof createInputStore>;
   statusStore: ReturnType<typeof createStatusStore>;
+  logoStore: ReturnType<typeof createLogoStore>;
   /** 把一行系统消息固化进 store（替代旧 printLine） */
   printLine: (text: string) => void;
   /** 带样式/角色的消息（替代旧 printStyled） */
@@ -51,7 +54,8 @@ export interface BootstrapHandle {
 export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const messagesStore = createMessagesStore();
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
-  const statusStore = createStatusStore(opts.status);
+  const statusStore = createStatusStore();
+  const logoStore = createLogoStore(opts.logo);
   const adapter = new PipelineToStoreAdapter(messagesStore);
   const pipeline = new BlockPipeline(adapter);
 
@@ -80,14 +84,14 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
         style: role === 'error' ? { fg: 'error', ...(style ?? {}) } : (style ?? {}),
         indent: 0,
       };
-      messagesStore.getState().appendLine(role === 'error' ? 'system' : 'system', line);
+      messagesStore.getState().appendLine('system', line);
     }
   };
 
   // 渲染 Ink 应用（ConnectedApp 内部 useAltScreen 进 alt screen）
   let inkInstance: InkInstance | null = render(
     React.createElement(ConnectedApp, {
-      messagesStore, inputStore, statusStore, onExit: opts.onExit,
+      messagesStore, inputStore, statusStore, logoStore, onExit: opts.onExit,
     }),
     { exitOnCtrlC: false },
   );
@@ -103,6 +107,6 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   };
 
   return {
-    pipeline, messagesStore, inputStore, statusStore, printLine, printStyled, cleanup,
+    pipeline, messagesStore, inputStore, statusStore, logoStore, printLine, printStyled, cleanup,
   };
 }

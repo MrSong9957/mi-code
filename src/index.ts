@@ -189,7 +189,8 @@ let isProcessing = false;
  */
 const askManager = new AskUserManager({
   printLine: (s) => printLine(s),
-  setHint: (s) => tuiHandle?.statusStore.getState().setHint(s),
+  // 提问提示走消息区（charter StatusBar 无 hint 字段，提示信息进 messagesStore 显示）
+  setHint: (s) => { if (s) printLine(s); },
 });
 // 注册 ask_user_question 工具（依赖 askManager）
 const askTool = createAskUserTool(askManager);
@@ -241,7 +242,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       if (userInput === '/approve') {
         permissionChecker.setMode('build');
         configStore.setPermissionMode('build');
-        tuiHandle?.statusStore.getState().setStatus({ mode: 'build' });
+        tuiHandle?.logoStore.getState().setMode('build');
         printLine('✓ Plan approved. Switched to build mode.');
         askManager.resolve('approve');
       } else {
@@ -280,7 +281,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       const result = executeCommand(cmd, configStore, { permissionChecker });
       printLine(result.message);
       if (cmd.name === 'plan' || cmd.name === 'build' || cmd.name === 'auto') {
-        tuiHandle?.statusStore.getState().setStatus({ mode: permissionChecker.getMode() });
+        tuiHandle?.logoStore.getState().setMode(permissionChecker.getMode());
       }
     }
     return;
@@ -331,14 +332,19 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   let thinkingContent = '';
   let thinkingStart = Date.now();
   pipeline.emit({ kind: 'thinking_start' });
-  tuiHandle?.statusStore.getState().startSpinner('Thinking…');
+
+  // 状态栏计数器：新 turn 归零 + 启动 elapsed 计时（每秒更新，agent loop 结束清除）
+  tuiHandle?.statusStore.getState().resetTurn();
+  const turnStart = Date.now();
+  const elapsedTimer = setInterval(() => {
+    tuiHandle?.statusStore.getState().setElapsed(Math.floor((Date.now() - turnStart) / 1000));
+  }, 1000);
 
   const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
   if (!apiKey) {
     tuiHandle?.printStyled(`[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`, 'error');
-    tuiHandle?.statusStore.getState().stopSpinner();
+    clearInterval(elapsedTimer);
     isProcessing = false;
-    tuiHandle?.statusStore.getState().setHint(undefined);
     return;
   }
 
@@ -347,17 +353,13 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const eventBus = new StreamEventBus();
   eventBus.onToolCall(d => {
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
-    if (d.name === 'ask_user_question') {
-      tuiHandle?.statusStore.getState().stopSpinner();
-    } else {
-      tuiHandle?.statusStore.getState().setSpinnerLabel(`Running ${d.name}`);
-    }
   });
   eventBus.onToolResult(d => {
     pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId });
   });
   eventBus.onLoopEnd(() => {
-    tuiHandle?.statusStore.getState().stopSpinner();
+    // turn 结束：最后一次 elapsed 更新（token 由 message_delta 实时更新）
+    tuiHandle?.statusStore.getState().setElapsed(Math.floor((Date.now() - turnStart) / 1000));
   });
   const allToolDefs = Array.from(toolRegistry.tools.values()).map(t => t.definition);
   const tools = currentMode === 'plan'
@@ -399,7 +401,6 @@ async function handleUserSubmit(rawText: string): Promise<void> {
           pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
           thinkingContent = '';
           thinkingActive = false;
-          tuiHandle?.statusStore.getState().setSpinnerLabel('Generating…');
         }
       } else if ('type' in msg && msg.type === 'content_block_delta') {
         const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
@@ -415,6 +416,12 @@ async function handleUserSubmit(rawText: string): Promise<void> {
         } else if (delta.deltaType === 'thinking' && delta.content) {
           thinkingContent += delta.content;
           pipeline.emit({ kind: 'thinking_delta', content: delta.content });
+        }
+      } else if ('type' in msg && msg.type === 'message_delta') {
+        // token 计数：捕获累计 output_tokens，喂给状态栏（charter tokens 字段）
+        const md = msg as { type: 'message_delta'; outputTokens?: number };
+        if (typeof md.outputTokens === 'number') {
+          tuiHandle?.statusStore.getState().setTokens(md.outputTokens);
         }
       } else if ('type' in msg && msg.type === 'assistant') {
         if (assistantText) {
@@ -438,8 +445,10 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     }
   } catch (err) {
     tuiHandle?.printStyled(`[Error] ${err}`, 'error');
-    tuiHandle?.statusStore.getState().stopSpinner();
   } finally {
+    // turn 结束：停 elapsed 计时器 + 最终 elapsed 落定
+    clearInterval(elapsedTimer);
+    tuiHandle?.statusStore.getState().setElapsed(Math.floor((Date.now() - turnStart) / 1000));
     isProcessing = false;
     if (thinkingContent) {
       const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
@@ -482,21 +491,20 @@ if (cliOpts.list) {
   // 装配 Ink 渲染层：stores + PipelineToStoreAdapter + BlockPipeline + render(<ConnectedApp/>)。
   // bootstrap 内部进 alt screen（useAltScreen），render 挂载 ConnectedApp。
   // onSubmit → handleUserSubmit（驱动 agent loop）；onExit → cleanup + process.exit。
+  // LOGO 区数据（version/dir/model/branch/mode）由 LogoBox 固定渲染，不再走消息区 banner。
   tuiHandle = bootstrap({
-    status: { mode: configStore.getPermissionMode(), model: MODEL, branch: GIT_BRANCH, dir: SHORT_DIR, contextUsage: 0 },
+    logo: {
+      version: VERSION,
+      dir: SHORT_DIR,
+      model: MODEL,
+      branch: GIT_BRANCH,
+      mode: configStore.getPermissionMode(),
+    },
     onSubmit: (text) => { void handleUserSubmit(text); },
     onExit: () => { cleanupOnExit(); process.exit(0); },
   });
   // pipeline 由 bootstrap 内构造，赋值到外层 let pipeline（agent loop 使用）
   pipeline = tuiHandle.pipeline;
-
-  // 一次性 banner（进消息区）—— 在 bootstrap 之后（stores 已就绪），紧贴屏幕顶部
-  printLine('');
-  printStyled(' ▐▛███▜▌   MiCode v' + VERSION, 'system');
-  printStyled('▝▜█████▛▘  TypeScript CLI · Node.js Runtime', 'system');
-  printStyled('  ▘▘ ▝▝    ' + process.cwd(), 'system');
-  printStyled(`model: ${MODEL}  ·  dir: ${SHORT_DIR}  ·  branch: ${GIT_BRANCH}`, 'system');
-  printLine('');
 
   // resume 时回显历史消息到消息区（让用户看到之前的对话）
   if (sessionMessages.length > 0) {
@@ -529,7 +537,6 @@ if (cliOpts.list) {
   // 进程退出兜底：杀后台子进程 + 卸载 Ink + 退 alt screen + 主屏 resume hint
   function cleanupOnExit(): void {
     backgroundManager.killAll();
-    tuiHandle?.statusStore.getState().stopSpinner();
     tuiHandle?.cleanup();
     // 退出 alt screen 后，在主屏打印 resume hint（对齐 Claude Code）
     process.stdout.write(`\x1b[2mResume this session with:\nmicode --resume ${sessionId}\n\x1b[0m`);

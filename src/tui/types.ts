@@ -78,15 +78,28 @@ export function styleToInkProps(style: UIMessageStyle | undefined): InkTextStyle
   return props;
 }
 
-/** Footer 状态栏数据（StatusBar 组件消费） */
+/**
+ * Footer 状态栏数据（StatusBar 组件消费）。
+ * 对齐 charter §顶层布局 L89：`tokens: {tokenCount} | {elapsed}s`。
+ * mode/model/branch/dir 等静态信息移至 LogoData（固定 LOGO 区显示）。
+ */
 export interface StatusBarData {
-  mode: string;
-  model: string;
-  branch: string;
+  /** 本次 agent turn 累计输出 token 数（来自 message_delta.outputTokens） */
+  tokenCount: number;
+  /** 本次 agent turn 已耗时（秒），从用户提交起算 */
+  elapsedSec: number;
+}
+
+/** 固定 LOGO 区数据（LogoBox 组件消费，不随消息滚动） */
+export interface LogoData {
+  /** 版本号，如 "1.0.0" */
+  version: string;
+  /** 当前工作目录 */
   dir: string;
-  contextUsage: number;
-  /** 工具运行中提示（如 "Read a.ts"），无则 undefined */
-  toolStatus?: { name: string; status: string };
-  /** 提示文本（翻页提示、todo 提醒等），无则 undefined */
-  hint?: string;
+  /** 模型名 */
+  model: string;
+  /** git 分支 */
+  branch: string;
+  /** 权限模式（plan/build/auto）—— LOGO 区显示，弥补 StatusBar 不再含 mode */
+  mode: string;
 }
