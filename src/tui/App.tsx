@@ -23,8 +23,8 @@ import type { TuiMessage, StatusBarData, LogoData } from './types.js';
 
 /** Footer 固定占用的行数：上边框 + 输入 + 下边框 + 状态栏 */
 const FOOTER_ROWS = 4;
-/** LogoBox 固定占用的行数：3 行 ASCII art + 1 行信息 */
-const LOGO_ROWS = 4;
+/** LogoBox 固定占用的行数：3 行 ASCII art */
+const LOGO_ROWS = 3;
 
 export interface AppProps {
   messages: TuiMessage[];
@@ -40,11 +40,15 @@ export interface AppProps {
 
 export function App({ messages, status, logo, input, cursor, cols = 80, rows = 24 }: AppProps): React.ReactElement {
   const visibleRows = Math.max(0, rows - FOOTER_ROWS - LOGO_ROWS);
+  // 输入行全局 y：ScrollBox 实际渲染行数 + LOGO_ROWS + 上边框 1 行
+  // （ScrollBox 空/少消息时只占实际内容行数，flexGrow 空白不算渲染行）
+  const scrollboxRenderedRows = Math.min(messages.length, visibleRows);
+  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + 1;
   return (
     <Box flexDirection="column">
       <ScrollBox messages={messages} visibleRows={visibleRows} />
       <LogoBox logo={logo} />
-      <Footer input={input} cursor={cursor} status={status} cols={cols} />
+      <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} />
     </Box>
   );
 }

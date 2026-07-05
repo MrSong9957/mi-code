@@ -1,43 +1,47 @@
 // src/__tests__/tui/status-store.test.ts
-// status-store：tokens + elapsed 状态（charter L89 格式）
+// status-store：mode/model/dir/branch/contextPct（用户规格状态栏）
 
 import { describe, it, expect } from 'vitest';
 import { createStatusStore } from '../../tui/state/status-store.js';
 
-describe('status-store（tokens + elapsed）', () => {
-  it('初始：tokenCount=0, elapsedSec=0', () => {
-    const store = createStatusStore();
+const INIT = { mode: 'build', model: 'claude-sonnet', dir: 'Projects/mi-code', branch: 'main' };
+
+describe('status-store（mode/model/dir/branch/contextPct）', () => {
+  it('初始：含 mode/model/dir/branch，contextPct=0', () => {
+    const store = createStatusStore(INIT);
     const s = store.getState();
-    expect(s.tokenCount).toBe(0);
-    expect(s.elapsedSec).toBe(0);
+    expect(s.mode).toBe('build');
+    expect(s.model).toBe('claude-sonnet');
+    expect(s.dir).toBe('Projects/mi-code');
+    expect(s.branch).toBe('main');
+    expect(s.contextPct).toBe(0);
   });
 
-  it('setTokens：更新 tokenCount', () => {
-    const store = createStatusStore();
-    store.getState().setTokens(42);
-    expect(store.getState().tokenCount).toBe(42);
+  it('setMode：更新权限模式', () => {
+    const store = createStatusStore(INIT);
+    store.getState().setMode('plan');
+    expect(store.getState().mode).toBe('plan');
+    // 其它字段不变
+    expect(store.getState().model).toBe('claude-sonnet');
   });
 
-  it('setTokens 覆盖（累计由上游算，store 只存最新值）', () => {
-    const store = createStatusStore();
-    store.getState().setTokens(10);
-    store.getState().setTokens(25);
-    store.getState().setTokens(100);
-    expect(store.getState().tokenCount).toBe(100);
+  it('setContextPct：更新上下文占用 [0,1]', () => {
+    const store = createStatusStore(INIT);
+    store.getState().setContextPct(0.25);
+    expect(store.getState().contextPct).toBe(0.25);
   });
 
-  it('setElapsed：更新 elapsedSec', () => {
-    const store = createStatusStore();
-    store.getState().setElapsed(7);
-    expect(store.getState().elapsedSec).toBe(7);
+  it('setContextPct 钳位到 [0,1]（超界防御）', () => {
+    const store = createStatusStore(INIT);
+    store.getState().setContextPct(-0.5);
+    expect(store.getState().contextPct).toBe(0);
+    store.getState().setContextPct(1.5);
+    expect(store.getState().contextPct).toBe(1);
   });
 
-  it('resetTurn：清零 tokenCount + elapsedSec（新 turn 开始）', () => {
-    const store = createStatusStore();
-    store.getState().setTokens(99);
-    store.getState().setElapsed(5);
-    store.getState().resetTurn();
-    expect(store.getState().tokenCount).toBe(0);
-    expect(store.getState().elapsedSec).toBe(0);
+  it('setContextPct 真实场景：50000/200000 = 0.25', () => {
+    const store = createStatusStore(INIT);
+    store.getState().setContextPct(50000 / 200000);
+    expect(store.getState().contextPct).toBeCloseTo(0.25);
   });
 });

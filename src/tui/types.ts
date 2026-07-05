@@ -80,26 +80,25 @@ export function styleToInkProps(style: UIMessageStyle | undefined): InkTextStyle
 
 /**
  * Footer 状态栏数据（StatusBar 组件消费）。
- * 对齐 charter §顶层布局 L89：`tokens: {tokenCount} | {elapsed}s`。
- * mode/model/branch/dir 等静态信息移至 LogoData（固定 LOGO 区显示）。
+ * 用户规格：{mode} | {model} | {dir末两级} | {branch} | [进度条] pct%
  */
 export interface StatusBarData {
-  /** 本次 agent turn 累计输出 token 数（来自 message_delta.outputTokens） */
-  tokenCount: number;
-  /** 本次 agent turn 已耗时（秒），从用户提交起算 */
-  elapsedSec: number;
+  /** 权限模式：plan / build / auto */
+  mode: string;
+  /** 模型名 */
+  model: string;
+  /** 工作目录（末两级，如 "Projects/mi-code"） */
+  dir: string;
+  /** git 分支 */
+  branch: string;
+  /** 上下文占用比例 [0,1]（inputTokens / 200000），驱动进度条 */
+  contextPct: number;
 }
 
 /** 固定 LOGO 区数据（LogoBox 组件消费，不随消息滚动） */
 export interface LogoData {
   /** 版本号，如 "1.0.0" */
   version: string;
-  /** 当前工作目录 */
+  /** 当前工作目录（完整或末两级，LOGO 区显示） */
   dir: string;
-  /** 模型名 */
-  model: string;
-  /** git 分支 */
-  branch: string;
-  /** 权限模式（plan/build/auto）—— LOGO 区显示，弥补 StatusBar 不再含 mode */
-  mode: string;
 }

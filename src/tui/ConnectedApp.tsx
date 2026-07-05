@@ -41,10 +41,10 @@ export function ConnectedApp({
   const inputText = useStore(inputStore, (s) => s.text);
   const cursor = useStore(inputStore, (s) => s.cursor);
   const status = useStore(statusStore, (s) => ({
-    tokenCount: s.tokenCount, elapsedSec: s.elapsedSec,
+    mode: s.mode, model: s.model, dir: s.dir, branch: s.branch, contextPct: s.contextPct,
   }));
   const logo = useStore(logoStore, (s) => ({
-    version: s.version, dir: s.dir, model: s.model, branch: s.branch, mode: s.mode,
+    version: s.version, dir: s.dir,
   }));
 
   return (

@@ -242,7 +242,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       if (userInput === '/approve') {
         permissionChecker.setMode('build');
         configStore.setPermissionMode('build');
-        tuiHandle?.logoStore.getState().setMode('build');
+        tuiHandle?.statusStore.getState().setMode('build');
         printLine('✓ Plan approved. Switched to build mode.');
         askManager.resolve('approve');
       } else {
@@ -281,7 +281,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       const result = executeCommand(cmd, configStore, { permissionChecker });
       printLine(result.message);
       if (cmd.name === 'plan' || cmd.name === 'build' || cmd.name === 'auto') {
-        tuiHandle?.logoStore.getState().setMode(permissionChecker.getMode());
+        tuiHandle?.statusStore.getState().setMode(permissionChecker.getMode());
       }
     }
     return;
@@ -333,17 +333,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   let thinkingStart = Date.now();
   pipeline.emit({ kind: 'thinking_start' });
 
-  // 状态栏计数器：新 turn 归零 + 启动 elapsed 计时（每秒更新，agent loop 结束清除）
-  tuiHandle?.statusStore.getState().resetTurn();
-  const turnStart = Date.now();
-  const elapsedTimer = setInterval(() => {
-    tuiHandle?.statusStore.getState().setElapsed(Math.floor((Date.now() - turnStart) / 1000));
-  }, 1000);
-
   const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
   if (!apiKey) {
     tuiHandle?.printStyled(`[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`, 'error');
-    clearInterval(elapsedTimer);
     isProcessing = false;
     return;
   }
@@ -358,8 +350,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId });
   });
   eventBus.onLoopEnd(() => {
-    // turn 结束：最后一次 elapsed 更新（token 由 message_delta 实时更新）
-    tuiHandle?.statusStore.getState().setElapsed(Math.floor((Date.now() - turnStart) / 1000));
+    // turn 结束（end_turn/error/max_turns）：无状态栏副作用（contextPct 由 message_start 更新）
   });
   const allToolDefs = Array.from(toolRegistry.tools.values()).map(t => t.definition);
   const tools = currentMode === 'plan'
@@ -417,11 +408,11 @@ async function handleUserSubmit(rawText: string): Promise<void> {
           thinkingContent += delta.content;
           pipeline.emit({ kind: 'thinking_delta', content: delta.content });
         }
-      } else if ('type' in msg && msg.type === 'message_delta') {
-        // token 计数：捕获累计 output_tokens，喂给状态栏（charter tokens 字段）
-        const md = msg as { type: 'message_delta'; outputTokens?: number };
-        if (typeof md.outputTokens === 'number') {
-          tuiHandle?.statusStore.getState().setTokens(md.outputTokens);
+      } else if ('type' in msg && msg.type === 'message_start') {
+        // 上下文占用：input_tokens / context_window(200000) → 进度条百分比
+        const ms = msg as { type: 'message_start'; inputTokens?: number };
+        if (typeof ms.inputTokens === 'number') {
+          tuiHandle?.statusStore.getState().setContextPct(ms.inputTokens / 200000);
         }
       } else if ('type' in msg && msg.type === 'assistant') {
         if (assistantText) {
@@ -446,9 +437,6 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   } catch (err) {
     tuiHandle?.printStyled(`[Error] ${err}`, 'error');
   } finally {
-    // turn 结束：停 elapsed 计时器 + 最终 elapsed 落定
-    clearInterval(elapsedTimer);
-    tuiHandle?.statusStore.getState().setElapsed(Math.floor((Date.now() - turnStart) / 1000));
     isProcessing = false;
     if (thinkingContent) {
       const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
@@ -490,15 +478,14 @@ if (cliOpts.list) {
 
   // 装配 Ink 渲染层：stores + PipelineToStoreAdapter + BlockPipeline + render(<ConnectedApp/>)。
   // bootstrap 内部进 alt screen（useAltScreen），render 挂载 ConnectedApp。
-  // onSubmit → handleUserSubmit（驱动 agent loop）；onExit → cleanup + process.exit。
-  // LOGO 区数据（version/dir/model/branch/mode）由 LogoBox 固定渲染，不再走消息区 banner。
+  // LOGO 区只显示 version + dir；mode/model/branch/contextPct 在 StatusBar 显示。
   tuiHandle = bootstrap({
-    logo: {
-      version: VERSION,
-      dir: SHORT_DIR,
-      model: MODEL,
-      branch: GIT_BRANCH,
+    logo: { version: VERSION, dir: SHORT_DIR },
+    status: {
       mode: configStore.getPermissionMode(),
+      model: MODEL,
+      dir: SHORT_DIR,
+      branch: GIT_BRANCH,
     },
     onSubmit: (text) => { void handleUserSubmit(text); },
     onExit: () => { cleanupOnExit(); process.exit(0); },

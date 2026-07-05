@@ -29,8 +29,10 @@ import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
 
 export interface BootstrapOptions {
-  /** LOGO 区初始数据（version/dir/model/branch/mode） */
+  /** LOGO 区数据（version/dir） */
   logo: TuiLogoData;
+  /** 状态栏初始数据（mode/model/dir/branch） */
+  status: { mode: string; model: string; dir: string; branch: string };
   /** 用户提交输入时回调（index.ts 在此驱动 agent loop） */
   onSubmit: (text: string) => void;
   /** 退出时回调（index.ts 在此做 session 落盘等，再 process.exit） */
@@ -54,7 +56,7 @@ export interface BootstrapHandle {
 export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const messagesStore = createMessagesStore();
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
-  const statusStore = createStatusStore();
+  const statusStore = createStatusStore(opts.status);
   const logoStore = createLogoStore(opts.logo);
   const adapter = new PipelineToStoreAdapter(messagesStore);
   const pipeline = new BlockPipeline(adapter);
