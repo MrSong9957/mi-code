@@ -1,35 +1,34 @@
 #!/usr/bin/env node
-// MiCode 主入口 —— 备用屏全屏画布渲染（alt screen + 整屏重画 + 逐格 diff）
+// MiCode 主入口 —— React + Ink 渲染层（alt screen + flexbox 布局 + Yoga）
 //
-// 物理本质：把整块终端屏幕当成一张虚拟画布（二维字符格子）。
-// 上面大格是消息区（流式 token 在这里刷新），下面小格钉死状态栏 + 输入框。
-// 每次状态变都在内存里重画一张新画布，和上一张逐格比对，只把"变了样的格子"
-// 刷到终端——状态栏/输入框那几行格子没变就一个字节都不写，所以它们纹丝不动。
-// 备用屏没有原生 scrollback，消息超出一屏时自动滚屏（视口取最后 N 行）。
-//
-// 这是 Claude Code 全屏模式的同款机制（文档 docs/Claude-Code-终端渲染架构-流式与输入框共存.md）。
+// 物理本质：组件树 + Zustand stores + Yoga 自动算坐标。
+// bootstrap() 装配 messagesStore/inputStore/statusStore + PipelineToStoreAdapter +
+// BlockPipeline，render(<ConnectedApp/>) 进 alt screen。
+// agent loop 的所有 pipeline.emit 透明路由到 store，Ink 自动重渲染。
+// 坐标全由 Yoga flexbox 算（charter 铁律：禁止手动 CUP 定位）。
 
 import 'dotenv/config';
 import { execSync } from 'child_process';
+import { join } from 'path';
+import { homedir } from 'os';
 import { createDefaultRegistry } from './agent/tool-registry.js';
 import { AnthropicStreamClient } from './agent/anthropic-stream-client.js';
 import { streamingQuery } from './agent/streaming-query.js';
 import { StreamEventBus } from './agent/stream-event-bus.js';
-import { UILayout } from './ui/index.js';
 import { BlockPipeline } from './ui/block-pipeline.js';
-import {
-  saveCursor, restoreCursor,
-  cursorHome, eraseScreen, showCursor, hideCursor,
-} from './renderer/ansi.js';
+import { bootstrap, type BootstrapHandle } from './tui/bootstrap.js';
 import { ConfigStore } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
 import { TodoManager } from './agent/todo.js';
 import { createTaskTool } from './agent/tools/task-tool.js';
+import { createSpawnAgentTool } from './agent/tools/spawn-agent-tool.js';
 import { createSpawnSelfOrganizingTool } from './agent/tools/spawn-self-organizing-tool.js';
 import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
 import { parseBlockPrefix } from './commands/parser.js';
 import { PermissionChecker } from './permission/index.js';
+import type { PermissionMode } from './permission/index.js';
+import { WRITE_TOOLS } from './permission/types.js';
 import { HookRunner, preToolSafetyCheck, postToolLogger, sessionStartLogger } from './hooks/index.js';
 import { TeammateManager, createSendMessageTool, createReadInboxTool, NegotiationManager, createShutdownRequestTool, createRespondRequestTool, createSubmitPlanTool, createApprovePlanTool } from './agent/team/index.js';
 import { ScheduleManager } from './agent/scheduler/index.js';
@@ -38,6 +37,10 @@ import { TaskBoard } from './task-board/index.js';
 import { BackgroundManager } from './background/index.js';
 import { MemoryManager } from './memory/index.js';
 import { createMemoryWriteTool, createMemoryReadTool, createMemoryListTool } from './agent/tools/memory-tool.js';
+import { AskUserManager } from './agent/ask-user-manager.js';
+import { createAskUserTool } from './agent/tools/ask-user-tool.js';
+import { PlanStore } from './plan/plan-store.js';
+import { createWritePlanTool, createExitPlanModeTool } from './agent/tools/plan-tools.js';
 import { HistoryManager } from './history.js';
 
 const VERSION = "1.0.0";
@@ -104,6 +107,10 @@ const taskTool = createTaskTool(childToolRegistry, worktreeManager, SMALL_MODEL)
 toolRegistry.register(taskTool.definition, taskTool.executor);
 const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, { model: SMALL_MODEL });
 toolRegistry.register(spawnSoTool.definition, spawnSoTool.executor);
+// spawn_agent：派角色化子代理（explore/plan/general）
+// 透传 permissionChecker：让子代理也受 plan 模式约束（读 allow / 写 deny）
+const spawnAgentTool = createSpawnAgentTool(childToolRegistry, SMALL_MODEL, permissionChecker);
+toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 const loadSkillTool = createLoadSkillTool(skillRegistry);
 toolRegistry.register(loadSkillTool.definition, loadSkillTool.executor);
 const sendMessageTool = createSendMessageTool(teammateManager);
@@ -124,65 +131,46 @@ const memRead = createMemoryReadTool(memoryManager);
 toolRegistry.register(memRead.definition, memRead.executor);
 const memList = createMemoryListTool(memoryManager);
 toolRegistry.register(memList.definition, memList.executor);
+// 注：ask_user_question 工具依赖 askManager（需 layout），在 askManager 实例化后注册（见下方 UI 状态区）
 
 // ─────────────────────────────────────────────────────────────
-// 渲染器：备用屏全屏画布（状态栏 + 输入框钉死底部，消息区上方流式刷新）
+// React + Ink 渲染层（charter 新架构）：alt screen + flexbox + Yoga
+// 终端尺寸由 useTerminalSize hook 响应，无需手动 readTermSize。
 // ─────────────────────────────────────────────────────────────
 
-function readTermSize(): { rows: number; cols: number } {
-  const rows = process.stdout.rows && process.stdout.rows > 0 ? process.stdout.rows : 24;
-  const cols = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
-  return { rows, cols };
-}
-
 /**
- * 主屏模式（对齐 Claude Code 默认）：无需备用屏/鼠标/同步更新检测。
- * 滚动交给终端原生 scrollback（用户用滚动条翻历史）。
+ * React + Ink 渲染层（charter 新架构）：alt screen + flexbox + Yoga。
+ * bootstrap() 装配 stores + PipelineToStoreAdapter + BlockPipeline，render(<ConnectedApp/>) 进 alt screen。
+ * agent loop 的 pipeline.emit 透明路由到 messagesStore，Ink 自动重渲染。
+ *
+ * 循环依赖处理：askManager/planStore 等在 bootstrap 前构造，需要 printLine/setHint。
+ * 用前向声明 tuiHandle（bootstrap 后赋值）+ 延迟绑定函数。pipeline 同理（bootstrap 内构造）。
  */
-const termSize = readTermSize();
+let tuiHandle: BootstrapHandle | null = null;
 
-/**
- * UILayout：统一消息格式化 + 流式 Markdown 渲染 + 帧缓冲
- * 物理本质：排版工厂的总管——消息进、格式化、分区、渲染、终端出。
- */
-const layout = new UILayout({
-  rows: termSize.rows,
-  cols: termSize.cols,
-  writer: (s: string) => process.stdout.write(s),
-  status: { mode: 'Act', model: MODEL, branch: GIT_BRANCH, dir: SHORT_DIR, contextUsage: 0 },
+/** 统一输出管道（bootstrap 内构造，所有 agent 逻辑 emit Block 到此）。
+ *  声明为 let，bootstrap 后赋值；agent loop 使用前必已赋值。 */
+let pipeline = new BlockPipeline({
+  printMessage: () => {},
+  appendStreamingMarkdown: () => {},
+  sealStreaming: () => {},
+  flushNow: () => {},
+  clearMessages: () => {},
 });
 
-/**
- * 统一输出管道：所有渲染经 pipeline.emit(Block)，统一块间空行 + 格式契约。
- * pipeline 直接调 layout 的 raw* 原语（透传到 Renderer），不走 layout.send。
- */
-const pipeline = new BlockPipeline({
-  printMessage: (text, role, style, raw) => layout.rawPrintMessage(text, (role ?? 'system') as 'user' | 'assistant' | 'system', style ?? {}, raw),
-  appendStreamingMarkdown: (text, isFinal, opts) => layout.rawAppendStreamingMarkdown(text, isFinal, opts ?? {}),
-  sealStreaming: () => layout.rawSealStreaming(),
-  flushNow: () => layout.commit(),
-  clearMessages: () => layout.rawClearMessages(),
-});
-
-/** 把一行文本作为"系统消息"固化进消息区（非模型内容：banner / hook / 提示等，直走 UILayout，不经 pipeline）。 */
+/** 把一行文本作为"系统消息"固化进消息区（延迟绑定到 bootstrap 后的 messagesStore）。 */
 function printLine(text: string): void {
-  layout.send('system', text);
+  tuiHandle?.printLine(text);
 }
 
-/** 把一行带样式的消息固化进消息区（非模型内容）。
- *  显式 role 路由到 UILayout 类型，避免"用颜色反推类型"的反模式（theme 化后颜色会变）。
- *  - 'banner'/'system' → layout.send('system')：普通系统消息，无 ❯ 前缀。
- *  - 'error'           → layout.send('error')：错误消息（红色）。
- *  - 'input'           → layout.send('input')：用户输入回显（带 ❯ 前缀，自动去重）。 */
+/** 带样式/角色的消息（延迟绑定）。
+ *  - 'input' → 用户输入回显（带 ❯ 前缀，Footer 自带 ❯，去重）
+ *  - 'error' → 红色错误
+ *  - 'system' → 普通系统消息 */
 function printStyled(text: string, role: 'system' | 'error' | 'input', style?: Record<string, unknown>): void {
-  void style; // style 当前未使用（样式由 UILayout 按 role 决定），保留参数供未来扩展
-  if (role === 'input') {
-    // input 类型：UILayout 会添加 ❯ 前缀，所以去掉原始文本中的 ❯
-    const cleanText = text.replace(/^❯\s*/, '');
-    layout.send('input', cleanText);
-  } else {
-    layout.send(role, text);
-  }
+  // style 参数旧实现未消费（样式由 role 决定）；新版 printStyled 也不消费，保留签名兼容
+  void style;
+  tuiHandle?.printStyled(text, role);
 }
 
 // 注：tool_result 的 diff 计算已移至 BlockPipeline（pendingToolInputs 缓存 +
@@ -191,476 +179,285 @@ function printStyled(text: string, role: 'system' | 'error' | 'input', style?: R
 // ─────────────────────────────────────────────────────────────
 // UI 状态
 // ─────────────────────────────────────────────────────────────
-let input = '';
-let cursorPos = 0;
+// 注：输入态（text/cursor）由 inputStore 管理（bootstrap 内构造，ConnectedApp 订阅）。
+// isProcessing 仍是模块级标志（agent loop 运行中标记，防重入）。
 let isProcessing = false;
 
-/** 同步输入态到渲染器并请求重绘（节流，不直接写屏）。 */
-function syncInput(): void {
-  layout.setInput(input, cursorPos);
-}
-
-// ─────────────────────────────────────────────────────────────
-// ctrl+o 临时 alt screen 覆盖层：显示可折叠块（thinking/tool_result）的完整内容
-//
-// 主屏 + scrollback 模式下，已进 scrollback 的行 CUP 够不着，无法就地展开。
-// 改为进 alt screen 全屏显示完整内容，按 q/ctrl+o/ESC 返回主屏。
-// 主屏 scrollback 在 alt screen 切换时自动保存/恢复，完好无损。
-// ─────────────────────────────────────────────────────────────
-
-/** 覆盖层是否激活（激活时 handleInput 把按键路由给 handleOverlayInput） */
-let overlayActive = false;
+/**
+ * AskUserManager：AI 向用户提问的挂起-应答状态机。
+ * 物理本质：服务员把问题递给顾客（贴消息区 + 页脚提示）后站等回话。
+ * 与 handleInput 共享同一实例：工具 executor 内 ask() 挂起，回车提交时 resolve()。
+ */
+const askManager = new AskUserManager({
+  printLine: (s) => printLine(s),
+  setHint: (s) => tuiHandle?.statusStore.getState().setHint(s),
+});
+// 注册 ask_user_question 工具（依赖 askManager）
+const askTool = createAskUserTool(askManager);
+toolRegistry.register(askTool.definition, askTool.executor);
 
 /**
- * 渲染可折叠块的完整内容（overlay 覆盖当前屏），置 overlayActive=true 等待退出键。
- *
- * 主渲染已在 alt screen 内，overlay 不能再进第二层 alt screen（终端只支持一层）。
- * 改用 saveCursor + 全屏 eraseScreen 覆盖当前 alt screen 内容，restoreCursor 恢复。
- * 退出时清屏 + restoreCursor 恢复原渲染状态，下一帧 requestFrame 重画。
+ * PlanStore：plan 文件落盘（plan 模式产出物的档案柜）。
+ * 目录 ~/.micode/plans/，文件名 <sessionId>-<ts>.md。
+ * 同时把 planDir 注册到 PermissionChecker，让 plan 模式下 write_file 写到该目录放行。
  */
-function showExpandOverlay(lines: { content: string }[], kind: 'thinking' | 'tool_result'): void {
-  overlayActive = true;
-  const out = process.stdout;
-  out.write(saveCursor());      // 保存当前光标（alt screen 内的位置）
-  out.write(eraseScreen() + cursorHome()); // 清当前 alt screen 全屏
-  out.write(hideCursor());
+const planStore = new PlanStore(join(homedir(), '.micode'));
+permissionChecker.setPlanDir(planStore.getPlansDir());
+// 注册 write_plan_file 与 exit_plan_mode 工具（依赖 planStore + askManager）
+const writePlanTool = createWritePlanTool(planStore, () => sessionId);
+toolRegistry.register(writePlanTool.definition, writePlanTool.executor);
+const exitPlanTool = createExitPlanModeTool(askManager, planStore);
+toolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
+// 同时注册到 childToolRegistry：plan 角色子代理需要这两个工具（白名单由 roles.ts 控制）
+childToolRegistry.register(writePlanTool.definition, writePlanTool.executor);
+childToolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
+// ask_user_question 同样需要给子代理（plan 角色白名单含此工具）
+const askToolChild = createAskUserTool(askManager);
+childToolRegistry.register(askToolChild.definition, askToolChild.executor);
 
-  const { cols } = readTermSize();
-  const title = kind === 'thinking' ? 'Thinking' : 'Tool result';
-  // 标题行
-  out.write(`\x1b[1m${title}\x1b[0m\r\n`);
-  out.write('━'.repeat(Math.min(cols, 60)) + '\r\n');
+/** 同步输入态（Ink 响应式模型下：inputStore 是单一数据源，App 自动重渲染）。
+ *  保留函数签名兼容旧调用点，现为 no-op。input/cursorPos 模块变量仅供 handleUserSubmit 读取。 */
+function syncInput(): void {
+  // no-op: ConnectedApp 订阅 inputStore 自动重渲染
+}
 
-  // 内容行：每行截断到 cols
-  for (const line of lines) {
-    const text = line.content;
-    const truncated = [...text].reduce((acc, ch) => {
-      const next = acc + ch;
-      // 简单按字符数截断（显示宽度近似）
-      return [...next].length <= cols ? next : acc;
-    }, '');
-    out.write(truncated + '\r\n');
+/**
+ * 用户提交输入（回车）。从旧 handleInput 的 byte===0x0d 块提取，接入 bootstrap 的 onSubmit 回调。
+ *
+ * 职责（与旧实现完全一致）：
+ * 1. 'exit' 命令 → cleanup + 退出
+ * 2. pending question（askManager.hasPending）→ resolve（/approve //reject 特判）
+ * 3. 新 turn：history 落盘 + clearTurnState + emit user_input + 命令解析 + agent loop
+ *
+ * ink-store 迁移点：input/cursorPos 已由 inputStore 管理（submit 时清空），故删除旧
+ * input=''/cursorPos=0/syncInput；layout.* → tuiHandle.statusStore。
+ */
+async function handleUserSubmit(rawText: string): Promise<void> {
+  const userInput = rawText.trim();
+  if (userInput === 'exit') {
+    tuiHandle?.cleanup();
+    process.exit(0);
   }
 
-  // 底部提示
-  out.write('\r\n');
-  out.write(`\x1b[2m按 q / ctrl+o / ESC 返回\x1b[0m`);
-  out.write(showCursor());
-}
-
-/**
- * 处理覆盖层期间的按键：q(0x71)/ctrl+o(0x0f)/ESC(0x1b)/Ctrl+C(0x03) 退出覆盖层。
- * 其他按键忽略。
- */
-function handleOverlayInput(data: Buffer): void {
-  for (let i = 0; i < data.length; i++) {
-    const byte = data[i]!;
-    // Ctrl+C —— 退出覆盖层后正常退出进程
-    if (byte === 0x03) {
-      closeExpandOverlay();
-      layout.exit();
-      process.exit(0);
-    }
-    // q / Ctrl+O / ESC —— 关闭覆盖层，回主屏
-    if (byte === 0x71 || byte === 0x0f || byte === 0x1b) {
-      closeExpandOverlay();
+  // 1. 优先处理 pending question：agent 运行中也可回答
+  if (askManager.hasPending()) {
+    if (!userInput) return; // 空回车：忽略
+    // plan 批准流特判：/approve /reject 走专属副作用（切 mode + resolve）
+    if (userInput === '/approve' || userInput.startsWith('/reject')) {
+      pipeline.emit({ kind: 'user_input', text: userInput });
+      if (userInput === '/approve') {
+        permissionChecker.setMode('build');
+        configStore.setPermissionMode('build');
+        tuiHandle?.statusStore.getState().setStatus({ mode: 'build' });
+        printLine('✓ Plan approved. Switched to build mode.');
+        askManager.resolve('approve');
+      } else {
+        const reason = userInput.slice('/reject'.length).trim();
+        printLine(`✗ Plan rejected${reason ? ': ' + reason : ''}.`);
+        askManager.resolve(reason || 'reject');
+      }
       return;
     }
+    pipeline.emit({ kind: 'user_input', text: userInput });
+    askManager.resolve(userInput);
+    return;
   }
-}
 
-/** 关闭覆盖层：清屏 + 恢复光标 + 触发重画恢复原渲染状态。 */
-function closeExpandOverlay(): void {
-  const out = process.stdout;
-  out.write(hideCursor());
-  out.write(eraseScreen() + cursorHome());
-  out.write(restoreCursor());  // 恢复 overlay 前的光标位置
-  out.write(showCursor());
-  overlayActive = false;
-  // 触发重画：footerDirty + requestFrame，恢复 alt screen 内的原渲染内容
-  // （eraseScreen 清掉了内容，但消息区已写的在 messageRow 记账里，重画页脚即可；
-  //  消息区内容已进 alt screen 但被擦了——这里需要重画整个消息区，简化处理：标记 footerDirty）
-  layout.setHint(undefined); // 触发 requestFrame
-}
+  // 2. 新 turn
+  if (!userInput || isProcessing) return;
+  await historyManager.addEntry(userInput, currentProject);
+  // clearTurnState 必须在 user_input emit 之前（见旧注释）
+  pipeline.clearTurnState();
+  pipeline.emit({ kind: 'user_input', text: userInput });
 
-// ─────────────────────────────────────────────────────────────
-// 输入处理：Buffer 原始字节，手动解码 UTF-8
-//
-// 竞态修复：handler 顶部把数据并入 pending 缓冲（不丢弃），异步处理函数清空并消费它，
-// finally 里检查是否又有新数据到达，有则续处理——确保连按按键零丢失。
-// ─────────────────────────────────────────────────────────────
-if (process.stdin.isTTY) {
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
-  let pending = Buffer.alloc(0);
-  let historyBusy = false;
+  // 检查 ! 前缀拦截
+  const blockReq = parseBlockPrefix(userInput);
+  if (blockReq) {
+    skillNegotiator.block(blockReq.skillName, 'default');
+    printLine(`Skill "${blockReq.skillName}" blocked.`);
+    return;
+  }
 
-  process.stdin.on('data', (buf: Buffer) => {
-    pending = Buffer.concat([pending, buf]);
-    if (historyBusy) return;
-    historyBusy = true;
-    void handleInput();
-  });
-
-  async function handleInput() {
-    try {
-      const data = pending;
-      pending = Buffer.alloc(0);
-
-      // 覆盖层模式：所有按键路由给覆盖层处理器（只认 q/ctrl+o 退出、Ctrl+C）
-      if (overlayActive) {
-        handleOverlayInput(data);
-        return;
-      }
-
-      for (let i = 0; i < data.length; ) {
-        const byte = data[i]!;
-
-        // Ctrl+C —— 始终生效（先退出、恢复光标，再退出进程）
-        if (byte === 0x03) {
-          layout.exit();
-          process.exit(0);
-        }
-
-        // Ctrl+J —— 多行输入换行（预留 prompt 宽度空格对齐，最多 MAX_INPUT_LINES 行）
-        if (byte === 0x0a) {
-          const currentLines = input.split('\n').length;
-          if (currentLines < 3) { // MAX_INPUT_LINES
-            const promptPad = ' '.repeat([...layout.getPrompt()].length);
-            const chars = [...input];
-            input = chars.slice(0, cursorPos).join('') + '\n' + promptPad + chars.slice(cursorPos).join('');
-            cursorPos += 1 + promptPad.length;
-            syncInput();
-          }
-          i++; continue;
-        }
-
-        // Ctrl+O —— 临时 alt screen 覆盖层：显示最后一个可折叠块的完整内容
-        // 主屏 + scrollback 模式下，已进 scrollback 的行 CUP 够不着，无法就地展开。
-        // 改为进 alt screen 全屏显示完整内容，按 q/ctrl+o 返回主屏（主屏完好无损）。
-        if (byte === 0x0f) {
-          const expandable = pipeline.getLastExpandableFullLines();
-          if (expandable) {
-            showExpandOverlay(expandable.lines, expandable.kind);
-            syncInput();
-          }
-          i++; continue;
-        }
-
-        // ESC 序列检测（方向键）
-        if (byte === 0x1b && i + 2 < data.length && data[i + 1] === 0x5b) {
-          if (data[i + 2] === 0x41) {  // 上箭头：光标上移一行
-            const lines = input.split('\n');
-            let offset = 0;
-            for (let li = 0; li < lines.length; li++) {
-              const lineLen = [...lines[li]!].length;
-              if (cursorPos <= offset + lineLen) {
-                // 当前行是 li，光标在该行的 col = cursorPos - offset
-                if (li > 0) {
-                  const col = cursorPos - offset;
-                  const prevLineLen = [...lines[li - 1]!].length;
-                  const prevOffset = offset - prevLineLen - 1;
-                  cursorPos = prevOffset + Math.min(col, prevLineLen);
-                  syncInput();
-                }
-                break;
-              }
-              offset += lineLen + 1;
-            }
-            i += 3; continue;
-          }
-          if (data[i + 2] === 0x42) {  // 下箭头：光标下移一行
-            const lines = input.split('\n');
-            let offset = 0;
-            for (let li = 0; li < lines.length; li++) {
-              const lineLen = [...lines[li]!].length;
-              if (cursorPos <= offset + lineLen) {
-                if (li < lines.length - 1) {
-                  const col = cursorPos - offset;
-                  const nextLineLen = [...lines[li + 1]!].length;
-                  const nextOffset = offset + lineLen + 1;
-                  cursorPos = nextOffset + Math.min(col, nextLineLen);
-                  syncInput();
-                }
-                break;
-              }
-              offset += lineLen + 1;
-            }
-            i += 3; continue;
-          }
-          if (data[i + 2] === 0x44) {  // 左箭头
-            if (cursorPos > 0) { cursorPos--; syncInput(); }
-            i += 3; continue;
-          }
-          if (data[i + 2] === 0x43) {  // 右箭头
-            const maxPos = [...input].length;
-            if (cursorPos < maxPos) { cursorPos++; syncInput(); }
-            i += 3; continue;
-          }
-        }
-
-        // 回车（仅 CR 提交，LF 由 Ctrl+J 处理）
-        if (byte === 0x0d) {
-          if (input.trim() === 'exit') {
-            layout.exit();
-            process.exit(0);
-          }
-          if (input.trim() && !isProcessing) {
-            const userInput = input.trim();
-            await historyManager.addEntry(userInput, currentProject);
-            // 新 turn：先重置 turn 状态（清上一 turn 的快照/可折叠块），再 emit user_input。
-            // 顺序关键：clearTurnState 必须在 user_input emit 之前，否则 user_input 的
-            // 快照会被清掉，导致 ctrl+o 重绘时丢失用户输入。
-            pipeline.clearTurnState();
-            // 用户输入固化进消息区（经统一管道，纳入 turnSnapshot 供 ctrl+o 重绘）
-            pipeline.emit({ kind: 'user_input', text: userInput });
-            input = '';
-            cursorPos = 0;
-
-            // 检查 ! 前缀拦截
-            const blockReq = parseBlockPrefix(userInput);
-            if (blockReq) {
-              skillNegotiator.block(blockReq.skillName, 'default');
-              printLine(`Skill "${blockReq.skillName}" blocked.`);
-              syncInput();
-            } else {
-              const cmd = parseCommand(userInput);
-              if (cmd) {
-                if (['skill', 'trigger', 'y', 'n', 'edit'].includes(cmd.name)) {
-                  const result = executeCommand(cmd, { skillRegistry, negotiator: skillNegotiator, userId: 'default' });
-                  printLine(result.message);
-                } else {
-                  const result = executeCommand(cmd, configStore, { permissionChecker });
-                  printLine(result.message);
-                }
-                syncInput();
-              } else {
-                // Agent 循环
-                todoManager.incrementRounds();
-                const reminder = todoManager.getReminder() || todoManager.getVerificationNudge();
-                const skillsDescription = skillRegistry.describeAvailable();
-                const systemPrompt = [
-                  'You are a helpful assistant that can execute shell commands and manipulate files.',
-                  '',
-                  skillsDescription,
-                  reminder ? `\n${reminder}` : '',
-                ].join('\n');
-
-                isProcessing = true;
-                let thinkingContent = '';
-                let thinkingStart = Date.now();
-                // clearTurnState 已在 user_input emit 前调用（见上方）。
-                // thinking_start 复用同一 turn 的快照，不再重置。
-                pipeline.emit({ kind: 'thinking_start' });
-                // spinner：thinking 开始就转，钉死页脚区（不进 scrollback）
-                layout.startSpinner('Thinking…');
-
-                const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
-                if (apiKey) {
-                  const streamClient = new AnthropicStreamClient({ apiKey, model: MODEL });
-                  const compactClient = new AnthropicStreamClient({ apiKey, model: SMALL_MODEL });
-                  const eventBus = new StreamEventBus();
-                  // 工具显示经统一管道：emit Block，pipeline 内部缓存 input + 计算 diff。
-                  eventBus.onToolCall(d => {
-                    pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input });
-                    // spinner：工具运行时切换文案，继续转
-                    layout.setSpinnerLabel(`Running ${d.name}`);
-                  });
-                  eventBus.onToolResult(d => {
-                    pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output });
-                  });
-                  // turn 结束（end_turn/error/max_turns/user_abort）→ 停 spinner
-                  eventBus.onLoopEnd(() => {
-                    layout.stopSpinner();
-                  });
-                  const tools = Array.from(toolRegistry.tools.values()).map(t => t.definition);
-                  const ac = new AbortController();
-
-                  (async () => {
-                    // 当前 assistant 回合的累积文本（流式 Markdown 渲染用）
-                    let assistantText = '';
-                    // 已落盘的消息数量（onMessages 只 append 新增部分；初始 = 已 resume 的历史长度）
-                    let persistedCount = sessionMessages.length;
-                    // content block 的 index → blockType 映射（追踪每个块类型，用于 content_block_stop 分派）
-                    const blockTypes = new Map<number, string>();
-                    // 当前是否处于 thinking 块（控制 thinking_start/end 配对，避免重复）
-                    let thinkingActive = true; // L323 已乐观 emit thinking_start
-                    try {
-                      for await (const msg of streamingQuery(streamClient, toolRegistry, userInput, {
-                        systemPrompt,
-                        tools,
-                        signal: ac.signal,
-                        maxTurns: 10,
-                        eventBus,
-                        compactClient,
-                        initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
-                        onMessages: (finalMessages) => {
-                          // 落盘：只 append 本次新增的消息（闭包内跟踪已持久化数量）
-                          // persistedCount 在闭包外声明（每次 turn 重置）
-                          const newMsgs = finalMessages.slice(persistedCount);
-                          sessionMessages = finalMessages;
-                          persistedCount = finalMessages.length;
-                          for (const m of newMsgs) {
-                            void sessionStore.append(sessionId, m);
-                          }
-                        },
-                      })) {
-                        // AI 输出期间：累积 token，经 pipeline 渲染进消息区
-                        if ('type' in msg && msg.type === 'content_block_start') {
-                          // 记录块类型；thinking 块开始时 emit thinking_start（多轮场景每轮都配对）
-                          const cbs = msg as { type: 'content_block_start'; index: number; blockType: string };
-                          blockTypes.set(cbs.index, cbs.blockType);
-                          if (cbs.blockType === 'thinking' && !thinkingActive) {
-                            pipeline.emit({ kind: 'thinking_start' });
-                            thinkingStart = Date.now();
-                            thinkingActive = true;
-                          }
-                        } else if ('type' in msg && msg.type === 'content_block_stop') {
-                          // thinking 块结束的精确信号：立即 emit thinking_end，
-                          // 保证 Thought for Ns 紧跟思考内容、在 tool_call/text 之前。
-                          // （旧逻辑等首个 text delta 才触发，导致「思考→工具」时摘要推迟到末尾。）
-                          const cstop = msg as { type: 'content_block_stop'; index: number };
-                          if (blockTypes.get(cstop.index) === 'thinking' && thinkingActive) {
-                            const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-                            pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
-                            thinkingContent = '';
-                            thinkingActive = false;
-                            // spinner：思考结束，切换到"生成中"（通常接 text/tool，spinner 继续转）
-                            layout.setSpinnerLabel('Generating…');
-                          }
-                        } else if ('type' in msg && msg.type === 'content_block_delta') {
-                          const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
-                          // 任何 delta（thinking/text）都重置 spinner stall 计时器
-                          if (delta.content) layout.spinnerOnToken();
-                          if (delta.deltaType === 'text' && delta.content) {
-                            // 兜底：若 content_block_stop 信号缺失（如旧版 API），首个 text 时固化思考。
-                            // 正常路径已由 content_block_stop 处理（thinkingContent 此时为空，不触发）。
-                            if (assistantText === '' && thinkingContent) {
-                              const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-                              pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
-                              thinkingContent = '';
-                              thinkingActive = false;
-                            }
-                            assistantText += delta.content;
-                            pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: false });
-                          } else if (delta.deltaType === 'thinking' && delta.content) {
-                            thinkingContent += delta.content;
-                            pipeline.emit({ kind: 'thinking_delta', content: delta.content });
-                          }
-                        } else if ('type' in msg && msg.type === 'assistant') {
-                          // 一条 assistant 消息完成：finalize 流式（落定进 scrollback），下一条会新建
-                          if (assistantText) {
-                            pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: true });
-                            assistantText = '';
-                          }
-                        } else if ('type' in msg && msg.type === 'tool_result') {
-                          const tr = msg as { type: 'tool_result'; name: string; output: string };
-                          // 工具结果显示已由 eventBus.onToolResult 经 pipeline 处理，
-                          // 这里跑 PostToolUse hook 并同步经 pipeline 输出日志。
-                          // 必须同步 await：builtins 是同步函数立即完成，避免异步 .then
-                          // 穿插进下一轮流式内容（时序竞态导致 hook 消息错位）。
-                          const hookResult = await hookRunner.run({
-                            name: 'PostToolUse',
-                            payload: { tool_name: tr.name, output: tr.output },
-                          });
-                          if (hookResult.message) {
-                            pipeline.emit({ kind: 'hook', text: hookResult.message });
-                          }
-                        }
-                      }
-                      // 循环结束兜底：若还有未收尾的累积文本，最终解析一次
-                      if (assistantText) {
-                        pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: true });
-                        assistantText = '';
-                      }
-                    } catch (err) {
-                      layout.send('error', `[Error] ${err}`);
-                      // 错误时确保 spinner 停止（loop_end 可能未发出）
-                      layout.stopSpinner();
-                    } finally {
-                      isProcessing = false;
-                      // 如果还在思考状态（没有收到文本），显示内容并折叠
-                      if (thinkingContent) {
-                        const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-                        pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
-                        thinkingContent = '';
-                      }
-                      printLine('');
-                      syncInput();
-                    }
-                  })();
-                } else {
-                  layout.send('error', `[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`);
-                  // 无 API key：thinking_start 已启动 spinner，但循环不会跑，必须显式停
-                  layout.stopSpinner();
-                  isProcessing = false;
-                  layout.setHint(undefined);
-                  syncInput();
-                }
-              }
-            }
-          } else if (!isProcessing) {
-            input = '';
-            cursorPos = 0;
-            syncInput();
-          }
-          historyManager.reset();
-          i++;
-          continue;
-        }
-
-        // 退格
-        if (byte === 0x08 || byte === 0x7F) {
-          if (cursorPos > 0) {
-            const chars = [...input];
-            chars.splice(cursorPos - 1, 1);
-            input = chars.join('');
-            cursorPos--;
-          }
-          syncInput();
-          i++;
-          continue;
-        }
-
-        // 其他控制字符跳过
-        if (byte < 0x20) { i++; continue; }
-
-        // UTF-8 多字节字符
-        let charLen = 1;
-        if ((byte & 0xE0) === 0xC0) charLen = 2;
-        else if ((byte & 0xF0) === 0xE0) charLen = 3;
-        else if ((byte & 0xF8) === 0xF0) charLen = 4;
-
-        if (i + charLen > data.length) {
-          pending = data.subarray(i);
-          break;
-        }
-
-        const char = data.subarray(i, i + charLen).toString('utf8');
-        const chars = [...input];
-        chars.splice(cursorPos, 0, char);
-        input = chars.join('');
-        cursorPos++;
-        i += charLen;
-        // 可打印字符入框后同步输入态（节流重绘）
-        syncInput();
-      }
-
-      // 兜底：处理完一批按键后确保输入框反映最新 input（流式期间也照常，输入框始终可编辑）
-      syncInput();
-    } catch (err) {
-      // 经统一管道显示
-      layout.send('error', `[stdin handler error] ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      historyBusy = false;
-      // 处理期间若有新数据到达（连按按键），续处理，确保零丢失
-      if (pending.length > 0) {
-        historyBusy = true;
-        void handleInput();
+  const cmd = parseCommand(userInput);
+  if (cmd) {
+    if (['skill', 'trigger', 'y', 'n', 'edit'].includes(cmd.name)) {
+      const result = executeCommand(cmd, { skillRegistry, negotiator: skillNegotiator, userId: 'default' });
+      printLine(result.message);
+    } else {
+      const result = executeCommand(cmd, configStore, { permissionChecker });
+      printLine(result.message);
+      if (cmd.name === 'plan' || cmd.name === 'build' || cmd.name === 'auto') {
+        tuiHandle?.statusStore.getState().setStatus({ mode: permissionChecker.getMode() });
       }
     }
+    return;
   }
+
+  // 3. Agent 循环
+  todoManager.incrementRounds();
+  const reminder = todoManager.getReminder() || todoManager.getVerificationNudge();
+  const skillsDescription = skillRegistry.describeAvailable();
+  const currentMode = permissionChecker.getMode();
+  const planModeInstruction = currentMode === 'plan'
+    ? '\n\n## PLAN MODE ACTIVE\n' +
+      'You MUST NOT make any edits, run write tools, or otherwise change the system. ' +
+      'Only read-only operations and the plan-related tools (write_plan_file, exit_plan_mode) are allowed.\n' +
+      '\n' +
+      '## Communication（重要）\n' +
+      'Always give the user a concise verbal update — never chain tool calls in silence:\n' +
+      '- Before a batch of tool calls: one short sentence on what you are about to look at and why.\n' +
+      '- After exploration is complete: a thorough but concise summary of what you found, the architecture/design, ' +
+      'and (if you propose changes) how the user can verify them. This summary is your deliverable.\n' +
+      'The user should never feel the task is half-done or left hanging.\n' +
+      '\n' +
+      'Workflow:\n' +
+      '1. Explore the codebase — prefer dedicated read-only tools:\n' +
+      '   - read_file (view a file OR list a directory)\n' +
+      '   - glob (find files by name pattern, e.g. "**/*.ts")\n' +
+      '   - grep (search file contents by regex)\n' +
+      '   For cases those tools cannot cover (git log, find with complex filters),\n' +
+      '   you MAY use run_bash with read-only commands (ls/cat/grep/git status/git diff).\n' +
+      '   NEVER run write commands (mkdir/rm/git commit/npm install/...).\n' +
+      '2. When you have a complete plan, call write_plan_file with the full Markdown content\n' +
+      '3. Call exit_plan_mode to submit it for user approval\n' +
+      '4. The user will respond with /approve (you may then implement) or /reject <reason> (revise and resubmit)\n' +
+      'For large or unfamiliar codebases, consider spawning an explore agent (spawn_agent role="explore") ' +
+      'to investigate in parallel without bloating your main context.\n' +
+      'Do NOT execute the plan until it is approved and the mode switches to build.'
+    : '';
+
+  const systemPrompt = [
+    'You are a helpful assistant that can execute shell commands and manipulate files.',
+    '',
+    skillsDescription,
+    reminder ? `\n${reminder}` : '',
+    planModeInstruction,
+  ].join('\n');
+
+  isProcessing = true;
+  let thinkingContent = '';
+  let thinkingStart = Date.now();
+  pipeline.emit({ kind: 'thinking_start' });
+  tuiHandle?.statusStore.getState().startSpinner('Thinking…');
+
+  const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
+  if (!apiKey) {
+    tuiHandle?.printStyled(`[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`, 'error');
+    tuiHandle?.statusStore.getState().stopSpinner();
+    isProcessing = false;
+    tuiHandle?.statusStore.getState().setHint(undefined);
+    return;
+  }
+
+  const streamClient = new AnthropicStreamClient({ apiKey, model: MODEL });
+  const compactClient = new AnthropicStreamClient({ apiKey, model: SMALL_MODEL });
+  const eventBus = new StreamEventBus();
+  eventBus.onToolCall(d => {
+    pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
+    if (d.name === 'ask_user_question') {
+      tuiHandle?.statusStore.getState().stopSpinner();
+    } else {
+      tuiHandle?.statusStore.getState().setSpinnerLabel(`Running ${d.name}`);
+    }
+  });
+  eventBus.onToolResult(d => {
+    pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId });
+  });
+  eventBus.onLoopEnd(() => {
+    tuiHandle?.statusStore.getState().stopSpinner();
+  });
+  const allToolDefs = Array.from(toolRegistry.tools.values()).map(t => t.definition);
+  const tools = currentMode === 'plan'
+    ? allToolDefs.filter(t => !WRITE_TOOLS.includes(t.name))
+    : allToolDefs;
+  const ac = new AbortController();
+
+  // agent 循环（与旧实现 verbatim，仅 layout.* → tuiHandle.statusStore）
+  let assistantText = '';
+  let persistedCount = sessionMessages.length;
+  const blockTypes = new Map<number, string>();
+  let thinkingActive = true; // 已乐观 emit thinking_start
+  try {
+    for await (const msg of streamingQuery(streamClient, toolRegistry, userInput, {
+      systemPrompt, tools, signal: ac.signal, maxTurns: 10,
+      eventBus, compactClient, permissionChecker,
+      initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
+      onMessages: (finalMessages) => {
+        const newMsgs = finalMessages.slice(persistedCount);
+        sessionMessages = finalMessages;
+        persistedCount = finalMessages.length;
+        for (const m of newMsgs) {
+          void sessionStore.append(sessionId, m);
+        }
+      },
+    })) {
+      if ('type' in msg && msg.type === 'content_block_start') {
+        const cbs = msg as { type: 'content_block_start'; index: number; blockType: string };
+        blockTypes.set(cbs.index, cbs.blockType);
+        if (cbs.blockType === 'thinking' && !thinkingActive) {
+          pipeline.emit({ kind: 'thinking_start' });
+          thinkingStart = Date.now();
+          thinkingActive = true;
+        }
+      } else if ('type' in msg && msg.type === 'content_block_stop') {
+        const cstop = msg as { type: 'content_block_stop'; index: number };
+        if (blockTypes.get(cstop.index) === 'thinking' && thinkingActive) {
+          const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
+          pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
+          thinkingContent = '';
+          thinkingActive = false;
+          tuiHandle?.statusStore.getState().setSpinnerLabel('Generating…');
+        }
+      } else if ('type' in msg && msg.type === 'content_block_delta') {
+        const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
+        if (delta.deltaType === 'text' && delta.content) {
+          if (assistantText === '' && thinkingContent) {
+            const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
+            pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
+            thinkingContent = '';
+            thinkingActive = false;
+          }
+          assistantText += delta.content;
+          pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: false });
+        } else if (delta.deltaType === 'thinking' && delta.content) {
+          thinkingContent += delta.content;
+          pipeline.emit({ kind: 'thinking_delta', content: delta.content });
+        }
+      } else if ('type' in msg && msg.type === 'assistant') {
+        if (assistantText) {
+          pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: true });
+          assistantText = '';
+        }
+      } else if ('type' in msg && msg.type === 'tool_result') {
+        const tr = msg as { type: 'tool_result'; name: string; output: string };
+        const hookResult = await hookRunner.run({
+          name: 'PostToolUse',
+          payload: { tool_name: tr.name, output: tr.output },
+        });
+        if (hookResult.message) {
+          pipeline.emit({ kind: 'hook', text: hookResult.message });
+        }
+      }
+    }
+    if (assistantText) {
+      pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: true });
+      assistantText = '';
+    }
+  } catch (err) {
+    tuiHandle?.printStyled(`[Error] ${err}`, 'error');
+    tuiHandle?.statusStore.getState().stopSpinner();
+  } finally {
+    isProcessing = false;
+    if (thinkingContent) {
+      const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
+      pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
+      thinkingContent = '';
+    }
+    printLine('');
+  }
+  historyManager.reset();
 }
+
 
 // ─────────────────────────────────────────────────────────────
 // 启动
@@ -689,10 +486,18 @@ if (cliOpts.list) {
     sessionId = resumeId;
   }
 
-  // 进入渲染模式（隐藏光标 + 画首帧）
-  layout.enter();
+  // 装配 Ink 渲染层：stores + PipelineToStoreAdapter + BlockPipeline + render(<ConnectedApp/>)。
+  // bootstrap 内部进 alt screen（useAltScreen），render 挂载 ConnectedApp。
+  // onSubmit → handleUserSubmit（驱动 agent loop）；onExit → cleanup + process.exit。
+  tuiHandle = bootstrap({
+    status: { mode: configStore.getPermissionMode(), model: MODEL, branch: GIT_BRANCH, dir: SHORT_DIR, contextUsage: 0 },
+    onSubmit: (text) => { void handleUserSubmit(text); },
+    onExit: () => { cleanupOnExit(); process.exit(0); },
+  });
+  // pipeline 由 bootstrap 内构造，赋值到外层 let pipeline（agent loop 使用）
+  pipeline = tuiHandle.pipeline;
 
-  // 一次性 banner（进消息区）—— 必须在 resume 回显之前，让 banner 在屏幕顶部
+  // 一次性 banner（进消息区）—— 在 bootstrap 之后（stores 已就绪），紧贴屏幕顶部
   printLine('');
   printStyled(' ▐▛███▜▌   MiCode v' + VERSION, 'system');
   printStyled('▝▜█████▛▘  TypeScript CLI · Node.js Runtime', 'system');
@@ -702,7 +507,7 @@ if (cliOpts.list) {
 
   // resume 时回显历史消息到消息区（让用户看到之前的对话）
   if (sessionMessages.length > 0) {
-    printLine(`\x1b[2m── resumed ${sessionMessages.length} messages ──\x1b[0m`);
+    printLine(`── resumed ${sessionMessages.length} messages ──`);
     for (const m of sessionMessages) {
       if (m.role === 'user') {
         const text = typeof m.content === 'string' ? m.content : '(结构化内容)';
@@ -726,39 +531,29 @@ if (cliOpts.list) {
     printLine('');
   }
 
+  // 终端尺寸变化由 useTerminalSize hook 自动响应（ConnectedApp 内），无需手动 listener。
 
-// 终端尺寸变化 → UILayout fullReset 重排
-process.stdout.on('resize', () => {
-  const { rows, cols } = readTermSize();
-  layout.resize(rows, cols);
-});
-
-// 进程退出兜底：恢复光标 + 清理后台子进程 + 停 spinner/调度器
-function cleanupOnExit(): void {
-  backgroundManager.killAll();
-  layout.stopSpinner();  // 清 spinner 定时器，避免退出后 setInterval 泄漏
-  layout.exit();
-  // 退出 alt screen 后，在主屏打印 resume hint（对齐 Claude Code）
-  process.stdout.write(`\x1b[2mResume this session with:\nmicode --resume ${sessionId}\n\x1b[0m`);
-}
-process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });
-process.on('SIGTERM', () => { cleanupOnExit(); process.exit(0); });
-process.on('exit', () => { cleanupOnExit(); });
-
-// banner 已移到 layout.enter() 之后（resume 回显之前，确保 banner 在屏幕顶部）
-
-// SessionStart hook：返回的 message 经渲染器画进消息区（hook 不直写终端）
-void hookRunner.run({ name: 'SessionStart', payload: {} }).then(r => { if (r.message) printLine(r.message); });
-
-// 调度检查器
-setInterval(() => {
-  scheduler.check();
-  const notifications = scheduler.drain();
-  for (const n of notifications) {
-    printStyled(`[scheduled:${n.scheduleId}] ${n.prompt}`, 'system');
+  // 进程退出兜底：杀后台子进程 + 卸载 Ink + 退 alt screen + 主屏 resume hint
+  function cleanupOnExit(): void {
+    backgroundManager.killAll();
+    tuiHandle?.statusStore.getState().stopSpinner();
+    tuiHandle?.cleanup();
+    // 退出 alt screen 后，在主屏打印 resume hint（对齐 Claude Code）
+    process.stdout.write(`\x1b[2mResume this session with:\nmicode --resume ${sessionId}\n\x1b[0m`);
   }
-}, 60000);
+  process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });
+  process.on('SIGTERM', () => { cleanupOnExit(); process.exit(0); });
+  process.on('exit', () => { cleanupOnExit(); });
 
-// 首次显示输入框
-syncInput();
+  // SessionStart hook：返回的 message 经 printLine 进 messagesStore（hook 不直写终端）
+  void hookRunner.run({ name: 'SessionStart', payload: {} }).then(r => { if (r.message) printLine(r.message); });
+
+  // 调度检查器
+  setInterval(() => {
+    scheduler.check();
+    const notifications = scheduler.drain();
+    for (const n of notifications) {
+      printStyled(`[scheduled:${n.scheduleId}] ${n.prompt}`, 'system');
+    }
+  }, 60000);
 } // end of else（非 --list 分支，进入 TUI）
