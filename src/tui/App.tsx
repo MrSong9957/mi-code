@@ -1,14 +1,18 @@
 // src/tui/App.tsx
-// 顶层布局：flexbox 列，footer 紧贴（charter §顶层布局结构）+ 固定 LOGO 区
+// 顶层布局：flexbox 列，三段式 LogoBox → ScrollBox → Footer
 //
-// 物理本质：一根垂直 flex 容器，三段：
-// - 消息区 flexGrow=1（ScrollBox 虚拟滚动）：空时塌缩 → LogoBox+Footer 紧贴顶部；
-//   有消息时撑开占满 → LogoBox+Footer 被挤到底。
-// - LogoBox flexShrink=0：固定 LOGO 区（ASCII art + model/dir/branch/mode），不随滚动消失。
-// - Footer flexShrink=0：上边框 + 输入框 + 下边框 + StatusBar(tokens|elapsed)。
+// 物理本质：一根垂直 flex 容器，三段（自上而下）：
+// - LogoBox flexShrink=0：固定 LOGO 区（ASCII art + version + dir），不随滚动消失，在最顶。
+// - ScrollBox flexGrow=1（消息区虚拟滚动）：空时塌缩为 0 行 → Footer 紧贴 LogoBox（charter snug）；
+//   有消息时撑开占满中间 → 把 Footer 挤到底。
+// - Footer flexShrink=0：上边框 + 输入框 + 下边框 + StatusBar。
+//
+// charter §顶层布局 L93-96 snug 行为：无消息 Footer 紧贴顶部，有消息被挤到底。
+// 不给根 Box height="100%"——加了会破坏 snug（空消息时 flexGrow 把 Footer 推到底）。
 //
 // 坐标全由 Yoga 自动算（charter 铁律：禁止手动 CUP 定位）。
 // ScrollBox 的 visibleRows = rows - LOGO_ROWS - FOOTER_ROWS。
+// inputRowY = LOGO_ROWS + scrollboxRenderedRows + 1（LOGO 在顶 + 消息行 + Footer 上边框）。
 //
 // Props 注入策略：
 // - messages / input / cursor / status / logo：由 zustand store（Phase 4）或测试直接注入
@@ -20,6 +24,7 @@ import { ScrollBox } from './components/ScrollBox.js';
 import { LogoBox } from './components/LogoBox.js';
 import { Footer } from './components/Footer.js';
 import type { TuiMessage, StatusBarData, LogoData } from './types.js';
+import type { SelectionStore } from './state/selection-store.js';
 
 /** Footer 固定占用的行数：上边框 + 输入 + 下边框 + 状态栏 */
 const FOOTER_ROWS = 4;
@@ -30,6 +35,7 @@ export interface AppProps {
   messages: TuiMessage[];
   status: StatusBarData;
   logo: LogoData;
+  selectionStore: SelectionStore;
   input: string;
   cursor: number;
   /** 终端列数（边框宽度用）；默认 80（ink-testing-library 默认） */
@@ -38,16 +44,15 @@ export interface AppProps {
   rows?: number;
 }
 
-export function App({ messages, status, logo, input, cursor, cols = 80, rows = 24 }: AppProps): React.ReactElement {
+export function App({ messages, status, logo, selectionStore, input, cursor, cols = 80, rows = 24 }: AppProps): React.ReactElement {
   const visibleRows = Math.max(0, rows - FOOTER_ROWS - LOGO_ROWS);
   // 输入行全局 y：ScrollBox 实际渲染行数 + LOGO_ROWS + 上边框 1 行
-  // （ScrollBox 空/少消息时只占实际内容行数，flexGrow 空白不算渲染行）
   const scrollboxRenderedRows = Math.min(messages.length, visibleRows);
   const inputRowY = scrollboxRenderedRows + LOGO_ROWS + 1;
   return (
     <Box flexDirection="column">
-      <ScrollBox messages={messages} visibleRows={visibleRows} />
       <LogoBox logo={logo} />
+      <ScrollBox messages={messages} visibleRows={visibleRows} selectionStore={selectionStore} />
       <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} />
     </Box>
   );

@@ -48,6 +48,8 @@ export interface UIMessageStyle {
   dim?: boolean;
   italic?: boolean;
   underline?: boolean;
+  /** 反转视频（SGR 7）——选区行高亮用 */
+  inverse?: boolean;
 }
 
 /** Writer 接口 */

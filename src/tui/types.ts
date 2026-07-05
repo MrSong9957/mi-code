@@ -38,6 +38,8 @@ export interface InkTextStyle {
   dimColor?: boolean;
   italic?: boolean;
   underline?: boolean;
+  /** 反转视频（SGR 7）——选区高亮用，Ink <Text inverse> 直接支持 */
+  inverse?: boolean;
 }
 
 /**
@@ -75,6 +77,7 @@ export function styleToInkProps(style: UIMessageStyle | undefined): InkTextStyle
   if (style.dim) props.dimColor = true;
   if (style.italic) props.italic = true;
   if (style.underline) props.underline = true;
+  if (style.inverse) props.inverse = true;
   return props;
 }
 

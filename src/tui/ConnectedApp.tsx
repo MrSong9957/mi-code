@@ -7,7 +7,7 @@
 //
 // 这是 production 入口（bootstrap 渲染它）；测试直接渲染 App（注入假数据）。
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { App } from './App.js';
@@ -18,6 +18,7 @@ import type { MessagesStore } from './state/messages-store.js';
 import type { InputStore } from './state/input-store.js';
 import type { StatusStore } from './state/status-store.js';
 import type { LogoStore } from './state/logo-store.js';
+import { createSelectionStore } from './state/selection-store.js';
 
 export interface ConnectedAppProps {
   messagesStore: MessagesStore;
@@ -30,6 +31,8 @@ export interface ConnectedAppProps {
 export function ConnectedApp({
   messagesStore, inputStore, statusStore, logoStore, onExit,
 }: ConnectedAppProps): React.ReactElement {
+  // 选区 store：ScrollBox 鼠标拖拽写入，MessageRow 读 selected 高亮
+  const selectionStore = useMemo(() => createSelectionStore(), []);
   // alt screen 生命周期（mount 进，unmount 退）
   useAltScreen();
   // 终端尺寸（响应 resize）
@@ -55,6 +58,7 @@ export function ConnectedApp({
       messages={messages}
       status={status}
       logo={logo}
+      selectionStore={selectionStore}
       input={inputText}
       cursor={cursor}
       rows={rows}

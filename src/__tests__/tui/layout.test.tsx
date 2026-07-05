@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { App } from '../../tui/App.js';
+import { createSelectionStore } from '../../tui/state/selection-store.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../../tui/types.js';
 
 const STATUS: StatusBarData = {
@@ -14,12 +15,12 @@ const LOGO: LogoData = { version: '1.0.0', dir: '/tmp/proj' };
 
 function makeApp(messages: TuiMessage[] = []): { lastFrame: () => string | undefined } {
   return render(
-    React.createElement(App, { messages, status: STATUS, logo: LOGO, input: '', cursor: 0 }),
+    React.createElement(App, { messages, status: STATUS, logo: LOGO, selectionStore: createSelectionStore(), input: '', cursor: 0 }),
   );
 }
 
 describe('App 顶层布局（flexbox footer 紧贴 + LOGO 固定区）', () => {
-  it('空消息：LOGO + footer 紧贴顶部', () => {
+  it('空消息：LOGO + footer 紧贴顶部（LOGO 在第 0 行）', () => {
     const { lastFrame } = makeApp([]);
     const frame = lastFrame() ?? '';
     expect(frame).toContain('MiCode v1.0.0');
@@ -31,6 +32,27 @@ describe('App 顶层布局（flexbox footer 紧贴 + LOGO 固定区）', () => {
       if (lines[i]!.trim() !== '') { firstNonEmptyIdx = i; break; }
     }
     expect(firstNonEmptyIdx!, '紧贴顶部').toBeLessThanOrEqual(1);
+    // LOGO 第 0 行（ASCII art 最先）
+    expect(lines[0]).toContain('MiCode v1.0.0');
+  });
+
+  it('有消息：顺序为 LOGO(顶) → 消息(中) → Footer(底)', () => {
+    const messages: TuiMessage[] = [
+      {
+        uuid: 'm1', role: 'assistant', finalized: true,
+        lines: [{ content: '● 你好运', style: { fg: 'brand' }, indent: 0 }],
+      },
+    ];
+    const { lastFrame } = makeApp(messages);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('● 你好运');
+    // 顺序断言：LOGO 在消息之前，消息在 Footer(❯) 之前
+    const logoIdx = frame.indexOf('MiCode v1.0.0');
+    const msgIdx = frame.indexOf('● 你好运');
+    const footerIdx = frame.indexOf('❯');
+    expect(logoIdx, 'LOGO 应存在').toBeGreaterThanOrEqual(0);
+    expect(msgIdx, '消息应存在').toBeGreaterThan(logoIdx);
+    expect(footerIdx, 'Footer 应在消息之后').toBeGreaterThan(msgIdx);
   });
 
   it('LOGO 区固定显示：ASCII art + version + dir（无 model/branch/mode，那些在 StatusBar）', () => {
@@ -63,7 +85,7 @@ describe('App 顶层布局（flexbox footer 紧贴 + LOGO 固定区）', () => {
   it('StatusBar 进度条随 contextPct 变化', () => {
     const status50: StatusBarData = { ...STATUS, contextPct: 0.5 };
     const { lastFrame } = render(
-      React.createElement(App, { messages: [], status: status50, logo: LOGO, input: '', cursor: 0 }),
+      React.createElement(App, { messages: [], status: status50, logo: LOGO, selectionStore: createSelectionStore(), input: '', cursor: 0 }),
     );
     const frame = lastFrame() ?? '';
     // 50% → round(0.5*10)=5 满
