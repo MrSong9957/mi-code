@@ -1,6 +1,6 @@
 // src/__tests__/render/output-ops.test.ts
 import { describe, it, expect } from 'vitest';
-import { blit } from '../../render/output-ops.js';
+import { blit, blitAnsi } from '../../render/output-ops.js';
 import { Screen } from '../../render/screen.js';
 import { CharPool } from '../../render/char-pool.js';
 import { StylePool } from '../../render/style-pool.js';
@@ -99,5 +99,95 @@ describe('blit', () => {
     blit(s, -1, 0, 'a', DEFAULT_STYLE);
     blit(s, 0, 99, 'a', DEFAULT_STYLE);
     expect(s.cellAt(0, 0).charId).toBe(0);
+  });
+});
+
+describe('blitAnsi', () => {
+  // ANSI 串按 Ink/real-DOM 形状：颜色/样式嵌入文本字节中。
+  // 用 stylePool.get(decodeStyleId(...)) 读回 Style 做断言。
+
+  it('纯 ASCII（无 ANSI）：每字符默认样式', () => {
+    const s = makeScreen(1, 5);
+    blitAnsi(s, 0, 0, 'hello');
+    expect(s.charPool.get(s.cellAt(0, 0).charId)).toBe('h');
+    expect(s.charPool.get(s.cellAt(4, 0).charId)).toBe('o');
+    const style = s.stylePool.get(decodeStyleId(s.cellAt(0, 0).encodedStyleId));
+    expect(style).toEqual(DEFAULT_STYLE);
+  });
+
+  it('\\x1b[1mbold\\x1b[22m：字符带 bold=true', () => {
+    const s = makeScreen(1, 4);
+    blitAnsi(s, 0, 0, '\x1b[1mbold\x1b[22m');
+    expect(s.charPool.get(s.cellAt(0, 0).charId)).toBe('b');
+    const style = s.stylePool.get(decodeStyleId(s.cellAt(0, 0).encodedStyleId));
+    expect(style.bold).toBe(true);
+  });
+
+  it('\\x1b[38;2;255;0;0mred\\x1b[39m：fg=0xFF0000', () => {
+    const s = makeScreen(1, 3);
+    blitAnsi(s, 0, 0, '\x1b[38;2;255;0;0mred\x1b[39m');
+    const style = s.stylePool.get(decodeStyleId(s.cellAt(0, 0).encodedStyleId));
+    expect(style.fg).toBe(0xFF0000);
+  });
+
+  it('\\x1b[48;2;0;0;255m...\\x1b[49m：bg=0x0000FF', () => {
+    const s = makeScreen(1, 3);
+    blitAnsi(s, 0, 0, '\x1b[48;2;0;0;255mbg\x1b[49m');
+    const style = s.stylePool.get(decodeStyleId(s.cellAt(0, 0).encodedStyleId));
+    expect(style.bg).toBe(0x0000FF);
+  });
+
+  it('混合样式：\\x1b[1mB\\x1b[22mplain → 首字 bold，其余默认', () => {
+    const s = makeScreen(1, 6);
+    blitAnsi(s, 0, 0, '\x1b[1mB\x1b[22mplain');
+    expect(s.charPool.get(s.cellAt(0, 0).charId)).toBe('B');
+    const boldStyle = s.stylePool.get(decodeStyleId(s.cellAt(0, 0).encodedStyleId));
+    expect(boldStyle.bold).toBe(true);
+    // 'plain' 区域应为默认样式
+    const plainStyle = s.stylePool.get(decodeStyleId(s.cellAt(1, 0).encodedStyleId));
+    expect(plainStyle.bold).toBe(false);
+    expect(plainStyle).toEqual(DEFAULT_STYLE);
+  });
+
+  it('\\x1b[0m 中途 reset：后续字符回默认样式', () => {
+    const s = makeScreen(1, 3);
+    blitAnsi(s, 0, 0, '\x1b[1mB\x1b[0mcd');
+    const boldStyle = s.stylePool.get(decodeStyleId(s.cellAt(0, 0).encodedStyleId));
+    expect(boldStyle.bold).toBe(true);
+    const afterReset = s.stylePool.get(decodeStyleId(s.cellAt(1, 0).encodedStyleId));
+    expect(afterReset).toEqual(DEFAULT_STYLE);
+  });
+
+  it('16 色（chalk.green）：\\x1b[32m...\\x1b[39m 仍渲染字符（颜色降级为 fg）', () => {
+    // chalk 16 色用 \x1b[32m（green）。我们的 Style.fg 是 24-bit RGB；
+    // 16 色码无 RGB → 无法精确还原，但字符必须写入（不能丢字）。
+    // 这里仅断言字符被写入；颜色降级留待后续 SGR 调色板补全。
+    const s = makeScreen(1, 2);
+    blitAnsi(s, 0, 0, '\x1b[32mhi\x1b[39m');
+    expect(s.charPool.get(s.cellAt(0, 0).charId)).toBe('h');
+    expect(s.charPool.get(s.cellAt(1, 0).charId)).toBe('i');
+  });
+
+  it('多个属性叠加：red+bold（\x1b[38;2;255;0;0m\x1b[1m）', () => {
+    const s = makeScreen(1, 2);
+    blitAnsi(s, 0, 0, '\x1b[38;2;255;0;0m\x1b[1mAB\x1b[22m\x1b[39m');
+    const style = s.stylePool.get(decodeStyleId(s.cellAt(0, 0).encodedStyleId));
+    expect(style.fg).toBe(0xFF0000);
+    expect(style.bold).toBe(true);
+  });
+
+  it('空字符串：无操作', () => {
+    const s = makeScreen(1, 3);
+    blitAnsi(s, 0, 0, '');
+    expect(s.cellAt(0, 0).charId).toBe(0);
+  });
+
+  it('CJK 全角 + ANSI：宽度与样式同时正确', () => {
+    const s = makeScreen(1, 4);
+    blitAnsi(s, 0, 0, '\x1b[1m你\x1b[22m');
+    expect(s.charPool.get(s.cellAt(0, 0).charId)).toBe('你');
+    expect(isFullWidthContinuation(s.cellAt(1, 0).encodedStyleId)).toBe(true);
+    const headStyle = s.stylePool.get(decodeStyleId(s.cellAt(0, 0).encodedStyleId));
+    expect(headStyle.bold).toBe(true);
   });
 });

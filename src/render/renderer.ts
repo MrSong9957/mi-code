@@ -10,7 +10,7 @@ import { renderTree } from './yoga-walk.js';
 import { diff } from './diff.js';
 import { optimize } from './optimizer.js';
 import { emit, type EmitContext } from './emit.js';
-import { DEFAULT_STYLE, type CursorPos } from './types.js';
+import { type CursorPos } from './types.js';
 
 /** Ink renderer 的返回形状 */
 interface RenderResult {
@@ -64,7 +64,7 @@ export function createCustomRenderer(opts: CustomRendererOptions): InkRenderer {
       }
 
       // 2. yoga-walk：遍历 Ink 树写 back
-      renderTree(node as never, db.back, DEFAULT_STYLE);
+      renderTree(node as never, db.back);
 
       // 3. diff
       const patches = diff(db.front, db.back);

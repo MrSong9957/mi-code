@@ -24,8 +24,7 @@ describe('integration: custom renderer 端到端', () => {
           getComputedWidth: () => 5, getComputedHeight: () => 1,
           getDisplay: () => 0,
         },
-        textValue: 'hello',
-        childNodes: [],
+        childNodes: [{ nodeName: '#text', nodeValue: 'hello', childNodes: [] }],
       }],
     };
     renderer(fakeTree as never, { width: 80, height: 24 });
@@ -42,7 +41,7 @@ describe('integration: custom renderer 端到端', () => {
     const fakeTree = {
       nodeName: 'ink-root',
       yogaNode: { getComputedLeft: () => 0, getComputedTop: () => 0, getComputedWidth: () => 5, getComputedHeight: () => 1, getDisplay: () => 0 },
-      childNodes: [{ nodeName: 'ink-text', yogaNode: { getComputedLeft: () => 0, getComputedTop: () => 0, getComputedWidth: () => 5, getComputedHeight: () => 1, getDisplay: () => 0 }, textValue: 'hi', childNodes: [] }],
+      childNodes: [{ nodeName: 'ink-text', yogaNode: { getComputedLeft: () => 0, getComputedTop: () => 0, getComputedWidth: () => 5, getComputedHeight: () => 1, getDisplay: () => 0 }, childNodes: [{ nodeName: '#text', nodeValue: 'hi', childNodes: [] }] }],
     };
     renderer(fakeTree as never, { width: 80, height: 24 });
     writes.length = 0;  // 清第一帧

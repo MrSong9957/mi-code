@@ -3,25 +3,22 @@
 // 借鉴 node_modules/ink/build/render-node-to-output.js 的遍历结构，
 // 但目标是 Screen（Int32Array）而非 Ink 的 Output（对象网格）。
 //
-// Ink DOM 节点字段：
-// - nodeName: 'ink-root' | 'ink-box' | 'ink-text'
+// Real Ink DOM 节点字段（已验证 node_modules/ink/build/）：
+// - nodeName: 'ink-root' | 'ink-box' | 'ink-text' | 'ink-virtual-text' | '#text'
 // - yogaNode: Yoga 节点（getComputedLeft/Top/Width/Height/getDisplay）
-// - childNodes: 子节点数组
-// - style: { flexDirection, overflow, overflowX, overflowY, textWrap, ... }
-// - internal_transform: 可选 transformer 函数（项目未用，先忽略）
+// - childNodes: 子节点数组（#text 节点没有此字段）
+// - nodeValue: 仅 #text 节点有（DOM spec）；内容是 ANSI 嵌入的字符串
+//   （Ink 的 <Text> 在 render 前用 chalk 包色 → 色码进 nodeValue）
+// - internal_transform: 可选 transformer 函数（squashTextNodes 时应用）
 // - internal_static: 是否 <Static> 子树
 //
-// 简化范围（与项目实际用法对齐）：
-// - 不处理 overflow clip（项目 ScrollBox 用 visibleRows 裁剪消息，不靠 overflow:hidden）
-// - 不处理 border/background（项目用 ASCII 字符画边框，不是 Yoga border）
-// - 不处理 internal_transform（项目无 <Transform> 用法，grep 确认）
-// - 不处理 <Static>（项目未用）
-// - 样式用 inheritedStyle（简化，Task 13 冒烟后补 node.style 解析）
+// 关键修正（Task 9 bug）：旧版读不存在的 textValue 字段 → 全屏空白。
+// 现按 Ink 的 squash-text-nodes.js 算法递归 #text/ink-virtual-text 提取文本，
+// 再用 blitAnsi 解析嵌入的 ANSI 重建每字符 Style。
 
 import Yoga from 'yoga-layout';
 import type { Screen } from './screen.js';
-import type { Style } from './types.js';
-import { blit } from './output-ops.js';
+import { blitAnsi } from './output-ops.js';
 
 /** Ink DOM 节点的最小类型（避免依赖 Ink 内部类型） */
 interface InkNode {
@@ -34,34 +31,54 @@ interface InkNode {
     getDisplay(): number;
   };
   childNodes?: InkNode[];
-  style?: Record<string, unknown>;
+  /** #text 节点的文本（ANSI 嵌入） */
+  nodeValue?: string;
+  /** 可选 transformer（squashTextNodes 时对每个文本子节点应用） */
+  internal_transform?: (text: string, index: number) => string;
   internal_static?: boolean;
-  // ink-text 节点的文本（squashTextNodes 的简化读取）
-  textValue?: string;
-  // 真实 Ink：childNodes 里可能有字符串字面量子节点
 }
 
-/** 把 Ink 文本节点的子节点（字符串数组）squash 成单个字符串 */
+/**
+ * 把 Ink 文本节点（ink-text/ink-virtual-text）的子节点 squash 成单个字符串。
+ * 镜像 node_modules/ink/build/squash-text-nodes.js 的算法：
+ * - #text → 取 nodeValue
+ * - ink-text / ink-virtual-text → 递归 squashTextNodes
+ * - 对每个非 #text 子节点，若有 internal_transform 则应用
+ * 注意：这里返回的是「ANSI 嵌入的原始串」，样式解析交给 blitAnsi。
+ */
 function squashTextNodes(node: InkNode): string {
-  if (typeof node.textValue === 'string') return node.textValue;
-  // 真实 Ink：childNodes 是字符串或文本节点
-  if (!node.childNodes) return '';
-  return node.childNodes
-    .map(c => (typeof c === 'string' ? c : (c as InkNode).textValue ?? ''))
-    .join('');
+  let text = '';
+  const childNodes = node.childNodes;
+  if (!childNodes) return text;
+  for (let index = 0; index < childNodes.length; index++) {
+    const childNode = childNodes[index];
+    if (!childNode) continue;
+    let nodeText = '';
+    if (childNode.nodeName === '#text') {
+      nodeText = childNode.nodeValue ?? '';
+    } else if (childNode.nodeName === 'ink-text' || childNode.nodeName === 'ink-virtual-text') {
+      nodeText = squashTextNodes(childNode);
+      // squash 串联后 Output 无法逐子节点 transform，需在此手动应用
+      if (nodeText.length > 0 && typeof childNode.internal_transform === 'function') {
+        nodeText = childNode.internal_transform(nodeText, index);
+      }
+    }
+    text += nodeText;
+  }
+  return text;
 }
 
 /**
  * 渲染 Ink DOM 树到 Screen。
  * @param root Ink 根节点（已 Yoga 布局）
  * @param screen 目标 Screen（back buffer）
- * @param baseStyle 继承的样式（项目用 <Text> 自己的 style，这里作为 fallback）
  */
-export function renderTree(root: InkNode, screen: Screen, baseStyle: Style): void {
-  walk(root, screen, 0, 0, baseStyle);
+export function renderTree(root: InkNode, screen: Screen): void {
+  walk(root, screen, 0, 0);
 }
 
-function walk(node: InkNode, screen: Screen, offsetX: number, offsetY: number, inheritedStyle: Style): void {
+/** 累计坐标偏移递归写 cell。样式不继承——文本样式由 ANSI 嵌入文本本身携带。 */
+function walk(node: InkNode, screen: Screen, offsetX: number, offsetY: number): void {
   if (node.internal_static) return; // 跳过 <Static>（spec §5.4）
 
   const yoga = node.yogaNode;
@@ -72,22 +89,22 @@ function walk(node: InkNode, screen: Screen, offsetX: number, offsetY: number, i
   const y = offsetY + yoga.getComputedTop();
 
   if (node.nodeName === 'ink-text') {
+    // squash 出 ANSI 嵌入的整段文本，blitAnsi 逐字符重建样式
     const text = squashTextNodes(node);
     if (text.length > 0) {
-      blit(screen, x, y, text, inheritedStyle);
+      blitAnsi(screen, x, y, text);
     }
     return;
   }
 
   if (node.nodeName === 'ink-box' || node.nodeName === 'ink-root') {
-    // 真实 Ink 会从 node.style 读 <Text> 的 color/bold 等，构造 Style；
-    // 这里简化：用 inheritedStyle（项目里 <Text> 样式由 Ink 算，我们暂用继承）。
-    // TODO Task 13 冒烟后：从 node.style 解析 color/bold/etc. → Style
-    const childStyle = inheritedStyle;
-    if (node.childNodes) {
-      for (const child of node.childNodes) {
-        walk(child, screen, x, y, childStyle);
+    const childNodes = node.childNodes;
+    if (childNodes) {
+      for (const child of childNodes) {
+        walk(child, screen, x, y);
       }
     }
   }
+  // 其它 nodeName（ink-virtual-text 作为文本子节点已在 squashTextNodes 里处理，
+  // 不应直接出现在 walk 路径上；'#text' 无 yogaNode，前面已 return）
 }
