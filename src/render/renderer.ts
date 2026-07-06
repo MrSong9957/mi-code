@@ -38,6 +38,12 @@ export function createCustomRenderer(opts: CustomRendererOptions): InkRenderer {
   let db: DoubleBuffer | null = null;
   let lastCursor: CursorPos | undefined;
 
+  // 光标桥：订阅模块级 pub/sub，让 setCursorPos（来自 Ink 的 onSetCursorPosition）
+  // 能更新本闭包的 lastCursor，下次 emit 时定位光标。
+  // useCursor 在 Footer unmount/重渲染时会调 setCursorPosition(undefined) 清理，
+  // undefined 会传播到这里 → emit 隐藏光标（hideCursor）。
+  onCursorUpdate((pos) => { lastCursor = pos; });
+
   return (node: unknown, options: { width: number; height: number }): RenderResult => {
     if (!useFlag && fallback) {
       return fallback(node, options);
@@ -97,9 +103,10 @@ export function createCustomRenderer(opts: CustomRendererOptions): InkRenderer {
 }
 
 /**
- * 设置光标位置（fork 后 Ink 的 setCursorPosition 改调这里）。
- * 由 patch-package fork 的 ink.js 调用，把 useCursor 的 {x,y} 传进来。
- * Task 12/13 接入 Ink 时由 patch 调用此函数；当前 Task 仅占位。
+ * 光标位置 pub/sub：Ink 的 setCursorPosition（经 fork patch 的 onSetCursorPosition 钩子）
+ * → bootstrap.tsx 调 setCursorPos → 通知所有 onCursorUpdate 订阅者（renderer 闭包是其中之一）。
+ * useCursor 在 Footer unmount/重渲染 cleanup 时调 setCursorPosition(undefined)，
+ * undefined 流到这里 → renderer 闭包 lastCursor=undefined → emit 隐藏光标。
  */
 const cursorListeners: Array<(pos: CursorPos | undefined) => void> = [];
 export function onCursorUpdate(listener: (pos: CursorPos | undefined) => void): () => void {

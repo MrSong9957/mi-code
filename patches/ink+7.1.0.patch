@@ -1,8 +1,18 @@
 diff --git a/node_modules/ink/build/ink.js b/node_modules/ink/build/ink.js
-index 24d45ec..93763a4 100644
+index 24d45ec..0e8d1f3 100644
 --- a/node_modules/ink/build/ink.js
 +++ b/node_modules/ink/build/ink.js
-@@ -345,7 +345,23 @@ export default class Ink {
+@@ -306,6 +306,9 @@ export default class Ink {
+     setCursorPosition = (position) => {
+         this.cursorPosition = position;
+         this.log.setCursorPosition(position);
++        // MI-CODE FORK: forward cursor position to custom renderer (options.onSetCursorPosition).
++        // Symmetric with options.renderer patch; no-op when not provided (optional chaining).
++        this.options.onSetCursorPosition?.(position);
+     };
+     restoreLastOutput = () => {
+         if (!this.interactive) {
+@@ -345,7 +348,23 @@ export default class Ink {
              this.nextRenderCommit = undefined;
          }
          const startTime = performance.now();

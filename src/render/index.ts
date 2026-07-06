@@ -4,5 +4,5 @@
 
 export const USE_DOUBLE_BUFFER = process.env.MICODE_DOUBLE_BUFFER !== '0';
 
-export { createCustomRenderer } from './renderer.js';
+export { createCustomRenderer, setCursorPos } from './renderer.js';
 export type { CustomRendererOptions } from './renderer.js';

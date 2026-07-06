@@ -28,7 +28,7 @@ import { createOverlayStore, type OverlayStore } from './state/overlay-store.js'
 import { PipelineToStoreAdapter } from './state/pipeline-adapter.js';
 import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
-import { USE_DOUBLE_BUFFER, createCustomRenderer } from '../render/index.js';
+import { USE_DOUBLE_BUFFER, createCustomRenderer, setCursorPos } from '../render/index.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
 
@@ -110,10 +110,16 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   };
 
   // 渲染 Ink 应用（ConnectedApp 内部 useAltScreen 进 alt screen）
-  // feature flag：USE_DOUBLE_BUFFER=true 时注入自研 renderer（Task 12 patch 暴露的 options.renderer）
-  const renderOptions: { exitOnCtrlC: false; renderer?: unknown } = { exitOnCtrlC: false };
+  // feature flag：USE_DOUBLE_BUFFER=true 时注入自研 renderer（patch 暴露的 options.renderer）
+  // + onSetCursorPosition 钩子把 useCursor 的 {x,y} 转发给 renderer 的 pub/sub。
+  const renderOptions: {
+    exitOnCtrlC: false;
+    renderer?: unknown;
+    onSetCursorPosition?: (pos: unknown) => void;
+  } = { exitOnCtrlC: false };
   if (USE_DOUBLE_BUFFER) {
     renderOptions.renderer = createCustomRenderer({ stdout: process.stdout });
+    renderOptions.onSetCursorPosition = (pos) => { setCursorPos(pos as { x: number; y: number } | undefined); };
   }
 
   let inkInstance: InkInstance | null = render(
