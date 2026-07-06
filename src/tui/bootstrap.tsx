@@ -28,6 +28,7 @@ import { createOverlayStore, type OverlayStore } from './state/overlay-store.js'
 import { PipelineToStoreAdapter } from './state/pipeline-adapter.js';
 import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
+import { USE_DOUBLE_BUFFER, createCustomRenderer } from '../render/index.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
 
@@ -109,11 +110,17 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   };
 
   // 渲染 Ink 应用（ConnectedApp 内部 useAltScreen 进 alt screen）
+  // feature flag：USE_DOUBLE_BUFFER=true 时注入自研 renderer（Task 12 patch 暴露的 options.renderer）
+  const renderOptions: { exitOnCtrlC: false; renderer?: unknown } = { exitOnCtrlC: false };
+  if (USE_DOUBLE_BUFFER) {
+    renderOptions.renderer = createCustomRenderer({ stdout: process.stdout });
+  }
+
   let inkInstance: InkInstance | null = render(
     React.createElement(ConnectedApp, {
       messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
     }),
-    { exitOnCtrlC: false },
+    renderOptions,
   );
 
   const cleanup = (): void => {
