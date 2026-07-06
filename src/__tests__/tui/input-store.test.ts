@@ -142,3 +142,70 @@ describe('input-store setText（补全用）', () => {
     expect(store.getState().cursor).toBe(3);
   });
 });
+
+describe('input-store 多行', () => {
+  it('insertNewline：在光标处插 \\n，光标+1', () => {
+    const store = createInputStore();
+    store.getState().insert('abc');
+    store.getState().moveCursorTo(1); // a|bc
+    store.getState().insertNewline(); // a\n|bc
+    expect(store.getState().text).toBe('a\nbc');
+    expect(store.getState().cursor).toBe(2);
+  });
+
+  it('insertNewline 上限 3 行：第 3 行时不插入', () => {
+    const store = createInputStore();
+    store.getState().insert('a\nb\nc'); // 已 3 行
+    store.getState().moveCursorToEnd();
+    store.getState().insertNewline(); // 应被拒
+    expect(store.getState().text).toBe('a\nb\nc');
+  });
+
+  it('insertNewline 在 2 行时允许变 3 行', () => {
+    const store = createInputStore();
+    store.getState().insert('a\nb');
+    store.getState().moveCursorToEnd();
+    store.getState().insertNewline();
+    expect(store.getState().text).toBe('a\nb\n');
+  });
+
+  it('moveCursorDown：跨行下移，保留列', () => {
+    const store = createInputStore();
+    store.getState().insert('abc\ndef');
+    store.getState().moveCursorTo(2); // ab|c（第 0 行 col 2）
+    store.getState().moveCursorDown(); // → 第 1 行 col 2（'f'，索引 6）
+    expect(store.getState().cursor).toBe(6);
+  });
+
+  it('moveCursorDown 末行：无操作', () => {
+    const store = createInputStore();
+    store.getState().insert('abc\ndef');
+    store.getState().moveCursorToEnd(); // 第 1 行末（索引 7）
+    store.getState().moveCursorDown();
+    expect(store.getState().cursor).toBe(7);
+  });
+
+  it('moveCursorUp：跨行上移，保留列（钳到上行长度）', () => {
+    const store = createInputStore();
+    store.getState().insert('abc\ndef');
+    store.getState().moveCursorTo(5); // 第 1 行 col 1（'e'）
+    store.getState().moveCursorUp(); // → 第 0 行 col 1（'b'，索引 1）
+    expect(store.getState().cursor).toBe(1);
+  });
+
+  it('moveCursorUp 第 0 行：无操作', () => {
+    const store = createInputStore();
+    store.getState().insert('abc\ndef');
+    store.getState().moveCursorTo(0);
+    store.getState().moveCursorUp();
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('moveCursorUp 列超出上行长度：钳到上行末尾', () => {
+    const store = createInputStore();
+    store.getState().insert('ab\ndefgh'); // 上行 2 字符，下行 5
+    store.getState().moveCursorTo(6); // 第 1 行 col 2（'f'）
+    store.getState().moveCursorUp(); // → 第 0 行 col min(2,2)=2 = 末尾
+    expect(store.getState().cursor).toBe(2);
+  });
+});

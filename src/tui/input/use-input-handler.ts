@@ -87,6 +87,22 @@ export function useInputHandler(
       return;
     }
 
+    // Ctrl+J：多行换行（≤3 行）
+    if (key.ctrl && input === 'j') {
+      s.insertNewline();
+      return;
+    }
+
+    // 上/下箭头：跨行移动（单行时无副作用，input-store 已处理边界）
+    if (key.upArrow) {
+      s.moveCursorUp();
+      return;
+    }
+    if (key.downArrow) {
+      s.moveCursorDown();
+      return;
+    }
+
     // Home / End
     if (key.home) {
       s.moveCursorToStart();

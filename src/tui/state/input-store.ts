@@ -36,6 +36,12 @@ export interface InputState {
   clear: () => void;
   /** 整串替换文本（补全用），光标移到末尾 */
   setText: (text: string) => void;
+  /** 在光标处插入换行（≤3 行上限，超出无操作） */
+  insertNewline: () => void;
+  /** 光标上移一行（保留列，钳到上行长度；第 0 行无操作） */
+  moveCursorUp: () => void;
+  /** 光标下移一行（保留列，钳到下行长度；末行无操作） */
+  moveCursorDown: () => void;
   /** 提交：trim 后调 onSubmit，清空；空文本返回 null 不触发 */
   submit: () => string | null;
 }
@@ -77,6 +83,45 @@ export function createInputStore(opts: InputStoreOptions = {}): InputStore {
     moveCursorToEnd: () => set((s) => ({ cursor: [...s.text].length })),
     clear: () => set({ text: '', cursor: 0 }),
     setText: (text) => set({ text, cursor: [...text].length }),
+    insertNewline: () => set((s) => {
+      const lineCount = s.text.split('\n').length;
+      if (lineCount >= 3) return s; // 上限 3 行
+      const { text, cursor } = s;
+      const next = text.slice(0, cursor) + '\n' + text.slice(cursor);
+      return { text: next, cursor: cursor + 1 };
+    }),
+    moveCursorUp: () => set((s) => {
+      const lines = s.text.split('\n');
+      let offset = 0;
+      for (let li = 0; li < lines.length; li++) {
+        const lineLen = [...lines[li]!].length;
+        if (s.cursor <= offset + lineLen) {
+          if (li === 0) return s; // 已在第 0 行
+          const col = s.cursor - offset;
+          const prevLineLen = [...lines[li - 1]!].length;
+          const prevOffset = offset - prevLineLen - 1;
+          return { cursor: prevOffset + Math.min(col, prevLineLen) };
+        }
+        offset += lineLen + 1;
+      }
+      return s;
+    }),
+    moveCursorDown: () => set((s) => {
+      const lines = s.text.split('\n');
+      let offset = 0;
+      for (let li = 0; li < lines.length; li++) {
+        const lineLen = [...lines[li]!].length;
+        if (s.cursor <= offset + lineLen) {
+          if (li === lines.length - 1) return s; // 已在末行
+          const col = s.cursor - offset;
+          const nextOffset = offset + lineLen + 1;
+          const nextLineLen = [...lines[li + 1]!].length;
+          return { cursor: nextOffset + Math.min(col, nextLineLen) };
+        }
+        offset += lineLen + 1;
+      }
+      return s;
+    }),
 
     submit: () => {
       const trimmed = get().text.trim();
