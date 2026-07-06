@@ -79,3 +79,16 @@ typecheck/build 干净。master 全量 950 绿；feat 全量 1204 绿（history.
    **正确做法**：用 `string-width` 量「光标前文本」的显示宽度，绝不能把码点索引当列用。多行时按 `\n` 分割逐行算 `(x,y)`。已抽到 `src/tui/state/cursor-position.ts` 的 `cursorScreenPos(input, cursor, prompt)`。
    参照：Ink `useCursor()` README 官方示例 + 旧 `renderer.ts:computeInputCursorPos()`（commit a01c965 修过，6618e79 删 renderer 时丢）。
    **教训**：凡涉及「终端列坐标」的计算，必须走显示宽度（string-width），不可用 JS 字符串长度或码点数。
+8. **自研双缓冲渲染（2026-07-06，二期落地，feat/double-buffer-render 分支）**：
+   - **Fork Ink 7**：`patch-package` 暴露 `options.renderer` 注入点（`patches/ink+7.1.0.patch`）。保留 React/DOM/Yoga/输入端（useInput/useCursor/useFocus），重写输出端（renderer/screen/output-ops/yoga-walk/diff/optimizer/emit）。
+   - **patch 的关键坑**：Ink 原生 `render(node, isScreenReaderEnabled: boolean)` 第二参是布尔，不是 options 对象。fork 必须**分支**：提供 `options.renderer` 时调自研 `(node, {width,height,...})`；不提供时**原样**调原生 `(node, boolean)`。若用 `rendererFn || render` 单表达式，fallback 路径会把 truthy 对象当布尔传，触发 screen-reader 路径，**全屏错乱**。
+   - **数据结构**：`Int32Array` cell 网格（每 cell 2×Int32 = charId + encodedStyleId），跨帧累积池子（CharPool ASCII 快速路径 + StylePool transition 缓存），每 5 分钟 resetPools + ID 迁移。
+   - **styleId 编码纪律**（最易返工，spec §3.6）：Int32Array 存编码值（`poolId << 1 | fullWidthFlag`），Patch 存解码后的纯 poolId + 独立 `isFullWidthContinuation` 布尔。`output-ops.blit`/`blitAnsi` 是编码值**唯一生产点**（铁律 4，grep 验证）。
+   - **Ink DOM 文本提取（最易踩坑）**：real Ink DOM 用 `<#text>` 子节点 + `nodeValue`（DOM 规范），`<ink-text>`/`<ink-virtual-text>` 包裹。**不是** `node.textValue`（那是 mock 简化）。`yoga-walk.squashTextNodes` 必须按 Ink 的 `squash-text-nodes.js` 算法递归。Task 9 初版误用 textValue，导致**全屏空白**（commit `46d8a9c` 修复）。
+   - **颜色在文本里，不在 node.style**：Ink `<Text color="red">` 在布局**前**调 `colorize()` 把颜色作为 **ANSI 字节嵌入文本**（`\x1b[38;2;255;0;0m...\x1b[39m`）。`node.style` 只存布局属性（margin/padding）。故 `blitAnsi` 用 `@alcalzone/ansi-tokenize` 解析嵌入 ANSI 重建每字符 Style——**不要**去 node.style 找 color。
+   - **全角字符**（CJK/emoji）占 2 cell：head cell 存字符，tail cell（续位）存同 charId + styleId 但 `fullWidthFlag=1`，emit 时跳过字符输出（head 已写完整字符，终端自动覆盖续位）。
+   - **cursor 绝对定位** `\x1b[<y+1>;<x+1>H`（项目自管 alt-screen，不依赖 Ink 相对底部模型）；每帧开头 reset 样式（混合 stdout 流量——alt-screen/鼠标/kitty——可能改 cursor，不能假设帧间状态）。
+   - **DEC 2026 同步输出**由 emit 自己包裹（不再依赖 Ink throttledLog）。
+   - **feature flag** `MICODE_DOUBLE_BUFFER=0` 秒回滚 Ink 原生（默认开）。
+   - **性能基准**（2026-07-06）：1000 cell 全新帧 7ms、无变化帧 1ms（200×50 屏幕），远低于 30 FPS 帧预算。
+   - 参照：Claude Code 的 Ink fork（保留上游 + 重写输出端的 renderer/screen/log-update/optimizer）。spec：`docs/superpowers/specs/2026-07-06-double-buffer-render-design.md`；plan：`docs/superpowers/plans/2026-07-06-double-buffer-render.md`。
