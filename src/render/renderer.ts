@@ -20,7 +20,7 @@ interface RenderResult {
 }
 
 /** Ink renderer 函数签名（简化版，真实 Ink 还传 isScreenReaderEnabled） */
-export type InkRenderer = (node: unknown, options: { width: number; height: number }) => RenderResult;
+export type InkRenderer = (node: unknown, options: { width: number; height: number; cursor?: CursorPos }) => RenderResult;
 
 export interface CustomRendererOptions {
   stdout: { write: (s: string) => boolean; columns?: number; rows?: number; isTTY?: boolean };
@@ -44,7 +44,7 @@ export function createCustomRenderer(opts: CustomRendererOptions): InkRenderer {
   // undefined 会传播到这里 → emit 隐藏光标（hideCursor）。
   onCursorUpdate((pos) => { lastCursor = pos; });
 
-  return (node: unknown, options: { width: number; height: number }): RenderResult => {
+  return (node: unknown, options: { width: number; height: number; cursor?: CursorPos }): RenderResult => {
     if (!useFlag && fallback) {
       return fallback(node, options);
     }
@@ -79,11 +79,13 @@ export function createCustomRenderer(opts: CustomRendererOptions): InkRenderer {
       const optimized = optimize(patches);
 
       // 5. emit
+      // cursor 优先用 options.cursor（Ink 直接传的同步值，无时序问题），
+      // fallback 到 lastCursor（pub/sub，可能因 effect 时序滞后一帧）。
       const ctx: EmitContext = {
         charPool: db.charPool,
         stylePool: db.stylePool,
         stdout: opts.stdout,
-        cursor: lastCursor,
+        cursor: options.cursor ?? lastCursor,
       };
       emit(optimized, ctx);
 

@@ -1,5 +1,5 @@
 diff --git a/node_modules/ink/build/ink.js b/node_modules/ink/build/ink.js
-index 24d45ec..56a4c6b 100644
+index 24d45ec..34bfa51 100644
 --- a/node_modules/ink/build/ink.js
 +++ b/node_modules/ink/build/ink.js
 @@ -306,6 +306,9 @@ export default class Ink {
@@ -12,7 +12,7 @@ index 24d45ec..56a4c6b 100644
      };
      restoreLastOutput = () => {
          if (!this.interactive) {
-@@ -345,7 +348,23 @@ export default class Ink {
+@@ -345,7 +348,26 @@ export default class Ink {
              this.nextRenderCommit = undefined;
          }
          const startTime = performance.now();
@@ -25,10 +25,13 @@ index 24d45ec..56a4c6b 100644
 +        let output, outputHeight, staticOutput;
 +        if (this.options.renderer) {
 +            const rendererFn = this.options.renderer;
++            // MI-CODE FORK: 直接传 Ink instance 的 cursorPosition（同步字段），
++            // 不依赖 pub/sub 的 effect 时序（useInsertionEffect vs resetAfterCommit 顺序不确定）。
 +            ({ output, outputHeight, staticOutput } = rendererFn(this.rootNode, {
 +                width: this.options.stdout.columns || 80,
 +                height: this.options.stdout.rows || 24,
 +                isScreenReaderEnabled: this.isScreenReaderEnabled,
++                cursor: this.cursorPosition,
 +            }));
 +        }
 +        else {
@@ -37,7 +40,7 @@ index 24d45ec..56a4c6b 100644
          this.options.onRender?.({ renderTime: performance.now() - startTime });
          // If <Static> output isn't empty, it means new children have been added to it
          const hasStaticOutput = staticOutput && staticOutput !== '\n';
-@@ -415,6 +434,15 @@ export default class Ink {
+@@ -415,6 +437,15 @@ export default class Ink {
          if (hasStaticOutput) {
              this.fullStaticOutput += staticOutput;
          }
@@ -53,7 +56,7 @@ index 24d45ec..56a4c6b 100644
          this.renderInteractiveFrame(output, outputHeight, hasStaticOutput ? staticOutput : '');
      };
      render(node) {
-@@ -701,6 +729,10 @@ export default class Ink {
+@@ -701,6 +732,10 @@ export default class Ink {
          if (this.alternateScreen) {
              this.writeBestEffort(this.options.stdout, ansiEscapes.enterAlternativeScreen);
              this.writeBestEffort(this.options.stdout, hideCursorEscape);
