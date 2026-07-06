@@ -345,12 +345,13 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const eventBus = new StreamEventBus();
   eventBus.onToolCall(d => {
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
+    tuiHandle?.setSpinnerLabel(`Running ${d.name}`);
   });
   eventBus.onToolResult(d => {
     pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId });
   });
   eventBus.onLoopEnd(() => {
-    // turn 结束（end_turn/error/max_turns）：无状态栏副作用（contextPct 由 message_start 更新）
+    tuiHandle?.stopSpinner();
   });
   const allToolDefs = Array.from(toolRegistry.tools.values()).map(t => t.definition);
   const tools = currentMode === 'plan'
@@ -363,6 +364,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   let persistedCount = sessionMessages.length;
   const blockTypes = new Map<number, string>();
   let thinkingActive = true; // 已乐观 emit thinking_start
+  tuiHandle?.startSpinner('Thinking…');
   try {
     for await (const msg of streamingQuery(streamClient, toolRegistry, userInput, {
       systemPrompt, tools, signal: ac.signal, maxTurns: 10,
@@ -392,15 +394,18 @@ async function handleUserSubmit(rawText: string): Promise<void> {
           pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
           thinkingContent = '';
           thinkingActive = false;
+          tuiHandle?.setSpinnerLabel('Generating…');
         }
       } else if ('type' in msg && msg.type === 'content_block_delta') {
         const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
+        if (delta.content) tuiHandle?.spinnerOnToken();
         if (delta.deltaType === 'text' && delta.content) {
           if (assistantText === '' && thinkingContent) {
             const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
             pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
             thinkingContent = '';
             thinkingActive = false;
+            tuiHandle?.setSpinnerLabel('Generating…');
           }
           assistantText += delta.content;
           pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: false });
@@ -437,6 +442,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   } catch (err) {
     tuiHandle?.printStyled(`[Error] ${err}`, 'error');
   } finally {
+    tuiHandle?.stopSpinner();
     isProcessing = false;
     if (thinkingContent) {
       const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
@@ -524,6 +530,7 @@ if (cliOpts.list) {
   // 进程退出兜底：杀后台子进程 + 卸载 Ink + 退 alt screen + 主屏 resume hint
   function cleanupOnExit(): void {
     backgroundManager.killAll();
+    tuiHandle?.stopSpinner();
     tuiHandle?.cleanup();
     // 退出 alt screen 后，在主屏打印 resume hint（对齐 Claude Code）
     process.stdout.write(`\x1b[2mResume this session with:\nmicode --resume ${sessionId}\n\x1b[0m`);

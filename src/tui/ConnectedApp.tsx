@@ -18,6 +18,7 @@ import type { MessagesStore } from './state/messages-store.js';
 import type { InputStore } from './state/input-store.js';
 import type { StatusStore } from './state/status-store.js';
 import type { LogoStore } from './state/logo-store.js';
+import type { SpinnerStore } from './state/spinner-store.js';
 import { createSelectionStore } from './state/selection-store.js';
 
 export interface ConnectedAppProps {
@@ -25,11 +26,12 @@ export interface ConnectedAppProps {
   inputStore: InputStore;
   statusStore: StatusStore;
   logoStore: LogoStore;
+  spinnerStore: SpinnerStore;
   onExit: () => void;
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, onExit,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, onExit,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store：ScrollBox 鼠标拖拽写入，MessageRow 读 selected 高亮
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -59,6 +61,7 @@ export function ConnectedApp({
       status={status}
       logo={logo}
       selectionStore={selectionStore}
+      spinnerStore={spinnerStore}
       input={inputText}
       cursor={cursor}
       rows={rows}

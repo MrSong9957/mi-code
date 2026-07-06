@@ -22,6 +22,7 @@ import { createMessagesStore } from './state/messages-store.js';
 import { createInputStore } from './state/input-store.js';
 import { createStatusStore } from './state/status-store.js';
 import { createLogoStore } from './state/logo-store.js';
+import { createSpinnerStore, type SpinnerStore } from './state/spinner-store.js';
 import { PipelineToStoreAdapter } from './state/pipeline-adapter.js';
 import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
@@ -45,6 +46,12 @@ export interface BootstrapHandle {
   inputStore: ReturnType<typeof createInputStore>;
   statusStore: ReturnType<typeof createStatusStore>;
   logoStore: ReturnType<typeof createLogoStore>;
+  spinnerStore: SpinnerStore;
+  /** spinner 控制（对齐旧 layout.startSpinner 等） */
+  startSpinner: (label: string) => void;
+  stopSpinner: () => void;
+  setSpinnerLabel: (label: string) => void;
+  spinnerOnToken: () => void;
   /** 把一行系统消息固化进 store（替代旧 printLine） */
   printLine: (text: string) => void;
   /** 带样式/角色的消息（替代旧 printStyled） */
@@ -58,6 +65,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
   const statusStore = createStatusStore(opts.status);
   const logoStore = createLogoStore(opts.logo);
+  const spinnerStore = createSpinnerStore();
   const adapter = new PipelineToStoreAdapter(messagesStore);
   const pipeline = new BlockPipeline(adapter);
 
@@ -93,7 +101,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   // 渲染 Ink 应用（ConnectedApp 内部 useAltScreen 进 alt screen）
   let inkInstance: InkInstance | null = render(
     React.createElement(ConnectedApp, {
-      messagesStore, inputStore, statusStore, logoStore, onExit: opts.onExit,
+      messagesStore, inputStore, statusStore, logoStore, spinnerStore, onExit: opts.onExit,
     }),
     { exitOnCtrlC: false },
   );
@@ -109,6 +117,12 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   };
 
   return {
-    pipeline, messagesStore, inputStore, statusStore, logoStore, printLine, printStyled, cleanup,
+    pipeline, messagesStore, inputStore, statusStore, logoStore,
+    spinnerStore,
+    startSpinner: (label: string) => { spinnerStore.getState().start(label); },
+    stopSpinner: () => { spinnerStore.getState().stop(); },
+    setSpinnerLabel: (label: string) => { spinnerStore.getState().setLabel(label); },
+    spinnerOnToken: () => { spinnerStore.getState().onToken(); },
+    printLine, printStyled, cleanup,
   };
 }

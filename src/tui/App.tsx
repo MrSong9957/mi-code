@@ -25,6 +25,7 @@ import { LogoBox } from './components/LogoBox.js';
 import { Footer } from './components/Footer.js';
 import type { TuiMessage, StatusBarData, LogoData } from './types.js';
 import type { SelectionStore } from './state/selection-store.js';
+import type { SpinnerStore } from './state/spinner-store.js';
 
 /** Footer 固定占用的行数：上边框 + 输入 + 下边框 + 状态栏 */
 const FOOTER_ROWS = 4;
@@ -36,6 +37,7 @@ export interface AppProps {
   status: StatusBarData;
   logo: LogoData;
   selectionStore: SelectionStore;
+  spinnerStore: SpinnerStore;
   input: string;
   cursor: number;
   /** 终端列数（边框宽度用）；默认 80（ink-testing-library 默认） */
@@ -44,7 +46,7 @@ export interface AppProps {
   rows?: number;
 }
 
-export function App({ messages, status, logo, selectionStore, input, cursor, cols = 80, rows = 24 }: AppProps): React.ReactElement {
+export function App({ messages, status, logo, selectionStore, input, cursor, spinnerStore, cols = 80, rows = 24 }: AppProps): React.ReactElement {
   const visibleRows = Math.max(0, rows - FOOTER_ROWS - LOGO_ROWS);
   // 输入行全局 y：ScrollBox 实际渲染行数 + LOGO_ROWS + 上边框 1 行
   const scrollboxRenderedRows = Math.min(messages.length, visibleRows);
@@ -53,7 +55,7 @@ export function App({ messages, status, logo, selectionStore, input, cursor, col
     <Box flexDirection="column">
       <LogoBox logo={logo} />
       <ScrollBox messages={messages} visibleRows={visibleRows} selectionStore={selectionStore} />
-      <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} />
+      <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} spinnerStore={spinnerStore} />
     </Box>
   );
 }
