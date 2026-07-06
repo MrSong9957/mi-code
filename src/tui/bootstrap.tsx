@@ -133,11 +133,9 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     renderOptions.renderer = createCustomRenderer({ stdout: process.stdout });
     renderOptions.onSetCursorPosition = (pos) => { setCursorPos(pos as { x: number; y: number } | undefined); };
   }
-  // 提前进 alt screen + 光标归位：Ink 的 enterAlternativeScreen 只发 ?1049h（切备用屏），
-  // 不发 \x1b[H（归位）→ alt screen 光标停在用户输命令的位置（终端中间）→ 画面偏移。
-  // 这里在 render() 前发完整序列：先 ?1049h 进 alt，再 \x1b[H 归位到 (0,0)。
-  // render() 里 Ink 再发一次 ?1049h 是 no-op（已进 alt screen，重复安全）。
-  process.stdout.write('\x1b[?1049h\x1b[H');
+  // alt screen 由 Ink 的 alternateScreen: true 在 constructor 里进。
+  // 不再提前发——之前提前发 ?1049h + 标记，Ink constructor 又发一次 ?1049h，
+  // 第二次会把提前写的内容清掉（某些终端行为）。光标归位在 patch 里处理。
 
   let inkInstance: InkInstance | null = render(
     React.createElement(ConnectedApp, {

@@ -1,5 +1,5 @@
 diff --git a/node_modules/ink/build/ink.js b/node_modules/ink/build/ink.js
-index 24d45ec..635397f 100644
+index 24d45ec..56a4c6b 100644
 --- a/node_modules/ink/build/ink.js
 +++ b/node_modules/ink/build/ink.js
 @@ -306,6 +306,9 @@ export default class Ink {
@@ -53,3 +53,14 @@ index 24d45ec..635397f 100644
          this.renderInteractiveFrame(output, outputHeight, hasStaticOutput ? staticOutput : '');
      };
      render(node) {
+@@ -701,6 +729,10 @@ export default class Ink {
+         if (this.alternateScreen) {
+             this.writeBestEffort(this.options.stdout, ansiEscapes.enterAlternativeScreen);
+             this.writeBestEffort(this.options.stdout, hideCursorEscape);
++            // MI-CODE FORK: Ink 的 enterAlternativeScreen 只发 ?1049h（切备用屏），
++            // 不发 \x1b[H（光标归位）→ alt screen 光标停在用户输命令的位置（终端中间/底部）
++            // → renderer 从那开始画 → 画面漂移。进 alt 后立即归位到 (0,0)。
++            this.writeBestEffort(this.options.stdout, '\x1b[H');
+         }
+     }
+     resolveInteractiveOption(interactive) {
