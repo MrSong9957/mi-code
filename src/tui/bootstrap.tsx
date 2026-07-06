@@ -109,14 +109,19 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     }
   };
 
-  // 渲染 Ink 应用（ConnectedApp 内部 useAltScreen 进 alt screen）
+  // 渲染 Ink 应用
+  // alt screen：用 Ink 官方 alternateScreen option，在 constructor 阶段进入
+  // （在任何 onRender 之前），避免自研 renderer 的第一帧画到主屏再被 alt 清掉
+  // （「界面一闪而过」bug 的根因——原 useAltScreen useEffect 在 passive effect
+  // 阶段跑，晚于 commit 阶段的 onRender）。真实 TTY 下 interactive=true 才生效。
   // feature flag：USE_DOUBLE_BUFFER=true 时注入自研 renderer（patch 暴露的 options.renderer）
   // + onSetCursorPosition 钩子把 useCursor 的 {x,y} 转发给 renderer 的 pub/sub。
   const renderOptions: {
     exitOnCtrlC: false;
+    alternateScreen: true;
     renderer?: unknown;
     onSetCursorPosition?: (pos: unknown) => void;
-  } = { exitOnCtrlC: false };
+  } = { exitOnCtrlC: false, alternateScreen: true };
   if (USE_DOUBLE_BUFFER) {
     renderOptions.renderer = createCustomRenderer({ stdout: process.stdout });
     renderOptions.onSetCursorPosition = (pos) => { setCursorPos(pos as { x: number; y: number } | undefined); };

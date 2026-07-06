@@ -12,7 +12,6 @@ import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { App } from './App.js';
 import { useInputHandler } from './input/use-input-handler.js';
-import { useAltScreen } from './hooks/useAltScreen.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import type { MessagesStore } from './state/messages-store.js';
 import type { InputStore } from './state/input-store.js';
@@ -41,8 +40,9 @@ export function ConnectedApp({
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store：ScrollBox 鼠标拖拽写入，MessageRow 读 selected 高亮
   const selectionStore = useMemo(() => createSelectionStore(), []);
-  // alt screen 生命周期（mount 进，unmount 退）
-  useAltScreen();
+  // alt screen 由 bootstrap 的 render({ alternateScreen: true }) 接管——
+  // 必须在 Ink constructor（commit 前）进，否则自研 renderer 第一帧会画到主屏
+  // 再被 alt 清掉（「界面一闪而过」bug）。这里不再调 useAltScreen。
   // 终端尺寸（响应 resize）
   const { rows, cols } = useTerminalSize();
   // 输入处理（useInput → store）
