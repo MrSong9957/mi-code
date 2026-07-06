@@ -2,6 +2,7 @@
 import type { Command } from './parser.js';
 import type { ConfigStore } from '../config/store.js';
 import type { PermissionChecker } from '../permission/checker.js';
+import type { PermissionMode } from '../permission/types.js';
 import type { SkillRegistry } from '../skills/registry.js';
 import type { SkillNegotiator } from '../skills/negotiator.js';
 
@@ -18,6 +19,20 @@ export interface CommandContext {
   negotiator?: SkillNegotiator;
   userId?: string;
 }
+
+/**
+ * 所有可识别的斜杠命令名（单一真相源）。
+ * - executor.switch 用它做校验
+ * - use-input-handler 的 TAB 补全用它生成候选
+ * - approve/reject 虽在 index.ts 特殊路径，但 help 列出且应可补全，故纳入
+ */
+export const COMMAND_NAMES: readonly string[] = Object.freeze([
+  'config', 'login', 'provider', 'model', 'compact',
+  'build', 'plan', 'auto',
+  'approve', 'reject',
+  'help',
+  'skill', 'trigger', 'y', 'n', 'edit',
+]);
 
 /** 执行斜杠命令 */
 export function executeCommand(cmd: Command, configOrContext: ConfigStore | CommandContext, ctx?: CommandContext): CommandResult {
@@ -42,8 +57,12 @@ export function executeCommand(cmd: Command, configOrContext: ConfigStore | Comm
       return handleModel(cmd, config);
     case 'compact':
       return { message: 'Compaction triggered. Use the agent to run a task and it will auto-compact when needed.' };
-    case 'mode':
-      return handleMode(cmd, config, ctx);
+    case 'build':
+      return handleModeSwitch('build', config, ctx);
+    case 'plan':
+      return handleModeSwitch('plan', config, ctx);
+    case 'auto':
+      return handleModeSwitch('auto', config, ctx);
     case 'help':
       return handleHelp();
     // 技能相关命令也通过此路径处理
@@ -236,21 +255,19 @@ function handleModel(cmd: Command, config: ConfigStore): CommandResult {
   return { message: `Model set to: ${model} (for ${provider})` };
 }
 
-/** /mode — 切换权限模式（即时生效 + 持久化） */
-function handleMode(cmd: Command, config: ConfigStore, ctx?: CommandContext): CommandResult {
-  const validModes = ['default', 'plan', 'auto'] as const;
-  if (cmd.args.length === 0) {
-    const current = config.getPermissionMode();
-    return { message: `Current permission mode: ${current}\nAvailable: ${validModes.join(', ')}` };
-  }
-  const mode = cmd.args[0]!;
-  if (!validModes.includes(mode as typeof validModes[number])) {
-    return { message: `Invalid mode: ${mode}. Available: ${validModes.join(', ')}` };
-  }
+/**
+ * /build /plan /auto — 切换权限模式（即时生效 + 持久化）
+ *
+ * 物理类比：柜台上方挂的「今日营业模式」牌子。
+ *   /build = 标准营业（写操作走 ask 确认）
+ *   /plan  = 只读参观日（写窗口暂停服务）
+ *   /auto  = VIP 自助（除危险动作外全放行）
+ */
+function handleModeSwitch(mode: PermissionMode, config: ConfigStore, ctx?: CommandContext): CommandResult {
   // 即时生效：更新运行中的 PermissionChecker
-  ctx?.permissionChecker?.setMode(mode as typeof validModes[number]);
+  ctx?.permissionChecker?.setMode(mode);
   // 持久化：写入配置文件，重启后恢复
-  config.setPermissionMode(mode as typeof validModes[number]);
+  config.setPermissionMode(mode);
   return { message: `Permission mode set to: ${mode}` };
 }
 
@@ -263,7 +280,11 @@ function handleHelp(): CommandResult {
   /login <provider> <key>  Set API Key
   /provider <name>     Switch provider (anthropic, openai, google)
   /model <name>        Switch model
-  /mode <name>         Switch permission mode (default, plan, auto)
+  /build               Standard mode: writes ask for confirmation
+  /plan                Plan mode: all writes blocked (read-only)
+  /auto                Auto mode: everything allowed (dangerous cmds still blocked)
+  /approve             (After exit_plan_mode) Approve plan & switch to build
+  /reject [reason]     (After exit_plan_mode) Reject plan, stay in plan mode
   /compact             Trigger context compaction
   /skill list           List available skills
   /skill off <name>     Block a skill
