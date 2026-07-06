@@ -1,9 +1,9 @@
 // src/__tests__/render/screen.test.ts
 import { describe, it, expect } from 'vitest';
-import { Screen } from '../../render/screen.js';
+import { Screen, DoubleBuffer } from '../../render/screen.js';
 import { CharPool } from '../../render/char-pool.js';
 import { StylePool } from '../../render/style-pool.js';
-import { DEFAULT_STYLE } from '../../render/types.js';
+import { DEFAULT_STYLE, type Style } from '../../render/types.js';
 
 function makeScreen(rows: number, cols: number): Screen {
   return new Screen(rows, cols, new CharPool(), new StylePool());
@@ -83,5 +83,55 @@ describe('Screen pool 引用', () => {
     s.stylePool = newSp;
     expect(s.charPool).toBe(newCp);
     expect(s.stylePool).toBe(newSp);
+  });
+});
+
+describe('DoubleBuffer', () => {
+  it('初始：front/back 同尺寸，全 0', () => {
+    const db = new DoubleBuffer(2, 3);
+    expect(db.front.rows).toBe(2);
+    expect(db.front.cols).toBe(3);
+    expect(db.back.rows).toBe(2);
+    expect(db.back.cols).toBe(3);
+    expect(db.front.chars.length).toBe(2 * 3 * 2);
+  });
+
+  it('swap：back 内容拷到 front，back 清零', () => {
+    const db = new DoubleBuffer(1, 2);
+    // 在 back 写点东西
+    db.back.setCell(0, 0, 5, 10);
+    db.swap();
+    expect(db.front.cellAt(0, 0).charId).toBe(5);
+    expect(db.front.cellAt(0, 0).encodedStyleId).toBe(10);
+    // back 清零
+    expect(db.back.cellAt(0, 0).charId).toBe(0);
+  });
+
+  it('resize：重建 front/back 为新尺寸', () => {
+    const db = new DoubleBuffer(2, 3);
+    db.resize(4, 5);
+    expect(db.front.rows).toBe(4);
+    expect(db.front.cols).toBe(5);
+    expect(db.back.rows).toBe(4);
+    expect(db.back.cols).toBe(5);
+  });
+
+  it('resetPools：迁移 front/back 的 id 到新池', () => {
+    const db = new DoubleBuffer(1, 2);
+    const charId = db.charPool.intern('X');
+    const boldStyle: Style = { ...DEFAULT_STYLE, bold: true };
+    const styleId = db.stylePool.intern(boldStyle);
+    // encodedStyleId = styleId << 1 (fullWidth=false)
+    db.back.setCell(0, 0, charId, (styleId << 1));
+    db.front.setCell(0, 0, charId, (styleId << 1));
+
+    const oldCharPool = db.charPool;
+    db.resetPools();
+
+    // 新池里 'X' 仍可查到
+    expect(db.charPool.get(db.back.cellAt(0, 0).charId)).toBe('X');
+    expect(db.charPool.get(db.front.cellAt(0, 0).charId)).toBe('X');
+    // 新池不是旧池
+    expect(db.charPool).not.toBe(oldCharPool);
   });
 });

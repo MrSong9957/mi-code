@@ -6,8 +6,9 @@
 // 编码：chars[i*2] = charId, chars[i*2+1] = encodedStyleId（poolId<<1|fullWidthFlag）。
 // 见 types.ts encodeStyleId/decodeStyleId。
 
-import type { CharPool } from './char-pool.js';
-import type { StylePool } from './style-pool.js';
+import { CharPool } from './char-pool.js';
+import { StylePool } from './style-pool.js';
+import { decodeStyleId, isFullWidthContinuation, encodeStyleId } from './types.js';
 
 export class Screen {
   rows: number;
@@ -55,5 +56,90 @@ export class Screen {
     this.rows = rows;
     this.cols = cols;
     this.chars = new Int32Array(rows * cols * 2);
+  }
+}
+
+// ===== DoubleBuffer（spec §3.8）=====
+
+const POOL_RESET_INTERVAL_MS = 5 * 60 * 1000;
+
+/** 把 screen 的 charId/styleId 从旧池迁移到新池（原地改 Int32Array） */
+function migrateScreenPools(
+  screen: Screen,
+  oldCharPool: CharPool,
+  oldStylePool: StylePool,
+  newCharPool: CharPool,
+  newStylePool: StylePool,
+): void {
+  const len = screen.chars.length;
+  for (let i = 0; i < len; i += 2) {
+    const oldCharId = screen.chars[i]!;
+    const oldEncoded = screen.chars[i + 1]!;
+    if (oldCharId === 0 && oldEncoded === 0) continue;  // 空 cell 跳过
+    const oldStyleId = decodeStyleId(oldEncoded);
+    const fw = isFullWidthContinuation(oldEncoded);
+    // 用旧池查字符/样式，新池 intern
+    const newCharId = oldCharId === 0 ? 0 : newCharPool.intern(oldCharPool.get(oldCharId));
+    const newStyleId = oldStyleId === 0 ? 0 : newStylePool.intern(oldStylePool.get(oldStyleId));
+    screen.chars[i] = newCharId;
+    screen.chars[i + 1] = encodeStyleId(newStyleId, fw);
+  }
+}
+
+export class DoubleBuffer {
+  front: Screen;
+  back: Screen;
+  charPool: CharPool;
+  stylePool: StylePool;
+  private lastPoolResetTime: number;
+
+  constructor(rows: number, cols: number) {
+    this.charPool = new CharPool();
+    this.stylePool = new StylePool();
+    this.front = new Screen(rows, cols, this.charPool, this.stylePool);
+    this.back = new Screen(rows, cols, this.charPool, this.stylePool);
+    this.lastPoolResetTime = Date.now();
+  }
+
+  /** 交换：back → front，back 清零。含定期池子重置。 */
+  swap(): void {
+    const now = Date.now();
+    if (now - this.lastPoolResetTime > POOL_RESET_INTERVAL_MS) {
+      this.resetPools();
+      this.lastPoolResetTime = now;
+    }
+    // back 内容拷到 front
+    this.front.chars.set(this.back.chars);
+    // back 清零
+    this.back.clear();
+  }
+
+  /** 重建为新尺寸（resize 事件） */
+  resize(rows: number, cols: number): void {
+    this.front.resize(rows, cols);
+    this.back.resize(rows, cols);
+    // resize 后 Screen 的 pool 引用不变（resize 不重建池子）
+    this.front.charPool = this.charPool;
+    this.front.stylePool = this.stylePool;
+    this.back.charPool = this.charPool;
+    this.back.stylePool = this.stylePool;
+  }
+
+  /** 池子重置：创建新池，迁移 front/back 的 id */
+  resetPools(): void {
+    const newCharPool = new CharPool();
+    const newStylePool = new StylePool();
+    // 迁移时用旧池查字符（front/back 的 charPool 字段还指向旧池）
+    const oldCharPool = this.charPool;
+    const oldStylePool = this.stylePool;
+    migrateScreenPools(this.front, oldCharPool, oldStylePool, newCharPool, newStylePool);
+    migrateScreenPools(this.back, oldCharPool, oldStylePool, newCharPool, newStylePool);
+    // 换引用
+    this.charPool = newCharPool;
+    this.stylePool = newStylePool;
+    this.front.charPool = newCharPool;
+    this.front.stylePool = newStylePool;
+    this.back.charPool = newCharPool;
+    this.back.stylePool = newStylePool;
   }
 }
