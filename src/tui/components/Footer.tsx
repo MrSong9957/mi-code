@@ -10,9 +10,10 @@
 import React from 'react';
 import { Box, Text, useCursor } from 'ink';
 import { StatusBar } from './StatusBar.js';
+import { cursorScreenPos } from '../state/cursor-position.js';
 import type { StatusBarData } from '../types.js';
 
-const PROMPT_WIDTH = 2; // '❯ ' 的显示宽度
+const PROMPT = '❯ '; // 第 0 行 prompt（影响 x 偏移）
 
 export interface FooterProps {
   input: string;
@@ -25,8 +26,10 @@ export interface FooterProps {
 
 export function Footer({ input, cursor, status, cols, inputRowY }: FooterProps): React.ReactElement {
   const { setCursorPosition } = useCursor();
-  // 光标定位到输入框：x = '❯ ' 宽度 + 光标字符偏移，y = 输入行全局 y
-  setCursorPosition({ x: PROMPT_WIDTH + cursor, y: inputRowY });
+  // 光标定位（Bug 1 修复）：用 stringWidth 算显示宽度，CJK 不再被一分为二。
+  // 多行时 y 还要加上光标所在行偏移。
+  const pos = cursorScreenPos(input, cursor, PROMPT);
+  setCursorPosition({ x: pos.x, y: inputRowY + pos.y });
 
   const border = '─'.repeat(Math.max(0, cols));
   return (
