@@ -14,12 +14,16 @@ function InputProbe({
   store,
   onExit,
   onTab,
+  onToggleOverlay,
+  overlayVisible,
 }: {
   store: InputStore;
   onExit?: () => void;
   onTab?: (text: string) => void;
+  onToggleOverlay?: () => void;
+  overlayVisible?: () => boolean;
 }): React.ReactElement {
-  useInputHandler(store, onExit, onTab);
+  useInputHandler(store, onExit, onTab, onToggleOverlay, overlayVisible);
   const text = store.getState().text;
   return React.createElement(Text, {}, `text="${text}"`);
 }
@@ -146,5 +150,57 @@ describe('useInputHandler: TAB 路由', () => {
     const { stdin } = render(React.createElement(InputProbe, { store }));
     stdin.write('\t');
     expect(store.getState().text).toBe('hi'); // 仍未插入 \t
+  });
+});
+
+describe('useInputHandler: Ctrl+O 覆盖层', () => {
+  it('Ctrl+O → 调 onToggleOverlay', () => {
+    const store = createInputStore();
+    const onToggle = vi.fn();
+    const { stdin } = render(React.createElement(InputProbe, {
+      store, onToggleOverlay: onToggle,
+    }));
+    stdin.write('\x0f'); // Ctrl+O 字节
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('overlay 激活时：普通按键被吞（不 insert）', () => {
+    const store = createInputStore();
+    const onToggle = vi.fn();
+    const { stdin } = render(React.createElement(InputProbe, {
+      store,
+      onToggleOverlay: onToggle,
+      overlayVisible: () => true, // 模拟 overlay 已开
+    }));
+    stdin.write('x'); // 普通字符
+    expect(store.getState().text).toBe(''); // 被吞，未 insert
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it('overlay 激活时：q 关闭（调 onToggleOverlay）', () => {
+    const store = createInputStore();
+    const onToggle = vi.fn();
+    const { stdin } = render(React.createElement(InputProbe, {
+      store,
+      onToggleOverlay: onToggle,
+      overlayVisible: () => true,
+    }));
+    stdin.write('q');
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('overlay 激活时：Esc 关闭', () => {
+    vi.useFakeTimers();
+    const store = createInputStore();
+    const onToggle = vi.fn();
+    const { stdin } = render(React.createElement(InputProbe, {
+      store,
+      onToggleOverlay: onToggle,
+      overlayVisible: () => true,
+    }));
+    stdin.write('\x1b'); // ESC（ink 缓冲 20ms 后才 flush，需推进定时器）
+    vi.advanceTimersByTime(30);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });

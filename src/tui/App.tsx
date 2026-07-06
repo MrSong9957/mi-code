@@ -23,10 +23,13 @@ import { Box } from 'ink';
 import { ScrollBox } from './components/ScrollBox.js';
 import { LogoBox } from './components/LogoBox.js';
 import { Footer } from './components/Footer.js';
+import { Overlay } from './components/Overlay.js';
+import { useStore } from 'zustand/react';
 import type { TuiMessage, StatusBarData, LogoData } from './types.js';
 import type { SelectionStore } from './state/selection-store.js';
 import type { SpinnerStore } from './state/spinner-store.js';
 import type { CompletionStore } from './state/completion-store.js';
+import type { OverlayStore } from './state/overlay-store.js';
 
 /** Footer 固定占用的行数：上边框 + 输入 + 下边框 + 状态栏 */
 const FOOTER_ROWS = 4;
@@ -40,6 +43,7 @@ export interface AppProps {
   selectionStore: SelectionStore;
   spinnerStore: SpinnerStore;
   completionStore: CompletionStore;
+  overlayStore: OverlayStore;
   input: string;
   cursor: number;
   /** 终端列数（边框宽度用）；默认 80（ink-testing-library 默认） */
@@ -48,7 +52,14 @@ export interface AppProps {
   rows?: number;
 }
 
-export function App({ messages, status, logo, selectionStore, input, cursor, spinnerStore, completionStore, cols = 80, rows = 24 }: AppProps): React.ReactElement {
+export function App({ messages, status, logo, selectionStore, input, cursor, spinnerStore, completionStore, overlayStore, cols = 80, rows = 24 }: AppProps): React.ReactElement {
+  const overlayVisible = useStore(overlayStore, (s) => s.visible);
+
+  // 覆盖层激活：替换整个布局
+  if (overlayVisible) {
+    return <Overlay store={overlayStore} cols={cols} />;
+  }
+
   const visibleRows = Math.max(0, rows - FOOTER_ROWS - LOGO_ROWS);
   // 输入行全局 y：ScrollBox 实际渲染行数 + LOGO_ROWS + 上边框 1 行
   const scrollboxRenderedRows = Math.min(messages.length, visibleRows);

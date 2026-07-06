@@ -27,13 +27,31 @@ export function useInputHandler(
   store: InputStore,
   onExit?: () => void,
   onTab?: (text: string) => void,
+  onToggleOverlay?: () => void,
+  overlayVisible?: () => boolean,
 ): void {
   useInput((input: string, key: Key) => {
     const s = store.getState();
 
+    // 覆盖层激活时：只处理关闭键（q / Ctrl+O / Esc / Ctrl+C），其余吞掉
+    if (overlayVisible?.()) {
+      if (key.ctrl && input === 'c') { onExit?.(); return; }
+      if (input === 'q' || (key.ctrl && input === 'o') || key.escape) {
+        onToggleOverlay?.(); // 再 toggle 一次 = 关闭
+        return;
+      }
+      return; // 其余按键全部吞掉（模态）
+    }
+
     // Ctrl+C：退出（最高优先级，不改输入）
     if (key.ctrl && input === 'c') {
       onExit?.();
+      return;
+    }
+
+    // Ctrl+O：切换覆盖层
+    if (key.ctrl && input === 'o') {
+      onToggleOverlay?.();
       return;
     }
 

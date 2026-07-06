@@ -24,6 +24,7 @@ import { createStatusStore } from './state/status-store.js';
 import { createLogoStore } from './state/logo-store.js';
 import { createSpinnerStore, type SpinnerStore } from './state/spinner-store.js';
 import { createCompletionStore, type CompletionStore } from './state/completion-store.js';
+import { createOverlayStore, type OverlayStore } from './state/overlay-store.js';
 import { PipelineToStoreAdapter } from './state/pipeline-adapter.js';
 import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
@@ -41,6 +42,8 @@ export interface BootstrapOptions {
   onExit: () => void;
   /** TAB 键回调（模式切换 or 补全） */
   onTab?: (text: string) => void;
+  /** Ctrl+O 切换覆盖层回调 */
+  onToggleOverlay?: () => void;
 }
 
 export interface BootstrapHandle {
@@ -51,6 +54,7 @@ export interface BootstrapHandle {
   logoStore: ReturnType<typeof createLogoStore>;
   spinnerStore: SpinnerStore;
   completionStore: CompletionStore;
+  overlayStore: OverlayStore;
   /** spinner 控制（对齐旧 layout.startSpinner 等） */
   startSpinner: (label: string) => void;
   stopSpinner: () => void;
@@ -71,6 +75,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const logoStore = createLogoStore(opts.logo);
   const spinnerStore = createSpinnerStore();
   const completionStore = createCompletionStore();
+  const overlayStore = createOverlayStore();
   const adapter = new PipelineToStoreAdapter(messagesStore);
   const pipeline = new BlockPipeline(adapter);
 
@@ -106,7 +111,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   // 渲染 Ink 应用（ConnectedApp 内部 useAltScreen 进 alt screen）
   let inkInstance: InkInstance | null = render(
     React.createElement(ConnectedApp, {
-      messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, onExit: opts.onExit, onTab: opts.onTab,
+      messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
     }),
     { exitOnCtrlC: false },
   );
@@ -125,6 +130,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     pipeline, messagesStore, inputStore, statusStore, logoStore,
     spinnerStore,
     completionStore,
+    overlayStore,
     startSpinner: (label: string) => { spinnerStore.getState().start(label); },
     stopSpinner: () => { spinnerStore.getState().stop(); },
     setSpinnerLabel: (label: string) => { spinnerStore.getState().setLabel(label); },

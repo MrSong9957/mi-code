@@ -20,6 +20,7 @@ import type { StatusStore } from './state/status-store.js';
 import type { LogoStore } from './state/logo-store.js';
 import type { SpinnerStore } from './state/spinner-store.js';
 import type { CompletionStore } from './state/completion-store.js';
+import type { OverlayStore } from './state/overlay-store.js';
 import { createSelectionStore } from './state/selection-store.js';
 
 export interface ConnectedAppProps {
@@ -29,12 +30,14 @@ export interface ConnectedAppProps {
   logoStore: LogoStore;
   spinnerStore: SpinnerStore;
   completionStore: CompletionStore;
+  overlayStore: OverlayStore;
   onExit: () => void;
   onTab?: (text: string) => void;
+  onToggleOverlay?: () => void;
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, onExit, onTab,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit, onTab, onToggleOverlay,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store：ScrollBox 鼠标拖拽写入，MessageRow 读 selected 高亮
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -43,7 +46,7 @@ export function ConnectedApp({
   // 终端尺寸（响应 resize）
   const { rows, cols } = useTerminalSize();
   // 输入处理（useInput → store）
-  useInputHandler(inputStore, onExit, onTab);
+  useInputHandler(inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible);
 
   // 订阅四个 store
   const messages = useStore(messagesStore, (s) => s.messages);
@@ -66,6 +69,7 @@ export function ConnectedApp({
       selectionStore={selectionStore}
       spinnerStore={spinnerStore}
       completionStore={completionStore}
+      overlayStore={overlayStore}
       input={inputText}
       cursor={cursor}
       rows={rows}

@@ -8,6 +8,7 @@ import { App } from '../../tui/App.js';
 import { createSelectionStore } from '../../tui/state/selection-store.js';
 import { createSpinnerStore } from '../../tui/state/spinner-store.js';
 import { createCompletionStore } from '../../tui/state/completion-store.js';
+import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../../tui/types.js';
 
 const STATUS: StatusBarData = {
@@ -17,7 +18,7 @@ const LOGO: LogoData = { version: '1.0.0', dir: '/tmp/proj' };
 
 function makeApp(messages: TuiMessage[] = []): { lastFrame: () => string | undefined } {
   return render(
-    React.createElement(App, { messages, status: STATUS, logo: LOGO, selectionStore: createSelectionStore(), spinnerStore: createSpinnerStore(), completionStore: createCompletionStore(), input: '', cursor: 0 }),
+    React.createElement(App, { messages, status: STATUS, logo: LOGO, selectionStore: createSelectionStore(), spinnerStore: createSpinnerStore(), completionStore: createCompletionStore(), overlayStore: createOverlayStore(), input: '', cursor: 0 }),
   );
 }
 
@@ -88,7 +89,7 @@ describe('App 顶层布局（flexbox footer 紧贴 + LOGO 固定区）', () => {
   it('StatusBar 进度条随 contextPct 变化', () => {
     const status50: StatusBarData = { ...STATUS, contextPct: 0.5 };
     const { lastFrame } = render(
-      React.createElement(App, { messages: [], status: status50, logo: LOGO, selectionStore: createSelectionStore(), spinnerStore: createSpinnerStore(), completionStore: createCompletionStore(), input: '', cursor: 0 }),
+      React.createElement(App, { messages: [], status: status50, logo: LOGO, selectionStore: createSelectionStore(), spinnerStore: createSpinnerStore(), completionStore: createCompletionStore(), overlayStore: createOverlayStore(), input: '', cursor: 0 }),
     );
     const frame = lastFrame() ?? '';
     // 50% → round(0.5*10)=5 满（进度条无括号，见 StatusBar 多色高亮）

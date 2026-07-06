@@ -269,6 +269,20 @@ function handleTab(
   handle.statusStore.getState().setMode(next);
 }
 
+/** Ctrl+O：切换覆盖层。有可折叠块时打开，已开则关闭。 */
+function handleToggleOverlay(handle: BootstrapHandle | null): void {
+  if (!handle) return;
+  const overlay = handle.overlayStore.getState();
+  if (overlay.visible) {
+    overlay.close();
+    return;
+  }
+  const expandable = handle.pipeline.getLastExpandableFullLines();
+  if (!expandable) return; // 无可展开内容，静默忽略
+  const title = expandable.kind === 'thinking' ? 'Thinking' : 'Tool result';
+  overlay.open(title, expandable.lines);
+}
+
 /**
  * 用户提交输入（回车）。从旧 handleInput 的 byte===0x0d 块提取，接入 bootstrap 的 onSubmit 回调。
  *
@@ -550,6 +564,7 @@ if (cliOpts.list) {
     onSubmit: (text) => { void handleUserSubmit(text); },
     onExit: () => { cleanupOnExit(); process.exit(0); },
     onTab: (text) => { handleTab(text, tuiHandle, configStore, permissionChecker); },
+    onToggleOverlay: () => { handleToggleOverlay(tuiHandle); },
   });
   // pipeline 由 bootstrap 内构造，赋值到外层 let pipeline（agent loop 使用）
   pipeline = tuiHandle.pipeline;
