@@ -67,3 +67,29 @@ index 24d45ec..34bfa51 100644
          }
      }
      resolveInteractiveOption(interactive) {
+diff --git a/node_modules/ink/build/reconciler.js b/node_modules/ink/build/reconciler.js
+index 5b4a9d7..fab6c9a 100644
+--- a/node_modules/ink/build/reconciler.js
++++ b/node_modules/ink/build/reconciler.js
+@@ -149,6 +149,10 @@ export default createReconciler({
+                 node.internal_transform = value;
+                 continue;
+             }
++            if (key === 'internal_cursorTarget') {
++                node.internal_cursorTarget = true;
++                continue;
++            }
+             if (key === 'internal_static') {
+                 currentRootNode = rootNode;
+                 node.internal_static = true;
+@@ -239,6 +243,10 @@ export default createReconciler({
+                     node.internal_transform = value;
+                     continue;
+                 }
++                if (key === 'internal_cursorTarget') {
++                    node.internal_cursorTarget = true;
++                    continue;
++                }
+                 if (key === 'internal_static') {
+                     node.internal_static = true;
+                     continue;

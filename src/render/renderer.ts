@@ -69,8 +69,8 @@ export function createCustomRenderer(opts: CustomRendererOptions): InkRenderer {
         rootYoga.getComputedHeight();
       }
 
-      // 2. yoga-walk：遍历 Ink 树写 back
-      renderTree(node as never, db.back);
+      // 2. yoga-walk：遍历 Ink 树写 back，同时取输入框的绝对 y（cursorTargetY）
+      const { cursorTargetY } = renderTree(node as never, db.back);
 
       // 3. diff
       const patches = diff(db.front, db.back);
@@ -79,13 +79,19 @@ export function createCustomRenderer(opts: CustomRendererOptions): InkRenderer {
       const optimized = optimize(patches);
 
       // 5. emit
-      // cursor 优先用 options.cursor（Ink 直接传的同步值，无时序问题），
-      // fallback 到 lastCursor（pub/sub，可能因 effect 时序滞后一帧）。
+      // 光标 y 优先用 yoga-walk 算的 cursorTargetY（Yoga 布局的绝对坐标，
+      // 自动包含 Spinner/SuggestionBar 等动态行数，不依赖 inputRowY 公式）。
+      // 光标 x 用 useCursor 传的（光标在输入文本内的列偏移）。
+      // 若 cursorTargetY 存在，用它覆盖 cursor.y；否则回退到 options.cursor/lastCursor。
+      const userCursor = options.cursor ?? lastCursor;
+      const cursor = (cursorTargetY !== undefined && userCursor)
+        ? { x: userCursor.x, y: cursorTargetY }
+        : userCursor;
       const ctx: EmitContext = {
         charPool: db.charPool,
         stylePool: db.stylePool,
         stdout: opts.stdout,
-        cursor: options.cursor ?? lastCursor,
+        cursor,
       };
       emit(optimized, ctx);
 

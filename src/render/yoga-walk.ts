@@ -36,6 +36,8 @@ interface InkNode {
   /** 可选 transformer（squashTextNodes 时对每个文本子节点应用） */
   internal_transform?: (text: string, index: number) => string;
   internal_static?: boolean;
+  /** Footer 输入行标记（patch reconciler 挂到 node）——yoga-walk 读它的绝对坐标定位光标 */
+  internal_cursorTarget?: boolean;
 }
 
 /**
@@ -68,17 +70,31 @@ function squashTextNodes(node: InkNode): string {
   return text;
 }
 
+/** renderTree 返回值：光标目标节点的绝对 y 坐标（输入框行） */
+export interface RenderResult {
+  /** 输入框行（internal_cursorTarget 节点）的绝对 y；未找到则 undefined */
+  cursorTargetY?: number;
+}
+
 /**
- * 渲染 Ink DOM 树到 Screen。
+ * 渲染 Ink DOM 树到 Screen，返回光标目标节点的坐标（如有）。
  * @param root Ink 根节点（已 Yoga 布局）
  * @param screen 目标 Screen（back buffer）
  */
-export function renderTree(root: InkNode, screen: Screen): void {
-  walk(root, screen, 0, 0);
+export function renderTree(root: InkNode, screen: Screen): RenderResult {
+  let cursorTargetY: number | undefined;
+  walk(root, screen, 0, 0, (y) => { cursorTargetY = y; });
+  return cursorTargetY === undefined ? {} : { cursorTargetY };
 }
 
 /** 累计坐标偏移递归写 cell。样式不继承——文本样式由 ANSI 嵌入文本本身携带。 */
-function walk(node: InkNode, screen: Screen, offsetX: number, offsetY: number): void {
+function walk(
+  node: InkNode,
+  screen: Screen,
+  offsetX: number,
+  offsetY: number,
+  onCursorTarget: (y: number) => void,
+): void {
   if (node.internal_static) return; // 跳过 <Static>（spec §5.4）
 
   const yoga = node.yogaNode;
@@ -87,6 +103,11 @@ function walk(node: InkNode, screen: Screen, offsetX: number, offsetY: number): 
 
   const x = offsetX + yoga.getComputedLeft();
   const y = offsetY + yoga.getComputedTop();
+
+  // Footer 输入行标记：记录绝对 y（光标定位用，解决 inputRowY 不算动态行数的问题）
+  if (node.internal_cursorTarget) {
+    onCursorTarget(y);
+  }
 
   if (node.nodeName === 'ink-text') {
     // squash 出 ANSI 嵌入的整段文本，blitAnsi 逐字符重建样式
@@ -101,7 +122,7 @@ function walk(node: InkNode, screen: Screen, offsetX: number, offsetY: number): 
     const childNodes = node.childNodes;
     if (childNodes) {
       for (const child of childNodes) {
-        walk(child, screen, x, y);
+        walk(child, screen, x, y, onCursorTarget);
       }
     }
   }

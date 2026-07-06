@@ -45,10 +45,12 @@ export function Footer({ input, cursor, status, cols, inputRowY, spinnerStore, c
       <Spinner store={spinnerStore} />
       <SuggestionBar store={completionStore} />
       <Text color="gray">{border}</Text>
-      <Text>
-        <Text color="green" bold>❯ </Text>
-        {input}
-      </Text>
+      <Box {...{ internal_cursorTarget: true } as Record<string, unknown>}>
+        <Text>
+          <Text color="green" bold>❯ </Text>
+          {input}
+        </Text>
+      </Box>
       <Text color="gray">{border}</Text>
       <StatusBar status={status} />
     </Box>
