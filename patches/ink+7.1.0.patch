@@ -1,0 +1,29 @@
+diff --git a/node_modules/ink/build/ink.js b/node_modules/ink/build/ink.js
+index 24d45ec..93763a4 100644
+--- a/node_modules/ink/build/ink.js
++++ b/node_modules/ink/build/ink.js
+@@ -345,7 +345,23 @@ export default class Ink {
+             this.nextRenderCommit = undefined;
+         }
+         const startTime = performance.now();
+-        const { output, outputHeight, staticOutput } = render(this.rootNode, this.isScreenReaderEnabled);
++        // MI-CODE FORK: allow custom renderer injection via options.renderer.
++        // When provided, call the custom renderer with a viewport options object
++        // (width/height/isScreenReaderEnabled). When not provided, fall back to the
++        // original built-in renderer with its original (node, boolean) signature so
++        // default behavior is identical to upstream Ink.
++        let output, outputHeight, staticOutput;
++        if (this.options.renderer) {
++            const rendererFn = this.options.renderer;
++            ({ output, outputHeight, staticOutput } = rendererFn(this.rootNode, {
++                width: this.options.stdout.columns || 80,
++                height: this.options.stdout.rows || 24,
++                isScreenReaderEnabled: this.isScreenReaderEnabled,
++            }));
++        }
++        else {
++            ({ output, outputHeight, staticOutput } = render(this.rootNode, this.isScreenReaderEnabled));
++        }
+         this.options.onRender?.({ renderTime: performance.now() - startTime });
+         // If <Static> output isn't empty, it means new children have been added to it
+         const hasStaticOutput = staticOutput && staticOutput !== '\n';
