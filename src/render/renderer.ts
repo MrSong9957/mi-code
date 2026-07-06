@@ -90,11 +90,20 @@ export function createCustomRenderer(opts: CustomRendererOptions): InkRenderer {
       // 6. swap（back → front，back 清零，含定期池子重置）
       db.swap();
 
-      return { output: '', outputHeight: options.height, staticOutput: '' };
+      // outputHeight: 0——关键：让 Ink 认为帧非全屏，永不触发 Windows 上的
+      // shouldClearTerminalForFrame（ink.js:100-101：isWindowsConsole && isFullscreen → clearTerminal）。
+      // 我们的 renderer 已直接写 stdout，不需要 Ink 的帧输出/clearTerminal 参与。
+      // 返回空 output + height 0 = "我什么都没渲染，你别碰屏幕"。
+      return { output: '', outputHeight: 0, staticOutput: '' };
     } catch (err) {
-      // 自研抛错 → fallback
+      // 自研抛错 → fallback。
+      // 不用 console.error——Ink 的 patchConsole 会拦截它路由到 writeToStderr，
+      // 在 PowerShell 上 stderr 有内容就触发 NativeCommandError 杀进程。
+      // 仅在 MI_CODE_DEBUG 时写 process.stderr（绕过 patchConsole）。
+      if (process.env.MI_CODE_DEBUG) {
+        process.stderr.write(`[mi-code render] custom renderer failed, falling back: ${String(err)}\n`);
+      }
       if (fallback) {
-        console.error('[mi-code render] custom renderer failed, falling back:', err);
         return fallback(node, options);
       }
       throw err;

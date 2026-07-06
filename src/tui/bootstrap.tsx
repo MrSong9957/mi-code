@@ -111,17 +111,20 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
 
   // 渲染 Ink 应用
   // alt screen：用 Ink 官方 alternateScreen option，在 constructor 阶段进入
-  // （在任何 onRender 之前），避免自研 renderer 的第一帧画到主屏再被 alt 清掉
-  // （「界面一闪而过」bug 的根因——原 useAltScreen useEffect 在 passive effect
-  // 阶段跑，晚于 commit 阶段的 onRender）。真实 TTY 下 interactive=true 才生效。
+  // （在任何 onRender 之前），避免自研 renderer 的第一帧画到主屏再被 alt 清掉。
+  // 真实 TTY 下 interactive=true 才生效。
+  // patchConsole: false——关键：Ink 默认拦截 console.* 路由到 writeToStderr，
+  // PowerShell 检测到 stderr 有内容就抛 NativeCommandError 杀进程（"一闪而过"真因）。
+  // 项目 TUI 代码零处依赖 patchConsole（grep 确认），关闭后 console.* 走原生 Node 路径。
   // feature flag：USE_DOUBLE_BUFFER=true 时注入自研 renderer（patch 暴露的 options.renderer）
   // + onSetCursorPosition 钩子把 useCursor 的 {x,y} 转发给 renderer 的 pub/sub。
   const renderOptions: {
     exitOnCtrlC: false;
     alternateScreen: true;
+    patchConsole: false;
     renderer?: unknown;
     onSetCursorPosition?: (pos: unknown) => void;
-  } = { exitOnCtrlC: false, alternateScreen: true };
+  } = { exitOnCtrlC: false, alternateScreen: true, patchConsole: false };
   if (USE_DOUBLE_BUFFER) {
     renderOptions.renderer = createCustomRenderer({ stdout: process.stdout });
     renderOptions.onSetCursorPosition = (pos) => { setCursorPos(pos as { x: number; y: number } | undefined); };
