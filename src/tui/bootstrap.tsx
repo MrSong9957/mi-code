@@ -113,6 +113,10 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   // alt screen：用 Ink 官方 alternateScreen option，在 constructor 阶段进入
   // （在任何 onRender 之前），避免自研 renderer 的第一帧画到主屏再被 alt 清掉。
   // 真实 TTY 下 interactive=true 才生效。
+  // ⚠️ Ink 的 enterAlternativeScreen 只发 \x1b[?1049h（切到备用屏+保存光标），
+  // 不发 \x1b[H（光标归位）。导致 alt screen 的光标停在用户输入命令的位置
+  // （终端中间），renderer 从那开始画 → 整个画面偏移。
+  // 这里在 render() 后立即补 \x1b[H 把光标归位到左上角 (0,0)。
   // patchConsole: false——关键：Ink 默认拦截 console.* 路由到 writeToStderr，
   // PowerShell 检测到 stderr 有内容就抛 NativeCommandError 杀进程（"一闪而过"真因）。
   // 项目 TUI 代码零处依赖 patchConsole（grep 确认），关闭后 console.* 走原生 Node 路径。
@@ -129,6 +133,11 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     renderOptions.renderer = createCustomRenderer({ stdout: process.stdout });
     renderOptions.onSetCursorPosition = (pos) => { setCursorPos(pos as { x: number; y: number } | undefined); };
   }
+  // 提前进 alt screen + 光标归位：Ink 的 enterAlternativeScreen 只发 ?1049h（切备用屏），
+  // 不发 \x1b[H（归位）→ alt screen 光标停在用户输命令的位置（终端中间）→ 画面偏移。
+  // 这里在 render() 前发完整序列：先 ?1049h 进 alt，再 \x1b[H 归位到 (0,0)。
+  // render() 里 Ink 再发一次 ?1049h 是 no-op（已进 alt screen，重复安全）。
+  process.stdout.write('\x1b[?1049h\x1b[H');
 
   let inkInstance: InkInstance | null = render(
     React.createElement(ConnectedApp, {
