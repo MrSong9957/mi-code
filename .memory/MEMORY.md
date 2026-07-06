@@ -1,6 +1,10 @@
 # Memory Catalog
 
-- [test-memory-write](./test-memory-write.md) — 测试内存写入功能
-- [test-memory](./test-memory.md) — 测试内存写入功能
-- [tool-test-record](./tool-test-record.md) — 工具测试记录
-- [tool_test_memory](./tool_test_memory.md) — 工具测试记录
+- [ink-migration-progress](./ink-migration-progress.md) — Ink 渲染层迁移进度（feat/ink-rewrite 分支，Phase 7-9 待续）
+- [self-introduction](./self-introduction.md) — 智能助手的自我介绍和能力概述
+- [test-memory-write.md](./test-memory-write.md) — 
+- [test-memory.md](./test-memory.md) — 
+- [tool-test-memory](./tool-test-memory.md) — 工具测试记录
+- [tool-test-record.md](./tool-test-record.md) — 
+- [tool-test](./tool-test.md) — 工具测试记录
+- [tool_test_memory.md](./tool_test_memory.md) — 
