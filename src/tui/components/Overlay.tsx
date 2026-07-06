@@ -10,6 +10,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { useStore } from 'zustand/react';
+import stringWidth from 'string-width';
 import type { OverlayStore } from '../state/overlay-store.js';
 import { styleToInkProps } from '../types.js';
 
@@ -30,11 +31,19 @@ export function Overlay({ store, cols }: OverlayProps): React.ReactElement | nul
       <Text bold>{title}</Text>
       <Text color="#8c8c8c">{'━'.repeat(Math.min(cols, 60))}</Text>
       {lines.map((l, i) => {
-        const indent = ' '.repeat(l.indent ?? 0);
-        const content = l.content;
-        // 简单按字符数截断（保守，CJK 偶尔会少显示一格但不溢出）
-        const maxChars = Math.max(0, cols - (l.indent ?? 0));
-        const truncated = [...content].slice(0, maxChars).join('');
+        const indentNum = l.indent ?? 0;
+        const indent = ' '.repeat(indentNum);
+        // 按显示宽度截断（CJK 全角=2 列），与 cursorScreenPos 同源。
+        // 逐码点累加，直到下一个码点会让显示宽度超过剩余列宽。
+        const maxDisplayWidth = Math.max(0, cols - indentNum);
+        let used = 0;
+        let truncated = '';
+        for (const ch of l.content) {
+          const w = stringWidth(ch);
+          if (used + w > maxDisplayWidth) break;
+          truncated += ch;
+          used += w;
+        }
         const props = styleToInkProps(l.style);
         return (
           <Text key={i} {...props}>{indent}{truncated}</Text>
