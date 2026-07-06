@@ -78,8 +78,9 @@ describe('App 顶层布局（flexbox footer 紧贴 + LOGO 固定区）', () => {
     const { lastFrame } = makeApp([]);
     const frame = lastFrame() ?? '';
     // 25% → 10 格条 = ███░░░░░░░（round(0.25*10)=3 满）
-    expect(frame).toContain('build | sonnet | Projects/mi-code | main |');
-    expect(frame).toContain('[███░░░░░░░] 25%');
+    // 分隔符为 box-drawing │（见 StatusBar 多色高亮），进度条无括号
+    expect(frame).toContain('build │ sonnet │ Projects/mi-code │ main │');
+    expect(frame).toContain('███░░░░░░░ 25%');
   });
 
   it('StatusBar 进度条随 contextPct 变化', () => {
@@ -88,7 +89,7 @@ describe('App 顶层布局（flexbox footer 紧贴 + LOGO 固定区）', () => {
       React.createElement(App, { messages: [], status: status50, logo: LOGO, selectionStore: createSelectionStore(), input: '', cursor: 0 }),
     );
     const frame = lastFrame() ?? '';
-    // 50% → round(0.5*10)=5 满
-    expect(frame).toContain('[█████░░░░░] 50%');
+    // 50% → round(0.5*10)=5 满（进度条无括号，见 StatusBar 多色高亮）
+    expect(frame).toContain('█████░░░░░ 50%');
   });
 });
