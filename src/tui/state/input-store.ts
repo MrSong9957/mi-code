@@ -34,6 +34,8 @@ export interface InputState {
   moveCursorToEnd: () => void;
   /** 清空文本，光标归 0 */
   clear: () => void;
+  /** 整串替换文本（补全用），光标移到末尾 */
+  setText: (text: string) => void;
   /** 提交：trim 后调 onSubmit，清空；空文本返回 null 不触发 */
   submit: () => string | null;
 }
@@ -74,6 +76,7 @@ export function createInputStore(opts: InputStoreOptions = {}): InputStore {
     moveCursorToStart: () => set({ cursor: 0 }),
     moveCursorToEnd: () => set((s) => ({ cursor: [...s.text].length })),
     clear: () => set({ text: '', cursor: 0 }),
+    setText: (text) => set({ text, cursor: [...text].length }),
 
     submit: () => {
       const trimmed = get().text.trim();

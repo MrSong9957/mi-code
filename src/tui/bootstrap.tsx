@@ -39,6 +39,8 @@ export interface BootstrapOptions {
   onSubmit: (text: string) => void;
   /** 退出时回调（index.ts 在此做 session 落盘等，再 process.exit） */
   onExit: () => void;
+  /** TAB 键回调（模式切换 or 补全） */
+  onTab?: (text: string) => void;
 }
 
 export interface BootstrapHandle {
@@ -104,7 +106,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   // 渲染 Ink 应用（ConnectedApp 内部 useAltScreen 进 alt screen）
   let inkInstance: InkInstance | null = render(
     React.createElement(ConnectedApp, {
-      messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, onExit: opts.onExit,
+      messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, onExit: opts.onExit, onTab: opts.onTab,
     }),
     { exitOnCtrlC: false },
   );

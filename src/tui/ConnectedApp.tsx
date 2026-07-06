@@ -30,10 +30,11 @@ export interface ConnectedAppProps {
   spinnerStore: SpinnerStore;
   completionStore: CompletionStore;
   onExit: () => void;
+  onTab?: (text: string) => void;
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, onExit,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, onExit, onTab,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store：ScrollBox 鼠标拖拽写入，MessageRow 读 selected 高亮
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -42,7 +43,7 @@ export function ConnectedApp({
   // 终端尺寸（响应 resize）
   const { rows, cols } = useTerminalSize();
   // 输入处理（useInput → store）
-  useInputHandler(inputStore, onExit);
+  useInputHandler(inputStore, onExit, onTab);
 
   // 订阅四个 store
   const messages = useStore(messagesStore, (s) => s.messages);

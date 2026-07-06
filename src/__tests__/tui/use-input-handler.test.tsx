@@ -13,11 +13,13 @@ import { useInputHandler } from '../../tui/input/use-input-handler.js';
 function InputProbe({
   store,
   onExit,
+  onTab,
 }: {
   store: InputStore;
   onExit?: () => void;
+  onTab?: (text: string) => void;
 }): React.ReactElement {
-  useInputHandler(store, onExit);
+  useInputHandler(store, onExit, onTab);
   const text = store.getState().text;
   return React.createElement(Text, {}, `text="${text}"`);
 }
@@ -123,5 +125,26 @@ describe('useInputHandler（鼠标序列不得污染输入框）', () => {
     const { stdin } = render(React.createElement(InputProbe, { store }));
     stdin.write('hi');
     expect(store.getState().text).toBe('hi');
+  });
+});
+
+describe('useInputHandler: TAB 路由', () => {
+  it('TAB → 调 onTab(text)，不插入 \\t', () => {
+    const store = createInputStore();
+    store.getState().insert('hello');
+    const onTab = vi.fn();
+    const { stdin } = render(React.createElement(InputProbe, { store, onTab }));
+    stdin.write('\t');
+    expect(onTab).toHaveBeenCalledTimes(1);
+    expect(onTab).toHaveBeenCalledWith('hello');
+    expect(store.getState().text).toBe('hello'); // 未插入 \t
+  });
+
+  it('未传 onTab 时 TAB 静默忽略（不崩）', () => {
+    const store = createInputStore();
+    store.getState().insert('hi');
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    stdin.write('\t');
+    expect(store.getState().text).toBe('hi'); // 仍未插入 \t
   });
 });

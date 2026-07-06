@@ -26,6 +26,7 @@ import type { InputStore } from '../state/input-store.js';
 export function useInputHandler(
   store: InputStore,
   onExit?: () => void,
+  onTab?: (text: string) => void,
 ): void {
   useInput((input: string, key: Key) => {
     const s = store.getState();
@@ -33,6 +34,12 @@ export function useInputHandler(
     // Ctrl+C：退出（最高优先级，不改输入）
     if (key.ctrl && input === 'c') {
       onExit?.();
+      return;
+    }
+
+    // TAB：路由给 onTab（模式切换 or 补全），不插入 \t
+    if (key.tab) {
+      onTab?.(s.text);
       return;
     }
 
@@ -91,7 +98,7 @@ export function useInputHandler(
     // 拒绝仍含 \x1b 或匹配 SGR 鼠标残码模式（\[<digits;digits;digits>M|m）的 input；
     // 正常可打印字符（含多字节 UTF-8）绝不匹配，故不误伤。
     const isMouseOrControlSeq = input.includes('\x1b') || /^\[<\d+;\d+;\d+[Mm]/.test(input);
-    if (input !== '' && !key.ctrl && !key.meta && !key.escape && !key.tab && !isMouseOrControlSeq) {
+    if (input !== '' && !key.ctrl && !key.meta && !key.escape && !isMouseOrControlSeq) {
       s.insert(input);
     }
   });

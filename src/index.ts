@@ -27,7 +27,8 @@ import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
 import { parseBlockPrefix } from './commands/parser.js';
 import { PermissionChecker } from './permission/index.js';
-import { WRITE_TOOLS } from './permission/types.js';
+import { WRITE_TOOLS, type PermissionMode } from './permission/types.js';
+import { COMMAND_NAMES } from './commands/executor.js';
 import { HookRunner, preToolSafetyCheck, postToolLogger, sessionStartLogger } from './hooks/index.js';
 import { TeammateManager, createSendMessageTool, createReadInboxTool, NegotiationManager, createShutdownRequestTool, createRespondRequestTool, createSubmitPlanTool, createApprovePlanTool } from './agent/team/index.js';
 import { ScheduleManager } from './agent/scheduler/index.js';
@@ -214,6 +215,59 @@ childToolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
 // ask_user_question 同样需要给子代理（plan 角色白名单含此工具）
 const askToolChild = createAskUserTool(askManager);
 childToolRegistry.register(askToolChild.definition, askToolChild.executor);
+
+/**
+ * TAB 行为（对标 Claude Code）：
+ *  - input 以 / 开头 → 补全（COMMAND_NAMES 过滤前缀，cycle 候选，写回 input）
+ *  - 否则 → 循环 PermissionMode（build→plan→auto→build）
+ *
+ * completion：从 handle.completionStore 取当前候选池。
+ *  - 若候选已可见且仍匹配当前 text（输入框前缀未变），cycle 推进高亮；
+ *  - 否则（前缀变了或首次）按前缀重算候选。
+ * 选中项经 inputStore.setText('/' + sel) 写回输入框。
+ *
+ * 模式切换走与 /build /plan /auto 斜杠命令一致的 3 处副作用：
+ * permissionChecker.setMode + configStore.setPermissionMode + statusStore.setMode。
+ */
+function handleTab(
+  text: string,
+  handle: BootstrapHandle | null,
+  cfgStore: ConfigStore,
+  checker: PermissionChecker,
+): void {
+  if (!handle) return;
+  const completion = handle.completionStore.getState();
+
+  // 分支 1：补全（input 以 / 开头）
+  if (text.startsWith('/')) {
+    const prefix = text.slice(1);
+    // 候选已可见且仍匹配当前 text（输入框前缀未变）→ cycle；否则重算
+    const stillMatches = completion.visible
+      && completion.candidates.length > 0
+      && completion.candidates.every(c => c.startsWith(prefix));
+    if (stillMatches) {
+      completion.cycle();
+    } else {
+      const candidates = COMMAND_NAMES.filter(n => n.startsWith(prefix));
+      completion.setCandidates(candidates);
+    }
+    const sel = completion.selected();
+    if (sel) {
+      handle.inputStore.getState().setText('/' + sel);
+    }
+    return;
+  }
+
+  // 分支 2：模式切换（build→plan→auto→build）
+  completion.hide();
+  const order: PermissionMode[] = ['build', 'plan', 'auto'];
+  const cur = checker.getMode();
+  const idx = order.indexOf(cur);
+  const next = order[(idx + 1) % order.length]!;
+  checker.setMode(next);
+  cfgStore.setPermissionMode(next);
+  handle.statusStore.getState().setMode(next);
+}
 
 /**
  * 用户提交输入（回车）。从旧 handleInput 的 byte===0x0d 块提取，接入 bootstrap 的 onSubmit 回调。
@@ -495,6 +549,7 @@ if (cliOpts.list) {
     },
     onSubmit: (text) => { void handleUserSubmit(text); },
     onExit: () => { cleanupOnExit(); process.exit(0); },
+    onTab: (text) => { handleTab(text, tuiHandle, configStore, permissionChecker); },
   });
   // pipeline 由 bootstrap 内构造，赋值到外层 let pipeline（agent loop 使用）
   pipeline = tuiHandle.pipeline;

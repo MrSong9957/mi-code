@@ -118,3 +118,27 @@ describe('input-store（文本编辑 + 光标）', () => {
     expect(store.getState().cursor).toBe(3);
   });
 });
+
+describe('input-store setText（补全用）', () => {
+  it('setText：整串替换，光标移到末尾', () => {
+    const store = createInputStore();
+    store.getState().insert('abc');
+    store.getState().setText('/plan');
+    expect(store.getState().text).toBe('/plan');
+    expect(store.getState().cursor).toBe(5);
+  });
+
+  it('setText 空串：清空，光标归 0', () => {
+    const store = createInputStore();
+    store.getState().insert('abc');
+    store.getState().setText('');
+    expect(store.getState().text).toBe('');
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('setText CJK：光标按码点数', () => {
+    const store = createInputStore();
+    store.getState().setText('/你好');
+    expect(store.getState().cursor).toBe(3);
+  });
+});
