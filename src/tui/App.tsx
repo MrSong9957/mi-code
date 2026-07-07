@@ -50,25 +50,38 @@ export interface AppProps {
   cols?: number;
   /** 终端行数（算 ScrollBox visibleRows 用）；默认 24 */
   rows?: number;
+  /** ScrollBox scrollTop（受控，由 ConnectedApp 持有） */
+  scrollTop: number;
+  /** ScrollBox scrollTop 变更回调 */
+  onScrollTopChange: (updater: (prev: number) => number) => void;
+  /** ScrollBox 是否已主动上滚 */
+  scrolledAway: boolean;
 }
 
-export function App({ messages, status, logo, selectionStore, input, cursor, spinnerStore, completionStore, overlayStore, cols = 80, rows = 24 }: AppProps): React.ReactElement {
+export function App({ messages, status, logo, selectionStore, input, cursor, spinnerStore, completionStore, overlayStore, scrollTop, onScrollTopChange, scrolledAway, cols = 80, rows = 24 }: AppProps): React.ReactElement {
   const overlayVisible = useStore(overlayStore, (s) => s.visible);
+  // 订阅 spinner/completion 是否激活——影响 Footer 占用行数（激活时多 1-2 行）
+  const spinnerActive = useStore(spinnerStore, (s) => s.active);
+  const completionVisible = useStore(completionStore, (s) => s.visible);
 
   // 覆盖层激活：替换整个布局
   if (overlayVisible) {
     return <Overlay store={overlayStore} cols={cols} />;
   }
 
-  const visibleRows = Math.max(0, rows - FOOTER_ROWS - LOGO_ROWS);
-  // 输入行全局 y：ScrollBox 实际渲染行数 + LOGO_ROWS + 上边框 1 行
+  // Footer 实际占用行数：基础 4（边框/输入/边框/状态栏）+ spinner 1? + completion 1?
+  // + 多行输入的额外行数（input 含 \n 时每多一个 \n 多 1 行）
+  const inputExtraLines = Math.max(0, input.split('\n').length - 1);
+  const footerRows = FOOTER_ROWS + (spinnerActive ? 1 : 0) + (completionVisible ? 1 : 0) + inputExtraLines;
+  const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
+  // 输入行全局 y：ScrollBox 实际渲染行数 + LOGO_ROWS + spinner? + completion? + 上边框 1 行
   const scrollboxRenderedRows = Math.min(messages.length, visibleRows);
-  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + 1;
+  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + (completionVisible ? 1 : 0) + 1;
   return (
     <Box flexDirection="column">
-      <LogoBox logo={logo} />
-      <ScrollBox messages={messages} visibleRows={visibleRows} selectionStore={selectionStore} />
-      <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} spinnerStore={spinnerStore} completionStore={completionStore} />
+      <LogoBox logo={logo} selectionStore={selectionStore} />
+      <ScrollBox messages={messages} visibleRows={visibleRows} selectionStore={selectionStore} scrollTop={scrollTop} onScrollTopChange={onScrollTopChange} scrolledAway={scrolledAway} />
+      <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} spinnerStore={spinnerStore} completionStore={completionStore} selectionStore={selectionStore} />
     </Box>
   );
 }

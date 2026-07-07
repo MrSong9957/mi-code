@@ -17,9 +17,31 @@ function makeMessages(n: number, prefix = 'msg'): TuiMessage[] {
   }));
 }
 
-/** 造一个 ScrollBox（带 selectionStore） */
+/** ScrollBox 现在是受控组件（scrollTop 由父级持有）。造一个 wrapper 持有滚动状态。
+ *  wrapper 模拟 ConnectedApp 的行为：scrolledAway=false 时每次 render 同步把 scrollTop
+ *  钉到 maxScroll（自动跟随），不用 effect（避免 ink-testing-library 异步时序问题）。 */
+function ScrollBoxWrapper({ messages, visibleRows }: { messages: TuiMessage[]; visibleRows: number }): React.ReactElement {
+  const selectionStoreRef = React.useRef(createSelectionStore());
+  const [scrollTop, setScrollTop] = React.useState(0);
+  const scrolledAwayRef = React.useRef(false);
+  // 同步自动跟随：未主动上滚时钉到 maxScroll
+  const maxScroll = Math.max(0, messages.length - visibleRows);
+  const effectiveScrollTop = scrolledAwayRef.current ? scrollTop : maxScroll;
+  return React.createElement(ScrollBox, {
+    messages, visibleRows, selectionStore: selectionStoreRef.current,
+    scrollTop: effectiveScrollTop,
+    onScrollTopChange: (updater: (prev: number) => number) => {
+      const next = updater(effectiveScrollTop);
+      scrolledAwayRef.current = next < maxScroll;
+      setScrollTop(next);
+    },
+    scrolledAway: scrolledAwayRef.current,
+  });
+}
+
+/** 造一个 ScrollBox（带 selectionStore + 受控滚动状态） */
 function makeScrollBox(messages: TuiMessage[], visibleRows: number) {
-  return React.createElement(ScrollBox, { messages, visibleRows, selectionStore: createSelectionStore() });
+  return React.createElement(ScrollBoxWrapper, { messages, visibleRows });
 }
 
 describe('ScrollBox（虚拟滚动）', () => {
@@ -53,8 +75,7 @@ describe('ScrollBox（虚拟滚动）', () => {
 
     // 追加 5 条（共 15 条），应自动跟随到最后 3 条（#12,13,14）
     const msgs2 = makeMessages(15);
-    const selStore = createSelectionStore();
-    inst.rerender(React.createElement(ScrollBox, { messages: msgs2, visibleRows: 3, selectionStore: selStore }));
+    inst.rerender(makeScrollBox(msgs2, 3));
     frame = inst.lastFrame() ?? '';
     expect(frame).toContain('msg #14');
     expect(frame).not.toContain('msg #9');

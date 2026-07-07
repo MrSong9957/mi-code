@@ -13,3 +13,4 @@ dist/
 .transcripts/
 .memory/
 .runtime-tasks/
+mouse-diag.log
