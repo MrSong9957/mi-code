@@ -10,6 +10,7 @@
 
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolUseBlock, ContentBlock } from './types.js';
+import type { PermissionChecker } from '../permission/checker.js';
 
 /** 工具执行状态 */
 export type ToolStatus = 'queued' | 'executing' | 'completed' | 'yielded';
@@ -45,12 +46,14 @@ export function isConcurrencySafe(toolName: string, _input?: Record<string, unkn
  */
 export class StreamingToolExecutor {
   private registry: ToolRegistry;
+  private permissionChecker?: PermissionChecker;
   private tools: TrackedTool[] = [];
   private discarded = false;
   private progressResolve?: () => void;
 
-  constructor(registry: ToolRegistry) {
+  constructor(registry: ToolRegistry, permissionChecker?: PermissionChecker) {
     this.registry = registry;
+    this.permissionChecker = permissionChecker;
   }
 
   /**
@@ -109,6 +112,20 @@ export class StreamingToolExecutor {
     tool.status = 'executing';
 
     try {
+      // 权限检查（仅在传入 checker 时启用）。
+      // 当前流式路径无用户交互通道，**ask 决策保持旧行为（放行）**，
+      // 仅 deny 真正拦截（plan 模式、危险命令、用户 deny 规则、越界路径）。
+      // 这样既补上硬拦截，又不回归 default 模式下写工具的可用性。
+      if (this.permissionChecker) {
+        const decision = this.permissionChecker.check(tool.block.name, tool.block.input);
+        if (decision.behavior === 'deny') {
+          tool.results = [{ type: 'text', text: `[Blocked by permission] ${decision.reason}` }];
+          tool.status = 'completed';
+          this.progressResolve?.();
+          return;
+        }
+      }
+
       const output = await this.registry.execute(tool.block.name, tool.block.input);
       tool.results = [{ type: 'text', text: output }];
       tool.status = 'completed';

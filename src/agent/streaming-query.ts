@@ -21,6 +21,7 @@ import { QueryEngine, type NormalizedMessage, type QueryEngineOptions } from './
 import { StreamingToolExecutor } from './streaming-executor.js';
 import { StreamEventBus } from './stream-event-bus.js';
 import type { ToolRegistry } from './tool-registry.js';
+import type { PermissionChecker } from '../permission/checker.js';
 import { runCompaction, compactHistoryWithLLM } from './compression.js';
 import {
   createRecoveryState,
@@ -29,6 +30,27 @@ import {
   FailureInbox,
 } from './recovery.js';
 import { jitteredBackoff, sleep } from './backoff.js';
+
+/**
+ * 流式路径下的权限预检：返回是否被拦截及回写给模型的输出文本。
+ *
+ * 当前流式路径无用户确认通道，**ask 决策保持旧行为（放行）**，
+ * 仅 deny 真正拦截（plan 模式、危险命令、用户 deny 规则、越界路径）。
+ * 这样既补上了 plan/危险命令的硬拦截，又不回归 default 模式下写工具的可用性。
+ * 未来若引入 ask 回调，可在此处接入。
+ */
+function checkPermissionOrBlock(
+  name: string,
+  input: Record<string, unknown>,
+  checker?: PermissionChecker,
+): { blocked: boolean; output: string | null } {
+  if (!checker) return { blocked: false, output: null };
+  const decision = checker.check(name, input);
+  if (decision.behavior === 'deny') {
+    return { blocked: true, output: `[Blocked by permission] ${decision.reason}` };
+  }
+  return { blocked: false, output: null };
+}
 
 /** 流式查询消息（所有可能的输出类型） */
 export type StreamMessage =
@@ -62,6 +84,12 @@ export interface StreamingQueryOptions {
    * 用于会话持久化（落盘到 JSONL）。
    */
   onMessages?: (messages: Message[]) => void;
+  /**
+   * 权限检查器（传入后启用工具执行前的权限拦截）。
+   * 流式路径无用户确认通道，仅 deny 决策真正拦截；ask 保持旧行为（放行）。
+   * 与 checkPermissionOrBlock 的实现一致，与 streaming-executor.ts 的 deny 拦截一致。
+   */
+  permissionChecker?: PermissionChecker;
 }
 
 /**
@@ -94,6 +122,7 @@ export async function* streamingQuery(
     compactClient,
     initialMessages,
     onMessages,
+    permissionChecker,
   } = options;
 
   const engine = new QueryEngine(client);
@@ -125,7 +154,7 @@ export async function* streamingQuery(
 
     // 创建流式工具执行器
     const streamingExecutor = enableStreamingExecution
-      ? new StreamingToolExecutor(registry)
+      ? new StreamingToolExecutor(registry, permissionChecker)
       : null;
 
     const queryOptions: QueryEngineOptions = {
@@ -162,6 +191,7 @@ export async function* streamingQuery(
                 const startTime = Date.now();
                 toolStartTimes.set(block.id, startTime);
                 eventBus?.emitToolCall({
+                  toolUseId: (block as ToolUseBlock).id,
                   name: (block as ToolUseBlock).name,
                   input: (block as ToolUseBlock).input,
                   startTime,
@@ -215,6 +245,10 @@ export async function* streamingQuery(
 
     // ═══════ 阶段 3：获取工具执行结果 ═══════
     const toolResults: ToolResultBlock[] = [];
+    // idle 检测：若本轮工具调用里出现 idle，收集完结果后跳出循环，
+    // 不把 IDLE_REQUESTED 写回 messages（否则下一轮 LLM 收到无意义反馈，
+    // 会重新生成一遍刚说过的内容——这是"一条消息回复两次"的根因）。
+    let idleRequested = false;
 
     if (streamingExecutor) {
       // 流式执行器已经在后台执行了，这里等待结果
@@ -230,6 +264,11 @@ export async function* streamingQuery(
             content: output,
           };
           toolResults.push(result);
+
+          // idle 工具被调用 → 标记跳出（仍 emitToolResult 让 UI 显示 ⎿ 结果）
+          if (tool.block.name === 'idle') {
+            idleRequested = true;
+          }
 
           eventBus?.emitToolResult({
             toolUseId: tool.id,
@@ -249,6 +288,20 @@ export async function* streamingQuery(
     } else {
       // 传统方式：串行执行所有工具
       for (const block of toolUseBlocks) {
+        // 权限预检（流式路径无确认通道，仅 deny 拦截，ask 放行）
+        const guard = checkPermissionOrBlock(block.name, block.input, permissionChecker);
+        if (guard.blocked && guard.output) {
+          const output = guard.output;
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: output });
+          eventBus?.emitToolResult({
+            toolUseId: block.id,
+            name: block.name,
+            output,
+            duration: Date.now() - (toolStartTimes.get(block.id) ?? Date.now()),
+          });
+          yield { type: 'tool_result', toolUseId: block.id, name: block.name, output };
+          continue;
+        }
         try {
           const output = await registry.execute(block.name, block.input);
           const result: ToolResultBlock = {
@@ -257,6 +310,11 @@ export async function* streamingQuery(
             content: output,
           };
           toolResults.push(result);
+
+          // idle 工具被调用 → 标记跳出
+          if (block.name === 'idle') {
+            idleRequested = true;
+          }
 
           eventBus?.emitToolResult({
             toolUseId: block.id,
@@ -294,6 +352,14 @@ export async function* streamingQuery(
           };
         }
       }
+    }
+
+    // idle 跳出：本轮调用了 idle 工具，不再继续循环。
+    // 关键：不进入阶段 4（不把 IDLE_REQUESTED 写回 messages），
+    // 否则下一轮 LLM 收到无意义反馈会重复生成。
+    if (idleRequested) {
+      eventBus?.emitLoopEnd({ reason: 'idle' });
+      return;
     }
 
     // ═══════ 阶段 4：更新消息历史，继续循环 ═══════

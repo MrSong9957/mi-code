@@ -11,6 +11,9 @@
 
 import { runWithVercelAI } from './llm-vercel.js';
 import type { ToolRegistry } from './tool-registry.js';
+import type { RegisteredTool } from './types.js';
+import { ROLE_REGISTRY, filterToolsByRole, type Role } from './roles.js';
+import type { PermissionChecker } from '../permission/checker.js';
 
 export interface SubagentOptions {
   model?: string;
@@ -31,6 +34,17 @@ export interface SubagentOptions {
    * 执行期间切换 process.cwd()，结束后恢复。
    */
   cwd?: string;
+  /**
+   * 角色：'explore' | 'plan' | 'general'。
+   * 设置后套用 ROLE_REGISTRY 的 systemPrompt + 工具白名单。
+   * 未设置或传 system 字段时，行为与原版一致（全量工具 + 默认 prompt）。
+   */
+  role?: Role;
+  /**
+   * 权限检查器：透传给 runWithVercelAI，让子代理也受 PermissionChecker 约束。
+   * 不传则子代理工具调用裸跑（向后兼容，但不推荐生产用）。
+   */
+  permissionChecker?: PermissionChecker;
 }
 
 export interface SubagentResult {
@@ -49,7 +63,13 @@ export async function runSubagent(
   tools: ToolRegistry,
   options: SubagentOptions = {},
 ): Promise<SubagentResult> {
-  const system = options.system || 'You are a helpful subagent. Complete the task and return a concise summary.';
+  // system 选择优先级：显式 system > 角色预设 > 默认
+  const system = options.system
+    || (options.role ? ROLE_REGISTRY[options.role].systemPrompt : null)
+    || 'You are a helpful subagent. Complete the task and return a concise summary.';
+
+  // 工具子集：按角色过滤（role 未设置时全量，向后兼容）
+  const toolSubset: Map<string, RegisteredTool> = filterToolsByRole(tools.tools, options.role);
 
   // Fork 模式：使用父代理的 system 触发 prompt cache
   const effectiveSystem = options.forkMode && options.parentSystem
@@ -58,7 +78,7 @@ export async function runSubagent(
 
   // 异步后台执行
   if (options.runInBackground) {
-    runSubagentBackground(prompt, tools, options, effectiveSystem);
+    runSubagentBackground(prompt, toolSubset, options, effectiveSystem);
     return { text: '[Subagent launched in background]', isBackground: true };
   }
 
@@ -66,10 +86,11 @@ export async function runSubagent(
   const prevCwd = options.cwd ? process.cwd() : null;
   if (options.cwd) process.chdir(options.cwd);
   try {
-    const result = await runWithVercelAI(prompt, tools.tools, {
+    const result = await runWithVercelAI(prompt, toolSubset, {
       model: options.model,
       maxSteps: options.maxSteps || 10,
       system: effectiveSystem,
+      permissionChecker: options.permissionChecker,
     });
 
     // 克隆文件读取状态到共享池
@@ -90,15 +111,16 @@ export async function runSubagent(
  */
 async function runSubagentBackground(
   prompt: string,
-  tools: ToolRegistry,
+  toolSubset: Map<string, RegisteredTool>,
   options: SubagentOptions,
   system: string,
 ): Promise<void> {
   try {
-    const result = await runWithVercelAI(prompt, tools.tools, {
+    const result = await runWithVercelAI(prompt, toolSubset, {
       model: options.model,
       maxSteps: options.maxSteps || 10,
       system,
+      permissionChecker: options.permissionChecker,
     });
     if (options.onBackgroundComplete) {
       options.onBackgroundComplete(result.text || '(no summary)');
