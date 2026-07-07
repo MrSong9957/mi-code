@@ -57,6 +57,7 @@ export function ScrollBox({ messages, visibleRows, selectionStore }: ScrollBoxPr
       const events = parserRef.current.feed(str);
       for (const ev of events) {
         const globalRow = ev.row - 1; // SGR row 1-origin → 0-based 全局
+        const globalCol = ev.col - 1; // SGR col 1-origin → 0-based 显示列
         if (ev.type === 'wheelup' || ev.type === 'wheeldown') {
           setScrollTop((prev) => {
             const cur = computeScrollState({ total: messages.length, visibleRows, scrollTop: prev });
@@ -68,9 +69,11 @@ export function ScrollBox({ messages, visibleRows, selectionStore }: ScrollBoxPr
             return clamped;
           });
         } else if (ev.type === 'mousedown') {
-          selectionStore.getState().startDrag(globalRow);
+          // Task 7-8 will rewrite this with full Point-based gesture + word/line detection;
+          // here we bridge the new char-level API with col=0 (row-level approximation).
+          selectionStore.getState().startDrag({ row: globalRow, col: 0 });
         } else if (ev.type === 'mousedrag') {
-          selectionStore.getState().dragTo(globalRow);
+          selectionStore.getState().dragTo({ row: globalRow, col: globalCol });
         } else if (ev.type === 'mouseup') {
           selectionStore.getState().endDrag();
           // 释放后自动复制选中行（MVP：拖拽完即复制，charter §2 步骤 3）
@@ -107,7 +110,9 @@ export function ScrollBox({ messages, visibleRows, selectionStore }: ScrollBoxPr
           <MessageRow
             key={m.uuid}
             message={m}
-            selected={sel.isSelected(globalRow)}
+            // Task 7 will rewrite MessageRow to read colsForRow for char-level highlight;
+            // here we bridge with row-level rowIntersects.
+            selected={sel.rowIntersects(globalRow)}
           />
         );
       })}
@@ -127,9 +132,11 @@ async function copySelection(
   _visibleRows: number,
 ): Promise<void> {
   void _visibleRows;
-  const range = selectionStore.getState().selectionRange();
-  if (!range) return;
-  const [minRow, maxRow] = range;
+  // Task 5 will rewrite copySelection to use selectionRect/colsForRow/scrolledOff for char-level text extraction;
+  // here we bridge with the new API (row range from selectionRect).
+  const rect = selectionStore.getState().selectionRect();
+  if (!rect) return;
+  const [minRow, maxRow] = [rect.minRow, rect.maxRow];
   const lines: string[] = [];
   for (let i = 0; i < messages.length; i++) {
     const globalRow = LOGO_ROWS + scrollTop + i;
