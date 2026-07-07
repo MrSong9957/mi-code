@@ -1,13 +1,16 @@
 // src/tui/ConnectedApp.tsx
-// 连接版 App：从 zustand stores 读数据 + 装配输入处理 + 鼠标选区路由。
+// 连接版 App：从 zustand stores 读数据 + 装配输入处理 + 鼠标选区路由 + 滚动状态。
 //
-// 物理本质：stores 与 App 组件树的「接线员」+ 全屏鼠标选区的「中枢」。
-// - 装配键盘处理（useInputHandler）
-// - 持有 ScrollBox 滚动状态（scrollTop/scrolledAway）受控传给 App
+// 物理本质：stores 与 App 组件树的「接线员」+ 全屏鼠标选区 + 滚动状态的「中枢」。
+// - 装配键盘处理（useInputHandler，含 PageUp/PageDown）
+// - 持有 ScrollBox 滚动状态（scrollTop/scrolledAway，scrolledAway 是 state 触发重渲染）
 // - 持有选区 store，注册鼠标 useInput + ?1003h 启用 + 路由事件（全屏，跨所有区域）
-// - 构造统一 rowTextMap（屏幕行→文本），供 getSelectedText 提取
+// - 构造统一 rowTextMap（屏幕行→文本，按行坐标），供 getSelectedText 提取
+//
+// 滚动坐标统一为「行」（不再按消息）：flattenMessages 把消息展开成行，
+// scroll-state 的 total/visibleRows/scrollTop 都是行数，杜绝多行消息行号撞车。
 
-import React, { useMemo, useRef, useState, useEffect } from 'react';
+import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { useInput, useStdin } from 'ink';
@@ -20,6 +23,7 @@ import { writeClipboard } from './input/clipboard.js';
 import { classifyClick, type ClickState } from './selection/click-detector.js';
 import { buildRowTextMap, type RowTextMap } from './selection/row-text-map.js';
 import { getSelectedText } from './selection/get-selected-text.js';
+import { flattenMessages } from './selection/flatten-messages.js';
 import { computeScrollState } from './components/scroll-state.js';
 import type { MessagesStore } from './state/messages-store.js';
 import type { InputStore } from './state/input-store.js';
@@ -35,6 +39,8 @@ const LOGO_ROWS = 3;
 const FOOTER_BASE_ROWS = 4;
 /** 拖拽自动滚动间隔（ms） */
 const AUTOSCROLL_MS = 80;
+/** 滚轮一次滚动的行数 */
+const WHEEL_DELTA = 3;
 
 /** SGR 鼠标残片检测：Ink useInput 把 \x1b[<button;col;rowM|m 整段当 escape sequence 交付，前导 \x1b 被剥 */
 // eslint-disable-next-line no-control-regex
@@ -58,12 +64,10 @@ export function ConnectedApp({
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store（拖拽写入，所有区域订阅高亮）
   const selectionStore = useMemo(() => createSelectionStore(), []);
-  // ScrollBox 滚动状态（受控持有，供 rowTextMap + 鼠标路由用）
+  // ScrollBox 滚动状态（受控持有）。scrolledAway 是 state，变化触发重渲染（修根因 1a/1b）。
   const [scrollTop, setScrollTop] = useState(0);
-  const scrolledAwayRef = useRef(false);
+  const [scrolledAway, setScrolledAway] = useState(false);
   const { rows, cols } = useTerminalSize();
-  // 键盘处理
-  useInputHandler(inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible);
 
   // 订阅所有 store
   const messages = useStore(messagesStore, (s) => s.messages);
@@ -78,15 +82,22 @@ export function ConnectedApp({
   const spinnerActive = useStore(spinnerStore, (s) => s.active);
   const completionVisible = useStore(completionStore, (s) => s.visible);
 
-  // Footer 行数 + 可见区 + inputRowY（与 App.tsx 同算法，用于 rowTextMap）
+  // 把消息展开成行（按行坐标统一）。流式块不展开。
+  const flatLines = useMemo(() => flattenMessages(messages), [messages]);
+  const flatLineCount = flatLines.length;
+
+  // Footer 行数 + 可见区（按行算）
   const inputExtraLines = Math.max(0, inputText.split('\n').length - 1);
   const footerRows = FOOTER_BASE_ROWS + (spinnerActive ? 1 : 0) + (completionVisible ? 1 : 0) + inputExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
-  const effectiveScrollTop = scrolledAwayRef.current ? scrollTop : Math.max(0, messages.length - visibleRows);
-  const scrollboxRenderedRows = Math.min(messages.length, visibleRows);
+  // 自动跟随：scrolledAway=false 时钉到 maxScroll（同步算，不用 effect，修根因 1b）
+  const maxScroll = Math.max(0, flatLineCount - visibleRows);
+  const effectiveScrollTop = scrolledAway ? scrollTop : maxScroll;
+  // inputRowY 按行算（修根因 2b）
+  const scrollboxRenderedRows = Math.min(flatLineCount, visibleRows);
   const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + (completionVisible ? 1 : 0) + 1;
 
-  // 统一行文本映射（每次 render 重建，参数都是订阅到的最新值）
+  // 统一行文本映射
   const rowTextMap: RowTextMap = useMemo(() => buildRowTextMap({
     rows, cols,
     logo, messages, scrollTop: effectiveScrollTop, visibleRows,
@@ -94,38 +105,52 @@ export function ConnectedApp({
     spinnerActive, completionVisible,
   }), [rows, cols, logo, messages, effectiveScrollTop, visibleRows, inputText, inputRowY, status, spinnerActive, completionVisible]);
 
-  // 鼠标状态（跨事件持久，useInput 回调注册一次）
-  const parserRef = useRef(createMouseParser());
-  const clickStateRef = useRef<ClickState | null>(null);
-  const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // ref 镜像最新值（避免 useInput 回调 stale closure）
+  // ref 镜像最新值（useInput/useEffect 回调注册一次，避免 stale closure）
   const rowTextMapRef = useRef(rowTextMap);
   rowTextMapRef.current = rowTextMap;
   const visibleRowsRef = useRef(visibleRows);
   visibleRowsRef.current = visibleRows;
-  const messagesLenRef = useRef(messages.length);
-  messagesLenRef.current = messages.length;
-  const effectiveScrollTopRef = useRef(effectiveScrollTop);
-  effectiveScrollTopRef.current = effectiveScrollTop;
+  const flatLineCountRef = useRef(flatLineCount);
+  flatLineCountRef.current = flatLineCount;
 
-  // 滚轮：调 scrollTop（拖拽中禁用）
+  // 鼠标状态（跨事件持久）
+  const parserRef = useRef(createMouseParser());
+  const clickStateRef = useRef<ClickState | null>(null);
+  const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /** 通用滚动：delta 行（正向下、负向上），钳到 [0,maxScroll]，自动管理 scrolledAway。
+   *  到底时恢复自动跟随（scrolledAway=false）；否则标记主动上滚。 */
+  const scrollBy = useCallback((delta: number): void => {
+    const total = flatLineCountRef.current;
+    const vr = visibleRowsRef.current;
+    const ms = Math.max(0, total - vr);
+    setScrollTop((prev) => {
+      const cur = Math.max(0, Math.min(ms, prev));
+      const next = Math.max(0, Math.min(ms, cur + delta));
+      setScrolledAway(next < ms);
+      return next;
+    });
+  }, []);
+
+  // 滚轮：拖拽中禁用
   function handleWheel(ev: { type: string }): void {
     if (selectionStore.getState().isDragging) return;
-    setScrollTop((prev) => {
-      const cur = computeScrollState({ total: messagesLenRef.current, visibleRows: visibleRowsRef.current, scrollTop: prev });
-      const delta = 3;
-      const next = ev.type === 'wheelup' ? prev - delta : prev + delta;
-      const clamped = Math.max(0, Math.min(cur.maxScroll, next));
-      if (clamped < cur.maxScroll) scrolledAwayRef.current = true;
-      else scrolledAwayRef.current = false;
-      return clamped;
-    });
+    scrollBy(ev.type === 'wheelup' ? -WHEEL_DELTA : WHEEL_DELTA);
   }
+
+  // PageUp/PageDown（修根因 1c）：按 visibleRows 翻一屏
+  function handlePageScroll(direction: 'up' | 'down'): void {
+    const vr = visibleRowsRef.current;
+    scrollBy(direction === 'up' ? -vr : vr);
+  }
+
+  // 键盘处理（含 PageUp/PageDown 经 onPageScroll）
+  useInputHandler(inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible, handlePageScroll);
 
   // 拖拽自动滚动（focus 超出消息视口时）
   function maybeStartAutoScroll(focusRow: number): void {
-    const est = effectiveScrollTopRef.current;
-    const vr = visibleRowsRef.current;
+    const est = effectiveScrollTop;
+    const vr = visibleRows;
     const viewportTopRow = LOGO_ROWS + est;
     const viewportBottomRow = viewportTopRow + vr - 1;
     const outOfTop = focusRow < viewportTopRow;
@@ -134,17 +159,21 @@ export function ConnectedApp({
     if (autoScrollTimerRef.current !== null) return;
     autoScrollTimerRef.current = setInterval(() => {
       setScrollTop((prev) => {
-        const cur = computeScrollState({ total: messagesLenRef.current, visibleRows: visibleRowsRef.current, scrollTop: prev });
+        const total = flatLineCountRef.current;
+        const vr2 = visibleRowsRef.current;
+        const ms = Math.max(0, total - vr2);
+        const cur = Math.max(0, Math.min(ms, prev));
         const dir = outOfTop ? -1 : 1;
-        const next = Math.max(0, Math.min(cur.maxScroll, prev + dir));
-        if (next === prev) return prev;
+        const next = Math.max(0, Math.min(ms, cur + dir));
+        if (next === cur) return prev;
+        setScrolledAway(next < ms);
         // 滚出视口的行文本入缓存
-        if (outOfTop && next < prev) {
-          const rowLeaving = LOGO_ROWS + prev + visibleRowsRef.current - 1;
+        if (outOfTop && next < cur) {
+          const rowLeaving = LOGO_ROWS + cur + vr2 - 1;
           const txt = rowTextMapRef.current.getLineContent(rowLeaving);
           if (txt) selectionStore.getState().pushScrolledOff('below', txt);
-        } else if (outOfBottom && next > prev) {
-          const rowLeaving = LOGO_ROWS + prev;
+        } else if (outOfBottom && next > cur) {
+          const rowLeaving = LOGO_ROWS + cur;
           const txt = rowTextMapRef.current.getLineContent(rowLeaving);
           if (txt) selectionStore.getState().pushScrolledOff('above', txt);
         }
@@ -162,7 +191,7 @@ export function ConnectedApp({
 
   // 路由单个解析后的鼠标事件
   function routeMouseEvent(ev: { type: string; button: number; row: number; col: number }): void {
-    const row = ev.row - 1; // SGR 1-origin → 0-based
+    const row = ev.row - 1;
     const col = ev.col - 1;
 
     if (ev.type === 'wheelup' || ev.type === 'wheeldown') {
@@ -170,7 +199,6 @@ export function ConnectedApp({
       return;
     }
 
-    // 左键（button 0/32-motion）
     if (ev.button === 0 || ev.button === 32) {
       if (ev.type === 'mousedown') {
         const click = classifyClick(clickStateRef.current, ev.button, ev.row, ev.col, Date.now());
@@ -194,7 +222,6 @@ export function ConnectedApp({
       return;
     }
 
-    // 右键（button 2）：复制 + 清高亮
     if (ev.type === 'mousedown' && ev.button === 2) {
       stopAutoScroll();
       void copyOnRightClick();
@@ -205,14 +232,12 @@ export function ConnectedApp({
   async function copyOnRightClick(): Promise<void> {
     const sel = selectionStore.getState();
     const text = getSelectedText({ rowTextMap: rowTextMapRef.current, selection: sel });
-    // 先提取（读选区）再 clear（清选区），最后写剪贴板。clear 不依赖剪贴板成功。
     selectionStore.getState().clear();
     if (text) {
       try { await writeClipboard(text); } catch { /* 剪贴板失败静默 */ }
     }
   }
 
-  // 鼠标事件：经 Ink useInput 通道（SGR 残片识别 + 重建 + 解析 + 路由）
   useInput((input: string) => {
     if (!SGR_FRAGMENT_RE.test(input)) return;
     const events = parserRef.current.feed('\x1b' + input);
@@ -221,7 +246,6 @@ export function ConnectedApp({
     }
   });
 
-  // 开启鼠标追踪 ?1003h（全追踪）+ ?1006h（SGR 编码）
   const { stdin, setRawMode } = useStdin();
   useEffect(() => {
     if (!stdin) return;
@@ -248,8 +272,7 @@ export function ConnectedApp({
       rows={rows}
       cols={cols}
       scrollTop={effectiveScrollTop}
-      onScrollTopChange={(updater) => setScrollTop(updater)}
-      scrolledAway={scrolledAwayRef.current}
+      flatLines={flatLines}
     />
   );
 }

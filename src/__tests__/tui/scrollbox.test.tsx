@@ -1,11 +1,16 @@
 // src/__tests__/tui/scrollbox.test.tsx
-// ScrollBox：虚拟滚动 + 自动跟随
+// ScrollBox：虚拟滚动（按行切片渲染，纯受控组件）
+//
+// 改动背景：ScrollBox 现在按「行」坐标工作（flatLines），不再按消息切片。
+// 滚动状态由 ConnectedApp 持有，ScrollBox 纯受控（scrollTop 传入）。
+// 自动跟随逻辑在 ConnectedApp，本测试只验证 ScrollBox 按 flatLines + scrollTop 渲染正确行。
 
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { ScrollBox } from '../../tui/components/ScrollBox.js';
 import { createSelectionStore } from '../../tui/state/selection-store.js';
+import { flattenMessages } from '../../tui/selection/flatten-messages.js';
 import type { TuiMessage } from '../../tui/types.js';
 
 function makeMessages(n: number, prefix = 'msg'): TuiMessage[] {
@@ -17,34 +22,16 @@ function makeMessages(n: number, prefix = 'msg'): TuiMessage[] {
   }));
 }
 
-/** ScrollBox 现在是受控组件（scrollTop 由父级持有）。造一个 wrapper 持有滚动状态。
- *  wrapper 模拟 ConnectedApp 的行为：scrolledAway=false 时每次 render 同步把 scrollTop
- *  钉到 maxScroll（自动跟随），不用 effect（避免 ink-testing-library 异步时序问题）。 */
-function ScrollBoxWrapper({ messages, visibleRows }: { messages: TuiMessage[]; visibleRows: number }): React.ReactElement {
-  const selectionStoreRef = React.useRef(createSelectionStore());
-  const [scrollTop, setScrollTop] = React.useState(0);
-  const scrolledAwayRef = React.useRef(false);
-  // 同步自动跟随：未主动上滚时钉到 maxScroll
-  const maxScroll = Math.max(0, messages.length - visibleRows);
-  const effectiveScrollTop = scrolledAwayRef.current ? scrollTop : maxScroll;
+/** 造一个 ScrollBox（flatLines 由 messages 展开得到，scrollTop 受控传入） */
+function makeScrollBox(messages: TuiMessage[], visibleRows: number, scrollTop = 0) {
+  const flatLines = flattenMessages(messages);
   return React.createElement(ScrollBox, {
-    messages, visibleRows, selectionStore: selectionStoreRef.current,
-    scrollTop: effectiveScrollTop,
-    onScrollTopChange: (updater: (prev: number) => number) => {
-      const next = updater(effectiveScrollTop);
-      scrolledAwayRef.current = next < maxScroll;
-      setScrollTop(next);
-    },
-    scrolledAway: scrolledAwayRef.current,
+    messages, flatLines, visibleRows, scrollTop,
+    selectionStore: createSelectionStore(),
   });
 }
 
-/** 造一个 ScrollBox（带 selectionStore + 受控滚动状态） */
-function makeScrollBox(messages: TuiMessage[], visibleRows: number) {
-  return React.createElement(ScrollBoxWrapper, { messages, visibleRows });
-}
-
-describe('ScrollBox（虚拟滚动）', () => {
+describe('ScrollBox（按行虚拟滚动）', () => {
   it('内容少于可视区：全部渲染', () => {
     const msgs = makeMessages(3);
     const { lastFrame } = render(makeScrollBox(msgs, 10));
@@ -54,31 +41,40 @@ describe('ScrollBox（虚拟滚动）', () => {
     expect(frame).toContain('msg #2');
   });
 
-  it('内容超过可视区：只渲染可视区间（visibleRows 条），老的裁掉', () => {
+  it('内容超过可视区 + scrollTop 钉到底：渲染最后 visibleRows 行', () => {
     const msgs = makeMessages(20);
-    const { lastFrame } = render(makeScrollBox(msgs, 5));
+    // scrollTop=15 → 显示行 15..19（#15-#19）
+    const { lastFrame } = render(makeScrollBox(msgs, 5, 15));
     const frame = lastFrame() ?? '';
-    // 自动跟随到底：渲染最后 5 条（#15-#19），前面的裁掉
     expect(frame).toContain('msg #19');
     expect(frame).toContain('msg #15');
-    // #14 及更早不应出现（被裁剪）
     expect(frame).not.toContain('msg #0');
     expect(frame).not.toContain('msg #14');
   });
 
-  it('自动跟随：新消息追加后，可视区追到最新', () => {
-    const msgs1 = makeMessages(10);
-    const inst = render(makeScrollBox(msgs1, 3));
-    // 初始：最后 3 条（#7,8,9）
-    let frame = inst.lastFrame() ?? '';
-    expect(frame).toContain('msg #9');
+  it('scrollTop=0：渲染最前面 visibleRows 行', () => {
+    const msgs = makeMessages(20);
+    const { lastFrame } = render(makeScrollBox(msgs, 5, 0));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('msg #0');
+    expect(frame).toContain('msg #4');
+    expect(frame).not.toContain('msg #5');
+  });
 
-    // 追加 5 条（共 15 条），应自动跟随到最后 3 条（#12,13,14）
-    const msgs2 = makeMessages(15);
-    inst.rerender(makeScrollBox(msgs2, 3));
-    frame = inst.lastFrame() ?? '';
-    expect(frame).toContain('msg #14');
-    expect(frame).not.toContain('msg #9');
+  it('多行消息：每行独立渲染（行号不撞车）', () => {
+    const msgs: TuiMessage[] = [{
+      uuid: 'multi', role: 'assistant', finalized: true,
+      lines: [
+        { content: 'lineA', style: {}, indent: 0 },
+        { content: 'lineB', style: {}, indent: 0 },
+        { content: 'lineC', style: {}, indent: 0 },
+      ],
+    }];
+    const { lastFrame } = render(makeScrollBox(msgs, 10));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('lineA');
+    expect(frame).toContain('lineB');
+    expect(frame).toContain('lineC');
   });
 
   it('空消息列表：无内容渲染（不崩）', () => {
