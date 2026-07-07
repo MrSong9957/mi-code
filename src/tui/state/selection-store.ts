@@ -106,13 +106,13 @@ export function createSelectionStore(): SelectionStore {
     endDrag: () => set({ isDragging: false }),
 
     selectWordAt: (row, col, fullLineContent) => {
-      // col 是显示列；先转码点索引（按 stringWidth 累积）
       const codepoints = [...fullLineContent];
-      let cpIndex = 0;
+      let cpIndex = codepoints.length; // default: past end
       let acc = 0;
       for (let i = 0; i < codepoints.length; i++) {
-        if (acc >= col) { cpIndex = i; break; }
-        acc += stringWidth(codepoints[i]!);
+        const w = stringWidth(codepoints[i]!);
+        if (col < acc + w) { cpIndex = i; break; }   // col falls within this char's cells
+        acc += w;
         cpIndex = i + 1;
       }
       const bounds = findWordBounds(fullLineContent, cpIndex);

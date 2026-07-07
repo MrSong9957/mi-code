@@ -174,4 +174,34 @@ describe('selection-store（Point 字符级）', () => {
     expect(s.scrolledOffAbove).toEqual(['line1', 'line2']);
     expect(s.scrolledOffBelow).toEqual(['line3']);
   });
+
+  it('selectWordAt CJK：col 落在汉字右半部分（col=1）应选中该汉字', () => {
+    const store = createSelectionStore();
+    // '中文' 显示宽度：中=2, 文=2；col=1 落在「中」的右半格
+    const hit = store.getState().selectWordAt(5, 1, '中文');
+    expect(hit).toBe(true);
+    const s = store.getState();
+    // 应选中「中文」整个词（CJK 连续成词），显示列 [0,4)
+    expect(s.anchor).toEqual({ row: 5, col: 0 });
+    expect(s.focus).toEqual({ row: 5, col: 4 });
+  });
+
+  it('selectWordAt CJK+ASCII 混合：col 在汉字上选中连续词', () => {
+    const store = createSelectionStore();
+    // '你好world' 显示宽度：你=2 好=2 w=1...；col=3 落在「好」右半格
+    const hit = store.getState().selectWordAt(5, 3, '你好world');
+    expect(hit).toBe(true);
+    const s = store.getState();
+    // CJK+字母连续成词，覆盖全部 7 码点，显示列 [0, 2+2+5=9)
+    expect(s.anchor).toEqual({ row: 5, col: 0 });
+    expect(s.focus).toEqual({ row: 5, col: 9 });
+  });
+
+  it('selectWordAt col=0：选中第一个词', () => {
+    const store = createSelectionStore();
+    const hit = store.getState().selectWordAt(5, 0, 'hello world');
+    expect(hit).toBe(true);
+    expect(store.getState().anchor).toEqual({ row: 5, col: 0 });
+    expect(store.getState().focus).toEqual({ row: 5, col: 5 });
+  });
 });
