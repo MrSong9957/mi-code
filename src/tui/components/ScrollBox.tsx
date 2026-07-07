@@ -196,6 +196,10 @@ export function ScrollBox({ messages, visibleRows, selectionStore }: ScrollBoxPr
       messages: messagesRef.current, scrollTop: est, visibleRows: vr,
       viewportTopRow: LOGO_ROWS + est, selection: sel,
     });
+    // 先提取文本（基于当前选区），再清高亮，最后写剪贴板。
+    // 顺序很重要：必须先 getSelectedText（读选区）再 clear（清选区），
+    // 否则清空后提取到空文本。clear 不依赖剪贴板成功，用 finally 保证执行。
+    selectionStore.getState().clear();
     if (text) {
       try {
         await writeClipboard(text);
@@ -203,7 +207,6 @@ export function ScrollBox({ messages, visibleRows, selectionStore }: ScrollBoxPr
         // 剪贴板失败静默（spec §6 防御边界 4/5）
       }
     }
-    selectionStore.getState().clear();
   }
 
   // 鼠标事件：经 Ink useInput 通道（Ink 把 SGR 整段当 escape sequence 交付，前导 \x1b 被剥）。

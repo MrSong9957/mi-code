@@ -42,10 +42,39 @@ function runWithStdin(cmd: string, args: string[], text: string): Promise<void> 
   });
 }
 
-/** OS 原生命令（clip/pbcopy/xclip） */
+/** OS 原生命令（clip/pbcopy/xclip）。
+ *  win32 用 PowerShell Set-Clipboard（原生 UTF-8）；clip 命令按系统 ANSI 代码页
+ *  （中文 Windows 是 GBK）读 stdin，UTF-8 文本会乱码（"你是谁" → "浣犳槸璋侊紵"）。 */
 function copyNative(text: string): Promise<void> {
+  if (process.platform === 'win32') {
+    return copyNativeWin32(text);
+  }
   const { cmd, args } = clipboardCommand();
   return runWithStdin(cmd, args, text);
+}
+
+/** Windows：PowerShell Set-Clipboard。把 stdin 编码设为 UTF-8 后读全部 stdin。
+ *  powershell.exe 启动慢（~200ms），但保证 Unicode 正确；失败时上层回退 OSC52。
+ *  用 [Console]::In.ReadToEnd() 一次性读全部 stdin（$input 在 NonInteractive 下行为不稳）。 */
+function copyNativeWin32(text: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command',
+       '[Console]::InputEncoding = [System.Text.Encoding]::UTF8; ' +
+       'Set-Clipboard -Value ([Console]::In.ReadToEnd())',
+      ],
+      { stdio: ['pipe', 'ignore', 'ignore'] },
+    );
+    child.on('error', (err) => reject(err));
+    child.stdin.on('error', (err) => reject(err));
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`powershell Set-Clipboard exited with code ${code}`));
+    });
+    child.stdin.write(text);
+    child.stdin.end();
+  });
 }
 
 /** tmux load-buffer -w（转发到外层终端） */

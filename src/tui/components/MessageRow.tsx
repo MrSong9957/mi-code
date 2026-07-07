@@ -84,7 +84,7 @@ export function MessageRow({ message, globalRow, selectionStore }: MessageRowPro
             {indent}
             {segs.map((seg, j) =>
               seg.selected
-                ? <Text key={j} {...props} inverse>{seg.text}</Text>
+                ? <Text key={j} bold inverse>{seg.text}</Text>
                 : <Text key={j} {...props}>{seg.text}</Text>
             )}
           </Text>
