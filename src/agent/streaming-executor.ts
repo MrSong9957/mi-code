@@ -11,6 +11,7 @@
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolUseBlock, ContentBlock } from './types.js';
 import type { PermissionChecker } from '../permission/checker.js';
+import { READ_ONLY_TOOLS } from '../permission/types.js';
 
 /** 工具执行状态 */
 export type ToolStatus = 'queued' | 'executing' | 'completed' | 'yielded';
@@ -25,17 +26,19 @@ export interface TrackedTool {
   error?: string;
 }
 
-/** 并发安全的只读工具白名单 */
-const READ_ONLY_TOOLS = new Set([
-  'read_file', 'glob', 'grep', 'web_fetch', 'web_search',
-  'list_directory', 'get_file_info',
-]);
+/**
+ * 并发安全的只读工具白名单
+ *
+ * 复用 permission/types.ts 的 READ_ONLY_TOOLS（唯一真相源），
+ * 避免并发分区与权限判定使用不同标准导致漂移。
+ */
+const CONCURRENCY_SAFE_TOOLS = new Set(READ_ONLY_TOOLS);
 
 /**
  * 判断工具是否可并发执行（只读工具可并发，写入工具必须独占）
  */
 export function isConcurrencySafe(toolName: string, _input?: Record<string, unknown>): boolean {
-  return READ_ONLY_TOOLS.has(toolName);
+  return CONCURRENCY_SAFE_TOOLS.has(toolName);
 }
 
 /**

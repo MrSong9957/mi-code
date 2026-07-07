@@ -16,6 +16,7 @@ import type { TaskBoard } from '../task-board/task-board.js';
 import type { WorktreeManager } from '../worktree/worktree-manager.js';
 import { createTaskMatrixTool, createMarkTaskDoneTool } from './tools/task-board-tool.js';
 import { createWorktreeTool } from './tools/worktree-tool.js';
+import { READ_ONLY_TOOLS } from '../permission/types.js';
 
 export class ToolRegistry {
   private _tools = new Map<string, RegisteredTool>();
@@ -55,12 +56,17 @@ export class ToolRegistry {
   }
 }
 
-/** 只读工具列表（可并发安全执行） */
-const READ_ONLY_TOOLS = new Set(['read_file', 'glob', 'grep', 'load_skill', 'todo_write', 'schedule_list']);
+/**
+ * 只读工具列表（可并发安全执行）
+ *
+ * 复用 permission/types.ts 的 READ_ONLY_TOOLS（唯一真相源），
+ * 避免工具层与权限判定使用不同标准导致漂移。
+ */
+const READ_ONLY_SET = new Set(READ_ONLY_TOOLS);
 
 /** 判断工具是否只读 */
 export function isReadOnlyTool(name: string): boolean {
-  return READ_ONLY_TOOLS.has(name);
+  return READ_ONLY_SET.has(name);
 }
 
 /**

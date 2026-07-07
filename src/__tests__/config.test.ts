@@ -28,7 +28,9 @@ describe('ConfigStore', () => {
   });
 
   it('should return default config when no file exists', () => {
-    const store = new ConfigStore();
+    // 显式传临时目录，避免 os.homedir() 读取真实 ~/.micode/config.json（Windows 上
+    // 运行时改 USERPROFILE 对 homedir() 不可靠，会读到真实配置导致断言失败）
+    const store = new ConfigStore(tempDir);
     expect(store.getDefaultProvider()).toBe('anthropic');
     expect(store.getModel()).toBe('claude-sonnet-4-20250514');
   });
@@ -49,20 +51,20 @@ describe('ConfigStore', () => {
   });
 
   it('should set and get API key', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     store.setApiKey('openai', 'sk-test-123');
     expect(store.getApiKey('openai')).toBe('sk-test-123');
   });
 
   it('should mask API key', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     store.setApiKey('anthropic', 'sk-ant-1234567890');
     const masked = store.getMasked();
     expect(masked.providers.anthropic?.apiKey).toBe('sk-ant-1***');
   });
 
   it('should default permission mode to "build"', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     expect(store.getPermissionMode()).toBe('build');
     expect(store.getPermissionRules()).toEqual([]);
   });
@@ -136,7 +138,7 @@ describe('ConfigStore', () => {
   });
 
   it('getSmallModel should fall back to default model when provider has no model at all', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     // 空配置：连主模型都没有 → 回退到 DEFAULT_MODELS.anthropic
     expect(store.getSmallModel('anthropic')).toBe(store.getModel());
   });
@@ -188,43 +190,43 @@ describe('Command Executor', () => {
   });
 
   it('should execute /help command', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     const result = executeCommand({ name: 'help', args: [] }, store);
     expect(result.message).toContain('Available commands');
   });
 
   it('should execute /login command', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     const result = executeCommand({ name: 'login', args: ['anthropic', 'sk-test'] }, store);
     expect(result.message).toContain('API Key saved');
   });
 
   it('should execute /config command', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     const result = executeCommand({ name: 'config', args: [] }, store);
     expect(result.message).toContain('Current configuration');
   });
 
   it('should execute /provider command', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     const result = executeCommand({ name: 'provider', args: ['openai'] }, store);
     expect(result.message).toContain('Switched to provider');
   });
 
   it('should return error for unknown command', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     const result = executeCommand({ name: 'unknown', args: [] }, store);
     expect(result.message).toContain('Unknown command');
   });
 
   it('/mode is no longer a valid command (removed)', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     const result = executeCommand({ name: 'mode', args: ['plan'] }, store);
     expect(result.message).toContain('Unknown command');
   });
 
   it('/build sets mode to build on checker and persists', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     const checker = new PermissionChecker();
     // 先切到 plan，再切回 build 验证生效
     checker.setMode('plan');
@@ -239,7 +241,7 @@ describe('Command Executor', () => {
   });
 
   it('/plan sets mode to plan on checker and persists', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     const checker = new PermissionChecker();
     const result = executeCommand({ name: 'plan', args: [] }, store, { permissionChecker: checker });
 
@@ -251,7 +253,7 @@ describe('Command Executor', () => {
   });
 
   it('/auto sets mode to auto on checker and persists', () => {
-    const store = new ConfigStore();
+    const store = new ConfigStore(tempDir);
     const checker = new PermissionChecker();
     const result = executeCommand({ name: 'auto', args: [] }, store, { permissionChecker: checker });
 

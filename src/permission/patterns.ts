@@ -19,7 +19,7 @@ export const DANGEROUS_BASH_PATTERNS = [
   />\s*\/etc\//, // 写入系统目录
   /mkfs/,
   /dd\s+/,
-  /:(){ :\|:& };/, // fork bomb
+  /:\(\)\{ :\|:& \};/, // fork bomb（括号必须转义为字面量，否则 () 被当成捕获组）
 ];
 
 /** 检测 bash 命令是否命中危险模式 */
