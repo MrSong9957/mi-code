@@ -78,13 +78,37 @@ export interface RenderResult {
 
 /**
  * 渲染 Ink DOM 树到 Screen，返回光标目标节点的坐标（如有）。
+ *
+ * 光标 Y 定位用「标记优先 + 结构兜底」双保险：
+ * 1. 首选 internal_cursorTarget 标记：reconciler 在 createInstance 时挂到 node 上
+ *    （Box 经 patch 透传该 prop）。但该 prop 跨重渲染可能丢失（Box 复用节点时
+ *    commitUpdate 的 diff 不含未变化的 key，且某些重渲染路径会重建子树）。
+ * 2. 兜底自动识别：遍历时记录「最后一个含输入框 prompt（❯）的 ink-text 行的 Y」。
+ *    Footer 总在布局底部，是最后一个含 ❯ 的文本行；消息区的 ❯ echo 在它之上。
+ *    这层兜底不依赖任何 prop 转发/ref 时序，最稳健。
+ *
  * @param root Ink 根节点（已 Yoga 布局）
  * @param screen 目标 Screen（back buffer）
  */
 export function renderTree(root: InkNode, screen: Screen): RenderResult {
-  let cursorTargetY: number | undefined;
-  walk(root, screen, 0, 0, (y) => { cursorTargetY = y; });
-  return cursorTargetY === undefined ? {} : { cursorTargetY };
+  let markedY: number | undefined;       // 标记优先：internal_cursorTarget 节点的 Y
+  let fallbackY: number | undefined;     // 结构兜底：最后一个含 ❯ 的文本行的 Y
+  walk(root, screen, 0, 0, {
+    onMark: (y) => { markedY = y; },
+    onText: (y, text) => {
+      if (text.includes('❯')) fallbackY = y;
+    },
+  });
+  const finalY = markedY ?? fallbackY;
+  return finalY === undefined ? {} : { cursorTargetY: finalY };
+}
+
+/** walk 的回调集合：标记节点 + 文本行分别通知（避免二者混淆） */
+interface WalkCallbacks {
+  /** 遇到 internal_cursorTarget 标记节点时调（标记优先） */
+  onMark: (y: number) => void;
+  /** 遇到 ink-text 节点时调，传本行 squash 后的文本（供结构兜底识别） */
+  onText: (y: number, text: string) => void;
 }
 
 /** 累计坐标偏移递归写 cell。样式不继承——文本样式由 ANSI 嵌入文本本身携带。 */
@@ -93,7 +117,7 @@ function walk(
   screen: Screen,
   offsetX: number,
   offsetY: number,
-  onCursorTarget: (y: number) => void,
+  cb: WalkCallbacks,
 ): void {
   if (node.internal_static) return; // 跳过 <Static>（spec §5.4）
 
@@ -106,7 +130,7 @@ function walk(
 
   // Footer 输入行标记：记录绝对 y（光标定位用，解决 inputRowY 不算动态行数的问题）
   if (node.internal_cursorTarget) {
-    onCursorTarget(y);
+    cb.onMark(y);
   }
 
   if (node.nodeName === 'ink-text') {
@@ -114,6 +138,7 @@ function walk(
     const text = squashTextNodes(node);
     if (text.length > 0) {
       blitAnsi(screen, x, y, text);
+      cb.onText(y, text);
     }
     return;
   }
@@ -122,7 +147,7 @@ function walk(
     const childNodes = node.childNodes;
     if (childNodes) {
       for (const child of childNodes) {
-        walk(child, screen, x, y, onCursorTarget);
+        walk(child, screen, x, y, cb);
       }
     }
   }

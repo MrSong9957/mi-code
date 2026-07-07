@@ -39,6 +39,12 @@ export function Footer({ input, cursor, status, cols, inputRowY, spinnerStore, c
   const pos = cursorScreenPos(input, cursor, PROMPT);
   setCursorPosition({ x: pos.x, y: inputRowY + pos.y });
 
+  // 输入行光标目标标记：yoga-walk 遍历时读这个 Box 的绝对 y 定位终端光标。
+  // ⚠️ Ink <Box> 默认不转发 internal_cursorTarget（它只转发 ref/style/internal_accessibility/children），
+  // 故 patches/ink+7.1.0.patch 给 Box.js 打了补丁让它透传该 prop 到底层 <ink-box> host
+  // component，reconciler 在 createInstance 时挂到 node.internal_cursorTarget。
+  // 之前用 ref 回调打标记的方案失败：Ink 的 resetAfterCommit（调 renderer）早于 React
+  // 的 ref attach，renderer 遍历时标记还没设上 → cursorTargetY 永远 undefined。
   const border = '─'.repeat(Math.max(0, cols));
   return (
     <Box flexShrink={0} flexDirection="column">

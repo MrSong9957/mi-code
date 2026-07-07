@@ -79,10 +79,8 @@ export function createCustomRenderer(opts: CustomRendererOptions): InkRenderer {
       const optimized = optimize(patches);
 
       // 5. emit
-      // 光标 y 优先用 yoga-walk 算的 cursorTargetY（Yoga 布局的绝对坐标，
-      // 自动包含 Spinner/SuggestionBar 等动态行数，不依赖 inputRowY 公式）。
+      // 光标 y 用 yoga-walk 的 cursorTargetY（Yoga 布局的绝对坐标，自动感知消息换行），
       // 光标 x 用 useCursor 传的（光标在输入文本内的列偏移）。
-      // 若 cursorTargetY 存在，用它覆盖 cursor.y；否则回退到 options.cursor/lastCursor。
       const userCursor = options.cursor ?? lastCursor;
       const cursor = (cursorTargetY !== undefined && userCursor)
         ? { x: userCursor.x, y: cursorTargetY }
