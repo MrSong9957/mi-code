@@ -1,6 +1,6 @@
 // 工具测试
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { safePath, setWorkdir, getWorkdir } from '../agent/tools/path-sandbox.js';
@@ -76,6 +76,32 @@ describe('read_file Tool', () => {
   it('should throw for path escape', async () => {
     const tool = createReadFileTool();
     await expect(tool.executor({ path: '../escape.txt' })).rejects.toThrow('Path escapes workspace');
+  });
+
+  it('should list directory entries when path is a directory', async () => {
+    mkdirSync(join(tempDir, 'subdir'));
+    writeFileSync(join(tempDir, 'a.txt'), 'A', 'utf8');
+    writeFileSync(join(tempDir, 'b.txt'), 'B', 'utf8');
+
+    const tool = createReadFileTool();
+    const result = (await tool.executor({ path: '.' })) as string;
+
+    // 返回的是目录条目列表（每行一个），而不是抛 EISDIR
+    expect(result).toContain('a.txt');
+    expect(result).toContain('b.txt');
+    expect(result).toContain('subdir');
+  });
+
+  it('should mark directories with trailing slash in listing', async () => {
+    mkdirSync(join(tempDir, 'subdir'));
+    writeFileSync(join(tempDir, 'file.txt'), 'F', 'utf8');
+
+    const tool = createReadFileTool();
+    const result = (await tool.executor({ path: '.' })) as string;
+
+    const lines = result.split('\n');
+    expect(lines).toContain('subdir/');
+    expect(lines).toContain('file.txt');
   });
 });
 
