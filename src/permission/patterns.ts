@@ -28,6 +28,43 @@ export function isDangerousBash(command: string): boolean {
 }
 
 /**
+ * 写操作 bash 命令模式（plan 模式 / 子代理只读角色下要拦的写动作）
+ *
+ * 物理：所有"会留下文件痕迹"的命令——创建/删除/复制/移动文件、改权限、
+ * 改 git 状态、装包、重定向写入、原地修改、dd 写盘。即使命令本身不"危险"，
+ * 在 plan 模式或 explore 角色子代理中也不应执行。
+ *
+ * 这是跨模式的硬规则（在 PermissionChecker 闸门 1 拦截），与 mode 无关。
+ * 由 isWriteBash 检测，与 DANGEROUS_BASH（极端破坏）区分开。
+ */
+export const WRITE_BASH_PATTERNS = [
+  /\bmkdir\b/,                                                              // 创建目录
+  /\btouch\b/,                                                              // 创建文件
+  /\brm\b/,                                                                 // 删除（含单文件）
+  /\bcp\b/,                                                                 // 复制
+  /\bmv\b/,                                                                 // 移动/重命名
+  /\bchmod\b/,                                                              // 改权限
+  /\bchown\b/,                                                              // 改所有者
+  /\bgit\s+(add|commit|push|pull|merge|rebase|checkout|reset|stash|rm|mv)\b/, // git 写操作
+  /\bnpm\s+(install|publish|uninstall|i\s|add|remove)\b/,                   // npm 改包
+  /\byarn\s+(add|remove|install|publish)\b/,
+  /\bpnpm\s+(add|remove|install)\b/,
+  /\bpip3?\s+install\b/,
+  />\s*\S/,                                                                 // 输出重定向（>file、>>file）
+  /\|\s*tee\b/,                                                             // tee 写文件
+  /\bsed\s+(-i|--in-place)\b/,                                              // sed 原地修改
+  /\bawk\s+.*\binplace\b/,                                                  // GNU awk inplace（-i inplace）
+  /\bperl\s+-i\b/,                                                          // perl 原地修改
+  /\btruncate\s+-s\b/,                                                      // truncate 截断文件
+  /\binstall\s+-m\b/,                                                       // install 命令（设权限装文件）
+];
+
+/** 检测 bash 命令是否包含写操作（plan 模式 / 只读子代理角色用） */
+export function isWriteBash(command: string): boolean {
+  return WRITE_BASH_PATTERNS.some((p) => p.test(command));
+}
+
+/**
  * 将简单 glob 模式转换为正则表达式
  *
  * 支持的通配符：

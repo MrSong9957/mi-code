@@ -10,7 +10,7 @@ export interface ProviderConfig {
 }
 
 /** 权限模式（与 permission/types.ts 同步，本地定义避免循环依赖） */
-export type PermissionMode = 'default' | 'plan' | 'auto';
+export type PermissionMode = 'build' | 'plan' | 'auto';
 
 /** 权限规则（与 permission/types.ts 同步） */
 export interface PermissionRuleConfig {
@@ -38,7 +38,7 @@ export const DEFAULT_CONFIG: MiCodeConfig = {
   providers: {},
   defaultProvider: 'anthropic',
   permissions: {
-    mode: 'default',
+    mode: 'build',
     rules: [],
   },
 };

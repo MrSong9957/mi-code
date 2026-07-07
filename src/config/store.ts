@@ -43,8 +43,10 @@ export class ConfigStore {
         }
         // 权限配置（向后兼容：旧文件无此字段时保留默认）
         if (saved.permissions) {
+          // 旧版 'default' 重命名为 'build'：自动迁移老配置文件
+          const rawMode = saved.permissions.mode ?? DEFAULT_CONFIG.permissions.mode;
           config.permissions = {
-            mode: saved.permissions.mode ?? DEFAULT_CONFIG.permissions.mode,
+            mode: rawMode === ('default' as PermissionMode) ? 'build' : rawMode,
             rules: saved.permissions.rules ?? [],
           };
         }
