@@ -17,6 +17,8 @@ import { useInput, useStdin } from 'ink';
 import { App } from './App.js';
 import { useInputHandler } from './input/use-input-handler.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
+import { useRenderMode } from './state/render-mode.js';
+import { InlineApp } from './inline/InlineApp.js';
 import { createSelectionStore } from './state/selection-store.js';
 import { createMouseParser } from './input/mouse-events.js';
 import { writeClipboard } from './input/clipboard.js';
@@ -83,6 +85,27 @@ export function ConnectedApp({
   })));
   const spinnerActive = useStore(spinnerStore, (s) => s.active);
   const completionVisible = useStore(completionStore, (s) => s.visible);
+
+  // 渲染模式检测：inline 模式直接走 stdout.append，跳过虚拟滚动
+  const { mode } = useRenderMode();
+  const isInline = mode === 'inline';
+
+  if (isInline && _inlineRenderer) {
+    return (
+      <InlineApp
+        messages={messages}
+        status={status}
+        logo={logo}
+        renderer={_inlineRenderer}
+        messagesStore={messagesStore}
+        inputStore={inputStore}
+        statusStore={statusStore}
+        spinnerStore={spinnerStore}
+        completionStore={completionStore}
+        selectionStore={selectionStore}
+      />
+    );
+  }
 
   // 把消息展开成行（按行坐标统一）。流式块不展开。
   const flatLines = useMemo(() => flattenMessages(messages), [messages]);
