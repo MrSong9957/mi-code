@@ -18,6 +18,7 @@ export default defineConfig({
     // 同时包含两处测试源
     include: [
       'src/__tests__/**/*.test.ts',
+      'src/__tests__/**/*.test.tsx',
       'script/**/*.test.ts',
     ],
     exclude: [
