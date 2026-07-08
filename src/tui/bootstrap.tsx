@@ -26,9 +26,11 @@ import { createSpinnerStore, type SpinnerStore } from './state/spinner-store.js'
 import { createCompletionStore, type CompletionStore } from './state/completion-store.js';
 import { createOverlayStore, type OverlayStore } from './state/overlay-store.js';
 import { PipelineToStoreAdapter } from './state/pipeline-adapter.js';
+import { RenderModeProvider, type RenderMode } from './state/render-mode.js';
 import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
 import { USE_DOUBLE_BUFFER, createCustomRenderer, setCursorPos } from '../render/index.js';
+import { InlineRenderer } from './inline/InlineRenderer.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
 
@@ -45,6 +47,8 @@ export interface BootstrapOptions {
   onTab?: (text: string) => void;
   /** Ctrl+O 切换覆盖层回调 */
   onToggleOverlay?: () => void;
+  /** 渲染模式：inline（原生屏，默认）或 alt-screen（备用屏） */
+  renderMode?: RenderMode;
 }
 
 export interface BootstrapHandle {
@@ -70,6 +74,9 @@ export interface BootstrapHandle {
 }
 
 export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
+  const renderMode = opts.renderMode ?? 'inline';
+  const isInline = renderMode === 'inline';
+
   const messagesStore = createMessagesStore();
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
   const statusStore = createStatusStore(opts.status);
@@ -110,36 +117,30 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   };
 
   // 渲染 Ink 应用
-  // alt screen：用 Ink 官方 alternateScreen option，在 constructor 阶段进入
-  // （在任何 onRender 之前），避免自研 renderer 的第一帧画到主屏再被 alt 清掉。
-  // 真实 TTY 下 interactive=true 才生效。
-  // ⚠️ Ink 的 enterAlternativeScreen 只发 \x1b[?1049h（切到备用屏+保存光标），
-  // 不发 \x1b[H（光标归位）。导致 alt screen 的光标停在用户输入命令的位置
-  // （终端中间），renderer 从那开始画 → 整个画面偏移。
-  // 这里在 render() 后立即补 \x1b[H 把光标归位到左上角 (0,0)。
-  // patchConsole: false——关键：Ink 默认拦截 console.* 路由到 writeToStderr，
-  // PowerShell 检测到 stderr 有内容就抛 NativeCommandError 杀进程（"一闪而过"真因）。
-  // 项目 TUI 代码零处依赖 patchConsole（grep 确认），关闭后 console.* 走原生 Node 路径。
-  // feature flag：USE_DOUBLE_BUFFER=true 时注入自研 renderer（patch 暴露的 options.renderer）
-  // + onSetCursorPosition 钩子把 useCursor 的 {x,y} 转发给 renderer 的 pub/sub。
+  // inline 模式：alternateScreen=false，内容直接写入主缓冲区（原生 scrollback）
+  // alt-screen 模式：alternateScreen=true，进备用屏 + 可选双缓冲 renderer
   const renderOptions: {
     exitOnCtrlC: false;
-    alternateScreen: true;
+    alternateScreen: boolean;
     patchConsole: false;
     renderer?: unknown;
     onSetCursorPosition?: (pos: unknown) => void;
-  } = { exitOnCtrlC: false, alternateScreen: true, patchConsole: false };
-  if (USE_DOUBLE_BUFFER) {
+  } = { exitOnCtrlC: false, alternateScreen: !isInline, patchConsole: false };
+
+  if (!isInline && USE_DOUBLE_BUFFER) {
     renderOptions.renderer = createCustomRenderer({ stdout: process.stdout });
     renderOptions.onSetCursorPosition = (pos) => { setCursorPos(pos as { x: number; y: number } | undefined); };
   }
-  // alt screen 由 Ink 的 alternateScreen: true 在 constructor 里进。
-  // 不再提前发——之前提前发 ?1049h + 标记，Ink constructor 又发一次 ?1049h，
-  // 第二次会把提前写的内容清掉（某些终端行为）。光标归位在 patch 里处理。
+
+  const inlineRenderer = isInline ? new InlineRenderer(process.stdout) : null;
 
   let inkInstance: InkInstance | null = render(
-    React.createElement(ConnectedApp, {
-      messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
+    React.createElement(RenderModeProvider, { initialMode: renderMode, children:
+      React.createElement(ConnectedApp, {
+        messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore,
+        onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
+        inlineRenderer: inlineRenderer ?? undefined,
+      }),
     }),
     renderOptions,
   );
@@ -151,7 +152,9 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
       // unmount 可能已调用，忽略
     }
     inkInstance = null;
-    exitAltScreen(process.stdout);
+    if (!isInline) {
+      exitAltScreen(process.stdout);
+    }
   };
 
   return {

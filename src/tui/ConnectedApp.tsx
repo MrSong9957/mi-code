@@ -57,10 +57,12 @@ export interface ConnectedAppProps {
   onExit: () => void;
   onTab?: (text: string) => void;
   onToggleOverlay?: () => void;
+  /** inline 模式渲染器（alt-screen 模式为 undefined） */
+  inlineRenderer?: import('./inline/InlineRenderer.js').InlineRenderer;
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit, onTab, onToggleOverlay,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit, onTab, onToggleOverlay, inlineRenderer: _inlineRenderer,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store（拖拽写入，所有区域订阅高亮）
   const selectionStore = useMemo(() => createSelectionStore(), []);
