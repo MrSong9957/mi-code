@@ -1,4 +1,4 @@
-import { cursorUp, eraseLine, eraseLines, hideCursor, showCursor } from './ansi-utils.js';
+import { cursorUp, eraseLines, hideCursor, showCursor } from './ansi-utils.js';
 
 const PROMPT = '❯ ';
 
