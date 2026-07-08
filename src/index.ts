@@ -561,6 +561,7 @@ if (cliOpts.list) {
       dir: SHORT_DIR,
       branch: GIT_BRANCH,
     },
+    renderMode: 'inline',
     onSubmit: (text) => { void handleUserSubmit(text); },
     onExit: () => { cleanupOnExit(); process.exit(0); },
     onTab: (text) => { handleTab(text, tuiHandle, configStore, permissionChecker); },
