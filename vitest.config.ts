@@ -19,6 +19,7 @@ export default defineConfig({
     include: [
       'src/__tests__/**/*.test.ts',
       'src/__tests__/**/*.test.tsx',
+      'src/tui/**/*.test.ts',
       'script/**/*.test.ts',
     ],
     exclude: [
