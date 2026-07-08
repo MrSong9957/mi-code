@@ -50,6 +50,11 @@ export class InlineRenderer {
   }
 
   commitFooter(): void {
+    // Move cursor below the footer so subsequent appendLine calls
+    // write after the old footer (which becomes scrollback history).
+    if (this.footerLineCount > 0) {
+      this.stdout.write('\n');
+    }
     this.footerLineCount = 0;
   }
 }

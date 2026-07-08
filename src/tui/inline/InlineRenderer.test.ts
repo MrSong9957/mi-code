@@ -49,4 +49,18 @@ describe('InlineRenderer', () => {
     const combined = secondWrites.join('');
     expect(combined).toContain('\x1b[');
   });
+
+  it('commitFooter advances cursor past footer and resets state', () => {
+    renderer.renderFooter('hello', 0, 'status');
+    const afterRender = mock.written.length;
+    renderer.commitFooter();
+    // Should write a newline to move cursor below the footer
+    expect(mock.write).toHaveBeenCalledWith('\n');
+    // After commit, next renderFooter should NOT erase old lines
+    const afterCommit = mock.written.length;
+    renderer.renderFooter('world', 0, 'status2');
+    const afterSecond = mock.written.length;
+    const secondWrites = mock.written.slice(afterCommit, afterSecond).join('');
+    expect(secondWrites).not.toContain('\x1b[1A'); // no cursorUp erase
+  });
 });
