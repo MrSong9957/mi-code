@@ -34,6 +34,10 @@ export interface PipelineRenderer {
     isFinal: boolean,
     opts?: { indent?: number; firstLinePrefix?: string; firstLineStyle?: UIMessageStyle },
   ): void;
+  /** 流式 thinking 文本（灰色 dim，实时显示思考过程） */
+  appendStreamingThinking(text: string): void;
+  /** 擦除 thinking 流式草稿区（折叠为摘要行时调用） */
+  eraseStreamingThinking(): void;
   /** 封口流式（插分隔符，不强制 flushNow）——比 finalizeStreaming 温和 */
   sealStreaming(): void;
   flushNow(): void;
@@ -42,7 +46,9 @@ export interface PipelineRenderer {
 
 /** assistant 流式块的固定格式契约（hanging indent：● 第0列 + 续行 INDENT.nested 空格） */
 const ASSISTANT_FORMAT = {
-  indent: INDENT.nested,
+  // assistant 文本块首行顶格（与 ● Thinking… 对齐），不缩进。
+  // nested(2) 缩进只用于 ⎿ 工具结果行，不用于 assistant 正文。
+  indent: INDENT.block,
   firstLinePrefix: '● ',
   firstLineStyle: { fg: 'brand' } as UIMessageStyle,
 };
@@ -133,13 +139,16 @@ export class BlockPipeline {
         break;
 
       case 'thinking_delta':
-        // 累积 thinking 文本（供 ctrl+o 展开），不实时渲染（折叠模式）
+        // 累积 thinking 文本 + 流式渲染（灰色 dim，实时显示思考过程）
         this.thinkingBuffer += block.content;
+        this.renderer.appendStreamingThinking(this.thinkingBuffer);
         break;
 
       case 'thinking_end': {
-        // thinking 摘要行（2 空格缩进烤进 content，dim 样式）
+        // thinking 结束：擦除流式草稿 → 注册可折叠块 → 打印摘要行（折叠）
         if (this.thinkingActive) {
+          // 先擦除流式思考草稿区，让摘要行替代它
+          this.renderer.eraseStreamingThinking();
           const summaryLines = MessageFormatter.format('thinking_end', {
             duration: block.durationSec,
             filesRead: block.filesRead,
@@ -154,7 +163,9 @@ export class BlockPipeline {
               }))
             : summaryLines; // 无思考内容时 full = summary
           this.expandable.add({ id, kind: 'thinking', summaryLines, fullLines });
-          this.print(summaryLines, 'assistant');
+          // 摘要用 'thinking_summary' role（非 assistant），强制 messages-store 新建消息，
+          // 避免 appendLine 续接到已固化的 ● Thinking… 消息导致 InlineApp 跳过渲染。
+          this.print(summaryLines, 'thinking_summary');
         }
         this.thinkingBuffer = '';
         this.thinkingActive = false;

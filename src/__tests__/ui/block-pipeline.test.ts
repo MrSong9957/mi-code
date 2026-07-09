@@ -16,6 +16,8 @@ function mockRenderer() {
     appendStreamingMarkdown: vi.fn((text: string, isFinal: boolean) => {
       streamMarks.push({ text, isFinal });
     }),
+    appendStreamingThinking: vi.fn(),
+    eraseStreamingThinking: vi.fn(),
     sealStreaming: vi.fn(),
     finalizeStreaming: vi.fn(),
     appendStreaming: vi.fn(),

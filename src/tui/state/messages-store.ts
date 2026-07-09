@@ -27,8 +27,14 @@ export interface MessagesState {
   appendLine: (role: MessageRole, line: FormattedLine) => void;
   /** 开一条流式 assistant（finalized=false, streamingText=initialText） */
   startStreaming: (initialText: string) => void;
+  /** 开一条流式 thinking（role='thinking', 灰色 dim） */
+  startStreamingThinking: (initialText: string) => void;
   /** 更新末条流式 assistant 的 streamingText（累加全文） */
   updateStreaming: (text: string) => void;
+  /** 更新末条流式 thinking 的 streamingText */
+  updateStreamingThinking: (text: string) => void;
+  /** 移除末条流式 thinking 消息（折叠为摘要时调用） */
+  removeStreamingThinking: () => void;
   /** 固化末条流式（finalized=true，固化 lines，清 streamingText） */
   finalizeStreaming: (lines: FormattedLine[]) => void;
   /** 清空所有消息 */
@@ -84,11 +90,41 @@ export function createMessagesStore(): MessagesStore {
       };
     }),
 
+    /** 开一条流式 thinking 消息（灰色 dim，role='thinking'） */
+    startStreamingThinking: (initialText) => set((s) => {
+      const id = s._idCounter + 1;
+      return {
+        _idCounter: id,
+        messages: [...s.messages, {
+          uuid: `msg-${id}`,
+          role: 'thinking',
+          lines: [],
+          finalized: false,
+          streamingText: initialText,
+        }],
+      };
+    }),
+
     updateStreaming: (text) => set((s) => {
       const last = s.messages[s.messages.length - 1];
       if (!last || last.finalized || last.role !== 'assistant') return s;
       const updated = { ...last, streamingText: text };
       return { messages: [...s.messages.slice(0, -1), updated] };
+    }),
+
+    /** 更新末条流式 thinking 的 streamingText */
+    updateStreamingThinking: (text) => set((s) => {
+      const last = s.messages[s.messages.length - 1];
+      if (!last || last.finalized || last.role !== 'thinking') return s;
+      const updated = { ...last, streamingText: text };
+      return { messages: [...s.messages.slice(0, -1), updated] };
+    }),
+
+    /** 移除末条流式 thinking 消息（折叠为摘要时调用，摘要由 printMessage 追加） */
+    removeStreamingThinking: () => set((s) => {
+      const last = s.messages[s.messages.length - 1];
+      if (!last || last.finalized || last.role !== 'thinking') return s;
+      return { messages: s.messages.slice(0, -1) };
     }),
 
     finalizeStreaming: (lines) => set((s) => {

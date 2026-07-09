@@ -3,24 +3,23 @@
 // 物理本质：考试场地的排座表。
 // 告诉 vitest 该去哪些教室找试卷（include），哪些房间别进（exclude）。
 //
-// 关键：让 vitest 同时识别两处测试源——
-//   - src/__tests__/  现有 TDD 单元测试基线（不迁移）
-//   - script/         高风险回归测试集（AGENTS.md 规定的沉淀目录）
+// 测试源（全部递归匹配，npm test 一键全量跑）：
+//   - src/__tests__/**/*.test.ts(x)  常规单元/集成测试（功能正确性）
+//   - src/__tests__/regression/      安全缺口回归测试（权限/沙箱/数据，大量 it.fails）
+//   - src/tui/**/*.test.ts           TUI 渲染层测试
 //
-// test 项目（projects）划分两个逻辑集，便于精准触发：
-//   - unit      默认 npm test，跑全量
-//   - regression npm run test:regression，只跑高风险回归集
+// 两个 npm 脚本：
+//   - npm test            全量跑所有测试（每次修改后都应跑这个）
+//   - npm run test:regression  只跑 src/__tests__/regression/（安全缺口子集）
 
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    // 同时包含两处测试源
     include: [
       'src/__tests__/**/*.test.ts',
       'src/__tests__/**/*.test.tsx',
       'src/tui/**/*.test.ts',
-      'script/**/*.test.ts',
     ],
     exclude: [
       'dist/**',

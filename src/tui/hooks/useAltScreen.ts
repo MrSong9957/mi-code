@@ -16,6 +16,7 @@
 
 import { useEffect } from 'react';
 import { useStdout } from 'ink';
+import { useRenderMode } from '../state/render-mode.js';
 
 const ENTER_ALT = '\x1b[?1049h';
 const EXIT_ALT = '\x1b[?1049l';
@@ -23,20 +24,23 @@ const CLEAR_SCREEN = '\x1b[2J\x1b[H';
 
 /**
  * 进 alt screen（mount 时），卸载时退回主屏。
- * 返回当前是否在 alt screen（恒 true，因 mount 即进）——供测试断言。
+ * 在 inline 模式下为 no-op——不写任何转义序列。
+ * 返回当前是否在 alt screen 模式。
  */
 export function useAltScreen(): boolean {
   const { stdout } = useStdout();
+  const { mode } = useRenderMode();
+  const isAlt = mode === 'alt-screen';
 
   useEffect(() => {
-    if (!stdout) return;
+    if (!stdout || !isAlt) return;
     stdout.write(ENTER_ALT + CLEAR_SCREEN);
     return () => {
       stdout.write(EXIT_ALT);
     };
-  }, [stdout]);
+  }, [stdout, isAlt]);
 
-  return true;
+  return isAlt;
 }
 
 /** 仅写转义序列（不依赖 Ink 上下文，供 bootstrap 在 render 外直接调用） */

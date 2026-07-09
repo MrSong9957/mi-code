@@ -86,26 +86,11 @@ export function ConnectedApp({
   const spinnerActive = useStore(spinnerStore, (s) => s.active);
   const completionVisible = useStore(completionStore, (s) => s.visible);
 
-  // 渲染模式检测：inline 模式直接走 stdout.append，跳过虚拟滚动
+  // 渲染模式检测
   const { mode } = useRenderMode();
   const isInline = mode === 'inline';
 
-  if (isInline && _inlineRenderer) {
-    return (
-      <InlineApp
-        messages={messages}
-        status={status}
-        logo={logo}
-        renderer={_inlineRenderer}
-        messagesStore={messagesStore}
-        inputStore={inputStore}
-        statusStore={statusStore}
-        spinnerStore={spinnerStore}
-        completionStore={completionStore}
-        selectionStore={selectionStore}
-      />
-    );
-  }
+  // ── 以下所有 hooks 必须在 early return 之前（React hooks 规则） ──
 
   // 把消息展开成行（按行坐标统一）。流式块不展开。
   const flatLines = useMemo(() => flattenMessages(messages), [messages]);
@@ -115,10 +100,8 @@ export function ConnectedApp({
   const inputExtraLines = Math.max(0, inputText.split('\n').length - 1);
   const footerRows = FOOTER_BASE_ROWS + (spinnerActive ? 1 : 0) + (completionVisible ? 1 : 0) + inputExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
-  // 自动跟随：scrolledAway=false 时钉到 maxScroll（同步算，不用 effect，修根因 1b）
   const maxScroll = Math.max(0, flatLineCount - visibleRows);
   const effectiveScrollTop = scrolledAway ? scrollTop : maxScroll;
-  // inputRowY 按行算（修根因 2b）
   const scrollboxRenderedRows = Math.min(flatLineCount, visibleRows);
   const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + (completionVisible ? 1 : 0) + 1;
 
@@ -143,8 +126,7 @@ export function ConnectedApp({
   const clickStateRef = useRef<ClickState | null>(null);
   const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  /** 通用滚动：delta 行（正向下、负向上），钳到 [0,maxScroll]，自动管理 scrolledAway。
-   *  到底时恢复自动跟随（scrolledAway=false）；否则标记主动上滚。 */
+  /** 通用滚动 */
   const scrollBy = useCallback((delta: number): void => {
     const total = flatLineCountRef.current;
     const vr = visibleRowsRef.current;
@@ -157,22 +139,19 @@ export function ConnectedApp({
     });
   }, []);
 
-  // 滚轮：拖拽中禁用
   function handleWheel(ev: { type: string }): void {
     if (selectionStore.getState().isDragging) return;
     scrollBy(ev.type === 'wheelup' ? -WHEEL_DELTA : WHEEL_DELTA);
   }
 
-  // PageUp/PageDown（修根因 1c）：按 visibleRows 翻一屏
   function handlePageScroll(direction: 'up' | 'down'): void {
     const vr = visibleRowsRef.current;
     scrollBy(direction === 'up' ? -vr : vr);
   }
 
-  // 键盘处理（含 PageUp/PageDown 经 onPageScroll）
+  // 键盘处理（必须在 early return 之前，inline 模式也需要）
   useInputHandler(inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible, handlePageScroll);
 
-  // 拖拽自动滚动（focus 超出消息视口时）
   function maybeStartAutoScroll(focusRow: number): void {
     const est = effectiveScrollTop;
     const vr = visibleRows;
@@ -192,7 +171,6 @@ export function ConnectedApp({
         const next = Math.max(0, Math.min(ms, cur + dir));
         if (next === cur) return prev;
         setScrolledAway(next < ms);
-        // 滚出视口的行文本入缓存
         if (outOfTop && next < cur) {
           const rowLeaving = LOGO_ROWS + cur + vr2 - 1;
           const txt = rowTextMapRef.current.getLineContent(rowLeaving);
@@ -214,7 +192,6 @@ export function ConnectedApp({
     }
   }
 
-  // 路由单个解析后的鼠标事件
   function routeMouseEvent(ev: { type: string; button: number; row: number; col: number }): void {
     const row = ev.row - 1;
     const col = ev.col - 1;
@@ -263,25 +240,51 @@ export function ConnectedApp({
     }
   }
 
-  useInput((input: string) => {
-    if (!SGR_FRAGMENT_RE.test(input)) return;
-    const events = parserRef.current.feed('\x1b' + input);
-    for (const ev of events) {
-      routeMouseEvent(ev);
-    }
-  });
+  // 鼠标事件处理（仅 alt-screen 模式需要，inline 模式跳过）
+  if (!isInline) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useInput((input: string) => {
+      if (!SGR_FRAGMENT_RE.test(input)) return;
+      const events = parserRef.current.feed('\x1b' + input);
+      for (const ev of events) {
+        routeMouseEvent(ev);
+      }
+    });
 
-  const { stdin, setRawMode } = useStdin();
-  useEffect(() => {
-    if (!stdin) return;
-    setRawMode(true);
-    process.stdout.write('\x1b[?1003h\x1b[?1006h');
-    return () => {
-      process.stdout.write('\x1b[?1003l\x1b[?1006l');
-      setRawMode(false);
-      stopAutoScroll();
-    };
-  }, [stdin, setRawMode]);
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const { stdin, setRawMode } = useStdin();
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useEffect(() => {
+      if (!stdin) return;
+      setRawMode(true);
+      process.stdout.write('\x1b[?1003h\x1b[?1006h');
+      return () => {
+        process.stdout.write('\x1b[?1003l\x1b[?1006l');
+        setRawMode(false);
+        stopAutoScroll();
+      };
+    }, [stdin, setRawMode]);
+  }
+
+  // ── early return 只影响 JSX 输出，不影响 hooks ──
+
+  if (isInline && _inlineRenderer) {
+    return (
+      <InlineApp
+        messages={messages}
+        status={status}
+        logo={logo}
+        renderer={_inlineRenderer}
+        messagesStore={messagesStore}
+        inputStore={inputStore}
+        statusStore={statusStore}
+        spinnerStore={spinnerStore}
+        completionStore={completionStore}
+        selectionStore={selectionStore}
+        overlayStore={overlayStore}
+      />
+    );
+  }
 
   return (
     <App
