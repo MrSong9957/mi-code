@@ -3,6 +3,7 @@ import { spawnSync } from 'child_process';
 import { Encoder } from '../output/encoder.js';
 import type { ToolDefinition, ToolExecutor, RegisteredTool } from './types.js';
 import { createReadFileTool, createWriteFileTool, createEditFileTool } from './tools/index.js';
+import { createGlobTool, createGrepTool } from './tools/search-tools.js';
 import { createTodoTool } from './tools/todo-tool.js';
 import { createIdleTool } from './tools/idle-tool.js';
 import { createClaimTaskTool } from './tools/claim-task-tool.js';
@@ -15,6 +16,7 @@ import type { TaskBoard } from '../task-board/task-board.js';
 import type { WorktreeManager } from '../worktree/worktree-manager.js';
 import { createTaskMatrixTool, createMarkTaskDoneTool } from './tools/task-board-tool.js';
 import { createWorktreeTool } from './tools/worktree-tool.js';
+import { READ_ONLY_TOOLS } from '../permission/types.js';
 
 export class ToolRegistry {
   private _tools = new Map<string, RegisteredTool>();
@@ -54,12 +56,17 @@ export class ToolRegistry {
   }
 }
 
-/** 只读工具列表（可并发安全执行） */
-const READ_ONLY_TOOLS = new Set(['read_file', 'load_skill', 'todo_write', 'schedule_list', 'glob', 'ls']);
+/**
+ * 只读工具列表（可并发安全执行）
+ *
+ * 复用 permission/types.ts 的 READ_ONLY_TOOLS（唯一真相源），
+ * 避免工具层与权限判定使用不同标准导致漂移。
+ */
+const READ_ONLY_SET = new Set(READ_ONLY_TOOLS);
 
 /** 判断工具是否只读 */
 export function isReadOnlyTool(name: string): boolean {
-  return READ_ONLY_TOOLS.has(name);
+  return READ_ONLY_SET.has(name);
 }
 
 /**
@@ -190,6 +197,12 @@ export function createDefaultRegistry(
 
   const editFile = createEditFileTool();
   registry.register(editFile.definition, editFile.executor);
+
+  // 注册搜索工具（plan 模式探索主力，全程只读）
+  const glob = createGlobTool();
+  registry.register(glob.definition, glob.executor);
+  const grep = createGrepTool();
+  registry.register(grep.definition, grep.executor);
 
   // 注册 todo 工具（如果有 TodoManager）
   if (todoManager) {

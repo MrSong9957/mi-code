@@ -12,13 +12,15 @@
 
 import type { PermissionMode, PermissionRule, PermissionDecision } from './types.js';
 import { WRITE_TOOLS, READ_ONLY_TOOLS } from './types.js';
-import { isDangerousBash, isPathOutsideWorkspace, matchesRule } from './patterns.js';
+import { isDangerousBash, isWriteBash, isPathOutsideWorkspace, matchesRule } from './patterns.js';
 
 /** PermissionChecker 构造参数 */
 export interface PermissionCheckerOptions {
   mode?: PermissionMode;
   rules?: PermissionRule[];
   workdir?: string;
+  /** plan 模式下唯一允许写入的目录（plan 文件白名单） */
+  planDir?: string;
 }
 
 /** 文件写入类工具（用于路径越界预检） */
@@ -28,11 +30,13 @@ export class PermissionChecker {
   private mode: PermissionMode;
   private rules: PermissionRule[];
   private workdir: string;
+  private planDir: string | null;
 
   constructor(options: PermissionCheckerOptions = {}) {
-    this.mode = options.mode ?? 'default';
+    this.mode = options.mode ?? 'build';
     this.rules = options.rules ? [...options.rules] : [];
     this.workdir = options.workdir ?? process.cwd();
+    this.planDir = options.planDir ?? null;
   }
 
   /** 设置权限模式 */
@@ -43,6 +47,16 @@ export class PermissionChecker {
   /** 获取当前模式 */
   getMode(): PermissionMode {
     return this.mode;
+  }
+
+  /** 设置 plan 目录（plan 模式下的写入白名单根目录） */
+  setPlanDir(dir: string | null): void {
+    this.planDir = dir;
+  }
+
+  /** 获取 plan 目录 */
+  getPlanDir(): string | null {
+    return this.planDir;
   }
 
   /** 获取全部规则（副本） */
@@ -92,6 +106,23 @@ export class PermissionChecker {
 
     // ── 闸门 3：模式检查 ──
     if (this.mode === 'plan') {
+      // plan 目录白名单：write_file/edit_file 目标在 planDir 内则放行
+      // （让 AI 能用 write_file 写 plan 文件，但不能写其它）
+      if (FILE_WRITE_TOOLS.has(toolName) && this.planDir) {
+        const filePath = (input.path as string) || '';
+        if (filePath && !isPathOutsideWorkspace(filePath, this.planDir)) {
+          return { behavior: 'allow', reason: 'Plan mode allows writing inside plan dir' };
+        }
+      }
+      // run_bash 精细判定：写命令（mkdir/echo>/git commit/...）deny，只读命令（ls/cat/grep）allow
+      // 这是 plan 模式与 explore 角色子代理的核心：允许只读探索，但拦任何文件改动。
+      if (toolName === 'run_bash') {
+        const command = (input.command as string) || '';
+        if (isWriteBash(command)) {
+          return { behavior: 'deny', reason: 'Plan mode blocks write bash commands' };
+        }
+        return { behavior: 'allow', reason: 'Plan mode allows read-only bash commands' };
+      }
       if (WRITE_TOOLS.includes(toolName)) {
         return { behavior: 'deny', reason: 'Plan mode blocks write operations' };
       }

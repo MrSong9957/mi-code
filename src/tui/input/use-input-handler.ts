@@ -29,6 +29,7 @@ export function useInputHandler(
   onTab?: (text: string) => void,
   onToggleOverlay?: () => void,
   overlayVisible?: () => boolean,
+  onPageScroll?: (direction: 'up' | 'down') => void,
 ): void {
   useInput((input: string, key: Key) => {
     const s = store.getState();
@@ -52,6 +53,17 @@ export function useInputHandler(
     // Ctrl+O：切换覆盖层
     if (key.ctrl && input === 'o') {
       onToggleOverlay?.();
+      return;
+    }
+
+    // PageUp/PageDown：翻屏滚动（调用方按 visibleRows 翻一屏）
+    // Ink 的 key.pageUp/pageDown 在终端发 \x1b[5~ / \x1b[6~ 时为 true
+    if (key.pageUp) {
+      onPageScroll?.('up');
+      return;
+    }
+    if (key.pageDown) {
+      onPageScroll?.('down');
       return;
     }
 

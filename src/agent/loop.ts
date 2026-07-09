@@ -222,6 +222,8 @@ export async function agentLoop(
 
     const batches = partitionToolCalls(toolCalls);
     const results: ToolResultBlock[] = [];
+    // idle 检测：若本轮调用了 idle，执行完后跳出循环，不把 IDLE_REQUESTED 写回 messages。
+    let idleRequested = false;
 
     for (const batch of batches) {
       if (batch.parallel) {
@@ -232,6 +234,7 @@ export async function agentLoop(
             const rawOutput = await registry.execute(call.name, call.input);
             const output = persistLargeOutput(call.id, rawOutput, call.name);
             callbacks.onToolResult?.(call.id, output);
+            if (call.name === 'idle') idleRequested = true;
             return { type: 'tool_result' as const, tool_use_id: call.id, content: output };
           }),
         );
@@ -259,6 +262,9 @@ export async function agentLoop(
           const rawOutput = await registry.execute(call.name, call.input);
           const output = persistLargeOutput(call.id, rawOutput, call.name);
 
+          // idle 检测
+          if (call.name === 'idle') idleRequested = true;
+
           // PostToolUse hook
           if (hookRunner) {
             await hookRunner.run({
@@ -271,6 +277,13 @@ export async function agentLoop(
           callbacks.onToolResult?.(call.id, output);
         }
       }
+    }
+
+    // idle 跳出：本轮调用了 idle 工具，终止循环。
+    // 关键：不把 IDLE_REQUESTED 写回 messages（否则下一轮 LLM 收到无意义反馈会重复生成）。
+    if (idleRequested) {
+      callbacks.onLoopEnd?.('idle');
+      return extractTextFromContent(response.content);
     }
 
     // 5. 把工具结果写回消息历史（关键！）

@@ -43,8 +43,16 @@ export class ConfigStore {
         }
         // 权限配置（向后兼容：旧文件无此字段时保留默认）
         if (saved.permissions) {
+          // 模式校验：只接受合法值，旧版 'default' 迁移为 'build'，其余非法值回退 'build'
+          // 防止配置文件被污染（手改/损坏）后传入非法模式导致权限层行为未定义
+          const rawMode = saved.permissions.mode ?? DEFAULT_CONFIG.permissions.mode;
+          const VALID_MODES: PermissionMode[] = ['build', 'plan', 'auto'];
+          const safeMode: PermissionMode =
+            rawMode === ('default' as PermissionMode) || !VALID_MODES.includes(rawMode as PermissionMode)
+              ? 'build'
+              : (rawMode as PermissionMode);
           config.permissions = {
-            mode: saved.permissions.mode ?? DEFAULT_CONFIG.permissions.mode,
+            mode: safeMode,
             rules: saved.permissions.rules ?? [],
           };
         }

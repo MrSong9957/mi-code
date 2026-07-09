@@ -1,56 +1,79 @@
 // src/tui/components/Footer.tsx
-// Footer：flexShrink=0 钉底 + 输入框光标定位
+// Footer：flexShrink=0 钉底 + 输入框光标定位（支持字符级选区高亮）。
 //
 // 物理本质：flexbox 列布局里 flexShrink=0 的固定高度块。
-// 结构（对齐 charter §顶层布局）：上边框 / ❯ 输入 / 下边框 / 状态栏。
+// 结构：Spinner? + SuggestionBar? + 上边框 / ❯ 输入 / 下边框 / 状态栏。
+// 选区高亮：边框行、输入行用 SelectionText（自订阅 selectionStore）；状态栏由 StatusBar 处理。
 //
 // 光标定位（Bug 1 修复）：用 Ink useCursor 把终端光标定位到输入框 `❯ ` 之后 + cursor 偏移处。
-// y 坐标由 App 算好传入（输入行的全局 y = ScrollBox 实际行数 + LOGO_ROWS + 上边框）。
 
 import React from 'react';
 import { Box, Text, useCursor } from 'ink';
 import { StatusBar } from './StatusBar.js';
+import { SelectionText } from './SelectionText.js';
+import { Spinner } from './Spinner.js';
+import { SuggestionBar } from './SuggestionBar.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
 import type { StatusBarData } from '../types.js';
-import { Spinner } from './Spinner.js';
 import type { SpinnerStore } from '../state/spinner-store.js';
-import { SuggestionBar } from './SuggestionBar.js';
 import type { CompletionStore } from '../state/completion-store.js';
+import type { SelectionStore } from '../state/selection-store.js';
 
-const PROMPT = '❯ '; // 第 0 行 prompt（影响 x 偏移）
+const PROMPT = '❯ ';
 
 export interface FooterProps {
   input: string;
   cursor: number;
   status: StatusBarData;
   cols: number;
-  /** 输入行在 Ink 输出中的全局 y 坐标（用于光标定位） */
+  /** 输入行在 Ink 输出中的全局 y 坐标（用于光标定位 + 选区行号） */
   inputRowY: number;
-  /** spinner store（active 时渲染加载指示） */
   spinnerStore: SpinnerStore;
-  /** 补全候选 store（visible 时渲染候选条） */
   completionStore: CompletionStore;
+  /** 选区 store（由 App 注入；SelectionText 自订阅） */
+  selectionStore?: SelectionStore;
 }
 
-export function Footer({ input, cursor, status, cols, inputRowY, spinnerStore, completionStore }: FooterProps): React.ReactElement {
+export function Footer({ input, cursor, status, cols, inputRowY, spinnerStore, completionStore, selectionStore }: FooterProps): React.ReactElement {
   const { setCursorPosition } = useCursor();
-  // 光标定位（Bug 1 修复）：用 stringWidth 算显示宽度，CJK 不再被一分为二。
-  // 多行时 y 还要加上光标所在行偏移。
   const pos = cursorScreenPos(input, cursor, PROMPT);
   setCursorPosition({ x: pos.x, y: inputRowY + pos.y });
 
   const border = '─'.repeat(Math.max(0, cols));
+  const inputSplit = input.split('\n');
+  const inputLineCount = inputSplit.length;
+  const upperBorderRow = inputRowY - 1;
+  const lowerBorderRow = inputRowY + inputLineCount;
+  const statusBarRow = lowerBorderRow + 1;
+
   return (
     <Box flexShrink={0} flexDirection="column">
       <Spinner store={spinnerStore} />
       <SuggestionBar store={completionStore} />
-      <Text color="gray">{border}</Text>
-      <Text>
-        <Text color="green" bold>❯ </Text>
-        {input}
-      </Text>
-      <Text color="gray">{border}</Text>
-      <StatusBar status={status} />
+      <SelectionText
+        content={border}
+        globalRow={upperBorderRow}
+        selectionStore={selectionStore}
+        baseProps={{ color: 'gray' }}
+      />
+      <Box {...{ internal_cursorTarget: true } as Record<string, unknown>}>
+        {inputSplit.map((line, i) => (
+          <SelectionText
+            key={i}
+            content={i === 0 ? `${PROMPT}${line}` : line}
+            globalRow={inputRowY + i}
+            selectionStore={selectionStore}
+            baseProps={i === 0 ? { color: 'green', bold: true } : {}}
+          />
+        ))}
+      </Box>
+      <SelectionText
+        content={border}
+        globalRow={lowerBorderRow}
+        selectionStore={selectionStore}
+        baseProps={{ color: 'gray' }}
+      />
+      <StatusBar status={status} selectionStore={selectionStore} globalRow={statusBarRow} />
     </Box>
   );
 }

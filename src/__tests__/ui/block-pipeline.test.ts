@@ -16,6 +16,8 @@ function mockRenderer() {
     appendStreamingMarkdown: vi.fn((text: string, isFinal: boolean) => {
       streamMarks.push({ text, isFinal });
     }),
+    appendStreamingThinking: vi.fn(),
+    eraseStreamingThinking: vi.fn(),
     sealStreaming: vi.fn(),
     finalizeStreaming: vi.fn(),
     appendStreaming: vi.fn(),
@@ -88,7 +90,9 @@ describe('BlockPipeline', () => {
     it('tool_call → printMessage("● Bash(cmd)", magenta)；首个模型块前有空行', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
+      // tool_call 进缓冲区，需配对 result（或 clear 兜底 flush）才落屏
+      p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' }, toolUseId: 't1' });
+      p.emit({ kind: 'tool_result', name: 'run_bash', output: 'done', toolUseId: 't1' });
       expect(prints[0].text).toBe(''); // 首个模型块前空行
       const content = firstContent(prints);
       expect(content!.text).toBe('● Bash(ls)');
@@ -117,7 +121,7 @@ describe('BlockPipeline', () => {
       expect(resultLine).toBeDefined();
     });
 
-    it('hook → printMessage(text, dim)；前面已有内容时加块间空行', () => {
+    it('hook → printMessage(text, dim)；紧跟 tool_result 不加块间空行', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       // 先有 tool_result 内容，再 emit hook（模拟 PostToolUse 紧跟 tool_result）
@@ -128,9 +132,9 @@ describe('BlockPipeline', () => {
       const hookLine = prints.slice(printsBeforeHook).find(p => p.text.includes('[Hook]'));
       expect(hookLine, '应有 hook 输出行').toBeDefined();
       expect(hookLine!.style).toMatchObject({ dim: true });
-      // 前面已有内容 → hook 前应有空行（openBlock 的块间分隔）
+      // hook 是 tool_result 的附属信息，紧跟其后，不加块间空行
       const hasGapBeforeHook = prints.slice(printsBeforeHook).some(p => p.text === '');
-      expect(hasGapBeforeHook, 'hook 前应有块间空行').toBe(true);
+      expect(hasGapBeforeHook, 'hook 前不应有块间空行（紧跟 tool_result）').toBe(false);
     });
 
     // 注：纯 UI 的 system / error 不再是 Block kind——banner/错误直接走 UILayout.send。
@@ -153,9 +157,10 @@ describe('BlockPipeline', () => {
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
       p.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
-      p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' } });
-      // tool_call 前应有空行（thinking_end 的 finalize 分隔已被 justFinalized 抵消，
-      // 但 tool_call openModelBlock 仍会在已有内容前加空行）
+      // tool_call 进缓冲区，补 result 触发 flush
+      p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' }, toolUseId: 't2' });
+      p.emit({ kind: 'tool_result', name: 'run_bash', output: 'done', toolUseId: 't2' });
+      // tool_call 前应有空行（thinking_end 之后，flushTool 的 openModelBlock 加空行）
       const toolIdx = prints.findIndex(p => p.text.includes('Bash'));
       expect(toolIdx).toBeGreaterThan(0);
     });
@@ -250,6 +255,166 @@ describe('BlockPipeline', () => {
       p.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
       p.clearTurnState();
       expect(p.getLastExpandableFullLines()).toBeNull();
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  // 并行工具调用配对（Bug 1 修复验证）
+  //
+  // 物理本质：4 个同名 write_file 同时下发，每个有自己的 toolUseId。
+  // 旧版用 name 做 key 缓存 input，4 个互相覆盖——所有 result 都拿到
+  // 最后一个 call 的 input。新版用 toolUseId 做 key + FIFO 队列，精确配对。
+  //
+  // 验证方式：write_file 的 result summary 是 "⎿  Added N lines"，
+  // N 来自 input.content 的行数。让 4 个 call 的 content 行数各不同
+  //（1/2/3/4 行），配对错了 N 就会错位。
+  // ════════════════════════════════════════════════════════════════════
+  describe('并行工具调用配对（toolUseId）', () => {
+    // 提取 "⎿  Added N line(s)" 中的 N
+    function addedCount(text: string): number | null {
+      const m = text.match(/Added\s+(\d+)\s+line/);
+      return m ? parseInt(m[1], 10) : null;
+    }
+
+    it('4 个并行 write_file：每个 result 配对自己 call 的 input（按 toolUseId）', () => {
+      const { renderer, prints } = mockRenderer();
+      const p = new BlockPipeline(renderer);
+      // 4 个 call，content 行数 1/2/3/4 各不同（配对错了 N 就错）
+      p.emit({ kind: 'tool_call', name: 'write_file', input: { path: 'a.txt', content: 'A' }, toolUseId: 'id-1' });
+      p.emit({ kind: 'tool_call', name: 'write_file', input: { path: 'b.txt', content: 'B\nB' }, toolUseId: 'id-2' });
+      p.emit({ kind: 'tool_call', name: 'write_file', input: { path: 'c.txt', content: 'C\nC\nC' }, toolUseId: 'id-3' });
+      p.emit({ kind: 'tool_call', name: 'write_file', input: { path: 'd.txt', content: 'D\nD\nD\nD' }, toolUseId: 'id-4' });
+      // 4 个 result 按 toolUseId 到达（顺序与 call 一致）
+      p.emit({ kind: 'tool_result', name: 'write_file', output: 'File written: a.txt', toolUseId: 'id-1' });
+      p.emit({ kind: 'tool_result', name: 'write_file', output: 'File written: b.txt', toolUseId: 'id-2' });
+      p.emit({ kind: 'tool_result', name: 'write_file', output: 'File written: c.txt', toolUseId: 'id-3' });
+      p.emit({ kind: 'tool_result', name: 'write_file', output: 'File written: d.txt', toolUseId: 'id-4' });
+
+      const addedLines = prints
+        .map(pr => addedCount(pr.text))
+        .filter((n): n is number => n !== null);
+      // 各自配对自己的 content 行数：1/2/3/4
+      expect(addedLines).toEqual([1, 2, 3, 4]);
+    });
+
+    it('result 无 toolUseId 时按 FIFO 配对（兼容旧路径，顺序保证）', () => {
+      const { renderer, prints } = mockRenderer();
+      const p = new BlockPipeline(renderer);
+      // call 带 id，result 不带 id → 走 FIFO 队列
+      p.emit({ kind: 'tool_call', name: 'write_file', input: { path: 'first.txt', content: 'X' }, toolUseId: 'u-1' });
+      p.emit({ kind: 'tool_call', name: 'write_file', input: { path: 'second.txt', content: 'Y\nY' }, toolUseId: 'u-2' });
+      p.emit({ kind: 'tool_result', name: 'write_file', output: 'File written: first.txt' }); // 无 id
+      p.emit({ kind: 'tool_result', name: 'write_file', output: 'File written: second.txt' }); // 无 id
+
+      const addedLines = prints
+        .map(pr => addedCount(pr.text))
+        .filter((n): n is number => n !== null);
+      // FIFO：第 1 个 result 配对第 1 个 call（1 行），第 2 个配第 2 个（2 行）
+      expect(addedLines).toEqual([1, 2]);
+    });
+
+    it('无 toolUseId 的同名工具串行调用（最老路径）仍能配对', () => {
+      const { renderer, prints } = mockRenderer();
+      const p = new BlockPipeline(renderer);
+      // 都不带 id（模拟旧版完全无 id 的场景）
+      p.emit({ kind: 'tool_call', name: 'write_file', input: { path: 'old1.txt', content: 'a' } });
+      p.emit({ kind: 'tool_result', name: 'write_file', output: 'File written: old1.txt' });
+      p.emit({ kind: 'tool_call', name: 'write_file', input: { path: 'old2.txt', content: 'b\nc' } });
+      p.emit({ kind: 'tool_result', name: 'write_file', output: 'File written: old2.txt' });
+
+      const addedLines = prints
+        .map(pr => addedCount(pr.text))
+        .filter((n): n is number => n !== null);
+      expect(addedLines).toEqual([1, 2]);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  // 工具块缓冲模型（方案 C：视觉位置修复）
+  //
+  // 物理本质：旧版 emit 即落屏，5 个并行 call 先印完，5 个 result 才能堆屏幕底部，
+  // 视觉上"call 们在上、result 们在下"，每个 result 不知道对应哪个 call。
+  // 新版把 tool_call/tool_result 进缓冲区，配对成 call→result→call→result 顺序 flush。
+  // ════════════════════════════════════════════════════════════════════
+  describe('工具块缓冲（视觉位置修复）', () => {
+    it('5 个并行 Read：result 紧跟各自 call（call₁→result₁→call₂→result₂...）', () => {
+      const { renderer, prints } = mockRenderer();
+      const p = new BlockPipeline(renderer);
+      // 模拟真实时序：阶段 1 全部 emit call，阶段 3 才 emit result
+      p.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'a.ts' }, toolUseId: 'id-1' });
+      p.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'b.ts' }, toolUseId: 'id-2' });
+      p.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'c.ts' }, toolUseId: 'id-3' });
+      p.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'd.ts' }, toolUseId: 'id-4' });
+      p.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'e.ts' }, toolUseId: 'id-5' });
+      p.emit({ kind: 'tool_result', name: 'read_file', output: 'A-content', toolUseId: 'id-1' });
+      p.emit({ kind: 'tool_result', name: 'read_file', output: 'B-content', toolUseId: 'id-2' });
+      p.emit({ kind: 'tool_result', name: 'read_file', output: 'C-content', toolUseId: 'id-3' });
+      p.emit({ kind: 'tool_result', name: 'read_file', output: 'D-content', toolUseId: 'id-4' });
+      p.emit({ kind: 'tool_result', name: 'read_file', output: 'E-content', toolUseId: 'id-5' });
+
+      // 提取所有非空内容行的文本，保留顺序
+      const contentTexts = prints
+        .filter(pr => pr.text !== '')
+        .map(pr => pr.text);
+
+      // 找每个 call 的位置（● Read(path)）和对应 result 的位置（含 output 内容）
+      // 期望顺序：call₁, result₁, call₂, result₂, ...
+      // 关键：call₁ 和 result₁ 必须相邻（中间不能夹着 call₂）
+      const findCallIdx = (path: string) =>
+        contentTexts.findIndex(t => t.includes('●') && t.includes(path));
+      const findResultIdx = (content: string) =>
+        contentTexts.findIndex(t => t.includes(content));
+
+      const aCall = findCallIdx('a.ts');
+      const aResult = findResultIdx('A-content');
+      const bCall = findCallIdx('b.ts');
+
+      // 核心断言：a 的 result 紧跟 a 的 call，且都在 b 的 call 之前
+      expect(aCall, 'a 的 call 应存在').toBeGreaterThanOrEqual(0);
+      expect(aResult, 'a 的 result 应存在').toBeGreaterThanOrEqual(0);
+      expect(bCall, 'b 的 call 应存在').toBeGreaterThanOrEqual(0);
+      // a 的 result 在 a 的 call 之后、b 的 call 之前（成对 flush 的证据）
+      expect(aResult, 'a 的 result 应在 a 的 call 之后').toBeGreaterThan(aCall);
+      expect(bCall, 'b 的 call 应在 a 的 result 之后（成对 flush）').toBeGreaterThan(aResult);
+    });
+
+    it('hook 紧跟对应 tool_result，不串到下一个 call', () => {
+      const { renderer, prints } = mockRenderer();
+      const p = new BlockPipeline(renderer);
+      // 第 1 个工具：call + result + hook
+      p.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'x.ts' }, toolUseId: 'h-1' });
+      p.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'y.ts' }, toolUseId: 'h-2' });
+      p.emit({ kind: 'tool_result', name: 'read_file', output: 'X', toolUseId: 'h-1' });
+      p.emit({ kind: 'hook', text: '[Hook] read_file done (x)' });
+      p.emit({ kind: 'tool_result', name: 'read_file', output: 'Y', toolUseId: 'h-2' });
+      p.emit({ kind: 'hook', text: '[Hook] read_file done (y)' });
+
+      const contentTexts = prints
+        .filter(pr => pr.text !== '')
+        .map(pr => pr.text);
+
+      const xResultIdx = contentTexts.findIndex(t => t === 'X' || t.includes('X'));
+      const hookXIdx = contentTexts.findIndex(t => t.includes('(x)'));
+      const yCallIdx = contentTexts.findIndex(t => t.includes('y.ts'));
+
+      // x 的 hook 必须在 x 的 result 之后、y 的 call 之前（不串到 y 后面）
+      expect(hookXIdx, 'x 的 hook 应存在').toBeGreaterThanOrEqual(0);
+      expect(hookXIdx, 'x 的 hook 应在 x 的 result 之后').toBeGreaterThan(xResultIdx);
+      expect(yCallIdx, 'y 的 call 应在 x 的 hook 之后').toBeGreaterThan(hookXIdx);
+    });
+
+    it('clear() 时未配对的 call 也能 flush（不丢失）', () => {
+      const { renderer, prints } = mockRenderer();
+      const p = new BlockPipeline(renderer);
+      // 只 emit call，不 emit result，然后 clear
+      p.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'orphan.ts' }, toolUseId: 'orphan-1' });
+      p.clear();
+
+      const contentTexts = prints
+        .filter(pr => pr.text !== '')
+        .map(pr => pr.text);
+      // 即使没 result，call 行也得渲染出来（不能因缓冲而丢失）
+      expect(contentTexts.some(t => t.includes('orphan.ts')), '未配对 call 不应丢失').toBe(true);
     });
   });
 });

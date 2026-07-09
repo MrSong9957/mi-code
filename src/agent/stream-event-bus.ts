@@ -19,6 +19,7 @@ export type StreamEventType =
 
 /** 工具调用事件数据 */
 export interface ToolCallEvent {
+  toolUseId: string;
   name: string;
   input: Record<string, unknown>;
   startTime: number;

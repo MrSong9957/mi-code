@@ -26,8 +26,11 @@ import { createSpinnerStore, type SpinnerStore } from './state/spinner-store.js'
 import { createCompletionStore, type CompletionStore } from './state/completion-store.js';
 import { createOverlayStore, type OverlayStore } from './state/overlay-store.js';
 import { PipelineToStoreAdapter } from './state/pipeline-adapter.js';
+import { RenderModeProvider, type RenderMode } from './state/render-mode.js';
 import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
+import { USE_DOUBLE_BUFFER, createCustomRenderer, setCursorPos } from '../render/index.js';
+import { InlineRenderer } from './inline/InlineRenderer.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
 
@@ -44,6 +47,8 @@ export interface BootstrapOptions {
   onTab?: (text: string) => void;
   /** Ctrl+O 切换覆盖层回调 */
   onToggleOverlay?: () => void;
+  /** 渲染模式：inline（原生屏，默认）或 alt-screen（备用屏） */
+  renderMode?: RenderMode;
 }
 
 export interface BootstrapHandle {
@@ -69,6 +74,9 @@ export interface BootstrapHandle {
 }
 
 export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
+  const renderMode = opts.renderMode ?? 'inline';
+  const isInline = renderMode === 'inline';
+
   const messagesStore = createMessagesStore();
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
   const statusStore = createStatusStore(opts.status);
@@ -108,12 +116,33 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     }
   };
 
-  // 渲染 Ink 应用（ConnectedApp 内部 useAltScreen 进 alt screen）
+  // 渲染 Ink 应用
+  // inline 模式：alternateScreen=false，内容直接写入主缓冲区（原生 scrollback）
+  // alt-screen 模式：alternateScreen=true，进备用屏 + 可选双缓冲 renderer
+  const renderOptions: {
+    exitOnCtrlC: false;
+    alternateScreen: boolean;
+    patchConsole: false;
+    renderer?: unknown;
+    onSetCursorPosition?: (pos: unknown) => void;
+  } = { exitOnCtrlC: false, alternateScreen: !isInline, patchConsole: false };
+
+  if (!isInline && USE_DOUBLE_BUFFER) {
+    renderOptions.renderer = createCustomRenderer({ stdout: process.stdout });
+    renderOptions.onSetCursorPosition = (pos) => { setCursorPos(pos as { x: number; y: number } | undefined); };
+  }
+
+  const inlineRenderer = isInline ? new InlineRenderer(process.stdout) : null;
+
   let inkInstance: InkInstance | null = render(
-    React.createElement(ConnectedApp, {
-      messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
+    React.createElement(RenderModeProvider, { initialMode: renderMode, children:
+      React.createElement(ConnectedApp, {
+        messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore,
+        onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
+        inlineRenderer: inlineRenderer ?? undefined,
+      }),
     }),
-    { exitOnCtrlC: false },
+    renderOptions,
   );
 
   const cleanup = (): void => {
@@ -123,7 +152,9 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
       // unmount 可能已调用，忽略
     }
     inkInstance = null;
-    exitAltScreen(process.stdout);
+    if (!isInline) {
+      exitAltScreen(process.stdout);
+    }
   };
 
   return {

@@ -1,6 +1,6 @@
 // 文件工具：read_file, write_file, edit_file
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { dirname, join } from 'path';
 import { safePath } from './path-sandbox.js';
 import type { ToolDefinition, ToolExecutor } from '../types.js';
 
@@ -8,16 +8,18 @@ import type { ToolDefinition, ToolExecutor } from '../types.js';
 const MAX_READ_SIZE = 50 * 1024;
 
 /**
- * read_file: 读取文件内容
+ * read_file: 读取文件内容（或列出目录条目）
  *
  * 物理本质：打开文件柜，取出文件，看里面写了什么。
+ * 如果打开的是一个文件夹，就报一份目录清单（每个子项带 / 后缀表示文件夹）。
  * 可以只看前几行（limit），避免拿太多出来。
  */
 export function createReadFileTool(): { definition: ToolDefinition; executor: ToolExecutor } {
   return {
     definition: {
       name: 'read_file',
-      description: 'Read file content. Returns first N lines if limit specified.',
+      description:
+        'Read a file or directory from the local filesystem. If path is a directory, returns its entries (directories end with /). Returns first N lines if limit specified.',
       parameters: {
         type: 'object',
         properties: {
@@ -36,6 +38,22 @@ export function createReadFileTool(): { definition: ToolDefinition; executor: To
     executor: async (input) => {
       const filePath = safePath(input.path as string);
       const limit = input.limit as number | undefined;
+
+      // 目录：列条目，文件夹加 / 后缀
+      if (statSync(filePath).isDirectory()) {
+        const entries = readdirSync(filePath).map((name) => {
+          const isDir = statSync(join(filePath, name)).isDirectory();
+          return isDir ? `${name}/` : name;
+        });
+        const sorted = entries.sort((a, b) => {
+          // 文件夹优先，再按名字排
+          const aDir = a.endsWith('/');
+          const bDir = b.endsWith('/');
+          if (aDir !== bDir) return aDir ? -1 : 1;
+          return a.localeCompare(b);
+        });
+        return sorted.join('\n');
+      }
 
       let content = readFileSync(filePath, 'utf8');
 

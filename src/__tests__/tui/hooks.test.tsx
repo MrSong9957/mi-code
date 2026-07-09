@@ -7,6 +7,7 @@ import React from 'react';
 import { Text } from 'ink';
 import { useAltScreen, enterAltScreen, exitAltScreen } from '../../tui/hooks/useAltScreen.js';
 import { useTerminalSize } from '../../tui/hooks/useTerminalSize.js';
+import { RenderModeProvider } from '../../tui/state/render-mode.js';
 
 function Probe({ onSize }: { onSize?: (s: { rows: number; cols: number }) => void }): React.ReactElement {
   useAltScreen();
@@ -15,20 +16,20 @@ function Probe({ onSize }: { onSize?: (s: { rows: number; cols: number }) => voi
   return React.createElement(Text, {}, 'probe');
 }
 
-describe('useAltScreen', () => {
+function AltScreenProbe(): React.ReactElement {
+  const isAlt = useAltScreen();
+  return React.createElement(Text, {}, isAlt ? 'alt' : 'inline');
+}
+
+describe('useAltScreen — alt-screen mode', () => {
   it('mount 时进 alt screen（在所有写入里能找到 \\x1b[?1049h）', () => {
-    // ink-testing-library 的 stdout.write 把每帧 push 进 frames。
-    // useAltScreen 的 stdout.write(ENTER_ALT) 会作为一帧进 frames。
-    const inst = render(React.createElement(Probe));
-    // frames 里应能找到进 alt screen 的序列（可能与其他渲染混合，用 join 查找）
+    const inst = render(
+      React.createElement(RenderModeProvider, { initialMode: 'alt-screen', children: React.createElement(Probe) }),
+    );
     const allFrames = inst.stdout.frames.join('');
-    // 注意：debug 模式下 Ink 可能只在最终帧输出；alt screen 序列是 useEffect 直写
-    // 若 frames 不含，则退回验证 unmount 的退出序列（间接证明 mount 进过）
     const hasEnter = allFrames.includes('\x1b[?1049h');
     inst.unmount();
     if (!hasEnter) {
-      // 兜底断言：至少 unmount 的退出序列存在（说明 mount 进了又退）
-      // 这条由下一个测试覆盖，这里若 hasEnter 为 true 就直接断言
       expect(hasEnter, 'mount 应写 \\x1b[?1049h（或 testing-library debug 模式吃掉了直写）').toBe(true);
     } else {
       expect(hasEnter).toBe(true);
@@ -36,13 +37,52 @@ describe('useAltScreen', () => {
   });
 
   it('unmount 时退 alt screen（写 \\x1b[?1049l）', () => {
-    const inst = render(React.createElement(Probe));
+    const inst = render(
+      React.createElement(RenderModeProvider, { initialMode: 'alt-screen', children: React.createElement(Probe) }),
+    );
     const beforeUnmountLen = inst.stdout.frames.length;
     inst.unmount();
-    // unmount 后新增的写入里应含退出 alt screen 序列
     const newWrites = inst.stdout.frames.slice(beforeUnmountLen).join('');
-    // 允许序列混在帧里，用 includes 查找
     expect(newWrites).toContain('\x1b[?1049l');
+  });
+
+  it('返回 true 表示处于 alt-screen 模式', () => {
+    const inst = render(
+      React.createElement(RenderModeProvider, { initialMode: 'alt-screen', children: React.createElement(AltScreenProbe) }),
+    );
+    const allFrames = inst.stdout.frames.join('');
+    expect(allFrames).toContain('alt');
+    inst.unmount();
+  });
+});
+
+describe('useAltScreen — inline mode', () => {
+  it('mount 时不写 \\x1b[?1049h', () => {
+    const inst = render(
+      React.createElement(RenderModeProvider, { initialMode: 'inline', children: React.createElement(Probe) }),
+    );
+    const allFrames = inst.stdout.frames.join('');
+    expect(allFrames).not.toContain('\x1b[?1049h');
+    inst.unmount();
+  });
+
+  it('unmount 时不写 \\x1b[?1049l', () => {
+    const inst = render(
+      React.createElement(RenderModeProvider, { initialMode: 'inline', children: React.createElement(Probe) }),
+    );
+    const beforeUnmountLen = inst.stdout.frames.length;
+    inst.unmount();
+    const newWrites = inst.stdout.frames.slice(beforeUnmountLen).join('');
+    expect(newWrites).not.toContain('\x1b[?1049l');
+  });
+
+  it('返回 false 表示处于 inline 模式', () => {
+    const inst = render(
+      React.createElement(RenderModeProvider, { initialMode: 'inline', children: React.createElement(AltScreenProbe) }),
+    );
+    const allFrames = inst.stdout.frames.join('');
+    expect(allFrames).toContain('inline');
+    inst.unmount();
   });
 });
 

@@ -33,6 +33,9 @@ export class BackgroundManager {
   private tasks = new Map<string, RuntimeTaskRecord>();
   private notifications: Notification[] = [];
   private processes = new Map<string, ChildProcess>();
+  /** 被超时/僵尸机制主动 kill 的 task id（区分「被超时杀」vs「自然崩溃」）。
+   *  解决 SIGTERM → close 事件竞态：close handler 看到此标志时优先判 timeout。 */
+  private killedByManager = new Set<string>();
   private zombieTimer: ReturnType<typeof setInterval> | null = null;
   private zombieTimeoutMs: number;
   private zombieCheckIntervalMs: number;
@@ -56,6 +59,7 @@ export class BackgroundManager {
           // 僵尸：强制击杀
           const child = this.processes.get(id);
           if (child) {
+            this.killedByManager.add(id);
             child.kill('SIGKILL');
             this.processes.delete(id);
           }
@@ -116,7 +120,10 @@ export class BackgroundManager {
     child.stderr?.on('data', safeAppend);
 
     // 超时定时器
+    // 先置 killedByManager 标志再 kill，防止 close 事件竞态抢先标记 error。
+    // （SIGTERM 触发的 close 事件可能先于此处的 finishTask 执行）
     const timer = setTimeout(() => {
+      this.killedByManager.add(id);
       child.kill('SIGTERM');
       this.finishTask(id, 'timeout', 'command timed out');
     }, timeoutMs);
@@ -129,6 +136,15 @@ export class BackgroundManager {
       // 如果已经被超时处理过，跳过
       const task = this.tasks.get(id);
       if (!task || task.status !== 'running') return;
+
+      // 竞态防护：被超时/僵尸机制 kill 的进程，即使 close 带非零码也判 timeout。
+      // （此分支只在 finishTask('timeout') 尚未执行时到达——即 close 抢先）
+      if (this.killedByManager.has(id)) {
+        this.killedByManager.delete(id);
+        this.finishTask(id, 'timeout', 'command timed out');
+        return;
+      }
+      this.killedByManager.delete(id);
 
       if (code === 0) {
         let preview = '(no output)';

@@ -10,6 +10,8 @@
 
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolUseBlock, ContentBlock } from './types.js';
+import type { PermissionChecker } from '../permission/checker.js';
+import { READ_ONLY_TOOLS } from '../permission/types.js';
 
 /** 工具执行状态 */
 export type ToolStatus = 'queued' | 'executing' | 'completed' | 'yielded';
@@ -24,17 +26,19 @@ export interface TrackedTool {
   error?: string;
 }
 
-/** 并发安全的只读工具白名单 */
-const READ_ONLY_TOOLS = new Set([
-  'read_file', 'glob', 'grep', 'web_fetch', 'web_search',
-  'list_directory', 'get_file_info',
-]);
+/**
+ * 并发安全的只读工具白名单
+ *
+ * 复用 permission/types.ts 的 READ_ONLY_TOOLS（唯一真相源），
+ * 避免并发分区与权限判定使用不同标准导致漂移。
+ */
+const CONCURRENCY_SAFE_TOOLS = new Set(READ_ONLY_TOOLS);
 
 /**
  * 判断工具是否可并发执行（只读工具可并发，写入工具必须独占）
  */
 export function isConcurrencySafe(toolName: string, _input?: Record<string, unknown>): boolean {
-  return READ_ONLY_TOOLS.has(toolName);
+  return CONCURRENCY_SAFE_TOOLS.has(toolName);
 }
 
 /**
@@ -45,12 +49,14 @@ export function isConcurrencySafe(toolName: string, _input?: Record<string, unkn
  */
 export class StreamingToolExecutor {
   private registry: ToolRegistry;
+  private permissionChecker?: PermissionChecker;
   private tools: TrackedTool[] = [];
   private discarded = false;
   private progressResolve?: () => void;
 
-  constructor(registry: ToolRegistry) {
+  constructor(registry: ToolRegistry, permissionChecker?: PermissionChecker) {
     this.registry = registry;
+    this.permissionChecker = permissionChecker;
   }
 
   /**
@@ -109,6 +115,20 @@ export class StreamingToolExecutor {
     tool.status = 'executing';
 
     try {
+      // 权限检查（仅在传入 checker 时启用）。
+      // 当前流式路径无用户交互通道，**ask 决策保持旧行为（放行）**，
+      // 仅 deny 真正拦截（plan 模式、危险命令、用户 deny 规则、越界路径）。
+      // 这样既补上硬拦截，又不回归 default 模式下写工具的可用性。
+      if (this.permissionChecker) {
+        const decision = this.permissionChecker.check(tool.block.name, tool.block.input);
+        if (decision.behavior === 'deny') {
+          tool.results = [{ type: 'text', text: `[Blocked by permission] ${decision.reason}` }];
+          tool.status = 'completed';
+          this.progressResolve?.();
+          return;
+        }
+      }
+
       const output = await this.registry.execute(tool.block.name, tool.block.input);
       tool.results = [{ type: 'text', text: output }];
       tool.status = 'completed';

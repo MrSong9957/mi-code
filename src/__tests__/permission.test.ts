@@ -133,7 +133,7 @@ describe('PermissionChecker - Gate 1 (built-in hard deny)', () => {
 
   it('allows safe bash that is not dangerous', () => {
     const d = checker.check('run_bash', { command: 'echo hi' });
-    // default 模式 + 写工具 → ask（未被闸门1挡）
+    // build 模式（默认）+ 写工具 → ask（未被闸门1挡）
     expect(d.behavior).toBe('ask');
   });
 });
@@ -162,7 +162,25 @@ describe('PermissionChecker - Gate 3 (mode)', () => {
     const checker = new PermissionChecker({ mode: 'plan', workdir: process.cwd() });
     expect(checker.check('write_file', { path: 'a.txt', content: 'x' }).behavior).toBe('deny');
     expect(checker.check('edit_file', { path: 'a.txt', old_text: 'a', new_text: 'b' }).behavior).toBe('deny');
-    expect(checker.check('run_bash', { command: 'echo hi' }).behavior).toBe('deny');
+    // run_bash 写命令 deny（echo>是重定向写）；只读 bash 在下方测试
+    expect(checker.check('run_bash', { command: 'echo hi > file.txt' }).behavior).toBe('deny');
+  });
+
+  it('plan mode allows read-only bash commands (ls/cat/grep/git status)', () => {
+    const checker = new PermissionChecker({ mode: 'plan' });
+    expect(checker.check('run_bash', { command: 'echo hi' }).behavior).toBe('allow'); // 无重定向
+    expect(checker.check('run_bash', { command: 'ls -la' }).behavior).toBe('allow');
+    expect(checker.check('run_bash', { command: 'grep -r foo .' }).behavior).toBe('allow');
+    expect(checker.check('run_bash', { command: 'git status' }).behavior).toBe('allow');
+    expect(checker.check('run_bash', { command: 'git log --oneline' }).behavior).toBe('allow');
+  });
+
+  it('plan mode denies write bash commands (mkdir/git commit/tee/...)', () => {
+    const checker = new PermissionChecker({ mode: 'plan' });
+    expect(checker.check('run_bash', { command: 'mkdir foo' }).behavior).toBe('deny');
+    expect(checker.check('run_bash', { command: 'git commit -m x' }).behavior).toBe('deny');
+    expect(checker.check('run_bash', { command: 'echo x | tee file' }).behavior).toBe('deny');
+    expect(checker.check('run_bash', { command: 'npm install lodash' }).behavior).toBe('deny');
   });
 
   it('plan mode allows read tools', () => {
@@ -184,23 +202,23 @@ describe('PermissionChecker - Gate 3 (mode)', () => {
   });
 });
 
-describe('PermissionChecker - Gate 4 (user allow rules + default)', () => {
-  it('allow rule permits a write in default mode (no ask)', () => {
+describe('PermissionChecker - Gate 4 (user allow rules + build)', () => {
+  it('allow rule permits a write in build mode (no ask)', () => {
     const checker = new PermissionChecker({
-      mode: 'default',
+      mode: 'build',
       rules: [{ tool: 'write_file', behavior: 'allow', path: 'logs/*' }],
     });
     const d = checker.check('write_file', { path: 'logs/run.log', content: 'x' });
     expect(d.behavior).toBe('allow');
   });
 
-  it('default mode allows read tools', () => {
-    const checker = new PermissionChecker({ mode: 'default' });
+  it('build mode allows read tools', () => {
+    const checker = new PermissionChecker({ mode: 'build' });
     expect(checker.check('read_file', { path: 'a.txt' }).behavior).toBe('allow');
   });
 
-  it('default mode asks for write tools', () => {
-    const checker = new PermissionChecker({ mode: 'default', workdir: process.cwd() });
+  it('build mode asks for write tools', () => {
+    const checker = new PermissionChecker({ mode: 'build', workdir: process.cwd() });
     expect(checker.check('write_file', { path: 'a.txt', content: 'x' }).behavior).toBe('ask');
   });
 
@@ -216,7 +234,7 @@ describe('PermissionChecker - Gate 4 (user allow rules + default)', () => {
 describe('PermissionChecker - rule precedence', () => {
   it('deny rule beats allow rule', () => {
     const checker = new PermissionChecker({
-      mode: 'default',
+      mode: 'build',
       rules: [
         { tool: 'run_bash', behavior: 'allow', content: 'git *' },
         { tool: 'run_bash', behavior: 'deny', content: 'git push *' },
@@ -240,7 +258,7 @@ describe('PermissionChecker - rule precedence', () => {
 describe('PermissionChecker - rule management', () => {
   it('setMode / getMode', () => {
     const checker = new PermissionChecker();
-    expect(checker.getMode()).toBe('default');
+    expect(checker.getMode()).toBe('build');
     checker.setMode('plan');
     expect(checker.getMode()).toBe('plan');
   });

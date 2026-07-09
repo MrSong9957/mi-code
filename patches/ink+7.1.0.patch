@@ -1,0 +1,133 @@
+diff --git a/node_modules/ink/build/components/Box.js b/node_modules/ink/build/components/Box.js
+index 9a1d9c8..f3230fc 100644
+--- a/node_modules/ink/build/components/Box.js
++++ b/node_modules/ink/build/components/Box.js
+@@ -10,7 +10,13 @@ const Box = forwardRef(({ children, backgroundColor, 'aria-label': ariaLabel, 'a
+     if (isScreenReaderEnabled && ariaHidden) {
+         return null;
+     }
+-    const boxElement = (React.createElement("ink-box", { ref: ref, style: {
++    // MI-CODE FORK: 透传 internal_cursorTarget 给底层 <ink-box> host component。
++    // 默认 Box 只转发 ref/style/internal_accessibility/children，其他 prop（含 internal_cursorTarget）
++    // 会落入 ...style 收集器被 applyStyles 丢弃。reconciler 的 createInstance/commitUpdate
++    // 识别 internal_cursorTarget 并挂到 node 上，yoga-walk 读它定位终端光标（输入框绝对 Y）。
++    const inkBoxProps = {
++        ref: ref,
++        style: {
+             flexWrap: 'nowrap',
+             flexDirection: 'row',
+             flexGrow: 0,
+@@ -19,10 +25,16 @@ const Box = forwardRef(({ children, backgroundColor, 'aria-label': ariaLabel, 'a
+             backgroundColor,
+             overflowX: style.overflowX ?? style.overflow ?? 'visible',
+             overflowY: style.overflowY ?? style.overflow ?? 'visible',
+-        }, internal_accessibility: {
++        },
++        internal_accessibility: {
+             role,
+             state: ariaState,
+-        } }, isScreenReaderEnabled && label ? label : children));
++        },
++    };
++    if (style.internal_cursorTarget === true) {
++        inkBoxProps.internal_cursorTarget = true;
++    }
++    const boxElement = (React.createElement("ink-box", inkBoxProps, isScreenReaderEnabled && label ? label : children));
+     // If this Box has a background color, provide it to children via context
+     if (backgroundColor) {
+         return (React.createElement(backgroundContext.Provider, { value: backgroundColor }, boxElement));
+diff --git a/node_modules/ink/build/ink.js b/node_modules/ink/build/ink.js
+index 24d45ec..34bfa51 100644
+--- a/node_modules/ink/build/ink.js
++++ b/node_modules/ink/build/ink.js
+@@ -306,6 +306,9 @@ export default class Ink {
+     setCursorPosition = (position) => {
+         this.cursorPosition = position;
+         this.log.setCursorPosition(position);
++        // MI-CODE FORK: forward cursor position to custom renderer (options.onSetCursorPosition).
++        // Symmetric with options.renderer patch; no-op when not provided (optional chaining).
++        this.options.onSetCursorPosition?.(position);
+     };
+     restoreLastOutput = () => {
+         if (!this.interactive) {
+@@ -345,7 +348,26 @@ export default class Ink {
+             this.nextRenderCommit = undefined;
+         }
+         const startTime = performance.now();
+-        const { output, outputHeight, staticOutput } = render(this.rootNode, this.isScreenReaderEnabled);
++        // MI-CODE FORK: allow custom renderer injection via options.renderer.
++        // When provided, call the custom renderer with a viewport options object
++        // (width/height/isScreenReaderEnabled). When not provided, fall back to the
++        // original built-in renderer with its original (node, boolean) signature so
++        // default behavior is identical to upstream Ink.
++        let output, outputHeight, staticOutput;
++        if (this.options.renderer) {
++            const rendererFn = this.options.renderer;
++            // MI-CODE FORK: 直接传 Ink instance 的 cursorPosition（同步字段），
++            // 不依赖 pub/sub 的 effect 时序（useInsertionEffect vs resetAfterCommit 顺序不确定）。
++            ({ output, outputHeight, staticOutput } = rendererFn(this.rootNode, {
++                width: this.options.stdout.columns || 80,
++                height: this.options.stdout.rows || 24,
++                isScreenReaderEnabled: this.isScreenReaderEnabled,
++                cursor: this.cursorPosition,
++            }));
++        }
++        else {
++            ({ output, outputHeight, staticOutput } = render(this.rootNode, this.isScreenReaderEnabled));
++        }
+         this.options.onRender?.({ renderTime: performance.now() - startTime });
+         // If <Static> output isn't empty, it means new children have been added to it
+         const hasStaticOutput = staticOutput && staticOutput !== '\n';
+@@ -415,6 +437,15 @@ export default class Ink {
+         if (hasStaticOutput) {
+             this.fullStaticOutput += staticOutput;
+         }
++        // MI-CODE FORK: 自研 renderer 已直接写 stdout，跳过 Ink 的 renderInteractiveFrame
++        // （否则 Ink 会调 throttledLog(outputToRender) 往 stdout 写额外字节如 '\n'，
++        // 把光标从 renderer 画的 (0,0) 往下推，导致画面漂到底部）。
++        if (this.options.renderer) {
++            this.lastOutput = output;
++            this.lastOutputToRender = output;
++            this.lastOutputHeight = outputHeight;
++            return;
++        }
+         this.renderInteractiveFrame(output, outputHeight, hasStaticOutput ? staticOutput : '');
+     };
+     render(node) {
+@@ -701,6 +732,10 @@ export default class Ink {
+         if (this.alternateScreen) {
+             this.writeBestEffort(this.options.stdout, ansiEscapes.enterAlternativeScreen);
+             this.writeBestEffort(this.options.stdout, hideCursorEscape);
++            // MI-CODE FORK: Ink 的 enterAlternativeScreen 只发 ?1049h（切备用屏），
++            // 不发 \x1b[H（光标归位）→ alt screen 光标停在用户输命令的位置（终端中间/底部）
++            // → renderer 从那开始画 → 画面漂移。进 alt 后立即归位到 (0,0)。
++            this.writeBestEffort(this.options.stdout, '\x1b[H');
+         }
+     }
+     resolveInteractiveOption(interactive) {
+diff --git a/node_modules/ink/build/reconciler.js b/node_modules/ink/build/reconciler.js
+index 5b4a9d7..fab6c9a 100644
+--- a/node_modules/ink/build/reconciler.js
++++ b/node_modules/ink/build/reconciler.js
+@@ -149,6 +149,10 @@ export default createReconciler({
+                 node.internal_transform = value;
+                 continue;
+             }
++            if (key === 'internal_cursorTarget') {
++                node.internal_cursorTarget = true;
++                continue;
++            }
+             if (key === 'internal_static') {
+                 currentRootNode = rootNode;
+                 node.internal_static = true;
+@@ -239,6 +243,10 @@ export default createReconciler({
+                     node.internal_transform = value;
+                     continue;
+                 }
++                if (key === 'internal_cursorTarget') {
++                    node.internal_cursorTarget = true;
++                    continue;
++                }
+                 if (key === 'internal_static') {
+                     node.internal_static = true;
+                     continue;

@@ -129,6 +129,25 @@ describe('BackgroundManager', () => {
     const notifications = manager.drainNotifications();
     expect(notifications[0].preview.length).toBeLessThanOrEqual(500);
   });
+
+  // ── 超时 vs exit 竞态稳定性（flaky 回归防护）──
+  // 根因：超时回调 child.kill('SIGTERM') 后，close 事件（非零退出码 → error）
+  // 可能抢先于 finishTask('timeout') 执行，导致误标 error。
+  // 本测试重复跑多次，放大竞态窗口，确保每次都正确标记 timeout。
+  it('timeout: 多次超时均标记为 timeout（无 SIGTERM/close 竞态误标 error）', async () => {
+    const TRIALS = 5;
+    const results: string[] = [];
+    for (let i = 0; i < TRIALS; i++) {
+      manager.run('sleep 30', { timeoutMs: 100 });
+      await waitFor(() => manager.pendingCount() > 0, 5000);
+      const notifs = manager.drainNotifications();
+      results.push(notifs[0]?.status ?? '(none)');
+    }
+    // 每次（包括竞态最激烈的第一次）都必须是 timeout，不能是 error
+    for (let i = 0; i < TRIALS; i++) {
+      expect(results[i], `trial ${i}: 超时任务被误标为 ${results[i]}（应为 timeout）`).toBe('timeout');
+    }
+  }, 30000);
 });
 
 /** 轮询等待条件成立 */

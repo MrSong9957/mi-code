@@ -13,6 +13,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { createDefaultRegistry } from './agent/tool-registry.js';
 import { AnthropicStreamClient } from './agent/anthropic-stream-client.js';
+import { formatErrorForDisplay } from './cli/format-error.js';
 import { streamingQuery } from './agent/streaming-query.js';
 import { StreamEventBus } from './agent/stream-event-bus.js';
 import { BlockPipeline } from './ui/block-pipeline.js';
@@ -49,8 +50,13 @@ const VERSION = "1.0.0";
 // 初始化
 // ─────────────────────────────────────────────────────────────
 const configStore = new ConfigStore();
-const MODEL = configStore.getModel();
-const SMALL_MODEL = configStore.getSmallModel(configStore.getDefaultProvider());
+// MODEL/SMALL_MODEL 显式取自 anthropic provider 槽位（不读 defaultProvider）。
+// 原因：客户端恒为 AnthropicStreamClient（new Anthropic()），只支持 Anthropic 兼容端点。
+// 若用 getModel()（读 defaultProvider），当 defaultProvider=openai 时会拿到 gpt-4o，
+// 但 key 也会取错槽位（见下方 getApiKey 修复），导致 401。
+const ANTHROPIC_PROVIDER = configStore.getProvider('anthropic');
+const MODEL = ANTHROPIC_PROVIDER?.model || configStore.getModel();
+const SMALL_MODEL = configStore.getSmallModel('anthropic');
 
 const todoManager = new TodoManager();
 const skillRegistry = new SkillRegistry();
@@ -153,6 +159,8 @@ let tuiHandle: BootstrapHandle | null = null;
 let pipeline = new BlockPipeline({
   printMessage: () => {},
   appendStreamingMarkdown: () => {},
+  appendStreamingThinking: () => {},
+  eraseStreamingThinking: () => {},
   sealStreaming: () => {},
   flushNow: () => {},
   clearMessages: () => {},
@@ -389,7 +397,10 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     : '';
 
   const systemPrompt = [
-    'You are a helpful assistant that can execute shell commands and manipulate files.',
+    'You are a helpful assistant. Answer questions directly with text — do NOT use tools for simple conversation.',
+    'You have tools (run_bash, read_file, write_file, etc.) for when you need to perform real operations on the system.',
+    'Only use tools when the user asks you to do something concrete (run a command, read/edit a file, search code).',
+    'For questions, explanations, and advice, respond with plain text — never wrap your reply in a Bash echo command.',
     '',
     skillsDescription,
     reminder ? `\n${reminder}` : '',
@@ -401,9 +412,13 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   let thinkingStart = Date.now();
   pipeline.emit({ kind: 'thinking_start' });
 
-  const apiKey = configStore.getApiKey(configStore.getDefaultProvider());
+  // API Key 显式取自 anthropic provider 槽位（不读 defaultProvider）。
+  // 原因：客户端恒为 AnthropicStreamClient，只支持 Anthropic 兼容端点 + X-Api-Key 头。
+  // 若用 getApiKey(getDefaultProvider())，当 defaultProvider=openai 时会拿到假 key
+  // （如 sk-test-123），发给 miMo 网关 → 401 Invalid API Key。
+  const apiKey = configStore.getApiKey('anthropic');
   if (!apiKey) {
-    tuiHandle?.printStyled(`[Error] No API Key for ${configStore.getDefaultProvider()}. Use /login <provider> <key> to configure.`, 'error');
+    tuiHandle?.printStyled(`[Error] No API Key for anthropic provider. Use /login anthropic <key> to configure.`, 'error');
     isProcessing = false;
     return;
   }
@@ -508,7 +523,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       assistantText = '';
     }
   } catch (err) {
-    tuiHandle?.printStyled(`[Error] ${err}`, 'error');
+    // formatErrorForDisplay 只取 message（不含堆栈），超长截断——
+    // 避免把整个 Error.stack 刷屏到终端（之前的 [system] [Error] Error [ERR_UNHANDLED_ERROR]... 问题）
+    tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
   } finally {
     tuiHandle?.stopSpinner();
     isProcessing = false;
@@ -561,6 +578,7 @@ if (cliOpts.list) {
       dir: SHORT_DIR,
       branch: GIT_BRANCH,
     },
+    renderMode: 'inline',
     onSubmit: (text) => { void handleUserSubmit(text); },
     onExit: () => { cleanupOnExit(); process.exit(0); },
     onTab: (text) => { handleTab(text, tuiHandle, configStore, permissionChecker); },

@@ -1,22 +1,42 @@
 // src/tui/components/LogoBox.tsx
-// 固定 LOGO 区（不随消息滚动）
+// 固定 LOGO 区（不随消息滚动，支持字符级选区高亮）。
 //
-// 物理本质：屏幕底部、Footer 上方的「铭牌」。
-// charter §顶层布局示例里没有独立 LOGO 区，但 LOGO 需要固定可见（不随 ScrollBox 滚走），
-// 故在 App 布局的 ScrollBox 与 Footer 之间插入此 flexShrink=0 区块。
-//
-// 内容：3 行 ASCII art + 版本 + 当前目录。mode/model/branch 在 StatusBar 显示，不在此重复。
+// 物理本质：屏幕顶部的「铭牌」。3 行 ASCII art + 版本 + 当前目录。
+// 选区高亮：每行用 SelectionText（自订阅 selectionStore，蓝底黑字切片）。
 
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box } from 'ink';
 import type { LogoData } from '../types.js';
+import { SelectionText } from './SelectionText.js';
+import type { SelectionStore } from '../state/selection-store.js';
 
-export function LogoBox({ logo }: { logo: LogoData }): React.ReactElement {
+/** LOGO 行 0 起的全局行号（与 App.tsx LOGO_ROWS 一致） */
+const LOGO_BASE_ROW = 0;
+
+export interface LogoBoxProps {
+  logo: LogoData;
+  /** 选区 store（由 ConnectedApp 注入；SelectionText 自订阅） */
+  selectionStore?: SelectionStore;
+}
+
+export function LogoBox({ logo, selectionStore }: LogoBoxProps): React.ReactElement {
+  const lines = [
+    ` ▐▛███▜▌   MiCode v${logo.version}`,
+    '▝▜█████▛▘  TypeScript CLI · Node.js Runtime',
+    `  ▘▘ ▝▝    ${logo.dir}`,
+  ];
+
   return (
     <Box flexShrink={0} flexDirection="column">
-      <Text color="magenta"> ▐▛███▜▌   MiCode v{logo.version}</Text>
-      <Text color="magenta">▝▜█████▛▘  TypeScript CLI · Node.js Runtime</Text>
-      <Text color="magenta">  ▘▘ ▝▝    {logo.dir}</Text>
+      {lines.map((text, i) => (
+        <SelectionText
+          key={i}
+          content={text}
+          globalRow={LOGO_BASE_ROW + i}
+          selectionStore={selectionStore}
+          baseProps={{ color: 'magenta' }}
+        />
+      ))}
     </Box>
   );
 }

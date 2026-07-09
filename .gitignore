@@ -8,6 +8,12 @@ dist/
 .micode.json
 .task_outputs/
 .opencode/
-.mimocode/.mcp.json
+.mimocode/
 .mcp.json
 .transcripts/
+.memory/
+.runtime-tasks/
+mouse-diag.log
+
+# ZCode 工具临时产物（规划文件等，同 .claude/.opencode）
+.zcode/

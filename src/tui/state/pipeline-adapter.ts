@@ -115,6 +115,22 @@ export class PipelineToStoreAdapter implements PipelineRenderer {
     // 保留方法以满足 PipelineRenderer 接口契约。
   }
 
+  appendStreamingThinking(text: string): void {
+    // 流式 thinking：首次 startStreamingThinking，后续 updateStreamingThinking
+    const msgs = this.store.getState().messages;
+    const last = msgs[msgs.length - 1];
+    if (last && !last.finalized && last.role === 'thinking') {
+      this.store.getState().updateStreamingThinking(text);
+    } else {
+      this.store.getState().startStreamingThinking(text);
+    }
+  }
+
+  eraseStreamingThinking(): void {
+    // 折叠：移除流式 thinking 消息，摘要行由 printMessage 追加
+    this.store.getState().removeStreamingThinking();
+  }
+
   clearMessages(): void {
     this.store.getState().clear();
     this.streamingPrefix = '';

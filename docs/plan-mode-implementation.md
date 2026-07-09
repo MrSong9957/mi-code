@@ -1,5 +1,32 @@
 # Plan 模式实现方案（代码级强约束）
 
+> **现状说明（2026-07 更新）**
+>
+> 本文档下半部分的 `PlanModeManager` + `plan-mode-interceptor` 设计**未采纳**，仅作为
+> 思想参考保留（"代码级强制优于提示词"这一核心观点仍然成立）。
+>
+> 实际落地采用**基于现有 `PermissionChecker` 的收口方案**——理由：
+> 1. 项目里 Plan 模式早已是 `PermissionChecker` 的一种 mode（`src/permission/checker.ts`
+>    闸门 3），并行新建一套 `PlanModeManager` 会与现有权限规则、危险命令检查、越界路径
+>    检查重复甚至冲突。
+> 2. 原 `ToolRegistry` 是薄壳，没有"注册时包装 executor"的扩展点；强行加会侵入核心。
+> 3. 真正的痛点是：主入口 `streamingQuery` 路径**根本没接 `PermissionChecker`**，
+>    `/mode plan` 对主循环零生效。原方案没识别到这点。
+>
+> **实际实现位置**：
+> - `src/agent/streaming-executor.ts` —— 构造函数新增可选 `permissionChecker`，在
+>   `executeTool()` 调 registry 前做 deny 检查。
+> - `src/agent/streaming-query.ts` —— `StreamingQueryOptions.permissionChecker` 字段；
+>   透传给 `StreamingToolExecutor`；兜底串行分支用 `checkPermissionOrBlock()` 预检。
+> - `src/index.ts` —— 把已有的 `permissionChecker` 实例（与 `/mode` 命令共用）传给
+>   `streamingQuery`。
+> - 测试：`src/__tests__/plan-mode-streaming.test.ts`。
+>
+> **拦截策略**：deny 决策拦下并返回 `[Blocked by permission] <reason>`；ask 决策保持
+> 旧行为（放行），因为流式路径暂无用户确认通道，强降级会回归 default 模式的写功能。
+
+---
+
 ## 问题
 
 Claude Code 的 Plan 模式只靠提示词约束，AI 经常忽略限制直接执行修改。

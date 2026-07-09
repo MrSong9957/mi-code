@@ -1,79 +1,99 @@
 // src/__tests__/tui/clipboard.test.ts
-// 跨平台剪贴板写入（OS 命令，charter §核心模块 2 步骤 3）
+// clipboard 三级回退：OS命令 → tmux → OSC52
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { writeClipboard } from '../../tui/input/clipboard.js';
 
-// mock child_process.spawn
-vi.mock('child_process', () => ({
-  spawn: vi.fn(),
-}));
-import { spawn } from 'child_process';
-
-/** 造一个最小 mock child（实现 writeClipboard 用到的 on/close/error 接口） */
-function makeMockChild(opts: { exitCode?: number; spawnError?: Error } = {}) {
-  const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
-  const stdinHandlers: Record<string, ((...args: unknown[]) => void)[]> = {};
-  const child = {
-    stdin: {
-      write: vi.fn(() => true),
-      end: vi.fn(),
-      on: (event: string, cb: (...args: unknown[]) => void) => {
-        (stdinHandlers[event] ??= []).push(cb);
-      },
-    },
-    on: (event: string, cb: (...args: unknown[]) => void) => {
-      (handlers[event] ??= []).push(cb);
-      // spawn error 立即触发
-      if (event === 'error' && opts.spawnError) {
-        setTimeout(() => cb(opts.spawnError!), 0);
-      }
-      // close 事件模拟成功退出（除非要测错误码）
-      if (event === 'close' && opts.spawnError === undefined) {
-        setTimeout(() => cb(opts.exitCode ?? 0), 0);
-      }
-    },
-  };
-  return child;
-}
-
-describe('writeClipboard（跨平台 OS 命令）', () => {
-  const realPlatform = process.platform;
+describe('clipboard 三级回退', () => {
+  let originalEnv: NodeJS.ProcessEnv;
+  let writeMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    (spawn as ReturnType<typeof vi.fn>).mockReturnValue(makeMockChild());
+    originalEnv = { ...process.env };
+    writeMock = vi.fn();
+    // 清模块缓存：每个测试内 vi.doMock + 动态 import 都拿到重新求值的 clipboard.ts，
+    // 使其顶层 `import { spawn }` 绑定到本测试自己的 spawnMock（否则首个 import 的绑定被缓存）。
+    vi.resetModules();
+    vi.spyOn(process.stdout, 'write').mockImplementation(writeMock);
   });
   afterEach(() => {
-    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+    process.env = originalEnv;
+    vi.restoreAllMocks();
   });
 
-  it('win32: 调用 clip，文本写入 stdin', async () => {
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    await writeClipboard('hello world');
-    expect(spawn).toHaveBeenCalledWith('clip', [], expect.any(Object));
+  // Note: child_process.spawn is mocked at top-level via vi.mock below.
+  // The mock factory exposes spawnMock so tests can configure return values.
+  let spawnMock: ReturnType<typeof vi.fn>;
+
+  function makeChild(ok: boolean): unknown {
+    return {
+      on: vi.fn((event: string, cb: (code?: number) => void) => {
+        if (event === 'close') setTimeout(() => cb(ok ? 0 : 1), 0);
+      }),
+      stdin: {
+        on: vi.fn(),
+        write: vi.fn(),
+        end: vi.fn(),
+      },
+    };
+  }
+
+  it('本地（非 SSH）+ OS 命令成功：调 spawn', async () => {
+    delete process.env.SSH_CONNECTION;
+    delete process.env.SSH_TTY;
+    delete process.env.TMUX;
+    spawnMock = vi.fn().mockReturnValue(makeChild(true));
+    vi.doMock('child_process', () => ({ spawn: spawnMock }));
+    const { writeClipboard } = await import('../../tui/input/clipboard.js');
+    await writeClipboard('hello');
+    expect(spawnMock).toHaveBeenCalled();
+    expect(writeMock).not.toHaveBeenCalled(); // 没走 OSC52
   });
 
-  it('darwin: 调用 pbcopy', async () => {
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
-    await writeClipboard('mac text');
-    expect(spawn).toHaveBeenCalledWith('pbcopy', [], expect.any(Object));
+  it('SSH 环境 + 非 tmux：跳过 OS 命令，直接 OSC52', async () => {
+    process.env.SSH_CONNECTION = '1.2.3.4';
+    delete process.env.TMUX;
+    spawnMock = vi.fn();
+    vi.doMock('child_process', () => ({ spawn: spawnMock }));
+    const { writeClipboard } = await import('../../tui/input/clipboard.js');
+    await writeClipboard('hello');
+    expect(spawnMock).not.toHaveBeenCalled();
+    // OSC52 序列：\x1b]52;c;<base64>\x07
+    const expected = `\x1b]52;c;${Buffer.from('hello', 'utf8').toString('base64')}\x07`;
+    expect(writeMock).toHaveBeenCalledWith(expected);
   });
 
-  it('linux: 调用 xclip -selection clipboard', async () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    await writeClipboard('linux text');
-    expect(spawn).toHaveBeenCalledWith('xclip', ['-selection', 'clipboard'], expect.any(Object));
+  it('tmux 环境：调 tmux load-buffer', async () => {
+    delete process.env.SSH_CONNECTION;
+    process.env.TMUX = '/tmp/tmux-1000/default,1234,0';
+    spawnMock = vi.fn().mockReturnValue(makeChild(true));
+    vi.doMock('child_process', () => ({ spawn: spawnMock }));
+    const { writeClipboard } = await import('../../tui/input/clipboard.js');
+    await writeClipboard('hello');
+    // 第一参 spawn 调用的 cmd 应是 'tmux'
+    expect(spawnMock).toHaveBeenCalledWith(
+      'tmux', expect.arrayContaining(['load-buffer']), expect.anything(),
+    );
   });
 
-  it('spawn error 事件 → reject（不吞错）', async () => {
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    (spawn as ReturnType<typeof vi.fn>).mockReturnValue(makeMockChild({ spawnError: new Error('spawn fail') }));
-    await expect(writeClipboard('x')).rejects.toThrow('spawn fail');
+  it('OSC52 中文 base64 编码正确', async () => {
+    process.env.SSH_CONNECTION = '1.2.3.4';
+    delete process.env.TMUX;
+    spawnMock = vi.fn();
+    vi.doMock('child_process', () => ({ spawn: spawnMock }));
+    const { writeClipboard } = await import('../../tui/input/clipboard.js');
+    await writeClipboard('你好');
+    const expected = `\x1b]52;c;${Buffer.from('你好', 'utf8').toString('base64')}\x07`;
+    expect(writeMock).toHaveBeenCalledWith(expected);
   });
 
-  it('非零退出码 → reject', async () => {
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    (spawn as ReturnType<typeof vi.fn>).mockReturnValue(makeMockChild({ exitCode: 1 }));
-    await expect(writeClipboard('x')).rejects.toThrow('exited with code 1');
+  it('OSC52 emoji 正确编码', async () => {
+    process.env.SSH_CONNECTION = '1.2.3.4';
+    delete process.env.TMUX;
+    spawnMock = vi.fn();
+    vi.doMock('child_process', () => ({ spawn: spawnMock }));
+    const { writeClipboard } = await import('../../tui/input/clipboard.js');
+    await writeClipboard('👋🌍');
+    const expected = `\x1b]52;c;${Buffer.from('👋🌍', 'utf8').toString('base64')}\x07`;
+    expect(writeMock).toHaveBeenCalledWith(expected);
   });
 });

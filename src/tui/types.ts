@@ -18,7 +18,7 @@ export interface TuiMessage {
   /** 唯一标识（React key + store 更新定位） */
   uuid: string;
   /** 语义角色（决定 MessageRow 整体样式倾向，如 user 带 ❯ 前缀已烤进行内容） */
-  role: 'user' | 'assistant' | 'system' | 'tool';
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'thinking';
   /** 已固化的渲染行（来自 BlockPipeline 的 FormattedLine）。
    *  finalized=true 时这是最终内容；finalized=false 且为 assistant 流式中，
    *  末行可能由 streamingText 动态覆盖。 */
