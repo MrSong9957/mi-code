@@ -171,6 +171,37 @@ describe('block-format', () => {
       expect(result.filePath).toBe('src/new.ts');
     });
 
+    // ── BUG 修复：被拦截的 write_file 不能谎报 Added N lines ──
+    //
+    // 物理本质：邮递员说"信被退回"，播报员不能因为信封颜色就报"投递成功"。
+    // write_file 越界被 checker 拦截时，output 是 "[Blocked by permission]..."，
+    // 此时必须走 rawOutput 分支诚实显示拦截原因，而不是按 input.content 算行数谎报成功。
+    //
+    // AAA：
+    //   Arrange：构造被拦截的 write_file（input 有 content，但 output 是 Blocked 文本）
+    //   Act：调用 buildToolResultBlock
+    //   Assert：必须走 rawOutput（诚实），且不能有 linesAdded（不谎报行数）
+    it('write_file 被拦截（output 含 [Blocked by permission]）→ 走 rawOutput，不算行数', () => {
+      const result = buildToolResultBlock('write_file', {
+        path: '../outside/secret.txt',
+        content: '这是越界内容\n第二行',
+      }, '[Blocked by permission] Writing outside workspace is blocked by built-in policy');
+      // 诚实：走 rawOutput，显示拦截原因
+      expect(result.rawOutput).toContain('[Blocked by permission]');
+      // 不谎报：不能有 linesAdded（否则 UI 会显示 "Added 2 lines"）
+      expect(result.linesAdded).toBeUndefined();
+    });
+
+    it('edit_file 被拦截（output 含 [Blocked by permission]）→ 走 rawOutput，不算行数', () => {
+      const result = buildToolResultBlock('edit_file', {
+        path: '../outside/secret.txt',
+        old_text: 'a',
+        new_text: 'b',
+      }, '[Blocked by permission] Writing outside workspace is blocked by built-in policy');
+      expect(result.rawOutput).toContain('[Blocked by permission]');
+      expect(result.linesAdded).toBeUndefined();
+    });
+
     it('run_bash → 传 rawOutput（不计算行数）', () => {
       const result = buildToolResultBlock('run_bash', {
         command: 'npm test',

@@ -23,8 +23,11 @@ export interface PermissionCheckerOptions {
   planDir?: string;
 }
 
-/** 文件写入类工具（用于路径越界预检） */
+/** 文件写入类工具（用于路径越界预检 + plan 目录白名单） */
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file']);
+
+/** 带路径的文件类工具（闸门 1 越界预检：读+写统一硬拦截） */
+const FILE_PATH_TOOLS = new Set(['read_file', 'write_file', 'edit_file']);
 
 export class PermissionChecker {
   private mode: PermissionMode;
@@ -90,10 +93,11 @@ export class PermissionChecker {
         return { behavior: 'deny', reason: 'Dangerous command blocked by built-in policy' };
       }
     }
-    if (FILE_WRITE_TOOLS.has(toolName)) {
+    if (FILE_PATH_TOOLS.has(toolName)) {
       const filePath = (input.path as string) || '';
       if (filePath && isPathOutsideWorkspace(filePath, this.workdir)) {
-        return { behavior: 'deny', reason: 'Writing outside workspace is blocked by built-in policy' };
+        const op = toolName === 'read_file' ? 'Reading' : 'Writing';
+        return { behavior: 'deny', reason: `${op} outside workspace is blocked by built-in policy` };
       }
     }
 

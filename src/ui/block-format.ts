@@ -212,12 +212,16 @@ export function formatThinkingSummary(durationSec: number, filesRead: number): s
  * 把工具执行结果翻译成「UI 能读懂的摘要数据」。
  *
  * 物理本质：工具执行完返回的是原始字符串，但不同工具要显示不同摘要——
- * edit_file 显示 +N/-M 行数、run_bash 显示 stdout 摘要。这个函数按工具名分派。
+ * edit_file 显示 +N/-M 行数、write_file 显示 stdout 摘要。这个函数按工具名分派。
  *
- * - edit_file：用 input.old_text/new_text 算 +N/-M（经 computeEditDiff）。
- * - write_file：覆盖式，旧内容未知 → 当作全新增（经 computeWriteDiff）。
- * - run_bash / 其他：直接传 rawOutput（让 formatter 内部 summarize）。
- * - input 为 undefined：退化传 rawOutput（无法算行数）。
+ * 优先级（事实优于名字）：
+ * 1. 若 output 是拦截/错误文本（[Blocked by permission]、Error: ...），
+ *    一律走 rawOutput 诚实展示——哪怕工具名是 write_file，也不能谎报行数。
+ *    （否则权限拦截的 write 会被显示成 "Added N lines"，让人误判安全防线失效。）
+ * 2. edit_file：用 input.old_text/new_text 算 +N/-M（经 computeEditDiff）。
+ * 3. write_file：覆盖式，旧内容未知 → 当作全新增（经 computeWriteDiff）。
+ * 4. run_bash / 其他：直接传 rawOutput（让 formatter 内部 summarize）。
+ * 5. input 为 undefined：退化传 rawOutput（无法算行数）。
  *
  * 返回值直接作为 MessageFormatter.format('tool_result', meta) 的 meta 字段。
  */
@@ -226,6 +230,11 @@ export function buildToolResultBlock(
   input: Record<string, unknown> | undefined,
   output: string,
 ): { linesAdded?: number; linesRemoved?: number; rawOutput?: string; filePath?: string; toolName: string } {
+  // 事实优先：output 已表明操作未真正生效（被拦截/报错），诚实展示，不算行数
+  if (isNonSuccessOutput(output)) {
+    return { toolName: name, rawOutput: output };
+  }
+
   if (name === 'edit_file' && input) {
     const oldText = String(input.old_text ?? '');
     const newText = String(input.new_text ?? '');
@@ -244,6 +253,24 @@ export function buildToolResultBlock(
 }
 
 // ─────────────── 内部辅助 ───────────────
+
+/**
+ * 判定工具 output 是否表明「操作未真正生效」
+ *
+ * 物理本质：投递员的话里有没有"被退回/出错了"的信号。
+ * 命中任一即说明操作没真正落盘——此时 UI 必须诚实展示原文，
+ * 不能因为工具名是 write_file 就谎报 "Added N lines"。
+ *
+ * 覆盖三类未生效：
+ * - [Blocked by permission]：权限层硬拦截（越界、危险命令）
+ * - Error:：执行层返回错误（old_text not found、未知工具等）
+ * - [Tool Error]：执行层异常捕获
+ */
+function isNonSuccessOutput(output: string): boolean {
+  return output.startsWith('[Blocked by permission]')
+    || output.startsWith('Error:')
+    || output.startsWith('[Tool Error]');
+}
 
 /** 按 \n 拆行并过滤掉空串（尾部空行不计入）。 */
 function splitNonEmptyLines(text: string): string[] {

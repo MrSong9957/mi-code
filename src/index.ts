@@ -42,6 +42,7 @@ import { AskUserManager } from './agent/ask-user-manager.js';
 import { createAskUserTool } from './agent/tools/ask-user-tool.js';
 import { PlanStore } from './plan/plan-store.js';
 import { createWritePlanTool, createExitPlanModeTool } from './agent/tools/plan-tools.js';
+import { setWorkdir, getWorkdir } from './agent/tools/path-sandbox.js';
 import { HistoryManager } from './history.js';
 
 const VERSION = "1.0.0";
@@ -62,10 +63,14 @@ const todoManager = new TodoManager();
 const skillRegistry = new SkillRegistry();
 skillRegistry.loadFromDir('skills');
 const skillNegotiator = new SkillNegotiator();
+// 统一 workdir 真相源：path-sandbox 模块全局与 PermissionChecker 实例同源，
+// 消除"双源靠都是 process.cwd() 巧合一致"的漂移风险。
+// 必须在任何工具注册（createDefaultRegistry）之前锚定，且不受后续 process.chdir 影响。
+setWorkdir(process.cwd());
 const permissionChecker = new PermissionChecker({
   mode: configStore.getPermissionMode(),
   rules: configStore.getPermissionRules(),
-  workdir: process.cwd(),
+  workdir: getWorkdir(),
 });
 const teammateManager = new TeammateManager('.team');
 const negotiationManager = new NegotiationManager();

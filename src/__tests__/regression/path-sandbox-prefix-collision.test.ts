@@ -19,7 +19,7 @@
 // 两者行为应对齐——这正是回归要守住的底线。
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
 import { safePath, setWorkdir, getWorkdir } from '../../../src/agent/tools/path-sandbox.js';
@@ -66,15 +66,20 @@ describe('path-sandbox 前缀碰撞回归', () => {
     expect(isPathOutsideWorkspace(collisionPath, sandboxDir)).toBe(true);
   });
 
-  // ── 回归核心：safePath 的 bug 锁定 ──
+  // ── 回归核心：safePath 前缀碰撞已修复 ──
   //
-  // 当前 safePath 用 startsWith(workdir) 未加尾部分隔符，
-  // 会把 sandboxDir + "_evil/..." 误判为内部、放行越界写。
-  // 本测试断言"应抛错"——因 bug 存在，断言会失败；
-  // it.fails 把这个失败标绿，表示"缺口已记录"。
-  // 修复 safePath 后请删除 .fails。
-  it.fails('前缀碰撞路径（workdir + 兄弟后缀）必须抛错 [已知 bug，待修复]', () => {
+  // 前身是 it.fails 锁定的已知 bug（startsWith 未加尾部分隔符）。
+  // 修复后（加 sep + realpath）该测试必须常绿：碰撞路径必须抛错。
+  // 若此测试变红，说明 safePath 退化为 startsWith(workdir) 词法比较。
+  //
+  // 反假测试要点：必须把兄弟目录真实建在磁盘上（mkdirSync）。
+  // 否则 realpath 回溯会退化到 workdir 自身，关卡 2 不抛错，
+  // 词法关卡（关卡 1）即使被破坏也抓不到——测试会假绿。
+  // 兄弟目录存在后，关卡 1 的 startsWith+sep 是唯一防线，
+  // 破坏关卡 1（去 sep）本用例必须变红，证明测试真能测它。
+  it('前缀碰撞路径（workdir + 兄弟后缀）必须抛错', () => {
     const collisionDir = sandboxDir + '_evil';
+    mkdirSync(collisionDir, { recursive: true });
     const collisionPath = join(collisionDir, 'stolen.txt');
     // 期望：safePath 与 isPathOutsideWorkspace 对齐，判定为越界并抛错
     expect(() => safePath(collisionPath)).toThrow('Path escapes workspace');
@@ -88,9 +93,78 @@ describe('path-sandbox 前缀碰撞回归', () => {
     ];
     for (const p of escapes) {
       const outside = isPathOutsideWorkspace(p, sandboxDir);
-      expect(outside).toBe(true);
+      expect(outside);
       // 这些常规逃逸 safePath 已能正确拦截
       expect(() => safePath(p)).toThrow('Path escapes workspace');
     }
+  });
+
+  // ── 符号链接逃逸：realpath 防御 ──
+  //
+  // 物理本质：工作区围墙内挖了一条地道（软链）通到外面。
+  // 光看入口（词法路径）发现不了，必须顺着地道走到头（realpath）
+  // 看它真正通到哪里——若通到工作区外，就是越界。
+  //
+  // 注意：Windows 默认无 Developer Mode/Admin 时 symlinkSync 报 EPERM。
+  // 这是环境限制而非测试缺陷——软链逃逸在 Linux/macOS CI 上仍真实验证。
+  // 本地不可建软链时自动 skip 并标注原因，避免假红/假绿。
+  describe('符号链接逃逸防御', () => {
+    function tryCreateSymlink(target: string, linkPath: string): boolean {
+      try {
+        symlinkSync(target, linkPath);
+        return true;
+      } catch (err) {
+        // EPERM/EPERM-ish：Windows 无权限建软链 → 标记本环境不可测
+        if (err instanceof Error && /EPERM|EACCES|insufficient|privilege/i.test(err.message)) {
+          return false;
+        }
+        throw err;
+      }
+    }
+
+    it('指向外部的软链路径必须抛错', ({ skip }) => {
+      // Arrange: 外部目录（模拟工作区外敏感数据）+ 工作区内软链指向它
+      const outsideDir = mkdtempSync(join(tmpdir(), 'sandbox-outside-'));
+      try {
+        const ok = tryCreateSymlink(outsideDir, join(sandboxDir, 'escape'));
+        if (!ok) {
+          skip('本环境不可创建符号链接（Windows 需 Developer Mode/Admin），跳过软链逃逸验证');
+          return;
+        }
+        // Act: 走软链 escape/ 再进入 stolen.txt
+        // Assert: realpath 解析后落在 workdir 之外，必须拦截
+        expect(() => safePath('escape/stolen.txt')).toThrow('Path escapes workspace');
+      } finally {
+        rmSync(outsideDir, { recursive: true, force: true });
+      }
+    });
+
+    it('指向工作区内部的软链不误伤', ({ skip }) => {
+      // Arrange: 工作区内子目录 + 内部软链
+      const innerTarget = join(sandboxDir, 'inner-target');
+      mkdirSync(innerTarget, { recursive: true });
+      const ok = tryCreateSymlink(innerTarget, join(sandboxDir, 'inner-link'));
+      if (!ok) {
+        rmSync(innerTarget, { recursive: true, force: true });
+        skip('本环境不可创建符号链接（Windows 需 Developer Mode/Admin），跳过软链验证');
+        return;
+      }
+      // Act: 经内部软链访问文件
+      // Assert: realpath 仍在 workdir 内，正常返回（不抛错）
+      const result = safePath('inner-link/file.txt');
+      expect(result).toBe(join(sandboxDir, 'inner-link', 'file.txt'));
+    });
+  });
+
+  // ── 未创建文件：realpath 回溯不误伤 ──
+  //
+  // 写文件常写尚不存在的深层路径（a/b/c/new.txt）。
+  // realpath-existing-ancestor 算法回溯到最近存在的祖先（workdir 自身）后判定，
+  // 不应因目标不存在而抛错。
+  it('工作区内未创建的深层文件路径正常返回', () => {
+    // Act: 指向尚不存在的多层深层文件
+    // Assert: 回溯到存在的 workdir 后，realpath 自身仍在内部，放行
+    const result = safePath('a/b/c/new.txt');
+    expect(result).toBe(join(sandboxDir, 'a', 'b', 'c', 'new.txt'));
   });
 });

@@ -101,6 +101,17 @@ describe('权限↔执行↔磁盘 端到端集成', () => {
       expect(result).toContain('[Blocked by permission]');
     });
 
+    it('build 模式 + read_file 越界读：闸门 1 必须硬 deny（补 read 缺口）', async () => {
+      // 物理认知：闸门 1 当前只盯着"提包出门的"（write/edit），
+      // 没盯"探头窥视的"（read 越界）。本用例补 read 的越界硬闸门。
+      const checker = new PermissionChecker({ mode: 'build', workdir });
+      const outsideFile = join(workdir + '_sibling', 'secret.txt');
+
+      // 双断言①：门卫嘴上——read_file 越界必须 deny（当前返回 allow → RED）
+      const decision = checker.check('read_file', { path: outsideFile });
+      expect(decision.behavior).toBe('deny');
+    });
+
     it('build 模式 + 越界写路径：工作区外文件不存在', async () => {
       const checker = new PermissionChecker({ mode: 'build', workdir });
       const outsideFile = join(workdir + '_sibling', 'stolen.txt');
