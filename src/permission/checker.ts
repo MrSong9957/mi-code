@@ -13,6 +13,7 @@
 import type { PermissionMode, PermissionRule, PermissionDecision } from './types.js';
 import { WRITE_TOOLS, READ_ONLY_TOOLS } from './types.js';
 import { isDangerousBash, isWriteBash, isPathOutsideWorkspace, matchesRule } from './patterns.js';
+import { extractBashPaths } from './bash-paths.js';
 
 /** PermissionChecker 构造参数 */
 export interface PermissionCheckerOptions {
@@ -89,8 +90,24 @@ export class PermissionChecker {
     // ── 闸门 1：硬 deny（内置安全策略，不可被规则/模式绕过） ──
     if (toolName === 'run_bash') {
       const command = (input.command as string) || '';
+      // 1a. 危险命令黑名单（sudo/rm-rf/$()/fork bomb...）
       if (isDangerousBash(command)) {
         return { behavior: 'deny', reason: 'Dangerous command blocked by built-in policy' };
+      }
+      // 1b. 路径围栏（Phase 1：解析 + 路径越界检测）
+      // 解析命令里的路径参数，发现指向工作区外的 → deny；
+      // 解析失败/变量未知 → ask（不自动放行，升级人审）。
+      const { paths, parseFailed, unresolvableVars } = extractBashPaths(command);
+      if (parseFailed) {
+        return { behavior: 'ask', reason: 'Bash command unparseable, needs review' };
+      }
+      if (unresolvableVars) {
+        return { behavior: 'ask', reason: 'Bash command has unresolvable variable, needs review' };
+      }
+      for (const p of paths) {
+        if (isPathOutsideWorkspace(p, this.workdir)) {
+          return { behavior: 'deny', reason: `Bash touches path outside workspace: ${p}` };
+        }
       }
     }
     if (FILE_PATH_TOOLS.has(toolName)) {
