@@ -1,6 +1,7 @@
 // 工具注册表：注册、查找、执行工具
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import { Encoder } from '../output/encoder.js';
+import { killProcessTree } from './process-tree.js';
 import type { ToolDefinition, ToolExecutor, RegisteredTool } from './types.js';
 import { createReadFileTool, createWriteFileTool, createEditFileTool } from './tools/index.js';
 import { createGlobTool, createGrepTool } from './tools/search-tools.js';
@@ -131,45 +132,93 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
     },
     executor: async (input) => {
       const command = input.command as string;
-      // 使用 spawnSync 替代 execSync，显式配置 stdio 为 'pipe' 以捕获 stderr
-      // 而非让它直接输出到终端（导致乱码显示在 UI 上）
-      const result = spawnSync(command, {
-        shell: true,
-        timeout: 30000,
-        maxBuffer: 1024 * 1024,
-        // 不指定 encoding，确保返回 Buffer 以便正确处理 GBK
-        stdio: ['pipe', 'pipe', 'pipe'], // 显式捕获 stdin/stdout/stderr
-        windowsHide: true, // 隐藏 Windows 上的 CMD 窗口
+
+      // 异步 spawn + 手动超时 + 进程树终止（替代 spawnSync 的孤儿进程泄漏）
+      // 物理本质：spawnSync 超时只杀门面接待员（cmd.exe），孙进程（dev server）变孤儿。
+      // 改用 spawn + killProcessTree 做"全楼清场"，超时后整棵进程树请走。
+      return new Promise<string>((resolve) => {
+        const child = spawn(command, {
+          shell: true,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true,
+        });
+
+        // 流式收集 stdout/stderr（Buffer[]，末尾 concat 后 decodeBuffer 保留 GBK 处理）
+        const stdoutChunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
+        const MAX_OUTPUT = 1024 * 1024; // 1MB（对齐原 maxBuffer）
+        let stdoutLen = 0;
+        let stderrLen = 0;
+        let stdoutCapped = false;
+        let stderrCapped = false;
+        let timedOut = false;
+
+        // 流式截断：超 1MB 后停止 push（但不 pause/destroy 流，防 backpressure 挂死）
+        if (child.stdout) {
+          child.stdout.on('data', (chunk: Buffer) => {
+            if (stdoutCapped) return;
+            if (stdoutLen + chunk.length > MAX_OUTPUT) {
+              stdoutChunks.push(chunk.subarray(0, MAX_OUTPUT - stdoutLen));
+              stdoutChunks.push(Buffer.from('\n... (truncated)'));
+              stdoutCapped = true;
+            } else {
+              stdoutChunks.push(chunk);
+              stdoutLen += chunk.length;
+            }
+          });
+        }
+        if (child.stderr) {
+          child.stderr.on('data', (chunk: Buffer) => {
+            if (stderrCapped) return;
+            if (stderrLen + chunk.length > MAX_OUTPUT) {
+              stderrChunks.push(chunk.subarray(0, MAX_OUTPUT - stderrLen));
+              stderrChunks.push(Buffer.from('\n... (truncated)'));
+              stderrCapped = true;
+            } else {
+              stderrChunks.push(chunk);
+              stderrLen += chunk.length;
+            }
+          });
+        }
+
+        // 超时定时器：30s 后杀整棵进程树
+        const timer = setTimeout(() => {
+          timedOut = true;
+          if (child.pid) killProcessTree(child.pid);
+        }, 30000);
+
+        // 进程结束（stdio 流关闭后触发 close）
+        child.on('close', (code) => {
+          clearTimeout(timer);
+
+          if (timedOut) {
+            resolve('Command timed out after 30 seconds');
+            return;
+          }
+
+          const stdout = stdoutChunks.length > 0 ? Encoder.decodeBuffer(Buffer.concat(stdoutChunks)) : '';
+          const stderr = stderrChunks.length > 0 ? Encoder.decodeBuffer(Buffer.concat(stderrChunks)) : '';
+
+          // 命令失败（非零退出码）：返回 stderr
+          if (code !== 0) {
+            resolve(stderr || stdout || `Command exited with code ${code}`);
+            return;
+          }
+
+          // 命令成功：有 stderr（警告）则附加，否则纯 stdout
+          if (stderr) {
+            resolve(stdout ? `${stdout}\n${stderr}` : stderr);
+            return;
+          }
+          resolve(stdout);
+        });
+
+        // spawn 失败（命令不存在等）
+        child.on('error', (err) => {
+          clearTimeout(timer);
+          resolve(`Command failed: ${err.message}`);
+        });
       });
-
-      // 检查是否超时
-      if (result.error) {
-        const err = result.error as NodeJS.ErrnoException;
-        if (err.code === 'ETIMEDOUT') {
-          return 'Command timed out after 30 seconds';
-        }
-        return `Command failed: ${err.message}`;
-      }
-
-      // 有 stderr 输出（命令可能失败）
-      if (result.stderr && result.stderr.length > 0) {
-        const stderr = typeof result.stderr === 'string' ? result.stderr : Encoder.decodeBuffer(result.stderr);
-        // 如果命令失败（非零退出码），返回 stderr
-        if (result.status !== 0) {
-          return stderr;
-        }
-        // 命令成功但有 stderr（警告），附加到 stdout
-        const stdout = result.stdout ? (typeof result.stdout === 'string' ? result.stdout : Encoder.decodeBuffer(result.stdout)) : '';
-        return stdout ? `${stdout}\n${stderr}` : stderr;
-      }
-
-      // 命令成功，返回 stdout
-      if (result.stdout) {
-        return typeof result.stdout === 'string' ? result.stdout : Encoder.decodeBuffer(result.stdout);
-      }
-
-      // 无输出
-      return '';
     },
   };
 }

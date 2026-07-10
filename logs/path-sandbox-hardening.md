@@ -14,3 +14,13 @@
 - **已知局限**：①shell-quote 破坏 Windows 反斜杠绝对路径（C:\ 风格），但相对路径/POSIX 路径不受影响——这是真实攻击向量的主战场；②不防网络外泄（curl -d @.env）——命令问题，留 Phase 3/4；③不防代码解释器逃逸（python -c）；④不深度解析子 shell（$() 已由 isDangerousBash 兜底）。
 - **后续 Phase**：Phase 2（层6 tree-kill 进程终止+输出上限）、Phase 3（层4 tree-sitter AST 注入检测）、Phase 4（层5 sandbox-runtime OS 沙箱）。
 
+## run_bash 进程控制（Phase 2：进程终止 + 资源限制）
+
+- **底层逻辑**：spawnSync 超时只杀直接子进程（cmd.exe），孙进程（dev server）变孤儿泄漏。Phase 2 改 spawnSync→异步 spawn + 手动 setTimeout + killProcessTree 做全楼清场（taskkill /T /F 杀整棵进程树）。输出 maxBuffer 崩溃改流式截断（累计 1MB 后追加 '... (truncated)'，不杀进程、不 pause 流防 backpressure）。复用 background-manager 的 spawn+close+error 模式与 Encoder.decodeBuffer（GBK 回退）。
+- **TDD 测试点**：①killProcessTree 单元——长驻 node 进程/shell 包装 cmd→node 孙进程，杀后 process.kill(pid,0) 抛错确认死透（AAA 实体核对副作用）；②流式截断——2MB 输出含 '... (truncated)' + 长度≤1.1MB，小输出不截断；③正常基线——node --version/echo hello/不存在命令不破坏；④GBK 解码保留。
+- **失败原因**：无功能性失败。反假自检①破坏 killProcessTree（return 空操作）→ 2 failed（进程仍存在被实体核对抓出）；反假自检②破坏截断（MAX_OUTPUT 调 100MB）→ 1 failed（2MB 不截断）。两个方向都证明测试真能测对应行为。
+- **验证结果**：L1 bash-process-control 7 passed；L3 全量 111 文件 1176 passed | 2 skipped，零回归（executor 核心改动跨模块，全量必须）；tsc EXIT 0；ESLint EXIT 0。
+- **研究结论**：tree-kill npm 包在 Windows 上就是 taskkill /T /F 一行包装，可靠性相同（TOCTOU 竞态），无引入价值——直接调 taskkill（数组参数无 shell，零注入）。child.kill() 只杀直接子进程，Windows 无进程组概念（process.kill(-pid) 不可用）。ToolExecutor 已是 async 契约，所有调用方已 await，spawnSync→spawn 是纯内部改动不破坏接缝。
+- **已知局限**：①TOCTOU 竞态——taskkill /T 枚举后、终止前新派生孙进程可能逃脱（Windows 固有，95% 场景覆盖）；②breakaway 进程不受 /T 管辖；③唯一内核级保证是 Windows Job Object（KILL_ON_JOB_CLOSE），属 Phase 4 OS 沙箱。
+- **后续 Phase**：Phase 3（层4 tree-sitter AST 注入检测）、Phase 4（层5 sandbox-runtime OS 沙箱，含 Job Object）。
+
