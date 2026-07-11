@@ -163,7 +163,8 @@ describe('Logo 显示回归测试', () => {
     renderer.renderFooter('updated', 0, 'auto │ model');
 
     const rewriteWrites = mock.written.slice(afterFirst).join('');
-    // 覆写模式用 DL（\x1b[<n>M）物理删除旧 footer 块，比逐行擦除更可靠（折行残留也删干净）。
-    expect(rewriteWrites).toMatch(/\x1b\[\d+M/);
+    // 覆写模式用 DL 物理删除旧 footer 块。首帧空输入 footerHeight=4（border+空行+border+status）。
+    // DL 必须精确删 4 行（少删残留，多删吃下方 logo 行）。
+    expect(rewriteWrites).toMatch(/\x1b\[4M/);
   });
 });

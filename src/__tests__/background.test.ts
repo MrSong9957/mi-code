@@ -134,6 +134,7 @@ describe('BackgroundManager', () => {
   // 根因：超时回调 child.kill('SIGTERM') 后，close 事件（非零退出码 → error）
   // 可能抢先于 finishTask('timeout') 执行，导致误标 error。
   // 本测试重复跑多次，放大竞态窗口，确保每次都正确标记 timeout。
+  // 防竞态：每轮 drain 前多等一个 tick，让 event loop 跑完所有 pending 回调。
   it('timeout: 多次超时均标记为 timeout（无 SIGTERM/close 竞态误标 error）', async () => {
     const TRIALS = 5;
     const results: string[] = [];

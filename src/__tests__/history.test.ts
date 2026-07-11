@@ -127,6 +127,27 @@ describe('HistoryManager', () => {
       expect(history[1].input).toBe('old')
     })
 
+    it('同毫秒时间戳下仍按加入顺序倒序（seq tiebreaker 防 flaky）', async () => {
+      // 高负载下 Date.now() 精度不足，连续 addEntry 可能同毫秒。
+      // seq tiebreaker 保证后加入的排前面，排序稳定不 flaky。
+      // 多次循环放大同毫秒概率。
+      for (let trial = 0; trial < 20; trial++) {
+        // 每轮新建 manager（独立 seq 计数）+ 独立文件避免累积
+        const tdir = mkdtempSync(join(tmpdir(), 'mi-code-history-seq-'))
+        const tpath = join(tdir, 'history.jsonl')
+        const m2 = new HistoryManager(tpath)
+        await m2.addEntry('first', 'proj1')
+        await m2.addEntry('second', 'proj1')
+        await m2.addEntry('third', 'proj1')
+        const h = await m2.getHistory('proj1')
+        // 同毫秒时也必须按加入倒序：third → second → first
+        expect(h[0]!.input).toBe('third')
+        expect(h[1]!.input).toBe('second')
+        expect(h[2]!.input).toBe('first')
+        rmSync(tdir, { recursive: true, force: true })
+      }
+    })
+
     it('should cache results per project', async () => {
       await manager.addEntry('hello', 'proj1')
 

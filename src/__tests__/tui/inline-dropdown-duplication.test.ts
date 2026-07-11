@@ -69,8 +69,10 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     renderer.renderFooter('/', 1, 'S', 80, [], 0);
     const output = stdoutChunks.join('');
 
-    // 新策略：DL 整块删除（\x1b[<n>M）后从头追加，n = 旧 footerHeight（border+输入+8下拉+border+status=12）。
-    expect(output).toMatch(/\x1b\[\d+M/);
+    // 新策略：DL 整块删除（\x1b[<n>M）后从头追加。
+    // n 必须精确 = 旧 footerHeight：border(1) + 输入(1) + 8下拉 + border(1) + status(1) = 12。
+    // 数字错了会导致残留（少删）或吃掉下方内容（多删）。
+    expect(output).toMatch(/\x1b\[12M/);
     // 核心契约：输出不含任何旧候选名（零残留）
     for (const name of eight) {
       expect(output).not.toContain(`/${name}`);
@@ -94,8 +96,9 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     expect(output).toContain('/f');
     expect(output).toContain('/g');
     expect(output).toContain('/h');
-    // 新策略统一 DL 整块删除 + 重画，高度增加也会有 DL（删除旧的 5-下拉块再重画 8-下拉块）。
-    // 核心契约是无残留，DL 出现是预期行为。
+    // 新策略统一 DL 整块删除 + 重画。旧 5 下拉的 footerHeight = border(1)+输入(1)+5下拉+border(1)+status(1) = 9。
+    // DL 必须精确删 9 行（少删残留旧行，多删吃下方内容）。
+    expect(output).toMatch(/\x1b\[9M/);
   });
 
   it('多次连续覆写：候选名恰好出现一次（无重复）', async () => {
