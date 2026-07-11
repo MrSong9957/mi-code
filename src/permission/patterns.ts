@@ -9,6 +9,7 @@
 
 import { resolve, sep } from 'path';
 import type { PermissionRule } from './types.js';
+import { normalizeBashForCheck } from './bash-normalize.js';
 
 /** 危险 bash 命令模式（单一来源，permission 与 hooks 共享） */
 export const DANGEROUS_BASH_PATTERNS = [
@@ -22,9 +23,26 @@ export const DANGEROUS_BASH_PATTERNS = [
   /:\(\)\{ :\|:& \};/, // fork bomb（括号必须转义为字面量，否则 () 被当成捕获组）
 ];
 
-/** 检测 bash 命令是否命中危险模式 */
+/**
+ * 检测 bash 命令是否命中危险模式
+ *
+ * 双层防御（Phase 3 归一化检测）：
+ *   ① 对原始 command 跑正则（保留旧行为，不破坏现有测试）
+ *   ② 对归一化后的 command 跑正则（消除引号拼接混淆：'r''m' → rm）
+ *
+ * 物理本质：安检员既看原始标签，也看拼回原样后的内容。
+ * 任一层命中即危险。
+ *
+ * 此函数被 checker.ts（闸门1）与 hooks/builtins.ts（PreToolUse）共享调用，
+ * 两处都自动获得归一化能力——单点修改，两处生效。
+ */
 export function isDangerousBash(command: string): boolean {
-  return DANGEROUS_BASH_PATTERNS.some((p) => p.test(command));
+  if (DANGEROUS_BASH_PATTERNS.some((p) => p.test(command))) return true;
+  const normalized = normalizeBashForCheck(command);
+  if (normalized !== command) {
+    return DANGEROUS_BASH_PATTERNS.some((p) => p.test(normalized));
+  }
+  return false;
 }
 
 /**

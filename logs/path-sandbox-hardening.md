@@ -24,3 +24,13 @@
 - **已知局限**：①TOCTOU 竞态——taskkill /T 枚举后、终止前新派生孙进程可能逃脱（Windows 固有，95% 场景覆盖）；②breakaway 进程不受 /T 管辖；③唯一内核级保证是 Windows Job Object（KILL_ON_JOB_CLOSE），属 Phase 4 OS 沙箱。
 - **后续 Phase**：Phase 3（层4 tree-sitter AST 注入检测）、Phase 4（层5 sandbox-runtime OS 沙箱，含 Job Object）。
 
+## 归一化检测（Phase 3：防引号拼接混淆，原计划 AST 改名更诚实）
+
+- **底层逻辑**：isDangerousBash 用正则找 "rm -rf" 关键词，AI 可用引号撕开标签绕过——'r''m' -rf /，正则看到 'r'、'm'、-rf 三个片段找不到连续 rm。归一化检测：shell-quote 的 tokenizer 自动把相邻引号串合并（'r''m'→"rm"），再对归一化后命令跑同一套正则，混淆被拆穿。isDangerousBash 改为原始+归一化双查（任一命中即危险），checker 与 hook 两处调用点共享同一函数自动生效。
+- **关键转折**：原计划引入 tree-sitter 做 AST 检测，调研证伪——四种混淆攻击里只有引号拼接是真缺口（$VAR 已被 Phase 1 拦、$() 已被层2 正则拦、路径别名是命令策略问题），而 shell-quote（Phase 1 已引入，零新依赖）的 tokenizer 正好解这个唯一缺口。tree-sitter native 在 Windows 是负债（无预编译、node-gyp），web-tree-sitter 加 WASM 依赖，都是杀鸡用牛刀。层名从"AST 注入检测"改为"归一化检测"，诚实反映实现（token 流归一化，非真 AST）。
+- **TDD 测试点**：①引号拼接攻击（'r''m'/r'm'/"r""m"/'s''u''d''o' 四种变形 → dangerous）；②正常引号不误伤（echo "hello world"/git commit -m "fix"/ls -la → safe）；③归一化器单元（合并验证 + operator 还原 + parse 失败保守返回原文）；④原始 rm -rf/sudo 仍被直接抓（回归保护，归一化是叠加非替代）。
+- **失败原因**：实现初版有逻辑 bug——误把"连续字符串 token"当相邻引号串合并，导致 rm/-rf// 被拼成 rm-rf/（丢了空格）。单元测试因只断言 toContain('rm') 而蒙混过关（rm-rf 也含 rm），是集成测试（isDangerousBash 需完整 rm -rf）才抓出。修正：去掉错误合并逻辑，每个字符串 token 独立 push、空格 join（shell-quote 已在 parse 阶段合并了相邻引号串）。这印证集成层断言更严格的价值。
+- **验证结果**：L1 bash-normalize 16 passed；L3 全量 112 文件 1191 passed | 2 skipped（注：history.test.ts 有 1 个 flaky 用例全量时偶发失败，单独跑 28 passed 稳定通过，与 Phase 3 改动无代码路径交集，属预先存在的时序问题）；tsc EXIT 0；ESLint EXIT 0。反假自检：破坏 normalizeBashForCheck（直接返回原文）→ 8 failed（归一化单元 + 引号拼接攻击），恢复 → GREEN。
+- **诚实声明覆盖面**：✅抓引号拼接混淆；❌不抓语法正常的恶意命令（curl -d @.env，需 Phase 4 OS 沙箱）；❌不抓变量拼接（${cmd}m，但已被 Phase 1 UNRESOLVABLE_VAR 覆盖走 ask）。这是"补正则被混淆绕过的口子"，非"消灭所有注入"。
+- **后续 Phase**：Phase 4（层5 OS 沙箱）。若未来混淆攻击面扩大（新绕过手法），再升级到 tree-sitter 真 AST。
+
