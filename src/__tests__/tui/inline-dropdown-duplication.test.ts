@@ -100,7 +100,14 @@ describe('InlineApp 下拉菜单不重复绘制', () => {
 
     const dropdownRows = Math.min(candidates.length, 8);
     const footerBaseRows = 4;
-    expect(footerBaseRows + dropdownRows).toBeGreaterThan(footerBaseRows);
+    const totalRows = footerBaseRows + dropdownRows;
+
+    // 验证：总行数必须大于基础 footer 行数（有菜单时）
+    expect(totalRows).toBeGreaterThan(footerBaseRows);
+    // 验证：dropdown 行数必须为正（菜单有内容）
+    expect(dropdownRows).toBeGreaterThan(0);
+    // 验证：总行数 = footer 基础 + 菜单行数
+    expect(totalRows).toBe(footerBaseRows + dropdownRows);
   });
 
   it('下拉菜单关闭后连续重绘无残留（核心回归）', () => {
