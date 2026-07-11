@@ -30,7 +30,7 @@ export class InlineRenderer {
    * InlineApp 保证：有新消息时先 commitFooter()（清零 footerHeight），
    * 再写消息，再调用本方法。无新消息时直接调用本方法覆写。
    */
-  renderFooter(input: string, cursorPos: number, statusText: string, cols: number = 80): void {
+  renderFooter(input: string, cursorPos: number, statusText: string, cols: number = 80, prevDropdownRows: number = 0): void {
     const inputLines = input.split('\n');
     const border = '─'.repeat(cols);
     const newHeight = 2 + inputLines.length + 1;
@@ -49,18 +49,23 @@ export class InlineRenderer {
       }
     } else {
       // 覆写模式：光标在 footer 的输入框行
-      // 上移到 footer 顶部（border 行）
+      // 上移到上一次 dropdown + footer 顶部（清除整个区域）
       const inputLineIndex = inputLines.length - 1;
-      const offsetToTop = 1 + inputLineIndex; // border + input 行偏移
+      const offsetToTop = prevDropdownRows + 1 + inputLineIndex;
       this.stdout.write(cursorUp(offsetToTop));
 
-      // 逐行覆写。最后一行也补 \n，使光标停在 footer 下方一行，
-      // 与追加模式结尾的光标基准对齐（见 upFromBottom 计算），
-      // 否则每次覆写后光标会向上漂移 1 行，导致旧 footer 残留、状态栏重复。
-      for (let i = 0; i < this.footerHeight; i++) {
+      // 逐行覆写：擦除旧行 + 写入新行
+      const maxLines = Math.max(this.footerHeight, newHeight);
+      for (let i = 0; i < maxLines; i++) {
         const content = i < lines.length ? lines[i] : '';
-        this.stdout.write(`\r\x1b[2K${content}`);
-        this.stdout.write('\n');
+        this.stdout.write(`\r\x1b[2K${content}\n`);
+      }
+
+      // 如果新 footer 比旧的短，物理删除多余的行
+      if (newHeight < this.footerHeight) {
+        const excess = this.footerHeight - newHeight;
+        this.stdout.write(cursorUp(1));
+        this.stdout.write(`\x1b[${excess}M`);
       }
     }
 
@@ -73,10 +78,8 @@ export class InlineRenderer {
     const { x: cursorX, y: cursorLineIndex } = cursorScreenPos(input, cursorPos, PROMPT);
     const upFromBottom = this.footerHeight - 1 - cursorLineIndex;
 
-    // 记录光标到 footer 顶部的距离，供 commitFooter 精确上移。
-    // footer 结构：border(0) + input(1..n) + border + status。
-    // cursorLineIndex 是 input 内的行号（0-based），到 footer 顶部 = 1 + cursorLineIndex。
-    this.cursorToTop = 1 + cursorLineIndex;
+    // 记录光标到上一次 dropdown+footer 顶部的距离，供 commitFooter 精确上移。
+    this.cursorToTop = prevDropdownRows + 1 + cursorLineIndex;
 
     this.stdout.write(hideCursor);
     if (upFromBottom > 0) {

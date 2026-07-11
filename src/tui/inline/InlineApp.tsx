@@ -256,6 +256,8 @@ export function InlineApp({
   const dropdownVisible = useStore(completionStore, (s) => s.visible);
   const dropdownCandidates = useStore(completionStore, (s) => s.candidates);
   const dropdownIndex = useStore(completionStore, (s) => s.index);
+  /** 追踪上一帧的 dropdown 行数（供 renderFooter 覆写时 cursorUp 覆盖整个区域） */
+  const prevDropdownRowsRef = useRef(0);
 
   // overlay 渲染：visible 时进备用屏显示内容（最高优先级，独立 effect）
   useEffect(() => {
@@ -388,10 +390,12 @@ export function InlineApp({
 
     // ── 3. 绘制下拉菜单（消息区与 footer 之间）──
     // 必须在 footer 之前写入，否则 footer 覆写模式会清除菜单下方区域导致重复绘制。
+    let activeDropdownRows = 0;
     if (dropdownVisible && dropdownCandidates.length > 0) {
       const maxVisible = Math.min(dropdownCandidates.length, 8);
       const startIndex = Math.max(0, dropdownIndex - Math.floor(maxVisible / 2));
       const visible = dropdownCandidates.slice(startIndex, startIndex + maxVisible);
+      activeDropdownRows = visible.length;
 
       for (let i = 0; i < visible.length; i++) {
         const actualIndex = startIndex + i;
@@ -429,7 +433,8 @@ export function InlineApp({
       spinnerLine = `${bold}${color}${frame} ${spinner.label}${RESET}`;
     }
     const fullStatus = [spinnerLine, statusText].filter(Boolean).join(' │ ');
-    renderer.renderFooter(inputText, cursor, fullStatus, cols);
+    renderer.renderFooter(inputText, cursor, fullStatus, cols, prevDropdownRowsRef.current);
+    prevDropdownRowsRef.current = activeDropdownRows;
   }, [messages, renderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex]);
 
   // 卸载时 commit footer
