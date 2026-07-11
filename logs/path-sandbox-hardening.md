@@ -34,3 +34,11 @@
 - **诚实声明覆盖面**：✅抓引号拼接混淆；❌不抓语法正常的恶意命令（curl -d @.env，需 Phase 4 OS 沙箱）；❌不抓变量拼接（${cmd}m，但已被 Phase 1 UNRESOLVABLE_VAR 覆盖走 ask）。这是"补正则被混淆绕过的口子"，非"消灭所有注入"。
 - **后续 Phase**：Phase 4（层5 OS 沙箱）。若未来混淆攻击面扩大（新绕过手法），再升级到 tree-sitter 真 AST。
 
+## Phase 4 评估结论：Windows 上不做 OS 沙箱（诚实收尾）
+
+- **判断**：Windows 上不做 Phase 4（层5 OS 沙箱），与 Claude Code 的选择一致（Claude Code 仅在 Linux/macOS 用 bubblewrap/Seatbelt，Windows 无沙箱）。
+- **理由**：Windows 缺乏"给进程假文件系统视图"的内核原语（Linux bubblewrap 用 mount namespace，macOS 用 Seatbelt 规则，Windows 无等价物）。AppContainer 配置繁琐且破坏 Node.js 兼容性；ACL 只能"看到了不让碰"不能"看不到"；网络隔离在不破坏合法操作（npm install/git clone 需联网）前提下几乎不可能。唯一成熟的 Job Object（进程强杀）已被 Phase 2 的 taskkill /T /F 覆盖 95%。做半残沙箱（只有 Job Object 无文件/网络隔离）安全价值低，且会给用户虚假安全感——比坦诚"没有 OS 沙箱"更危险。
+- **未覆盖面（已知边界）**：①网络外泄（curl -d @.env，需网络隔离）；②语法正常的恶意命令（需文件隔离）。这两个是 OS 沙箱独有价值，Windows 上做不到。应用层（Phase 1-3）已覆盖越界读写、危险命令、引号混淆、孤儿进程、输出爆炸。
+- **若未来需要强隔离的现实路径**：①WSL2（在 Windows 里跑 Linux 再用 bubblewrap）；②Docker 容器化 micode；③等 Windows 原生沙箱方案成熟（Windows Sandbox/Job Object 增强尚不够用）。应用层补充防御可考虑加"网络命令审批"层（curl/wget/nc 走 ask 人审），不依赖 OS 沙箱。
+- **6 层架构在 Windows 上的实际状态**：5 层就位（层1-4 + 层6），层5 缺位。这是技术现实的诚实反映，非缺陷。围栏（应用层）已做到极限，剩下的靠用户警惕 + 环境隔离（WSL/Docker）。
+
