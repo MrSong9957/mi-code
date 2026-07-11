@@ -5,6 +5,7 @@ import type { PermissionChecker } from '../permission/checker.js';
 import type { PermissionMode } from '../permission/types.js';
 import type { SkillRegistry } from '../skills/registry.js';
 import type { SkillNegotiator } from '../skills/negotiator.js';
+import type { ThemeStore } from '../tui/state/theme-store.js';
 
 /** 命令执行结果 */
 export interface CommandResult {
@@ -18,6 +19,7 @@ export interface CommandContext {
   skillRegistry?: SkillRegistry;
   negotiator?: SkillNegotiator;
   userId?: string;
+  themeStore?: ThemeStore;
 }
 
 /**
@@ -32,17 +34,19 @@ export const COMMAND_NAMES: readonly string[] = Object.freeze([
   'approve', 'reject',
   'help',
   'skill', 'trigger', 'y', 'n', 'edit',
+  'theme',
 ]);
 
 /** 执行斜杠命令 */
 export function executeCommand(cmd: Command, configOrContext: ConfigStore | CommandContext, ctx?: CommandContext): CommandResult {
   // 兼容两种调用方式：
-  // executeCommand(cmd, configStore, ctx?) — 旧行为
-  // executeCommand(cmd, { skillRegistry, negotiator, userId }) — 新行为（技能命令）
-  const isSkillContext = 'skillRegistry' in configOrContext && configOrContext.skillRegistry !== undefined;
+  // executeCommand(cmd, configStore, ctx?) — 旧行为（config 命令）
+  // executeCommand(cmd, { skillRegistry/themeStore, ... }) — 新行为（技能/theme 命令）
+  const isContext = ('skillRegistry' in configOrContext && configOrContext.skillRegistry !== undefined)
+    || ('themeStore' in configOrContext);
 
-  if (isSkillContext) {
-    return executeSkillCommand(cmd, configOrContext as CommandContext);
+  if (isContext) {
+    return executeContextCommand(cmd, configOrContext as CommandContext);
   }
 
   const config = configOrContext as ConfigStore;
@@ -65,13 +69,22 @@ export function executeCommand(cmd: Command, configOrContext: ConfigStore | Comm
       return handleModeSwitch('auto', config, ctx);
     case 'help':
       return handleHelp();
-    // 技能相关命令也通过此路径处理
+    default:
+      return { message: `Unknown command: /${cmd.name}. Type /help for available commands.` };
+  }
+}
+
+/** 执行 context 命令（技能/theme） */
+function executeContextCommand(cmd: Command, ctx: CommandContext): CommandResult {
+  switch (cmd.name) {
     case 'skill':
     case 'trigger':
     case 'y':
     case 'n':
     case 'edit':
-      return executeSkillCommand(cmd, ctx ?? {});
+      return executeSkillCommand(cmd, ctx);
+    case 'theme':
+      return handleTheme(cmd, ctx);
     default:
       return { message: `Unknown command: /${cmd.name}. Type /help for available commands.` };
   }
@@ -286,6 +299,7 @@ function handleHelp(): CommandResult {
   /approve             (After exit_plan_mode) Approve plan & switch to build
   /reject [reason]     (After exit_plan_mode) Reject plan, stay in plan mode
   /compact             Trigger context compaction
+  /theme <dark|light>  Switch theme
   /skill list           List available skills
   /skill off <name>     Block a skill
   /skill retry <name>  Un-skip a skill
@@ -296,4 +310,14 @@ function handleHelp(): CommandResult {
   /edit <feedback>     Edit/feedback on pending skill
   /help                Show this help`,
   };
+}
+
+/** /theme — 切换主题 */
+function handleTheme(cmd: Command, ctx: CommandContext): CommandResult {
+  const themeName = cmd.args[0];
+  if (themeName !== 'dark' && themeName !== 'light') {
+    return { message: 'Usage: /theme <dark|light>' };
+  }
+  ctx.themeStore?.getState().setTheme(themeName);
+  return { message: `Theme switched to ${themeName}` };
 }

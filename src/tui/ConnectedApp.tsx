@@ -44,6 +44,8 @@ const FOOTER_BASE_ROWS = 4;
 const AUTOSCROLL_MS = 80;
 /** 滚轮一次滚动的行数 */
 const WHEEL_DELTA = 3;
+/** inline 模式下 completionStore 订阅的常量短路值（零候选，避免重渲染） */
+const EMPTY_CANDIDATES: readonly string[] = Object.freeze([]);
 
 /** SGR 鼠标残片检测：Ink useInput 把 \x1b[<button;col;rowM|m 整段当 escape sequence 交付，前导 \x1b 被剥 */
 // eslint-disable-next-line no-control-regex
@@ -74,6 +76,10 @@ export function ConnectedApp({
   const [scrolledAway, setScrolledAway] = useState(false);
   const { rows, cols } = useTerminalSize();
 
+  // 渲染模式检测（须在 completion 订阅之前——后者据 isInline 短路）
+  const { mode } = useRenderMode();
+  const isInline = mode === 'inline';
+
   // 订阅所有 store
   const messages = useStore(messagesStore, (s) => s.messages);
   const inputText = useStore(inputStore, (s) => s.text);
@@ -85,12 +91,11 @@ export function ConnectedApp({
     version: s.version, dir: s.dir,
   })));
   const spinnerActive = useStore(spinnerStore, (s) => s.active);
-  const completionVisible = useStore(completionStore, (s) => s.visible);
-  const completionCandidates = useStore(completionStore, (s) => s.candidates);
-
-  // 渲染模式检测
-  const { mode } = useRenderMode();
-  const isInline = mode === 'inline';
+  // completionStore 订阅：inline 模式下用常量短路，避免每次候选变化触发 ConnectedApp 重渲染
+  // （inline 模式的下拉渲染在 InlineApp 内部直接读 completionStore，不经此处）。
+  // useStore 用 Object.is 比较 selector 输出，常量 false/[] 永远不变 → 零重渲染。
+  const completionVisible = useStore(completionStore, (s) => (isInline ? false : s.visible));
+  const completionCandidates = useStore(completionStore, (s) => (isInline ? EMPTY_CANDIDATES : s.candidates));
 
   // ── 以下所有 hooks 必须在 early return 之前（React hooks 规则） ──
 

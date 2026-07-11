@@ -1,22 +1,18 @@
 // src/tui/inline/colors.ts
-// 色板模块：赛博亮色方案，给 LOGO 和状态栏字段着色。
+// 色板模块：主题驱动的着色系统，给 LOGO 和状态栏字段着色。
 //
 // 物理本质：终端 SGR（Select Graphic Rendition）色码的「印泥盒」。
 // 每个颜色常量是一块印泥，colorize() 是「蘸印泥盖章 + 立即擦除」的组合，
 // 保证颜色不泄漏到分隔符或其他文本。
 //
-// 配色规格（赛博亮色）：
-//   LOGO    → cyanBright   (96)  品牌主色
-//   mode    → cyanBright   (96)
-//   model   → magentaBright(95)
-//   dir     → yellowBright (93)
-//   branch  → greenBright  (92)
-//   context → blueBright   (94)
-//
-// 复用 ansi-utils.ts 的 sgr()（此前是死代码，本模块激活它）。
+// 配色由 theme.ts 集中管控，本模块通过 resolveSGR() 翻译主题槽位为 SGR 序列。
+// 16色降级路径保留 sgr() 常量作为后备。
 
 import { sgr } from './ansi-utils.js';
 import type { UIMessageStyle } from '../../ui/types.js';
+import { getTheme } from '../../utils/theme.js';
+import type { ThemeName, Theme } from '../../utils/theme.js';
+import { resolveSGR as themeSGR, RESET as THEME_RESET } from '../../utils/theme-resolve.js';
 
 /** 所有属性归零——着色包裹的收尾，防止颜色泄漏 */
 export const RESET = sgr('0');
@@ -44,11 +40,16 @@ export function colorize(color: string, text: string): string {
 }
 
 /**
- * LOGO 全行单色着色（cyanBright 品牌主色）。
- * 整行包裹：色码 + 原文 + reset。
+ * LOGO 全行单色着色（主题品牌主色）。
+ * 整行包裹：TrueColor SGR + 原文 + reset。
+ *
+ * @param line LOGO 文本行
+ * @param themeName 主题名（默认 dark）
  */
-export function colorizeLogo(line: string): string {
-  return colorize(cyanBright, line);
+export function colorizeLogo(line: string, themeName?: ThemeName): string {
+  const prefix = themeSGR(getTheme(themeName), 'brand');
+  if (!prefix) return colorize(cyanBright, line);
+  return `${prefix}${line}${THEME_RESET}`;
 }
 
 /** 状态栏 5 字段（与 StatusBarData 对应，去掉无关字段） */
@@ -62,18 +63,22 @@ export interface StatusFields {
 }
 
 /**
- * 状态栏分色着色：5 字段各用不同亮色，│ 分隔符保持默认色。
+ * 状态栏分色着色：5 字段各用主题色，│ 分隔符保持默认色。
  *
- * 输出结构：cyan{mode} │ magenta{model} │ yellow{dir} │ green{branch} │ blue{context}
- * 每个字段独立包裹（色码...reset），分隔符落在两个 reset/色码之间不着色。
+ * 输出结构：{theme.statusMode}{mode} │ {theme.statusModel}{model} │ ...
+ * 每个字段独立包裹（TrueColor SGR...reset），分隔符落在两个 reset/色码之间不着色。
+ *
+ * @param fields 状态栏 5 字段
+ * @param themeName 主题名（默认 dark）
  */
-export function colorizeStatus(fields: StatusFields): string {
+export function colorizeStatus(fields: StatusFields, themeName?: ThemeName): string {
+  const t = getTheme(themeName);
   const parts = [
-    colorize(cyanBright, fields.mode),
-    colorize(magentaBright, fields.model),
-    colorize(yellowBright, fields.dir),
-    colorize(greenBright, fields.branch),
-    colorize(blueBright, fields.context),
+    colorize(themeSGR(t, 'statusMode'), fields.mode),
+    colorize(themeSGR(t, 'statusModel'), fields.model),
+    colorize(themeSGR(t, 'statusDir'), fields.dir),
+    colorize(themeSGR(t, 'statusBranch'), fields.branch),
+    colorize(themeSGR(t, 'statusFill'), fields.context),
   ];
   return parts.join(' │ ');
 }
@@ -85,23 +90,28 @@ export function colorizeStatus(fields: StatusFields): string {
 // 本组函数把这些 token 翻译成终端 SGR 序列，让 InlineApp 能给每行正文上色。
 //
 // 映射表与 src/tui/types.ts:styleToInkProps 完全一致（单一事实源）：
-//   brand   → magenta(35) —— ● 标题、assistant 前缀
-//   success → green(32)   —— ❯ 用户输入
-//   error   → red(31)     —— 错误
-//   border  → gray(90)    —— 边框
+//   brand   → theme.brand —— ● 标题、assistant 前缀
+//   success → theme.success —— ❯ 用户输入
+//   error   → theme.error —— 错误
+//   border  → theme.border —— 边框
 //   其它    → 透传（可能是具名色）
-//
-// 复用 sgr() 原语（与状态栏同源），避免引入新依赖。
 
-/** 语义 fg token → SGR 色码（与 styleToInkProps 的 fg 映射一致） */
-function fgToSGR(fg: string): string | undefined {
-  switch (fg) {
-    case 'brand': return magentaBrightStd;   // magenta(35)
-    case 'success': return greenBrightStd;   // green(32)
-    case 'error': return redBright;          // red(31)
-    case 'border': return grayBrightStd;     // gray(90)
-    default: return undefined;               // 未知 token 不着色
-  }
+/** 语义 fg token → 主题槽位名（与 styleToInkProps 的 fg 映射一致） */
+const FG_THEME_MAP: Record<string, keyof Theme> = {
+  brand: 'brand',
+  success: 'success',
+  error: 'error',
+  border: 'border',
+};
+
+/**
+ * 语义 fg token → SGR 色码（TrueColor 模式）。
+ * 先查主题映射，未命中则返回 undefined（透传）。
+ */
+function fgToSGR(fg: string, theme?: Theme): string | undefined {
+  const slot = FG_THEME_MAP[fg];
+  if (slot && theme) return themeSGR(theme, slot);
+  return undefined;
 }
 
 /**
@@ -112,13 +122,15 @@ function fgToSGR(fg: string): string | undefined {
  * 无任何属性时返回空串。
  *
  * @param style 语义样式（可能为 undefined）
+ * @param themeName 主题名（默认 dark），用于 TrueColor 渲染
  * @returns SGR 序列串（空串表示无样式）
  */
-export function styleToSGR(style: UIMessageStyle | undefined): string {
+export function styleToSGR(style: UIMessageStyle | undefined, themeName?: ThemeName): string {
   if (!style) return '';
+  const theme = getTheme(themeName);
   let sgrSeq = '';
   if (style.fg) {
-    const fgCode = fgToSGR(style.fg);
+    const fgCode = fgToSGR(style.fg, theme);
     if (fgCode) sgrSeq += fgCode;
   }
   if (style.bold) sgrSeq += sgr('1');
@@ -137,10 +149,11 @@ export function styleToSGR(style: UIMessageStyle | undefined): string {
  *
  * @param text 原始文本
  * @param style 语义样式（可选；无则原样返回）
+ * @param themeName 主题名（默认 dark）
  * @returns 带 SGR 包裹的文本（或原样文本）
  */
-export function colorizeStyled(text: string, style?: UIMessageStyle): string {
-  const sgrSeq = styleToSGR(style);
+export function colorizeStyled(text: string, style?: UIMessageStyle, themeName?: ThemeName): string {
+  const sgrSeq = styleToSGR(style, themeName);
   if (sgrSeq === '') return text;
   return `${sgrSeq}${text}${RESET}`;
 }

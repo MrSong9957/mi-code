@@ -19,25 +19,28 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import { lexer, type Token, type Tokens } from 'marked';
 import { highlight } from 'cli-highlight';
+import { getTheme } from '../../utils/theme.js';
+import type { ThemeName } from '../../utils/theme.js';
 
 /** 行内 token → React 文本节点数组（递归） */
-function renderInlineTokens(tokens: Token[] | undefined, keyPrefix: string): React.ReactNode[] {
+function renderInlineTokens(tokens: Token[] | undefined, keyPrefix: string, themeName?: ThemeName): React.ReactNode[] {
   if (!tokens || tokens.length === 0) return [];
+  const t = getTheme(themeName);
   return tokens.map((tok, i) => {
     const key = `${keyPrefix}-${i}`;
     switch (tok.type) {
       case 'strong':
-        return React.createElement(Text, { key, bold: true }, renderInlineTokens(tok.tokens, key));
+        return React.createElement(Text, { key, bold: true }, renderInlineTokens(tok.tokens, key, themeName));
       case 'em':
-        return React.createElement(Text, { key, italic: true }, renderInlineTokens(tok.tokens, key));
+        return React.createElement(Text, { key, italic: true }, renderInlineTokens(tok.tokens, key, themeName));
       case 'codespan':
-        return React.createElement(Text, { key, color: 'cyan' }, tok.text);
+        return React.createElement(Text, { key, color: t.mdCode }, tok.text);
       case 'link':
-        return React.createElement(Text, { key, color: 'blue', underline: true },
+        return React.createElement(Text, { key, color: t.mdLink, underline: true },
           tok.text ?? (tok.tokens ? flattenText(tok.tokens) : ''),
         );
       case 'del':
-        return React.createElement(Text, { key, color: 'gray' }, renderInlineTokens(tok.tokens, key));
+        return React.createElement(Text, { key, color: t.mdStrikethrough }, renderInlineTokens(tok.tokens, key, themeName));
       case 'br':
         return React.createElement(Text, { key }, '\n');
       case 'escape':
@@ -45,7 +48,7 @@ function renderInlineTokens(tokens: Token[] | undefined, keyPrefix: string): Rea
       case 'text':
         // text token 可能还有子 tokens（嵌套），有则递归，否则直接用 text
         if (tok.tokens && tok.tokens.length > 0) {
-          return React.createElement(React.Fragment, { key }, renderInlineTokens(tok.tokens, key));
+          return React.createElement(React.Fragment, { key }, renderInlineTokens(tok.tokens, key, themeName));
         }
         return React.createElement(Text, { key }, tok.text);
       case 'html':
@@ -76,23 +79,24 @@ function highlightCode(code: string, lang?: string): React.ReactNode {
 }
 
 /** block token → 一组 React 节点（每条占独立行） */
-function renderBlockToken(tok: Token, idx: number): React.ReactNode {
+function renderBlockToken(tok: Token, idx: number, themeName?: ThemeName): React.ReactNode {
   const key = `block-${idx}`;
+  const t = getTheme(themeName);
   switch (tok.type) {
     case 'heading': {
-      return React.createElement(Text, { key, color: 'magenta', bold: true },
-        renderInlineTokens(tok.tokens, key),
+      return React.createElement(Text, { key, color: t.mdHeading, bold: true },
+        renderInlineTokens(tok.tokens, key, themeName),
       );
     }
     case 'paragraph': {
-      return React.createElement(Text, { key }, renderInlineTokens(tok.tokens, key));
+      return React.createElement(Text, { key }, renderInlineTokens(tok.tokens, key, themeName));
     }
     case 'code': {
       const code = highlightCode(tok.text, tok.lang);
-      return React.createElement(Text, { key, color: 'cyan' }, code);
+      return React.createElement(Text, { key, color: t.mdCode }, code);
     }
     case 'codespan': {
-      return React.createElement(Text, { key, color: 'cyan' }, tok.text);
+      return React.createElement(Text, { key, color: t.mdCode }, tok.text);
     }
     case 'list': {
       const items = (tok as Tokens.List).items.map((item: Tokens.ListItem, i: number) => {
@@ -101,7 +105,7 @@ function renderBlockToken(tok: Token, idx: number): React.ReactNode {
         const itemKey = `${key}-item-${i}`;
         // ListItem 的 tokens 通常是 [text/paragraph]，取其子 tokens 渲染
         const itemContent = item.tokens
-          ? renderListItemContent(item.tokens, itemKey)
+          ? renderListItemContent(item.tokens, itemKey, themeName)
           : React.createElement(Text, { key: itemKey }, item.text);
         return React.createElement(Text, { key: itemKey },
           marker,
@@ -112,14 +116,14 @@ function renderBlockToken(tok: Token, idx: number): React.ReactNode {
     }
     case 'blockquote': {
       // 引用：每行加 │ 前缀，dimColor
-      const inner = (tok.tokens ?? []).map((t, i) => renderBlockToken(t, i));
+      const inner = (tok.tokens ?? []).map((t, i) => renderBlockToken(t, i, themeName));
       return React.createElement(Box, { key, flexDirection: 'column' },
-        React.createElement(Text, { color: 'gray' }, '│'),
+        React.createElement(Text, { color: t.mdBlockquote }, '│'),
         React.createElement(Box, { flexDirection: 'column' }, inner),
       );
     }
     case 'hr': {
-      return React.createElement(Text, { key, color: 'gray' }, '─'.repeat(40));
+      return React.createElement(Text, { key, color: t.mdBlockquote }, '─'.repeat(40));
     }
     case 'space': {
       return React.createElement(Text, { key }, ' ');
@@ -146,7 +150,7 @@ function renderBlockToken(tok: Token, idx: number): React.ReactNode {
 }
 
 /** ListItem 内 tokens 渲染（通常含 paragraph/text 嵌套） */
-function renderListItemContent(tokens: Token[] | undefined, keyPrefix: string): React.ReactNode {
+function renderListItemContent(tokens: Token[] | undefined, keyPrefix: string, themeName?: ThemeName): React.ReactNode {
   if (!tokens || tokens.length === 0) return null;
   // 取每个子 token 的行内内容
   const parts: React.ReactNode[] = [];
@@ -156,25 +160,30 @@ function renderListItemContent(tokens: Token[] | undefined, keyPrefix: string): 
     if (t.type === 'text') {
       // text token 可能带子 tokens（行内格式）
       if (t.tokens && t.tokens.length > 0) {
-        parts.push(React.createElement(React.Fragment, { key: k }, renderInlineTokens(t.tokens, k)));
+        parts.push(React.createElement(React.Fragment, { key: k }, renderInlineTokens(t.tokens, k, themeName)));
       } else {
         parts.push(React.createElement(Text, { key: k }, t.text));
       }
     } else if (t.type === 'paragraph') {
-      parts.push(React.createElement(React.Fragment, { key: k }, renderInlineTokens(t.tokens, k)));
+      parts.push(React.createElement(React.Fragment, { key: k }, renderInlineTokens(t.tokens, k, themeName)));
     } else {
-      parts.push(renderBlockToken(t, i));
+      parts.push(renderBlockToken(t, i, themeName));
     }
   }
   return React.createElement(React.Fragment, null, ...parts);
 }
 
-/** 主入口：markdown 文本 → Ink <Box> 组件树 */
-export function renderMarkdown(text: string): React.ReactElement {
+/**
+ * 主入口：markdown 文本 → Ink <Box> 组件树。
+ *
+ * @param text markdown 原文
+ * @param themeName 主题名（默认 dark）
+ */
+export function renderMarkdown(text: string, themeName?: ThemeName): React.ReactElement {
   if (text === '') {
     return React.createElement(Box, { flexDirection: 'column' });
   }
   const tokens = lexer(text);
-  const children = tokens.map((tok, idx) => renderBlockToken(tok, idx));
+  const children = tokens.map((tok, idx) => renderBlockToken(tok, idx, themeName));
   return React.createElement(Box, { flexDirection: 'column' }, ...children);
 }

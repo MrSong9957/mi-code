@@ -13,6 +13,7 @@ import { useStore } from 'zustand/react';
 import stringWidth from 'string-width';
 import type { OverlayStore } from '../state/overlay-store.js';
 import { styleToInkProps } from '../types.js';
+import { useTheme } from '../state/theme-context.js';
 
 export interface OverlayProps {
   store: OverlayStore;
@@ -21,6 +22,7 @@ export interface OverlayProps {
 }
 
 export function Overlay({ store, cols }: OverlayProps): React.ReactElement | null {
+  const t = useTheme();
   const visible = useStore(store, (s) => s.visible);
   const title = useStore(store, (s) => s.title);
   const lines = useStore(store, (s) => s.lines);
@@ -29,7 +31,7 @@ export function Overlay({ store, cols }: OverlayProps): React.ReactElement | nul
   return (
     <Box flexDirection="column">
       <Text bold>{title}</Text>
-      <Text color="#8c8c8c">{'━'.repeat(Math.min(cols, 60))}</Text>
+      <Text color={t.border}>{'━'.repeat(Math.min(cols, 60))}</Text>
       {lines.map((l, i) => {
         const indentNum = l.indent ?? 0;
         const indent = ' '.repeat(indentNum);

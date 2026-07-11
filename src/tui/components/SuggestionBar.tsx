@@ -1,13 +1,17 @@
 // src/tui/components/SuggestionBar.tsx
-// 斜杠命令候选条：input 以 / 开头且 TAB 触发时显示
+// 斜杠命令下拉菜单：输入 / 后自动弹出，竖排显示候选命令
 //
-// 物理本质：一行候选预览。当前选中项 inverse（SGR 7 反色）+ bold 高亮。
-// 选TAB循环 index；选中项回写到 input-store（在 use-input-handler 的 onTab 里做）。
+// 物理本质：输入框上方的「命令速查表」。
+// 用户输入 / 时弹出全部命令，继续输入实时过滤；
+// 上下箭头选择，Enter 确认，Esc 关闭。
+// 最多显示 8 行，超出部分滚动。
 
 import React from 'react';
-import { Text } from 'ink';
+import { Box, Text } from 'ink';
 import { useStore } from 'zustand/react';
 import type { CompletionStore } from '../state/completion-store.js';
+
+const MAX_VISIBLE = 8;
 
 export interface SuggestionBarProps {
   store: CompletionStore;
@@ -19,16 +23,24 @@ export function SuggestionBar({ store }: SuggestionBarProps): React.ReactElement
   const index = useStore(store, (s) => s.index);
 
   if (!visible || candidates.length === 0) return null;
+
+  // 计算可见范围（滚动窗口）
+  const startIndex = Math.max(0, index - MAX_VISIBLE + 1);
+  const visibleCandidates = candidates.slice(startIndex, startIndex + MAX_VISIBLE);
+
   return (
-    <Text>
-      {candidates.map((c, i) => (
-        <Text key={c}>
-          {i === index
-            ? <Text inverse bold>{c}</Text>
-            : <Text dimColor>{c}</Text>}
-          {i < candidates.length - 1 ? <Text dimColor>  </Text> : null}
-        </Text>
-      ))}
-    </Text>
+    <Box flexDirection="column">
+      {visibleCandidates.map((c, i) => {
+        const actualIndex = startIndex + i;
+        const isSelected = actualIndex === index;
+        return (
+          <Text key={c}>
+            {isSelected
+              ? <Text inverse bold>{`▸/${c}`}</Text>
+              : <Text dimColor>{`  /${c}`}</Text>}
+          </Text>
+        );
+      })}
+    </Box>
   );
 }

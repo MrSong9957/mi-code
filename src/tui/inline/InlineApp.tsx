@@ -252,12 +252,10 @@ export function InlineApp({
   })));
   /** 追踪 overlay 上一帧的 visible 状态（检测 打开→关闭 转换，触发重绘） */
   const overlayWasVisibleRef = useRef(false);
-  // 下拉菜单状态（Claude Code Portal 模式：数据通过 Context 传递，渲染合并到主 effect）
+  // 下拉菜单状态（单一数据源：completionStore；渲染合并到 renderFooter 的原子块）
   const dropdownVisible = useStore(completionStore, (s) => s.visible);
   const dropdownCandidates = useStore(completionStore, (s) => s.candidates);
   const dropdownIndex = useStore(completionStore, (s) => s.index);
-  /** 追踪上一帧的 dropdown 行数（供 renderFooter 覆写时 cursorUp 覆盖整个区域） */
-  const prevDropdownRowsRef = useRef(0);
 
   // overlay 渲染：visible 时进备用屏显示内容（最高优先级，独立 effect）
   useEffect(() => {
@@ -353,10 +351,6 @@ export function InlineApp({
     for (const msg of finalizedMessages) {
       renderedMap.set(msg.uuid, msg.lines.length);
     }
-    // 更新每个消息的已渲染行数
-    for (const msg of finalizedMessages) {
-      renderedMap.set(msg.uuid, msg.lines.length);
-    }
 
     // ── 2. 流式文本：覆写草稿行（逐字显示）──
     // assistant → 白底蓝标（wrapStreamingText）；thinking → 灰色 dim（wrapThinkingText）
@@ -388,27 +382,9 @@ export function InlineApp({
       prevLastFinalizedRef.current = true;
     }
 
-    // ── 3. 绘制下拉菜单（消息区与 footer 之间）──
-    // 必须在 footer 之前写入，否则 footer 覆写模式会清除菜单下方区域导致重复绘制。
-    let activeDropdownRows = 0;
-    if (dropdownVisible && dropdownCandidates.length > 0) {
-      const maxVisible = Math.min(dropdownCandidates.length, 8);
-      const startIndex = Math.max(0, dropdownIndex - Math.floor(maxVisible / 2));
-      const visible = dropdownCandidates.slice(startIndex, startIndex + maxVisible);
-      activeDropdownRows = visible.length;
-
-      for (let i = 0; i < visible.length; i++) {
-        const actualIndex = startIndex + i;
-        const isSelected = actualIndex === dropdownIndex;
-        if (isSelected) {
-          process.stdout.write(`\x1b[7m ▸ /${visible[i]} \x1b[0m\n`);
-        } else {
-          process.stdout.write(`   /${visible[i]}\n`);
-        }
-      }
-    }
-
-    // ── 4. 绘制 Footer（含 spinner 状态）──
+    // ── 3. 绘制 Footer（含下拉菜单 + spinner 状态，一个原子块）──
+    // 下拉菜单作为 footer 块的一部分（输入框正下方），高度纳入 footerHeight 账本，
+    // 下一帧覆写天然覆盖整个区域——零残留。不再用裸 process.stdout.write。
     const barWidth = 10;
     const pct = Math.max(0, Math.min(1, statusData.contextPct));
     const filled = Math.round(pct * barWidth);
@@ -433,8 +409,9 @@ export function InlineApp({
       spinnerLine = `${bold}${color}${frame} ${spinner.label}${RESET}`;
     }
     const fullStatus = [spinnerLine, statusText].filter(Boolean).join(' │ ');
-    renderer.renderFooter(inputText, cursor, fullStatus, cols, prevDropdownRowsRef.current);
-    prevDropdownRowsRef.current = activeDropdownRows;
+    // 下拉候选：仅 visible 且非空时传入；renderer 内部据 selectedIndex 反白选中行
+    const suggestions = (dropdownVisible && dropdownCandidates.length > 0) ? dropdownCandidates : [];
+    renderer.renderFooter(inputText, cursor, fullStatus, cols, suggestions, dropdownIndex);
   }, [messages, renderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex]);
 
   // 卸载时 commit footer

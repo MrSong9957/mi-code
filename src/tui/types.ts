@@ -12,6 +12,8 @@
 // - 流式 assistant：streamingText 累积全文，finalized=false 时 MessageRow 用 StreamingMarkdown 渲染
 
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
+import { getTheme } from '../utils/theme.js';
+import type { ThemeName, Theme } from '../utils/theme.js';
 
 /** 一条 TUI 消息（一组逻辑相关的渲染行） */
 export interface TuiMessage {
@@ -42,6 +44,19 @@ export interface InkTextStyle {
   inverse?: boolean;
 }
 
+/** 语义 fg token → 主题槽位名 */
+const FG_SLOT_MAP: Record<string, keyof Theme> = {
+  brand: 'brand',
+  success: 'success',
+  error: 'error',
+  border: 'border',
+};
+
+/** 语义 bg token → 主题槽位名 */
+const BG_SLOT_MAP: Record<string, keyof Theme> = {
+  gray: 'bgMuted',
+};
+
 /**
  * 语义样式 token → Ink <Text> props 的映射（集中处）。
  *
@@ -49,29 +64,26 @@ export interface InkTextStyle {
  * Ink 用具体颜色字符串。这里把抽象翻译成具体，便于整体换肤。
  *
  * fg token（对齐旧 src/renderer/theme.ts 的语义）：
- * - brand   → magenta（● 标题、assistant 前缀）
- * - success → green（❯ 用户输入）
- * - error   → red（错误）
- * - border  → gray（边框，footer 用）
+ * - brand   → theme.brand（● 标题、assistant 前缀）
+ * - success → theme.success（❯ 用户输入）
+ * - error   → theme.error（错误）
+ * - border  → theme.border（边框，footer 用）
  * - 其它/未指定 → 不着色（默认前景）
+ *
+ * @param style 语义样式
+ * @param themeName 主题名（默认 dark）
  */
-export function styleToInkProps(style: UIMessageStyle | undefined): InkTextStyle {
+export function styleToInkProps(style: UIMessageStyle | undefined, themeName?: ThemeName): InkTextStyle {
   if (!style) return {};
+  const theme = getTheme(themeName);
   const props: InkTextStyle = {};
   if (style.fg) {
-    switch (style.fg) {
-      case 'brand': props.color = 'magenta'; break;
-      case 'success': props.color = 'green'; break;
-      case 'error': props.color = 'red'; break;
-      case 'border': props.color = 'gray'; break;
-      default: props.color = style.fg; // 未知 token 透传（可能是 hex/具名色）
-    }
+    const slot = FG_SLOT_MAP[style.fg];
+    props.color = slot ? theme[slot] : style.fg;
   }
   if (style.bg) {
-    switch (style.bg) {
-      case 'gray': props.backgroundColor = 'gray'; break;
-      default: props.backgroundColor = style.bg;
-    }
+    const slot = BG_SLOT_MAP[style.bg];
+    props.backgroundColor = slot ? theme[slot] : style.bg;
   }
   if (style.bold) props.bold = true;
   if (style.dim) props.dimColor = true;

@@ -1,46 +1,17 @@
 // src/__tests__/tui/inline-dropdown-duplication.test.ts
-// 回归测试：下拉菜单渲染在 footer 之后导致主屏重复绘制
+// 回归测试：下拉菜单与 footer 作为原子块渲染，无残留、无重复。
 //
-// 根因：两个独立 useEffect 竞争 stdout。
-// 主 effect 调用 renderer.renderFooter()（footer 在末尾），
-// dropdown effect 调用 process.stdout.write()（菜单追加在 footer 之后）。
-// 覆写模式只清除 footerHeight 行，不清除下方菜单 → 每次重绘追加新副本。
+// 物理本质：footer 和下拉菜单合并成一块（footerHeight 含下拉行数），
+// 下一帧覆写时 cursorUp 自动覆盖整个区域。
 //
-// 正确行为：菜单内容必须写在 footer 之前（消息区与 footer 之间），
-// 或者合并到同一个 effect 中协调写入。
+// 核心契约：
+// 1. 下拉候选行出现在两个 border 之间（输入框下方、状态栏上方）
+// 2. 从 N 行下拉 → 0 行时，输出含 \x1b[<n>M（物理删除，零残留）
+// 3. 多次覆写不产生重复候选行
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createCompletionStore } from '../../tui/state/completion-store.js';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-/**
- * 模拟 InlineApp useEffect #4 的下拉菜单渲染逻辑（带 visible 检查）。
- * 从 src/tui/inline/InlineApp.tsx 第 424-444 行提取。
- */
-function renderDropdownAnsi(
-  visible: boolean,
-  candidates: string[],
-  index: number,
-): string {
-  if (!visible || candidates.length === 0) return '';
-
-  const maxVisible = Math.min(candidates.length, 8);
-  const startIndex = Math.max(0, index - Math.floor(maxVisible / 2));
-  const visibleCandidates = candidates.slice(startIndex, startIndex + maxVisible);
-
-  let output = '';
-  for (let i = 0; i < visibleCandidates.length; i++) {
-    const actualIndex = startIndex + i;
-    const isSelected = actualIndex === index;
-    if (isSelected) {
-      output += `\x1b[7m ▸ /${visibleCandidates[i]} \x1b[0m\n`;
-    } else {
-      output += `   /${visibleCandidates[i]}\n`;
-    }
-  }
-  return output;
-}
-
-describe('InlineApp 下拉菜单不重复绘制', () => {
+describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
   let stdoutChunks: string[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let writeSpy: any;
@@ -53,156 +24,134 @@ describe('InlineApp 下拉菜单不重复绘制', () => {
     });
   });
 
-  it('菜单关闭后渲染函数返回空字符串（无残留）', () => {
-    const store = createCompletionStore();
-    store.getState().filter('');
-    store.getState().hide();
-
-    const { visible, candidates, index } = store.getState();
-    const output = renderDropdownAnsi(visible, candidates, index);
-    expect(output).toBe('');
-  });
-
-  it('下拉菜单内容出现在 footer 边框之前', () => {
-    const store = createCompletionStore();
-    store.getState().filter('');
-    const { visible, candidates, index } = store.getState();
-
-    const dropdownOutput = renderDropdownAnsi(visible, candidates, index);
-    const footerBorder = '─'.repeat(80);
-
-    // 正确顺序：dropdown 在 footer 之前
-    const combinedOutput = dropdownOutput + `\r\x1b[2K${footerBorder}\n`;
-
-    const dropdownPos = combinedOutput.indexOf('/plan');
-    const footerPos = combinedOutput.indexOf(footerBorder);
-    expect(dropdownPos).toBeLessThan(footerPos);
-  });
-
-  it('多次重绘不会产生重复的菜单项', () => {
-    const store = createCompletionStore();
-    store.getState().filter('');
-    const { visible, candidates, index } = store.getState();
-
-    const allOutput: string[] = [];
-    for (let i = 0; i < 5; i++) {
-      allOutput.push(renderDropdownAnsi(visible, candidates, index));
-    }
-
-    for (const output of allOutput) {
-      expect((output.match(/\/plan/g) ?? []).length).toBe(1);
-    }
-  });
-
-  it('footer 覆写范围必须包含下拉菜单行数', () => {
-    const store = createCompletionStore();
-    store.getState().filter('');
-    const { candidates } = store.getState();
-
-    const dropdownRows = Math.min(candidates.length, 8);
-    const footerBaseRows = 4;
-    const totalRows = footerBaseRows + dropdownRows;
-
-    // 验证：总行数必须大于基础 footer 行数（有菜单时）
-    expect(totalRows).toBeGreaterThan(footerBaseRows);
-    // 验证：dropdown 行数必须为正（菜单有内容）
-    expect(dropdownRows).toBeGreaterThan(0);
-    // 验证：总行数 = footer 基础 + 菜单行数
-    expect(totalRows).toBe(footerBaseRows + dropdownRows);
-  });
-
-  it('下拉菜单关闭后连续重绘无残留（核心回归）', () => {
-    const store = createCompletionStore();
-
-    store.getState().filter('');
-    store.getState().hide();
-
-    for (let i = 0; i < 3; i++) {
-      const output = renderDropdownAnsi(
-        store.getState().visible,
-        store.getState().candidates,
-        store.getState().index,
-      );
-      expect(output).toBe('');
-    }
-  });
-});
-
-// ── 核心回归：renderFooter 必须知道 dropdown 高度 ──
-describe('renderFooter 覆写范围包含 dropdown', () => {
-  let stdoutChunks: string[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let writeSpy: any;
-
-  beforeEach(() => {
-    stdoutChunks = [];
-    writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      stdoutChunks.push(typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk));
-      return true;
-    });
-  });
-
-  it('renderFooter 覆写模式必须 cursorUp 包含 dropdown 行数', async () => {
-    // 导入真实的 InlineRenderer
+  it('下拉候选行出现在输入框与状态栏之间（向下布局）', async () => {
     const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
     const renderer = new InlineRenderer(process.stdout);
-
-    // 第一次渲染：8 行 dropdown + 4 行 footer
-    const dropdownRows1 = 8;
-    for (let i = 0; i < dropdownRows1; i++) {
-      process.stdout.write(`   /cmd${i}\n`);
-    }
-    renderer.renderFooter('/test', 5, 'status', 80);
-    const afterFirst = [...stdoutChunks];
-    stdoutChunks.length = 0;
-
-    // 第二次渲染：3 行 dropdown + 4 行 footer
-    // 覆写模式必须清除第一次的 8 行 dropdown 残留
-    const dropdownRows2 = 3;
-    for (let i = 0; i < dropdownRows2; i++) {
-      process.stdout.write(`   /cmd${i}\n`);
-    }
-    renderer.renderFooter('/test2', 6, 'status2', 80);
-    const afterSecond = [...stdoutChunks];
-
-    // 验证：第二次 renderFooter 的 cursorUp 必须包含第一次的 dropdown 高度
-    // cursorUp 序列：\x1b[{n}A，n 必须 > 1（仅 footer 高度）才能覆盖 dropdown
-    const allOutput = afterSecond.join('');
-    const cursorUpMatches = allOutput.match(/\x1b\[(\d+)A/g) ?? [];
-    expect(cursorUpMatches.length).toBeGreaterThan(0);
-
-    // 提取 cursorUp 的行数
-    const lastCursorUp = cursorUpMatches[cursorUpMatches.length - 1];
-    const match = lastCursorUp.match(/\x1b\[(\d+)A/);
-    expect(match).not.toBeNull();
-    const upRows = parseInt(match![1], 10);
-
-    // upRows 必须 > 1（仅 footer 的 inputLineIndex）
-    // 因为还要覆盖 dropdown 行数
-    // 具体值：1 (footer top) + dropdownRows1 的一部分（取决于 cursor 位置）
-    expect(upRows).toBeGreaterThan(1);
-  });
-
-  it('dropdown 行数变化时 footer 覆写不残留旧行', async () => {
-    const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
-    const renderer = new InlineRenderer(process.stdout);
-
-    // 第一次：8 行 dropdown
-    for (let i = 0; i < 8; i++) {
-      process.stdout.write(`DROPDOWN_LINE_${i}\n`);
-    }
-    renderer.renderFooter('/', 1, 'S', 80, 8);
-    stdoutChunks.length = 0;
-
-    // 第二次：0 行 dropdown（菜单关闭），但 prevDropdownRows=8（上一次的 dropdown 高度）
-    renderer.renderFooter('/', 1, 'S', 80, 8);
+    const suggestions = ['config', 'compact'];
+    renderer.renderFooter('/c', 2, 'STATUS', 80, suggestions, 0);
     const output = stdoutChunks.join('');
 
-    // 验证：第二次必须 cursorUp 足够行数来清除第一次的 8 行 dropdown
-    const cursorUpMatch = output.match(/\x1b\[(\d+)A/);
+    // 行序断言：border → 输入行 → 候选行 → border → 状态行
+    const borderIdx = output.indexOf('─'.repeat(80));
+    const inputIdx = output.indexOf('❯ /c');
+    const candidateIdx = output.indexOf('/config');
+    const secondBorderIdx = output.indexOf('─'.repeat(80), borderIdx + 1);
+    const statusIdx = output.indexOf('STATUS');
+
+    expect(inputIdx).toBeGreaterThan(borderIdx);
+    expect(candidateIdx).toBeGreaterThan(inputIdx);
+    expect(secondBorderIdx).toBeGreaterThan(candidateIdx);
+    expect(statusIdx).toBeGreaterThan(secondBorderIdx);
+  });
+
+  it('选中候选行反白（\x1b[7m），未选中行不反白', async () => {
+    const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
+    const renderer = new InlineRenderer(process.stdout);
+    renderer.renderFooter('/', 1, 'S', 80, ['config', 'compact'], 1);
+    const output = stdoutChunks.join('');
+
+    // selectedIndex=1 → compact 反白，config 不反白
+    expect(output).toContain('\x1b[7m ▸ /compact');
+    expect(output).not.toContain('\x1b[7m ▸ /config');
+    expect(output).toContain('   /config');
+  });
+
+  it('从 8 行下拉 → 0 行时输出含物理删除序列（零残留）', async () => {
+    const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
+    const renderer = new InlineRenderer(process.stdout);
+    const eight = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+
+    // 第一帧：8 行下拉
+    renderer.renderFooter('/', 1, 'S', 80, eight, 0);
+    stdoutChunks.length = 0;
+
+    // 第二帧：0 行下拉（关闭）
+    renderer.renderFooter('/', 1, 'S', 80, [], 0);
+    const output = stdoutChunks.join('');
+
+    // 高度从 4+8=12 降到 4，必须物理删除 8 行（\x1b[8M）
+    expect(output).toMatch(/\x1b\[8M/);
+    // 输出不含任何旧候选名（无残留）
+    for (const name of eight) {
+      expect(output).not.toContain(`/${name}`);
+    }
+  });
+
+  it('下拉行数增加时不残留旧短状态（5→8）', async () => {
+    const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
+    const renderer = new InlineRenderer(process.stdout);
+    const five = ['a', 'b', 'c', 'd', 'e'];
+
+    renderer.renderFooter('/', 1, 'S', 80, five, 0);
+    stdoutChunks.length = 0;
+
+    // 扩展到 8 行
+    const eight = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    renderer.renderFooter('/', 1, 'S', 80, eight, 0);
+    const output = stdoutChunks.join('');
+
+    // 新增的 3 行必须出现
+    expect(output).toContain('/f');
+    expect(output).toContain('/g');
+    expect(output).toContain('/h');
+    // 不应有删除序列（高度增加了）
+    expect(output).not.toMatch(/\x1b\[\d+M/);
+  });
+
+  it('多次连续覆写：候选名恰好出现一次（无重复）', async () => {
+    const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
+    const renderer = new InlineRenderer(process.stdout);
+    const suggestions = ['config', 'compact'];
+
+    // 第一次渲染（追加模式）
+    renderer.renderFooter('/c', 2, 'S', 80, suggestions, 0);
+    // 多次覆写
+    for (let i = 0; i < 4; i++) {
+      renderer.renderFooter('/c', 2, 'S', 80, suggestions, i % 2);
+    }
+    const output = stdoutChunks.join('');
+
+    // '/config' 在最终帧应该只出现必要的次数，不应成倍堆积
+    // （追加 1 次 + 每次覆写都重写该行，但旧帧被擦除——检测无连续重复）
+    const configCount = (output.match(/\/config/g) ?? []).length;
+    // 每帧写一次 config，5 帧 = 5 次（合理），不应是 5*2=10（重复堆积的标志）
+    expect(configCount).toBeLessThanOrEqual(5);
+  });
+
+  it('commitFooter 在 dropdown 存在时正确清零，后续 renderFooter 走追加模式', async () => {
+    // 回归：commitFooter 必须擦除整个 footer+dropdown 块（cursorToTop 含下拉高度），
+    // 之后 appendLine 从原块顶覆盖，新 renderFooter 重新追加。
+    const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
+    const renderer = new InlineRenderer(process.stdout);
+    const suggestions = ['config', 'compact'];
+
+    // 渲染带 dropdown 的 footer
+    renderer.renderFooter('/c', 2, 'S', 80, suggestions, 0);
+    stdoutChunks.length = 0;
+
+    // commit（模拟用户提交：擦除 footer+dropdown，让消息接管）
+    renderer.commitFooter();
+    const commitOutput = stdoutChunks.join('');
+    // commitFooter 必须向上移动足够行数以擦除整个块（含 dropdown 的 2 行）
+    // footerHeight = border+input+2suggestions+border+status = 6；cursorToTop = 1（border）= 1
+    // 擦除 6 行
+    const cursorUpMatch = commitOutput.match(/\x1b\[(\d+)A/);
     expect(cursorUpMatch).not.toBeNull();
-    const upRows = parseInt(cursorUpMatch![1], 10);
-    // upRows = prevDropdownRows(8) + 1(border) + 0(inputLineIndex) = 9
-    expect(upRows).toBe(9);
+    expect(parseInt(cursorUpMatch![1], 10)).toBe(1);
+
+    // commit 后追加消息，不残留 dropdown
+    renderer.appendLine('❯ /config');
+    stdoutChunks.length = 0;
+
+    // 新 footer 重新追加（footerHeight 已归零，走追加模式）
+    renderer.renderFooter('', 0, 'S2', 80, [], 0);
+    const afterNewFooter = stdoutChunks.join('');
+
+    // 追加模式：输出含所有 footer 行（直接写入，非覆写）
+    // 光标定位用的 cursorUp 仍存在（把光标从状态行移到输入行），这是正常的
+    expect(afterNewFooter).toContain('❯');
+    expect(afterNewFooter).toContain('S2');
+    // 追加模式特征：第一个写入是 border + \n（而非 \r\x1b[2K 前缀——那是覆写模式）
+    expect(afterNewFooter).toMatch(/─+\n/);
   });
 });

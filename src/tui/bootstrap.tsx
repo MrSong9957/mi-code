@@ -33,6 +33,10 @@ import { USE_DOUBLE_BUFFER, createCustomRenderer, setCursorPos } from '../render
 import { InlineRenderer } from './inline/InlineRenderer.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
+import type { ThemeName } from '../utils/theme.js';
+import { createThemeStore } from './state/theme-store.js';
+import type { ThemeStore } from './state/theme-store.js';
+import { ThemeStoreProvider } from './state/theme-context.js';
 
 export interface BootstrapOptions {
   /** LOGO 区数据（version/dir） */
@@ -49,6 +53,8 @@ export interface BootstrapOptions {
   onToggleOverlay?: () => void;
   /** 渲染模式：inline（原生屏，默认）或 alt-screen（备用屏） */
   renderMode?: RenderMode;
+  /** 主题名（dark/light），默认 dark */
+  themeName?: ThemeName;
 }
 
 export interface BootstrapHandle {
@@ -60,6 +66,7 @@ export interface BootstrapHandle {
   spinnerStore: SpinnerStore;
   completionStore: CompletionStore;
   overlayStore: OverlayStore;
+  themeStore: ThemeStore;
   /** spinner 控制（对齐旧 layout.startSpinner 等） */
   startSpinner: (label: string) => void;
   stopSpinner: () => void;
@@ -134,13 +141,17 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
 
   const inlineRenderer = isInline ? new InlineRenderer(process.stdout) : null;
 
+  const themeStore = createThemeStore(opts.themeName);
+
   let inkInstance: InkInstance | null = render(
     React.createElement(RenderModeProvider, { initialMode: renderMode, children:
-      React.createElement(ConnectedApp, {
-        messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore,
-        onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
-        inlineRenderer: inlineRenderer ?? undefined,
-      }),
+      React.createElement(ThemeStoreProvider, { store: themeStore },
+        React.createElement(ConnectedApp, {
+          messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore,
+          onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
+          inlineRenderer: inlineRenderer ?? undefined,
+        }),
+      ),
     }),
     renderOptions,
   );
@@ -162,6 +173,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     spinnerStore,
     completionStore,
     overlayStore,
+    themeStore,
     startSpinner: (label: string) => { spinnerStore.getState().start(label); },
     stopSpinner: () => { spinnerStore.getState().stop(); },
     setSpinnerLabel: (label: string) => { spinnerStore.getState().setLabel(label); },

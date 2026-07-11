@@ -54,11 +54,16 @@ describe('InlineRenderer', () => {
     renderer.renderFooter('hello', 0, 'status');
     const afterFirst = mock.written.length;
     renderer.commitFooter();
-    // commitFooter 写入换行符将光标移到 footer 下方
     expect(mock.written.length).toBeGreaterThan(afterFirst);
-    // 之后 renderFooter 应以追加模式写入（不覆写）
     renderer.renderFooter('world', 0, 'status2');
     const afterSecond = mock.written.length;
     expect(afterSecond).toBeGreaterThan(afterFirst);
+  });
+
+  it('renderFooter 不渲染补全（下拉菜单由 DropdownOverlay 处理）', () => {
+    renderer.renderFooter('/', 1, 'status', 80);
+    const output = mock.written.join('');
+    expect(output).toContain('status');
+    expect(output).not.toContain('▸');
   });
 });

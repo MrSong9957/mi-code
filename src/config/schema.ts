@@ -26,11 +26,15 @@ export interface PermissionConfig {
   rules: PermissionRuleConfig[];
 }
 
+/** 主题名（与 utils/theme.ts ThemeName 同步） */
+export type ThemeName = 'dark' | 'light';
+
 /** 完整配置结构 */
 export interface MiCodeConfig {
   providers: Record<string, ProviderConfig>;
   defaultProvider: string;
   permissions: PermissionConfig;
+  theme: ThemeName;
 }
 
 /** 默认配置 */
@@ -41,6 +45,7 @@ export const DEFAULT_CONFIG: MiCodeConfig = {
     mode: 'build',
     rules: [],
   },
+  theme: 'dark',
 };
 
 /** 各 Provider 默认模型 */

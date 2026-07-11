@@ -24,6 +24,7 @@ import { ScrollBox } from './components/ScrollBox.js';
 import { LogoBox } from './components/LogoBox.js';
 import { Footer } from './components/Footer.js';
 import { Overlay } from './components/Overlay.js';
+import { DropdownOverlay } from './components/DropdownOverlay.js';
 import { useStore } from 'zustand/react';
 import type { TuiMessage, StatusBarData, LogoData } from './types.js';
 import type { FlatLine } from './selection/flatten-messages.js';
@@ -59,26 +60,27 @@ export interface AppProps {
 
 export function App({ messages, status, logo, selectionStore, input, cursor, spinnerStore, completionStore, overlayStore, scrollTop, flatLines, cols = 80, rows = 24 }: AppProps): React.ReactElement {
   const overlayVisible = useStore(overlayStore, (s) => s.visible);
-  // 订阅 spinner/completion 是否激活——影响 Footer 占用行数（激活时多 1-2 行）
+  // 订阅 spinner 是否激活——影响 Footer 占用行数
   const spinnerActive = useStore(spinnerStore, (s) => s.active);
-  const completionVisible = useStore(completionStore, (s) => s.visible);
 
   // 覆盖层激活：替换整个布局
   if (overlayVisible) {
     return <Overlay store={overlayStore} cols={cols} />;
   }
 
-  // Footer 实际占用行数：基础 4 + spinner? + completion? + 多行输入额外行
+  // Footer 实际占用行数：基础 4 + spinner? + 多行输入额外行
+  // 注意：下拉菜单已分离到 DropdownOverlay，不再占用 footer 行数
   const inputExtraLines = Math.max(0, input.split('\n').length - 1);
-  const footerRows = FOOTER_ROWS + (spinnerActive ? 1 : 0) + (completionVisible ? 1 : 0) + inputExtraLines;
+  const footerRows = FOOTER_ROWS + (spinnerActive ? 1 : 0) + inputExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
   // inputRowY 按行算（flatLines.length 是行数，修根因 2b）
   const scrollboxRenderedRows = Math.min(flatLines.length, visibleRows);
-  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + (completionVisible ? 1 : 0) + 1;
+  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + 1;
   return (
     <Box flexDirection="column">
       <LogoBox logo={logo} selectionStore={selectionStore} />
       <ScrollBox messages={messages} flatLines={flatLines} visibleRows={visibleRows} scrollTop={scrollTop} selectionStore={selectionStore} />
+      <DropdownOverlay />
       <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} spinnerStore={spinnerStore} completionStore={completionStore} selectionStore={selectionStore} />
     </Box>
   );

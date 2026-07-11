@@ -44,11 +44,12 @@ describe('逐行样式渲染契约（对齐 Claude Code）—— 调用真实 re
     expect(rendered).not.toContain('\x1b[35m');
   });
 
-  it('user(input) 行：❯ text 带 green+bold', () => {
+  it('user(input) 行：❯ text 带 green+bold（TrueColor）', () => {
     const lines = MessageFormatter.format('input', {}, '你是谁？');
     const rendered = renderReal('user', lines[0]);
     expect(rendered).toContain('❯ 你是谁？');
-    expect(rendered).toContain('\x1b[32m'); // green
+    // TrueColor: \x1b[38;2;R;G;Bm（theme.success = rgb(100,200,80)）
+    expect(rendered).toMatch(/\x1b\[38;2;\d+;\d+;\d+m/);
     expect(rendered).toContain('\x1b[1m');  // bold
   });
 
@@ -88,11 +89,12 @@ describe('逐行样式渲染契约（对齐 Claude Code）—— 调用真实 re
     expect(rendered).toContain('\x1b[2m'); // dim
   });
 
-  it('error 行：红色，无 [system] 前缀，无堆栈', () => {
+  it('error 行：红色（TrueColor），无 [system] 前缀，无堆栈', () => {
     const lines = MessageFormatter.format('error', {}, '[Error] Invalid API Key');
     const rendered = renderReal('system', lines[0]);
     expect(rendered).toContain('[Error] Invalid API Key');
-    expect(rendered).toContain('\x1b[31m'); // red
+    // TrueColor: \x1b[38;2;R;G;Bm（theme.error = rgb(255,90,90)）
+    expect(rendered).toMatch(/\x1b\[38;2;\d+;\d+;\d+m/);
     expect(rendered).not.toContain('[system]');
     expect(rendered).not.toContain('at ');
   });

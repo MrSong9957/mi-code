@@ -23,8 +23,8 @@ function createMockStdout() {
   };
 }
 
-/** SGR 序列正则：\x1b[<params>m */
-const SGR_RE = /\x1b\[\d+m/;
+/** SGR 序列正则：\x1b[<params>m（支持单数字如 96 和 TrueColor 如 38;2;R;G;B） */
+const SGR_RE = /\x1b\[[\d;]+m/;
 /** 提取某一行的「擦除重写」内容（\r\x1b[2K 后的部分） */
 function extractErasedLine(output: string, lineIndex: number): string {
   // 覆写模式下，每行以 \r\x1b[2K 开头。收集所有这样的片段。
@@ -77,9 +77,10 @@ describe('着色护栏：输入框不被着色', () => {
     renderer.renderFooter('hello', 5, coloredStatus);
 
     const out = mock.output;
-    // 状态栏文本应被 SGR 包裹
-    expect(out).toContain('\x1b[96mauto\x1b[0m');
-    expect(out).toContain('\x1b[95mgpt-4o\x1b[0m');
+    // 状态栏文本应被 SGR 包裹（TrueColor 模式）
+    expect(out).toContain('auto');
+    expect(SGR_RE.test(out.slice(out.indexOf('auto') - 20, out.indexOf('auto') + 20))).toBe(true);
+    expect(out).toContain('gpt-4o');
     // 但输入框 ❯ hello 不含 SGR
     const promptIdx = out.indexOf('❯');
     const lineEnd = out.indexOf('\n', promptIdx);

@@ -5,16 +5,16 @@
 // Ink 的 useInput 把原始 stdin 字节解析成 (input: string, key: Key)，
 // 本 hook 再翻译成 input-store 的原语（insert/backspace/move/submit）。
 //
-// 斜杠命令自动补全（Claude Code Portal 模式）：
-// - 输入 / 时自动弹出下拉菜单（通过 DropdownContext）
+// 斜杠命令自动补全（单一数据源：completionStore）：
+// - 输入 / 时自动弹出下拉菜单（completionStore.filter）
 // - 继续输入实时过滤候选
-// - 上下箭头选择，Enter 确认，Esc 关闭
-// - 下拉菜单与输入框分离渲染，通过 Context 传数据
+// - 上下箭头选择（cycle/cyclePrev），Enter 确认，Esc 关闭
+// - 数据源必须是 completionStore（而非 React Context）——因为本 hook 在
+//   DropdownProvider 之外执行（ConnectedApp 函数体内调用），Context 拿到的是 no-op stub。
 
 import { useInput, type Key } from 'ink';
 import type { InputStore } from '../state/input-store.js';
 import type { CompletionStore } from '../state/completion-store.js';
-import { useDropdown } from '../state/dropdown-context.js';
 
 export function useInputHandler(
   store: InputStore,
@@ -25,10 +25,9 @@ export function useInputHandler(
   onPageScroll?: (direction: 'up' | 'down') => void,
   completionStore?: CompletionStore,
 ): void {
-  const dropdown = useDropdown();
-
   useInput((input: string, key: Key) => {
     const s = store.getState();
+    const completion = completionStore?.getState();
 
     // 覆盖层激活时：只处理关闭键（q / Ctrl+O / Esc / Ctrl+C），其余吞掉
     if (overlayVisible?.()) {
@@ -56,49 +55,40 @@ export function useInputHandler(
     if (key.pageUp) { onPageScroll?.('up'); return; }
     if (key.pageDown) { onPageScroll?.('down'); return; }
 
-    // ─────────── 斜杠命令补全拦截（Claude Code Portal 模式）───────────
-    if (dropdown.visible) {
+    // ─────────── 斜杠命令补全拦截（completionStore 单一数据源）───────────
+    if (completion?.visible) {
       // Esc：关闭补全
       if (key.escape) {
-        dropdown.hide();
-        completionStore?.getState().hide();
+        completionStore!.getState().hide();
         return;
       }
 
       // 上箭头：向上选择候选
       if (key.upArrow) {
-        dropdown.prev();
-        completionStore?.getState().cyclePrev();
+        completionStore!.getState().cyclePrev();
         return;
       }
 
       // 下箭头：向下选择候选
       if (key.downArrow) {
-        dropdown.next();
-        completionStore?.getState().cycle();
+        completionStore!.getState().cycle();
         return;
       }
 
       // Enter：选中项写入 input，关闭补全
       if (key.return) {
-        const selected = dropdown.selected();
-        dropdown.hide();
-        completionStore?.getState().hide();
+        const selected = completionStore!.getState().selected();
+        completionStore!.getState().hide();
         if (selected) {
           store.getState().setText('/' + selected);
         }
         return;
       }
 
-      // TAB：循环选择候选
+      // TAB：循环选择候选并写回
       if (key.tab) {
-        dropdown.next();
-        const selected = dropdown.selected();
-        if (selected) {
-          store.getState().setText('/' + selected);
-        }
-        completionStore?.getState().cycle();
-        const sel = completionStore?.getState().selected();
+        completionStore!.getState().cycle();
+        const sel = completionStore!.getState().selected();
         if (sel) {
           store.getState().setText('/' + sel);
         }
@@ -110,11 +100,9 @@ export function useInputHandler(
         s.backspace();
         const newText = store.getState().text;
         if (!newText.startsWith('/')) {
-          dropdown.hide();
-          completionStore?.getState().hide();
+          completionStore!.getState().hide();
         } else {
-          dropdown.show(newText.slice(1));
-          completionStore?.getState().filter(newText.slice(1));
+          completionStore!.getState().filter(newText.slice(1));
         }
         return;
       }
@@ -124,11 +112,9 @@ export function useInputHandler(
         s.insert(input);
         const newText = store.getState().text;
         if (newText.startsWith('/')) {
-          dropdown.show(newText.slice(1));
-          completionStore?.getState().filter(newText.slice(1));
+          completionStore!.getState().filter(newText.slice(1));
         } else {
-          dropdown.hide();
-          completionStore?.getState().hide();
+          completionStore!.getState().hide();
         }
         return;
       }
@@ -190,7 +176,6 @@ export function useInputHandler(
       // 插入后检测：如果 text 变成 / 开头，触发补全
       const newText = store.getState().text;
       if (newText === '/') {
-        dropdown.show('');
         completionStore?.getState().filter('');
       }
     }

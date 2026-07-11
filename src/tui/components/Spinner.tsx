@@ -10,6 +10,7 @@ import React, { useEffect } from 'react';
 import { Text } from 'ink';
 import { useStore } from 'zustand/react';
 import { SPINNER_FRAMES, type SpinnerStore } from '../state/spinner-store.js';
+import { useTheme } from '../state/theme-context.js';
 
 const TICK_MS = 120;
 
@@ -18,6 +19,7 @@ export interface SpinnerProps {
 }
 
 export function Spinner({ store }: SpinnerProps): React.ReactElement | null {
+  const t = useTheme();
   const active = useStore(store, (s) => s.active);
   const label = useStore(store, (s) => s.label);
   const frameIndex = useStore(store, (s) => s.frameIndex);
@@ -32,7 +34,7 @@ export function Spinner({ store }: SpinnerProps): React.ReactElement | null {
   if (!active) return null;
   const frame = SPINNER_FRAMES[frameIndex % SPINNER_FRAMES.length];
   return (
-    <Text color={stalled ? 'red' : '#78e6e6'} bold>
+    <Text color={stalled ? t.spinnerStalled : t.spinnerActive} bold>
       {frame} {label}
     </Text>
   );

@@ -359,7 +359,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       const result = executeCommand(cmd, { skillRegistry, negotiator: skillNegotiator, userId: 'default' });
       printLine(result.message);
     } else {
-      const result = executeCommand(cmd, configStore, { permissionChecker });
+      const result = executeCommand(cmd, configStore, { permissionChecker, themeStore: tuiHandle?.themeStore });
       printLine(result.message);
       if (cmd.name === 'plan' || cmd.name === 'build' || cmd.name === 'auto') {
         tuiHandle?.statusStore.getState().setMode(permissionChecker.getMode());
@@ -584,6 +584,7 @@ if (cliOpts.list) {
       branch: GIT_BRANCH,
     },
     renderMode: 'inline',
+    themeName: cliOpts.theme ?? configStore.getTheme(),
     onSubmit: (text) => { void handleUserSubmit(text); },
     onExit: () => { cleanupOnExit(); process.exit(0); },
     onTab: (text) => { handleTab(text, tuiHandle, configStore, permissionChecker); },

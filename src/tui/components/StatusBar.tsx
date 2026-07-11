@@ -13,15 +13,9 @@ import { Text } from 'ink';
 import type { StatusBarData } from '../types.js';
 import { SelectionText } from './SelectionText.js';
 import type { SelectionStore, Point } from '../state/selection-store.js';
+import { useTheme } from '../state/theme-context.js';
 
 const BAR_WIDTH = 10;
-
-const MODE_COLOR = '#78e6e6';
-const MODEL_COLOR = '#8cbeff';
-const DIR_COLOR = '#c8a0ff';
-const BRANCH_COLOR = '#ffe16e';
-const FILL_COLOR = '#78e6e6';
-const EMPTY_COLOR = '#8c8c8c';
 
 const _noopStore = createStore<{ anchor: Point | null; focus: Point | null }>(() => ({
   anchor: null, focus: null,
@@ -49,6 +43,7 @@ export interface StatusBarProps {
 }
 
 export function StatusBar({ status, selectionStore, globalRow }: StatusBarProps): React.ReactElement {
+  const t = useTheme();
   const sel = useStore(
     selectionStore ?? _noopStore,
     useShallow((s: { anchor: Point | null; focus: Point | null }) => ({ anchor: s.anchor, focus: s.focus })),
@@ -71,17 +66,17 @@ export function StatusBar({ status, selectionStore, globalRow }: StatusBarProps)
   const bar = splitBar(status.contextPct);
   return (
     <Text>
-      <Text color={MODE_COLOR} bold>{status.mode}</Text>
-      <Text color={EMPTY_COLOR}> │ </Text>
-      <Text color={MODEL_COLOR} bold>{status.model}</Text>
-      <Text color={EMPTY_COLOR}> │ </Text>
-      <Text color={DIR_COLOR} bold>{status.dir}</Text>
-      <Text color={EMPTY_COLOR}> │ </Text>
-      <Text color={BRANCH_COLOR} bold>{status.branch}</Text>
-      <Text color={EMPTY_COLOR}> │ </Text>
-      <Text color={FILL_COLOR} bold>{bar.filled}</Text>
-      <Text color={EMPTY_COLOR}>{bar.empty}</Text>
-      <Text color={EMPTY_COLOR}> {bar.label}</Text>
+      <Text color={t.statusMode} bold>{status.mode}</Text>
+      <Text color={t.statusEmpty}> │ </Text>
+      <Text color={t.statusModel} bold>{status.model}</Text>
+      <Text color={t.statusEmpty}> │ </Text>
+      <Text color={t.statusDir} bold>{status.dir}</Text>
+      <Text color={t.statusEmpty}> │ </Text>
+      <Text color={t.statusBranch} bold>{status.branch}</Text>
+      <Text color={t.statusEmpty}> │ </Text>
+      <Text color={t.statusFill} bold>{bar.filled}</Text>
+      <Text color={t.statusEmpty}>{bar.empty}</Text>
+      <Text color={t.statusEmpty}> {bar.label}</Text>
     </Text>
   );
 }

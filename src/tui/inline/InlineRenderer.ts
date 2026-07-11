@@ -21,26 +21,70 @@ export class InlineRenderer {
   }
 
   /**
-   * 渲染 footer。
+   * 渲染 footer + 下拉菜单（一个原子块）。
+   *
+   * 物理本质：footer 和下拉菜单是同一张「便签」上的两部分。
+   * 把它们合并成一块写入，下拉菜单的高度天然纳入 footerHeight 账本，
+   * 下一帧覆写时 cursorUp 自动覆盖整个区域——零残留。
+   *
+   * 行序（向下布局，输入框正下方）：
+   *   ───── border ─────
+   *   ❯ <input>          ← 光标定位到这里
+   *      ▸ /cmd0         ← suggestions[selectedIndex] 反白（选中）
+   *        /cmd1         ← 未选中
+   *   ───── border ─────
+   *   <statusText>
    *
    * 调用契约：
    * - footerHeight=0 时：直接追加（首次或 commit 后）
-   * - footerHeight>0 时：覆写旧 footer（光标必须在 footer 区域内）
+   * - footerHeight>0 时：覆写旧区域（光标必须在 footer 区域内）
    *
    * InlineApp 保证：有新消息时先 commitFooter()（清零 footerHeight），
    * 再写消息，再调用本方法。无新消息时直接调用本方法覆写。
+   *
+   * @param suggestions 下拉候选（空数组=无下拉菜单）。最多取前 8 条。
+   * @param selectedIndex 选中的候选下标（决定哪一行反白）
    */
-  renderFooter(input: string, cursorPos: number, statusText: string, cols: number = 80, prevDropdownRows: number = 0): void {
+  renderFooter(
+    input: string,
+    cursorPos: number,
+    statusText: string,
+    cols: number = 80,
+    suggestions: string[] = [],
+    selectedIndex: number = 0,
+  ): void {
     const inputLines = input.split('\n');
     const border = '─'.repeat(cols);
-    const newHeight = 2 + inputLines.length + 1;
 
+    // 可见窗口切片：居中滚动（对齐 Claude Code 源码 PromptInputFooterSuggestions.tsx:238）
+    // startIndex = max(0, min(选中项 - 窗口高度/2, 总数 - 窗口高度))
+    // 选中项尽量在窗口中间，末尾不越界。少量候选（<8）时 startIndex=0，显示全部。
+    const maxVisible = Math.min(suggestions.length, 8);
+    const startIndex = Math.max(0, Math.min(
+      selectedIndex - Math.floor(maxVisible / 2),
+      suggestions.length - maxVisible,
+    ));
+    const visibleSuggestions = suggestions.slice(startIndex, startIndex + maxVisible);
+    // 按值匹配选中（Claude Code 风格，比相对下标更健壮——selectedIndex 越界时不会误高亮）
+    const selectedName = suggestions[selectedIndex];
+    const suggestionLines: string[] = visibleSuggestions.map((name) => {
+      const isSelected = name === selectedName;
+      // 选中：反白 + ▸ 前缀；未选中：3 空格缩进
+      return isSelected ? `\x1b[7m ▸ /${name} \x1b[0m` : `   /${name}`;
+    });
+
+    // 组装完整行序：border / 输入行(s) / 下拉行(s) / border / 状态
     const lines: string[] = [border];
     for (let i = 0; i < inputLines.length; i++) {
-      lines.push((i === 0 ? PROMPT : '') + inputLines[i]);
+      lines.push((i === 0 ? PROMPT : '') + inputLines[i]!);
+    }
+    for (const sl of suggestionLines) {
+      lines.push(sl);
     }
     lines.push(border);
     lines.push(statusText);
+
+    const newHeight = lines.length;
 
     if (this.footerHeight === 0) {
       // 追加模式
@@ -48,23 +92,27 @@ export class InlineRenderer {
         this.stdout.write(line + '\n');
       }
     } else {
-      // 覆写模式：光标在 footer 的输入框行
-      // 上移到上一次 dropdown + footer 顶部（清除整个区域）
+      // 覆写模式：光标在 footer 的输入框行（上一帧 renderFooter 结束时定位）。
+      // 行序：[border, inputLine(s), suggestions, border, status]
+      // 输入框上方只有 border（1 行）+ 多行输入的前序行（inputLineIndex）。
+      // 下拉候选在输入框下方，不影响向上回到块顶的偏移。
       const inputLineIndex = inputLines.length - 1;
-      const offsetToTop = prevDropdownRows + 1 + inputLineIndex;
+      const offsetToTop = 1 + inputLineIndex;
       this.stdout.write(cursorUp(offsetToTop));
 
-      // 逐行覆写：擦除旧行 + 写入新行
-      const maxLines = Math.max(this.footerHeight, newHeight);
-      for (let i = 0; i < maxLines; i++) {
-        const content = i < lines.length ? lines[i] : '';
-        this.stdout.write(`\r\x1b[2K${content}\n`);
+      // 逐行覆写：只写新内容（newHeight 行）。
+      // 不写多余空行——收缩时多余空行会把光标推到旧块底之外，导致光标漂移
+      // （下一帧 cursorUp 从错误位置开始，footer 在新位置重画、旧位置残留）。
+      // 多余的旧行由下面的 \x1b[<n>M 物理删除，无需写空行覆盖。
+      for (let i = 0; i < newHeight; i++) {
+        this.stdout.write(`\r\x1b[2K${lines[i]}\n`);
       }
 
-      // 如果新 footer 比旧的短，物理删除多余的行
+      // 如果新区域比旧的短，物理删除多余的旧行（消除残留的关键）。
+      // 循环写完 newHeight 行后光标在新块正下方（行 newHeight），直接删除下方旧行——
+      // 不需要 cursorUp(1)，那会让光标跑到错误位置。
       if (newHeight < this.footerHeight) {
         const excess = this.footerHeight - newHeight;
-        this.stdout.write(cursorUp(1));
         this.stdout.write(`\x1b[${excess}M`);
       }
     }
@@ -78,8 +126,9 @@ export class InlineRenderer {
     const { x: cursorX, y: cursorLineIndex } = cursorScreenPos(input, cursorPos, PROMPT);
     const upFromBottom = this.footerHeight - 1 - cursorLineIndex;
 
-    // 记录光标到上一次 dropdown+footer 顶部的距离，供 commitFooter 精确上移。
-    this.cursorToTop = prevDropdownRows + 1 + cursorLineIndex;
+    // 记录光标（输入框行）到块顶部的距离，供 commitFooter 精确上移。
+    // 输入框上方：1 个 border + 多行输入的前序行（cursorLineIndex）。
+    this.cursorToTop = 1 + cursorLineIndex;
 
     this.stdout.write(hideCursor);
     if (upFromBottom > 0) {

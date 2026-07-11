@@ -17,6 +17,7 @@ import stringWidth from 'string-width';
 import type { InkTextStyle } from '../types.js';
 import { sliceLineBySelection } from '../selection/slice-line.js';
 import type { SelectionStore, Point } from '../state/selection-store.js';
+import { useTheme } from '../state/theme-context.js';
 
 /** selectionStore 缺省时的占位 store（永远返回 null anchor/focus，让 useStore hook 不崩） */
 const _noopStore = createStore<{ anchor: Point | null; focus: Point | null }>(() => ({
@@ -35,13 +36,6 @@ export interface SelectionTextProps {
   /** 缩进空格 */
   indent?: string;
 }
-
-/** 选区高亮样式：蓝底黑字加粗（避开 magenta/green/red/gray 语义色，对比最强） */
-const SELECTED_PROPS: InkTextStyle = {
-  backgroundColor: 'cyan',
-  color: 'black',
-  bold: true,
-};
 
 /**
  * 用 anchor/focus 算某行的选区列范围（L 型语义，与 selection-store.colsForRow 同逻辑）。
@@ -66,6 +60,7 @@ function colsForRowFromPoints(
 }
 
 export function SelectionText({ content, globalRow, selectionStore, baseProps, indent = '' }: SelectionTextProps): React.ReactElement {
+  const t = useTheme();
   // 自订阅选区 anchor/focus（useShallow 浅比较）。选区变化时相交行重渲染。
   const sel = useStore(
     selectionStore ?? _noopStore,
@@ -81,12 +76,18 @@ export function SelectionText({ content, globalRow, selectionStore, baseProps, i
     segs = [{ text: content, selected: false }];
   }
 
+  const selectedProps: InkTextStyle = {
+    backgroundColor: t.selectionBg,
+    color: t.selectionFg,
+    bold: true,
+  };
+
   return (
     <Text {...baseProps}>
       {indent}
       {segs.map((seg, j) =>
         seg.selected
-          ? <Text key={j} {...SELECTED_PROPS}>{seg.text}</Text>
+          ? <Text key={j} {...selectedProps}>{seg.text}</Text>
           : <Text key={j} {...baseProps}>{seg.text}</Text>
       )}
     </Text>

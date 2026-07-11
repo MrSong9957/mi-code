@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import type { MiCodeConfig, ProviderConfig, PermissionMode, PermissionRuleConfig } from './schema.js';
+import type { MiCodeConfig, ProviderConfig, PermissionMode, PermissionRuleConfig, ThemeName } from './schema.js';
 import { DEFAULT_CONFIG, DEFAULT_MODELS } from './schema.js';
 
 export class ConfigStore {
@@ -55,6 +55,11 @@ export class ConfigStore {
             mode: safeMode,
             rules: saved.permissions.rules ?? [],
           };
+        }
+        // 主题配置（向后兼容：旧文件无此字段时保留默认 'dark'）
+        if (saved.theme) {
+          const VALID_THEMES: ThemeName[] = ['dark', 'light'];
+          config.theme = VALID_THEMES.includes(saved.theme) ? saved.theme : 'dark';
         }
       } catch {
         // 配置文件损坏，使用默认
@@ -160,6 +165,17 @@ export class ConfigStore {
       };
     }
     this.config.providers[provider]!.smallModel = smallModel;
+    this.save();
+  }
+
+  /** 获取主题名 */
+  getTheme(): ThemeName {
+    return this.config.theme;
+  }
+
+  /** 设置主题名（持久化） */
+  setTheme(theme: ThemeName): void {
+    this.config.theme = theme;
     this.save();
   }
 
