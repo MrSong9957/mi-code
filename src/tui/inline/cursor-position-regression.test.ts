@@ -63,12 +63,12 @@ describe('光标定位回归测试', () => {
     expect(col).toBe(5);
   });
 
-  it('多行输入 cursorPos=8：光标在第二行 li 之后（第 3 列）', () => {
-    // cursorPos=8 越过 'line1\n'(6字符)，落在第二行 'li' 之后
-    // 第二行无 PROMPT，cursorX = 0 + 2 = 2，列 = 3
+  it('多行输入 cursorPos=8：光标在第二行 li 之后（第 5 列）', () => {
+    // cursorPos=8 越过 'line1\n'(6字符)，落在第二行 'li' 之后。
+    // 续行有 CONTINUATION_INDENT（=promptWidth=2），cursorX = 2 + 2 = 4，列 = 5。
     renderer.renderFooter('line1\nline2', 8, 'status');
     const out = mock.output;
     const col = extractCursorCol(out);
-    expect(col).toBe(3);
+    expect(col).toBe(5);
   });
 });

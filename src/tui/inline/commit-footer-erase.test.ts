@@ -197,4 +197,44 @@ describe('commitFooter 擦除行为', () => {
     renderer.commitFooter();
     expect(mock.written.length).toBe(beforeLen);
   });
+
+  it('折行后 commit：footerHeight>4（物理行折算），commit 归零 + 追加模式恢复', () => {
+    expect.hasAssertions();
+    // 200 字符单行 → 折成 3 物理行，footerHeight = 1+3+1+1 = 6（不是 4）
+    const text = 'a'.repeat(200);
+    renderer.renderFooter(text, 200, 'STATUS', 80);
+    expect(renderer.getFooterHeight()).toBe(6);
+
+    // commit 应正确清理（用物理行 footerHeight 上移 + DL），footerHeight 归零
+    renderer.commitFooter();
+    expect(renderer.getFooterHeight()).toBe(0);
+
+    // 后续 renderFooter 走追加模式（含 border 首行）
+    const afterCommit = mock.written.length;
+    renderer.renderFooter('next', 4, 'STATUS', 80);
+    const newWrites = mock.written.slice(afterCommit).join('');
+    expect(newWrites).toContain('─');
+  });
+
+  it('CJK 折行后 commit：物理行清理无残留', () => {
+    expect.hasAssertions();
+    const term = new Terminal();
+    const orig = mock.write;
+    mock.write = (s: string) => { term.write(s); return orig(s); };
+
+    // 50 个汉字（100 列）→ 折行，footerHeight>4
+    renderer.renderFooter('中'.repeat(50), 50, 'STATUS', 80);
+    const fh = renderer.getFooterHeight();
+    expect(fh).toBeGreaterThan(4);
+
+    renderer.commitFooter();
+    renderer.appendLine('❯ 用户消息');
+    renderer.renderFooter('', 0, 'STATUS', 80);
+
+    // 历史区只有用户消息 1 次（折行的 footer 残留被 commit 清理干净）
+    const nonEmpty = term.nonEmptyLines;
+    expect(nonEmpty.filter(l => l === '❯ 用户消息').length).toBe(1);
+    // 不应有残留的 CJK 内容（footer 的输入被清理）
+    expect(nonEmpty.filter(l => l.includes('中中')).length).toBe(0);
+  });
 });

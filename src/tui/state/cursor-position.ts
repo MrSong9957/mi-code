@@ -9,10 +9,10 @@
 //   1. cursor 视为码点索引（与 input-store 一致）
 //   2. 按行分割；逐行消费码点，定位光标所在行 y
 //   3. 当前行「光标之前」的文本用 stringWidth 量显示宽度
-//   4. x = (y===0 ? promptWidth : 0) + 行内显示宽度
+//   4. x = promptWidth + 行内显示宽度（续行也有 prompt 宽度的缩进对齐）
 //
-// 注意：续行的「prompt 对齐 padding」由 Footer 渲染负责（不写入 input 文本），
-// 这里只关心 input 本身的字符宽度。
+// 注意：续行的缩进由 Footer/InlineRenderer 渲染负责（不写入 input 文本），
+// 续行前缀 CONTINUATION_INDENT（与 promptWidth 等宽），故所有行 x 都加 promptWidth。
 
 import stringWidth from 'string-width';
 
@@ -44,7 +44,7 @@ export function cursorScreenPos(input: string, cursor: number, prompt: string): 
       // 光标在第 i 行
       const beforeCursor = [...line].slice(0, remaining).join('');
       const lineOffset = stringWidth(beforeCursor);
-      const x = (i === 0 ? promptWidth : 0) + lineOffset;
+      const x = promptWidth + lineOffset;
       return { x, y: i };
     }
     remaining -= lineCpLen + 1; // +1 跳过 \n
@@ -52,6 +52,6 @@ export function cursorScreenPos(input: string, cursor: number, prompt: string): 
   // 理论不可达（cursor 已钳到末尾），兜底返回最后一行末尾
   const lastIdx = lines.length - 1;
   const lastLine = lines[lastIdx] ?? '';
-  const x = (lastIdx === 0 ? promptWidth : 0) + stringWidth(lastLine);
+  const x = promptWidth + stringWidth(lastLine);
   return { x, y: lastIdx };
 }

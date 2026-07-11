@@ -1,14 +1,20 @@
 import { cursorUp, hideCursor, showCursor } from './ansi-utils.js';
 import { enterAltScreen, exitAltScreen } from '../hooks/useAltScreen.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
+import { MAX_VISIBLE_INPUT_LINES, simulateTerminalWrap } from '../state/input-viewport.js';
 
 const PROMPT = '❯ ';
+/** 续行缩进：与 PROMPT 宽度对齐（❯ 占 1 列 + 空格 1 列 = 2 列）。
+ *  多行输入时续行前缀 2 空格，视觉上与首行的输入起点对齐。 */
+const CONTINUATION_INDENT = '  ';
 
 export class InlineRenderer {
-  /** footer 占用的行数。0 表示无 footer 或已 commit。 */
+  /** footer 占用的物理行数。0 表示无 footer 或已 commit。 */
   private footerHeight = 0;
-  /** 光标所在行到 footer 顶部的距离（用于 commitFooter 精确上移）。 */
+  /** 光标所在行到 footer 顶部的物理行距离（用于 commitFooter 精确上移）。 */
   private cursorToTop = 0;
+  /** 测试用：读取当前 footer 物理行数。 */
+  getFooterHeight(): number { return this.footerHeight; }
 
   constructor(private stdout: NodeJS.WriteStream) {}
 
@@ -52,9 +58,21 @@ export class InlineRenderer {
     cols: number = 80,
     suggestions: string[] = [],
     selectedIndex: number = 0,
+    viewportTop: number = 0,
   ): void {
     const inputLines = input.split('\n');
     const border = '─'.repeat(cols);
+
+    // 算光标所在逻辑行号（cursorScreenPos 是纯函数，y 是相对输入区第 0 行的绝对行）。
+    // 用于视口切片与光标物理行定位。光标列改由 simulateTerminalWrap 精确计算（CJK 留空感知）。
+    const { y: cursorAbsLine } = cursorScreenPos(input, cursorPos, PROMPT);
+
+    // 视口切片：footer 固定高度，输入超 viewportTop+maxVisible 时只渲染窗口内行。
+    // viewportTop=0 时退化为旧行为（全部渲染），向后兼容单行/少量多行场景。
+    const visibleInputLines = inputLines.slice(
+      viewportTop,
+      viewportTop + MAX_VISIBLE_INPUT_LINES,
+    );
 
     // 可见窗口切片：居中滚动（对齐 Claude Code 源码 PromptInputFooterSuggestions.tsx:238）
     // startIndex = max(0, min(选中项 - 窗口高度/2, 总数 - 窗口高度))
@@ -75,8 +93,11 @@ export class InlineRenderer {
 
     // 组装完整行序：border / 输入行(s) / 下拉行(s) / border / 状态
     const lines: string[] = [border];
-    for (let i = 0; i < inputLines.length; i++) {
-      lines.push((i === 0 ? PROMPT : '') + inputLines[i]!);
+    for (let i = 0; i < visibleInputLines.length; i++) {
+      // 首行 prompt 仅在视口顶=0（真首行）时显示；滚动后窗口首行用缩进对齐 prompt 宽度。
+      const absLine = viewportTop + i;
+      const prefix = absLine === 0 ? PROMPT : CONTINUATION_INDENT;
+      lines.push(prefix + visibleInputLines[i]!);
     }
     for (const sl of suggestionLines) {
       lines.push(sl);
@@ -84,57 +105,72 @@ export class InlineRenderer {
     lines.push(border);
     lines.push(statusText);
 
-    const newHeight = lines.length;
+    // 每个渲染行（lines 数组元素）占的物理行数——用精确终端折行模拟。
+    // 终端折行时 CJK（2列）放不下会留空换行（不劈字），简单 ceil(width/cols) 不考虑这个，
+    // 对 CJK 不准——累积偏差导致光标定位偏移（用户看到的"光标在文字中间"）。
+    // 注意：lines 元素已含 prefix（prompt/缩进在字符串里），故 promptWidth 传 0（不重复算前缀）。
+    const linePhysHeights: number[] = lines.map((line) => {
+      return simulateTerminalWrap(line, cols, 0).physRows;
+    });
+    const newHeight = linePhysHeights.reduce((a, b) => a + b, 0);
 
     if (this.footerHeight === 0) {
-      // 追加模式
+      // 追加模式：逐逻辑行写 + \n（终端自动折行）。
       for (const line of lines) {
         this.stdout.write(line + '\n');
       }
     } else {
-      // 覆写模式：光标在 footer 的输入框行（上一帧 renderFooter 结束时定位）。
-      // 行序：[border, inputLine(s), suggestions, border, status]
-      // 输入框上方只有 border（1 行）+ 多行输入的前序行（inputLineIndex）。
-      // 下拉候选在输入框下方，不影响向上回到块顶的偏移。
-      const inputLineIndex = inputLines.length - 1;
-      const offsetToTop = 1 + inputLineIndex;
-      this.stdout.write(cursorUp(offsetToTop));
-
-      // 逐行覆写：只写新内容（newHeight 行）。
-      // 不写多余空行——收缩时多余空行会把光标推到旧块底之外，导致光标漂移
-      // （下一帧 cursorUp 从错误位置开始，footer 在新位置重画、旧位置残留）。
-      // 多余的旧行由下面的 \x1b[<n>M 物理删除，无需写空行覆盖。
-      for (let i = 0; i < newHeight; i++) {
-        this.stdout.write(`\r\x1b[2K${lines[i]}\n`);
-      }
-
-      // 如果新区域比旧的短，物理删除多余的旧行（消除残留的关键）。
-      // 循环写完 newHeight 行后光标在新块正下方（行 newHeight），直接删除下方旧行——
-      // 不需要 cursorUp(1)，那会让光标跑到错误位置。
-      if (newHeight < this.footerHeight) {
-        const excess = this.footerHeight - newHeight;
-        this.stdout.write(`\x1b[${excess}M`);
+      // 覆写模式。
+      // 物理模型：先把旧 footer 块（footerHeight 个物理行）整体清空再重画。
+      // 上一帧光标停在输入框行（cursorToTop 记录到块顶距离），上移到块顶，
+      // 用 DL（\x1b[<n>M 删除 N 行，下方上移）删除全部旧物理行——DL 是物理删除，
+      // 不依赖终端折行模拟，比逐行擦除更可靠（折行残留也能删干净）。
+      this.stdout.write(cursorUp(this.cursorToTop));
+      this.stdout.write(`\x1b[${this.footerHeight}M`);
+      for (const line of lines) {
+        this.stdout.write(line + '\n');
       }
     }
 
     this.footerHeight = newHeight;
 
-    // 光标定位到输入框。
-    // cursorPos 是码点索引，终端 \x1b[NG 要的是显示列——CJK 全角字符/emoji
-    // 占 2 列但算 1 码点，直接用码点当列会导致中文光标落在字符中间。
-    // 复用 cursorScreenPos（stringWidth 实现，与 Footer.tsx 同源）做正确换算。
-    const { x: cursorX, y: cursorLineIndex } = cursorScreenPos(input, cursorPos, PROMPT);
-    const upFromBottom = this.footerHeight - 1 - cursorLineIndex;
+    // 光标定位到输入框——用精确终端折行模拟算光标的物理行 + 列。
+    // 取光标所在逻辑行的「光标之前内容」，用 simulateTerminalWrap 得到真实的 (row, col)。
+    // 块内物理行（0-based）：行0=顶部border，行1..=输入区，底部border，status。
+    let cursorPhysLine0 = 1; // 跳过顶部 border
+    let cursorColInPhysLine = 0; // 光标在物理行内的列（0-based，含 prompt 偏移）
+    for (let i = 0; i < visibleInputLines.length; i++) {
+      const absLine = viewportTop + i;
+      const linePhys = linePhysHeights[1 + i]!; // lines[1+i] 对应第 i 个输入行
+      if (absLine === cursorAbsLine) {
+        // 光标在本逻辑行：取光标前的内容做精确折行模拟，得光标真实的物理行内 (row, col)。
+        // cursorPos 是码点索引，必须用码点安全的方式切片（emoji 代理对不能劈）。
+        const lines2 = input.split('\n');
+        let off = 0;
+        for (let j = 0; j < absLine; j++) off += [...lines2[j]!].length + 1;
+        const cursorCpOffset = Math.max(0, cursorPos - off);
+        const lineCps = [...lines2[absLine]!];
+        const beforeCursor = lineCps.slice(0, cursorCpOffset).join('');
+        const wrap = simulateTerminalWrap(beforeCursor, cols, PROMPT.length);
+        cursorPhysLine0 += wrap.cursorRow;
+        cursorColInPhysLine = wrap.cursorCol;
+        break;
+      }
+      cursorPhysLine0 += linePhys;
+    }
+    const upFromBottom = newHeight - cursorPhysLine0;
 
-    // 记录光标（输入框行）到块顶部的距离，供 commitFooter 精确上移。
-    // 输入框上方：1 个 border + 多行输入的前序行（cursorLineIndex）。
-    this.cursorToTop = 1 + cursorLineIndex;
+    // 记录光标到块顶的距离（供 commitFooter 上移）。
+    this.cursorToTop = cursorPhysLine0;
 
     this.stdout.write(hideCursor);
     if (upFromBottom > 0) {
       this.stdout.write(cursorUp(upFromBottom));
     }
-    this.stdout.write(`\r\x1b[${cursorX + 1}G`);
+    // CHA：光标在物理行内的列（0-based），1-based = cursorColInPhysLine + 1。
+    // 钳制到 cols：恰好填满物理行时 cursorCol=cols（延迟换行边界），CHA 应停在末列而非超界。
+    const chaCol = Math.min(cursorColInPhysLine + 1, cols);
+    this.stdout.write(`\r\x1b[${chaCol}G`);
     this.stdout.write(showCursor);
   }
 

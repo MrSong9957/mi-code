@@ -25,6 +25,8 @@ import { LogoBox } from './components/LogoBox.js';
 import { Footer } from './components/Footer.js';
 import { Overlay } from './components/Overlay.js';
 import { DropdownOverlay } from './components/DropdownOverlay.js';
+import { cursorScreenPos } from './state/cursor-position.js';
+import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from './state/input-viewport.js';
 import { useStore } from 'zustand/react';
 import type { TuiMessage, StatusBarData, LogoData } from './types.js';
 import type { FlatLine } from './selection/flatten-messages.js';
@@ -68,20 +70,25 @@ export function App({ messages, status, logo, selectionStore, input, cursor, spi
     return <Overlay store={overlayStore} cols={cols} />;
   }
 
-  // Footer 实际占用行数：基础 4 + spinner? + 多行输入额外行
+  // Footer 实际占用行数：基础 4（border×2 + 1 输入 + status）+ spinner? + 视口固定高度-1
+  // 输入框视口固定为 MAX_VISIBLE_INPUT_LINES 行，不再随输入行数增长——历史区大小稳定。
   // 注意：下拉菜单已分离到 DropdownOverlay，不再占用 footer 行数
-  const inputExtraLines = Math.max(0, input.split('\n').length - 1);
-  const footerRows = FOOTER_ROWS + (spinnerActive ? 1 : 0) + inputExtraLines;
+  const inputViewportExtraLines = MAX_VISIBLE_INPUT_LINES - 1;
+  const footerRows = FOOTER_ROWS + (spinnerActive ? 1 : 0) + inputViewportExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
   // inputRowY 按行算（flatLines.length 是行数，修根因 2b）
   const scrollboxRenderedRows = Math.min(flatLines.length, visibleRows);
   const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + 1;
+  // 输入框视口：光标居中滚动，超 MAX_VISIBLE_INPUT_LINES 时 viewportTop 跟随光标。
+  const totalInputLines = input.split('\n').length;
+  const cursorLine = cursorScreenPos(input, cursor, '❯ ').y;
+  const vp = computeInputViewport(totalInputLines, cursorLine, MAX_VISIBLE_INPUT_LINES);
   return (
     <Box flexDirection="column">
       <LogoBox logo={logo} selectionStore={selectionStore} />
       <ScrollBox messages={messages} flatLines={flatLines} visibleRows={visibleRows} scrollTop={scrollTop} selectionStore={selectionStore} />
       <DropdownOverlay />
-      <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} spinnerStore={spinnerStore} completionStore={completionStore} selectionStore={selectionStore} />
+      <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} viewportTop={vp.viewportTop} spinnerStore={spinnerStore} completionStore={completionStore} selectionStore={selectionStore} />
     </Box>
   );
 }

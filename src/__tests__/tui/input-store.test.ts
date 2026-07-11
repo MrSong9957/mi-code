@@ -153,20 +153,23 @@ describe('input-store 多行', () => {
     expect(store.getState().cursor).toBe(2);
   });
 
-  it('insertNewline 上限 3 行：第 3 行时不插入', () => {
-    const store = createInputStore();
-    store.getState().insert('a\nb\nc'); // 已 3 行
-    store.getState().moveCursorToEnd();
-    store.getState().insertNewline(); // 应被拒
-    expect(store.getState().text).toBe('a\nb\nc');
-  });
-
   it('insertNewline 在 2 行时允许变 3 行', () => {
     const store = createInputStore();
     store.getState().insert('a\nb');
     store.getState().moveCursorToEnd();
     store.getState().insertNewline();
     expect(store.getState().text).toBe('a\nb\n');
+  });
+
+  it('insertNewline 可超过 3 行（视口接管，不再有硬上限）', () => {
+    // 旧设计：3 行硬上限，第 3 行时 insertNewline 被拒。
+    // 新设计：任意行数，超出 MAX_VISIBLE_INPUT_LINES 由视口滚动处理（见 input-viewport.ts）。
+    const store = createInputStore();
+    store.getState().insert('a\nb\nc\nd\ne'); // 已 5 行
+    store.getState().moveCursorToEnd();
+    store.getState().insertNewline(); // 应成功，变 6 行
+    expect(store.getState().text).toBe('a\nb\nc\nd\ne\n');
+    expect(store.getState().text.split('\n').length).toBe(6);
   });
 
   it('moveCursorDown：跨行下移，保留列', () => {
@@ -207,5 +210,96 @@ describe('input-store 多行', () => {
     store.getState().moveCursorTo(6); // 第 1 行 col 2（'f'）
     store.getState().moveCursorUp(); // → 第 0 行 col min(2,2)=2 = 末尾
     expect(store.getState().cursor).toBe(2);
+  });
+
+  it('deleteToLineStart：删光标到行首（行中间）', () => {
+    const store = createInputStore();
+    store.getState().insert('hello');
+    store.getState().moveCursorTo(3); // hel|lo
+    store.getState().deleteToLineStart(); // → |lo（删整行内容到行首）
+    expect(store.getState().text).toBe('lo');
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('deleteToLineStart：光标在行首时删除整行（连 \n 一起删）', () => {
+    // 新语义：光标在行首再按 Ctrl+U，删整行（含换行符），光标移到上一行末尾。
+    // 这是「连续 Ctrl+U 逐行删除」的关键——旧语义卡住不动，新语义继续往上删。
+    const store = createInputStore();
+    store.getState().insert('abc\ndef'); // 第0行 abc，第1行 def
+    store.getState().moveCursorTo(4); // 第1行行首（d 之前）
+    store.getState().deleteToLineStart(); // 删第1行（含 \n）→ 剩 'abc'，光标到第0行末
+    expect(store.getState().text).toBe('abc');
+    expect(store.getState().cursor).toBe(3);
+  });
+
+  it('deleteToLineStart：光标在首行行首时删到空', () => {
+    const store = createInputStore();
+    store.getState().insert('hello');
+    store.getState().moveCursorToStart(); // 首行行首
+    store.getState().deleteToLineStart(); // 删整行 → 空
+    expect(store.getState().text).toBe('');
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('deleteToLineStart：多行中间行删到行首', () => {
+    const store = createInputStore();
+    store.getState().insert('abc\ndefgh'); // 第0行 abc，第1行 defgh
+    store.getState().moveCursorTo(7); // 第1行 col 2（'g'，索引 7）
+    store.getState().deleteToLineStart(); // → 第1行剩 'gh'，第0行不变
+    expect(store.getState().text).toBe('abc\ngh');
+    expect(store.getState().cursor).toBe(4); // 第1行行首（abc\n 之后）
+  });
+
+  it('deleteToLineStart：CJK 码点安全', () => {
+    const store = createInputStore();
+    store.getState().insert('你好世界');
+    store.getState().moveCursorTo(2); // 你好|世界
+    store.getState().deleteToLineStart(); // → |世界
+    expect(store.getState().text).toBe('世界');
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('deleteToLineStart【核心契约】：连续按能从末行逐行删到全空', () => {
+    expect.hasAssertions();
+    // 模拟用户一直按 Ctrl+U：每次删一行，光标自动跳到上一行末尾，继续删。
+    // 最终所有内容被删空。
+    const store = createInputStore();
+    store.getState().insert('aaa\nbbb\nccc');
+    store.getState().moveCursorToEnd(); // 第2行末尾
+    // 连续按到 text 为空（设上限防爆）
+    let presses = 0;
+    while (store.getState().text !== '' && presses < 20) {
+      store.getState().deleteToLineStart();
+      presses++;
+    }
+    expect(store.getState().text).toBe('');
+    expect(store.getState().cursor).toBe(0);
+    // 应在有限次内删空（3 行内容，每行删一次到行首 + 删整行交替）
+    expect(presses).toBeLessThan(20);
+  });
+
+  it('deleteToLineStart【随机化防作弊】：任意多行输入连续删最终必空', () => {
+    expect.hasAssertions();
+    for (let trial = 0; trial < 10; trial++) {
+      const lineCount = 1 + Math.floor(Math.random() * 6);
+      const lines: string[] = [];
+      for (let i = 0; i < lineCount; i++) {
+        // 随机内容（含 CJK），定宽前缀避免子串污染
+        const isCjk = Math.random() < 0.5;
+        lines.push(isCjk ? `行${i}` : `l${i}`);
+      }
+      const store = createInputStore();
+      store.getState().insert(lines.join('\n'));
+      store.getState().moveCursorToEnd();
+      // 连续删到空
+      let presses = 0;
+      while (store.getState().text !== '' && presses < 30) {
+        store.getState().deleteToLineStart();
+        presses++;
+      }
+      // 不变量：无论内容/行数/光标位置，最终必删空
+      expect(store.getState().text).toBe('');
+      expect(store.getState().cursor).toBe(0);
+    }
   });
 });

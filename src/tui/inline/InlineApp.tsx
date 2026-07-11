@@ -11,6 +11,8 @@ import { colorizeLogo, colorizeStatus, colorizeStyled, RESET, magentaBright, red
 import { sgr } from './ansi-utils.js';
 import { highlightLine } from './token-highlight.js';
 import { SPINNER_FRAMES } from '../state/spinner-store.js';
+import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
+import { cursorScreenPos } from '../state/cursor-position.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../types.js';
 import type { FormattedLine } from '../../ui/types.js';
 import type { MessagesStore } from '../state/messages-store.js';
@@ -411,7 +413,11 @@ export function InlineApp({
     const fullStatus = [spinnerLine, statusText].filter(Boolean).join(' │ ');
     // 下拉候选：仅 visible 且非空时传入；renderer 内部据 selectedIndex 反白选中行
     const suggestions = (dropdownVisible && dropdownCandidates.length > 0) ? dropdownCandidates : [];
-    renderer.renderFooter(inputText, cursor, fullStatus, cols, suggestions, dropdownIndex);
+    // 输入框视口：光标居中滚动，超 MAX_VISIBLE_INPUT_LINES 时 viewportTop 跟随光标。
+    const totalInputLines = inputText.split('\n').length;
+    const cursorLine = cursorScreenPos(inputText, cursor, '❯ ').y;
+    const vp = computeInputViewport(totalInputLines, cursorLine, MAX_VISIBLE_INPUT_LINES);
+    renderer.renderFooter(inputText, cursor, fullStatus, cols, suggestions, dropdownIndex, vp.viewportTop);
   }, [messages, renderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex]);
 
   // 卸载时 commit footer

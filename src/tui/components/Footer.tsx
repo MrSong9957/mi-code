@@ -14,12 +14,15 @@ import { SelectionText } from './SelectionText.js';
 import { Spinner } from './Spinner.js';
 import { SuggestionBar } from './SuggestionBar.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
+import { MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
 import type { StatusBarData } from '../types.js';
 import type { SpinnerStore } from '../state/spinner-store.js';
 import type { CompletionStore } from '../state/completion-store.js';
 import type { SelectionStore } from '../state/selection-store.js';
 
 const PROMPT = '❯ ';
+/** 续行缩进：与 PROMPT 宽度对齐（❯ 占 1 列 + 空格 1 列 = 2 列）。 */
+const CONTINUATION_INDENT = '  ';
 
 export interface FooterProps {
   input: string;
@@ -28,22 +31,33 @@ export interface FooterProps {
   cols: number;
   /** 输入行在 Ink 输出中的全局 y 坐标（用于光标定位 + 选区行号） */
   inputRowY: number;
+  /** 输入框视口顶部行号（0-based）。光标/行渲染都相对此偏移。默认 0=无滚动。 */
+  viewportTop: number;
   spinnerStore: SpinnerStore;
   completionStore: CompletionStore;
   /** 选区 store（由 App 注入；SelectionText 自订阅） */
   selectionStore?: SelectionStore;
 }
 
-export function Footer({ input, cursor, status, cols, inputRowY, spinnerStore, completionStore, selectionStore }: FooterProps): React.ReactElement {
+export function Footer({ input, cursor, status, cols, inputRowY, viewportTop, spinnerStore, completionStore, selectionStore }: FooterProps): React.ReactElement {
   const { setCursorPosition } = useCursor();
   const pos = cursorScreenPos(input, cursor, PROMPT);
-  setCursorPosition({ x: pos.x, y: inputRowY + pos.y });
+  // 视口化：光标 y 减去 viewportTop 得到视口内行号，保证光标落在可见区。
+  setCursorPosition({ x: pos.x, y: inputRowY + (pos.y - viewportTop) });
 
   const border = '─'.repeat(Math.max(0, cols));
-  const inputSplit = input.split('\n');
-  const inputLineCount = inputSplit.length;
+  const allInputLines = input.split('\n');
+  // 视口切片：只渲染 [viewportTop, viewportTop + MAX_VISIBLE_INPUT_LINES) 区间。
+  const visibleInputLines = allInputLines.slice(
+    viewportTop,
+    viewportTop + MAX_VISIBLE_INPUT_LINES,
+  );
+  // 不足时补空行撑高——否则下边框会上移，footer 高度不稳定（破坏历史区布局）。
+  while (visibleInputLines.length < MAX_VISIBLE_INPUT_LINES) {
+    visibleInputLines.push('');
+  }
   const upperBorderRow = inputRowY - 1;
-  const lowerBorderRow = inputRowY + inputLineCount;
+  const lowerBorderRow = inputRowY + MAX_VISIBLE_INPUT_LINES;
   const statusBarRow = lowerBorderRow + 1;
 
   return (
@@ -57,15 +71,21 @@ export function Footer({ input, cursor, status, cols, inputRowY, spinnerStore, c
         baseProps={{ color: 'gray' }}
       />
       <Box {...{ internal_cursorTarget: true } as Record<string, unknown>}>
-        {inputSplit.map((line, i) => (
-          <SelectionText
-            key={i}
-            content={i === 0 ? `${PROMPT}${line}` : line}
-            globalRow={inputRowY + i}
-            selectionStore={selectionStore}
-            baseProps={i === 0 ? { color: 'green', bold: true } : {}}
-          />
-        ))}
+        {visibleInputLines.map((line, i) => {
+          // 首行 prompt 仅在视口顶=0（真首行）时显示；滚动后窗口首行用缩进对齐 prompt 宽度。
+          const absLine = viewportTop + i;
+          const prefix = absLine === 0 ? PROMPT : CONTINUATION_INDENT;
+          const isFirstLine = absLine === 0;
+          return (
+            <SelectionText
+              key={i}
+              content={`${prefix}${line}`}
+              globalRow={inputRowY + i}
+              selectionStore={selectionStore}
+              baseProps={isFirstLine ? { color: 'green', bold: true } : {}}
+            />
+          );
+        })}
       </Box>
       <SelectionText
         content={border}

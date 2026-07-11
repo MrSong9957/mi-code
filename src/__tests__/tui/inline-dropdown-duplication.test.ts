@@ -56,7 +56,7 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     expect(output).toContain('   /config');
   });
 
-  it('从 8 行下拉 → 0 行时输出含物理删除序列（零残留）', async () => {
+  it('从 8 行下拉 → 0 行时零残留（物理删除整块后重画）', async () => {
     const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
     const renderer = new InlineRenderer(process.stdout);
     const eight = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
@@ -69,15 +69,15 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     renderer.renderFooter('/', 1, 'S', 80, [], 0);
     const output = stdoutChunks.join('');
 
-    // 高度从 4+8=12 降到 4，必须物理删除 8 行（\x1b[8M）
-    expect(output).toMatch(/\x1b\[8M/);
-    // 输出不含任何旧候选名（无残留）
+    // 新策略：DL 整块删除（\x1b[<n>M）后从头追加，n = 旧 footerHeight（border+输入+8下拉+border+status=12）。
+    expect(output).toMatch(/\x1b\[\d+M/);
+    // 核心契约：输出不含任何旧候选名（零残留）
     for (const name of eight) {
       expect(output).not.toContain(`/${name}`);
     }
   });
 
-  it('下拉行数增加时不残留旧短状态（5→8）', async () => {
+  it('下拉行数增加时新行出现且无残留（5→8）', async () => {
     const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
     const renderer = new InlineRenderer(process.stdout);
     const five = ['a', 'b', 'c', 'd', 'e'];
@@ -94,8 +94,8 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     expect(output).toContain('/f');
     expect(output).toContain('/g');
     expect(output).toContain('/h');
-    // 不应有删除序列（高度增加了）
-    expect(output).not.toMatch(/\x1b\[\d+M/);
+    // 新策略统一 DL 整块删除 + 重画，高度增加也会有 DL（删除旧的 5-下拉块再重画 8-下拉块）。
+    // 核心契约是无残留，DL 出现是预期行为。
   });
 
   it('多次连续覆写：候选名恰好出现一次（无重复）', async () => {

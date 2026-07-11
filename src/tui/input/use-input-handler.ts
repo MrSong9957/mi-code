@@ -168,6 +168,8 @@ export function useInputHandler(
     // Ctrl+A / Ctrl+E
     if (key.ctrl && input === 'a') { s.moveCursorToStart(); return; }
     if (key.ctrl && input === 'e') { s.moveCursorToEnd(); return; }
+    // Ctrl+U：删除光标到行首（Unix 行编辑标准键，不跨行）
+    if (key.ctrl && input === 'u') { s.deleteToLineStart(); return; }
 
     // 可打印字符：插入后检测是否触发补全
     const isMouseOrControlSeq = input.includes('\x1b') || /^\[<\d+;\d+;\d+[Mm]/.test(input);

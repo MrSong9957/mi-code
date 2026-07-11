@@ -36,16 +36,17 @@ describe('cursorScreenPos（CJK + 多行 → 屏幕列/行）', () => {
   });
 
   it('多行：第 0 行末尾换行，光标在第 1 行行首', () => {
-    // 'abc\ndef'，cursor=4（在 \n 之后）
+    // 'abc\ndef'，cursor=4（在 \n 之后）。
+    // 续行渲染时有 CONTINUATION_INDENT（与 promptWidth=2 等宽），故 x = promptWidth + 0 = 2。
     const pos = cursorScreenPos('abc\ndef', 4, '❯ ');
-    expect(pos).toEqual({ x: 0, y: 1 });
+    expect(pos).toEqual({ x: 2, y: 1 });
   });
 
   it('多行：光标在第 1 行中间（含 CJK）', () => {
-    // 'abc\n你def'，cursor=5（「你」之后，5 = 4(\n后) + 1(「你」码点)）
+    // 'abc\n你def'，cursor=5（「你」之后）。
+    // 续行 x = promptWidth + stringWidth('你') = 2 + 2 = 4。
     const pos = cursorScreenPos('abc\n你def', 5, '❯ ');
-    // 第 0 行 prompt+abc=5；第 1 行 x = stringWidth('你') = 2
-    expect(pos).toEqual({ x: 2, y: 1 });
+    expect(pos).toEqual({ x: 4, y: 1 });
   });
 
   it('空 prompt：x 纯文本宽度', () => {
