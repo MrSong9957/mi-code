@@ -246,13 +246,16 @@ export function InlineApp({
   const spinner = useStore(spinnerStore, useShallow((s) => ({
     active: s.active, label: s.label, frameIndex: s.frameIndex, stalled: s.stalled,
   })));
-  const completionVisible = useStore(completionStore, (s) => s.visible);
   // overlay（ctrl+o 备用屏）：visible 时渲染覆盖层，替代正常输出
   const overlay = useStore(overlayStore, useShallow((s) => ({
     visible: s.visible, title: s.title, lines: s.lines,
   })));
   /** 追踪 overlay 上一帧的 visible 状态（检测 打开→关闭 转换，触发重绘） */
   const overlayWasVisibleRef = useRef(false);
+  // 下拉菜单状态（Claude Code Portal 模式：数据通过 Context 传递，渲染合并到主 effect）
+  const dropdownVisible = useStore(completionStore, (s) => s.visible);
+  const dropdownCandidates = useStore(completionStore, (s) => s.candidates);
+  const dropdownIndex = useStore(completionStore, (s) => s.index);
 
   // overlay 渲染：visible 时进备用屏显示内容（最高优先级，独立 effect）
   useEffect(() => {
@@ -383,7 +386,25 @@ export function InlineApp({
       prevLastFinalizedRef.current = true;
     }
 
-    // ── 3. 绘制 Footer（含 spinner 状态）──
+    // ── 3. 绘制下拉菜单（消息区与 footer 之间）──
+    // 必须在 footer 之前写入，否则 footer 覆写模式会清除菜单下方区域导致重复绘制。
+    if (dropdownVisible && dropdownCandidates.length > 0) {
+      const maxVisible = Math.min(dropdownCandidates.length, 8);
+      const startIndex = Math.max(0, dropdownIndex - Math.floor(maxVisible / 2));
+      const visible = dropdownCandidates.slice(startIndex, startIndex + maxVisible);
+
+      for (let i = 0; i < visible.length; i++) {
+        const actualIndex = startIndex + i;
+        const isSelected = actualIndex === dropdownIndex;
+        if (isSelected) {
+          process.stdout.write(`\x1b[7m ▸ /${visible[i]} \x1b[0m\n`);
+        } else {
+          process.stdout.write(`   /${visible[i]}\n`);
+        }
+      }
+    }
+
+    // ── 4. 绘制 Footer（含 spinner 状态）──
     const barWidth = 10;
     const pct = Math.max(0, Math.min(1, statusData.contextPct));
     const filled = Math.round(pct * barWidth);
@@ -407,10 +428,9 @@ export function InlineApp({
       const bold = sgr('1');
       spinnerLine = `${bold}${color}${frame} ${spinner.label}${RESET}`;
     }
-    const completionLine = completionVisible ? '...' : '';
-    const fullStatus = [spinnerLine, statusText, completionLine].filter(Boolean).join(' │ ');
+    const fullStatus = [spinnerLine, statusText].filter(Boolean).join(' │ ');
     renderer.renderFooter(inputText, cursor, fullStatus, cols);
-  }, [messages, renderer, inputText, cursor, statusData, spinner, completionVisible, logo, streamingText, overlay.visible]);
+  }, [messages, renderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex]);
 
   // 卸载时 commit footer
   useEffect(() => {
