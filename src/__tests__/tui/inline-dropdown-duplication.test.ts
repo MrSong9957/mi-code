@@ -42,7 +42,8 @@ function renderDropdownAnsi(
 
 describe('InlineApp 下拉菜单不重复绘制', () => {
   let stdoutChunks: string[];
-  let writeSpy: ReturnType<typeof vi.spyOn>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let writeSpy: any;
 
   beforeEach(() => {
     stdoutChunks = [];
