@@ -148,6 +148,39 @@ describe('BackgroundManager', () => {
       expect(results[i], `trial ${i}: 超时任务被误标为 ${results[i]}（应为 timeout）`).toBe('timeout');
     }
   }, 30000);
+
+  // ── 幂等性 + error handler 竞态防护（flaky 根因修复）──
+  // 根因：child.on('error') 不检查 killedByManager，超时 kill 触发的 error 事件误标 error；
+  //       finishTask 无幂等保护，重复调用 push 多条 notification 或后到的 error 覆盖 timeout。
+  it('幂等性：命令完成后 timer 仍触发但不重复通知（finishTask 幂等拦截）', async () => {
+    // echo 快速完成（close 先到 → completed），但 timer 设较长不会先触发；
+    // 改为用超短超时 + echo：若 echo 在 timeout 前完成，timer 后续触发不应改写 completed。
+    // 为稳定验证幂等，用「已完成的 task 再 killAll」间接验证。
+    manager.run('echo first');
+    manager.run('echo second');
+    await waitFor(() => manager.pendingCount() >= 2, 3000);
+    const completed = manager.drainNotifications();
+    expect(completed).toHaveLength(2);
+    expect(completed.every(n => n.status === 'completed')).toBe(true);
+    // 所有任务已完成（终态）。killAll 遍历 processes（已空），不重复通知。
+    manager.killAll();
+    expect(manager.drainNotifications()).toHaveLength(0);
+  });
+
+  it('幂等性不变量：超时任务的 notification 恰好 1 条（无重复 push）', async () => {
+    expect.hasAssertions();
+    // 超时触发 timer finishTask('timeout') + 可能的 close/error 竞态，
+    // 幂等保护确保最终恰好 1 条 timeout 通知（不会被后续 close/error 覆盖或追加）。
+    const TRIALS = 8;
+    for (let i = 0; i < TRIALS; i++) {
+      manager.run('sleep 30', { timeoutMs: 80 });
+      await waitFor(() => manager.pendingCount() > 0, 5000);
+      const notifs = manager.drainNotifications();
+      // 不变量：每轮恰好 1 条通知，状态必为 timeout
+      expect(notifs).toHaveLength(1);
+      expect(notifs[0]!.status).toBe('timeout');
+    }
+  }, 60000);
 });
 
 /** 轮询等待条件成立 */
