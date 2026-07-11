@@ -18,6 +18,7 @@ import { App } from './App.js';
 import { useInputHandler } from './input/use-input-handler.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { useRenderMode } from './state/render-mode.js';
+import { DropdownProvider } from './state/dropdown-context.js';
 import { InlineApp } from './inline/InlineApp.js';
 import { createSelectionStore } from './state/selection-store.js';
 import { createMouseParser } from './input/mouse-events.js';
@@ -85,6 +86,7 @@ export function ConnectedApp({
   })));
   const spinnerActive = useStore(spinnerStore, (s) => s.active);
   const completionVisible = useStore(completionStore, (s) => s.visible);
+  const completionCandidates = useStore(completionStore, (s) => s.candidates);
 
   // 渲染模式检测
   const { mode } = useRenderMode();
@@ -98,12 +100,13 @@ export function ConnectedApp({
 
   // Footer 行数 + 可见区（按行算）
   const inputExtraLines = Math.max(0, inputText.split('\n').length - 1);
-  const footerRows = FOOTER_BASE_ROWS + (spinnerActive ? 1 : 0) + (completionVisible ? 1 : 0) + inputExtraLines;
+  const suggestionRows = completionVisible ? Math.min(completionCandidates.length, 8) : 0;
+  const footerRows = FOOTER_BASE_ROWS + (spinnerActive ? 1 : 0) + suggestionRows + inputExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
   const maxScroll = Math.max(0, flatLineCount - visibleRows);
   const effectiveScrollTop = scrolledAway ? scrollTop : maxScroll;
   const scrollboxRenderedRows = Math.min(flatLineCount, visibleRows);
-  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + (completionVisible ? 1 : 0) + 1;
+  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + suggestionRows + 1;
 
   // 统一行文本映射
   const rowTextMap: RowTextMap = useMemo(() => buildRowTextMap({
@@ -150,7 +153,7 @@ export function ConnectedApp({
   }
 
   // 键盘处理（必须在 early return 之前，inline 模式也需要）
-  useInputHandler(inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible, handlePageScroll);
+  useInputHandler(inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible, handlePageScroll, completionStore);
 
   function maybeStartAutoScroll(focusRow: number): void {
     const est = effectiveScrollTop;
@@ -270,37 +273,41 @@ export function ConnectedApp({
 
   if (isInline && _inlineRenderer) {
     return (
-      <InlineApp
-        messages={messages}
-        status={status}
-        logo={logo}
-        renderer={_inlineRenderer}
-        messagesStore={messagesStore}
-        inputStore={inputStore}
-        statusStore={statusStore}
-        spinnerStore={spinnerStore}
-        completionStore={completionStore}
-        selectionStore={selectionStore}
-        overlayStore={overlayStore}
-      />
+      <DropdownProvider>
+        <InlineApp
+          messages={messages}
+          status={status}
+          logo={logo}
+          renderer={_inlineRenderer}
+          messagesStore={messagesStore}
+          inputStore={inputStore}
+          statusStore={statusStore}
+          spinnerStore={spinnerStore}
+          completionStore={completionStore}
+          selectionStore={selectionStore}
+          overlayStore={overlayStore}
+        />
+      </DropdownProvider>
     );
   }
 
   return (
-    <App
-      messages={messages}
-      status={status}
-      logo={logo}
-      selectionStore={selectionStore}
-      spinnerStore={spinnerStore}
-      completionStore={completionStore}
-      overlayStore={overlayStore}
-      input={inputText}
-      cursor={cursor}
-      rows={rows}
-      cols={cols}
-      scrollTop={effectiveScrollTop}
-      flatLines={flatLines}
-    />
+    <DropdownProvider>
+      <App
+        messages={messages}
+        status={status}
+        logo={logo}
+        selectionStore={selectionStore}
+        spinnerStore={spinnerStore}
+        completionStore={completionStore}
+        overlayStore={overlayStore}
+        input={inputText}
+        cursor={cursor}
+        rows={rows}
+        cols={cols}
+        scrollTop={effectiveScrollTop}
+        flatLines={flatLines}
+      />
+    </DropdownProvider>
   );
 }
