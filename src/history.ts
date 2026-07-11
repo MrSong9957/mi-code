@@ -8,6 +8,8 @@ export interface HistoryEntry {
   project: string
   sessionId: string
   timestamp: number
+  /** 单调递增序号，作为 timestamp 相同时的稳定排序 tiebreaker（后加入的排前面）。 */
+  seq?: number
 }
 
 const MAX_HISTORY_ITEMS = 50
@@ -23,6 +25,8 @@ export class HistoryManager {
   private lastInput: string = ''
   /** Approximate line count in the history file, used to skip cleanup I/O when under the cap. */
   private lineCount: number = 0
+  /** 单调递增序号：同毫秒内区分先后（timestamp tiebreaker，防 flaky 排序）。 */
+  private seqCounter: number = 0
 
   constructor(historyPath?: string) {
     this.historyPath = historyPath || join(homedir(), '.micode', 'history.jsonl')
@@ -39,7 +43,8 @@ export class HistoryManager {
       input,
       project,
       sessionId: this.sessionId,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      seq: ++this.seqCounter
     }
 
     const dir = dirname(this.historyPath)
@@ -91,7 +96,11 @@ export class HistoryManager {
     entries.sort((a, b) => {
       if (a.sessionId === this.sessionId && b.sessionId !== this.sessionId) return -1
       if (a.sessionId !== this.sessionId && b.sessionId === this.sessionId) return 1
-      return b.timestamp - a.timestamp
+      // timestamp 降序；同毫秒时用 seq 降序（后加入的排前面），保证排序稳定。
+      // 高负载下 Date.now() 精度不足，连续 addEntry 可能同毫秒，无 tiebreaker 会 flaky。
+      const tsDiff = b.timestamp - a.timestamp
+      if (tsDiff !== 0) return tsDiff
+      return (b.seq ?? 0) - (a.seq ?? 0)
     })
 
     const result = entries.slice(0, MAX_HISTORY_ITEMS)
