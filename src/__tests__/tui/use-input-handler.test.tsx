@@ -95,6 +95,83 @@ describe('useInputHandler（键事件 → store）', () => {
   });
 });
 
+describe('useInputHandler（多行编辑键绑定）', () => {
+  it('Ctrl+J → insertNewline（多行换行）', () => {
+    const store = createInputStore();
+    store.getState().insert('hello');
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    stdin.write('\n'); // Ctrl+J 在多数终端是 \n
+    expect(store.getState().text).toBe('hello\n');
+    expect(store.getState().cursor).toBe(6);
+  });
+
+  it('Ctrl+J 连续 3 次 → 3 个换行（无上限）', () => {
+    const store = createInputStore();
+    store.getState().insert('a');
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    stdin.write('\n\n\n');
+    expect(store.getState().text).toBe('a\n\n\n');
+  });
+
+  it('上方向键 → moveCursorUp（跨行上移）', () => {
+    const store = createInputStore();
+    store.getState().insert('line1\nline2');
+    store.getState().moveCursorToEnd(); // 在 line2 末尾（cursor=11）
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    stdin.write('\x1b[A'); // 上
+    // 从 line2 col5 上移到 line1 col5（line1 长5，钳到末尾=5，索引5）
+    expect(store.getState().cursor).toBe(5);
+  });
+
+  it('下方向键 → moveCursorDown（跨行下移）', () => {
+    const store = createInputStore();
+    store.getState().insert('line1\nline2');
+    store.getState().moveCursorTo(3); // line1 col3
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    stdin.write('\x1b[B'); // 下
+    // 下移到 line2 col3（索引 6+3=9）
+    expect(store.getState().cursor).toBe(9);
+  });
+
+  it('Ctrl+U → deleteToLineStart（删光标到行首）', () => {
+    const store = createInputStore();
+    store.getState().insert('hello');
+    store.getState().moveCursorTo(3); // hel|lo
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    stdin.write('\x15'); // Ctrl+U
+    expect(store.getState().text).toBe('lo');
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('Ctrl+U 连续按 → 逐行删除到空（核心契约）', () => {
+    const store = createInputStore();
+    store.getState().insert('aaa\nbbb\nccc');
+    store.getState().moveCursorToEnd();
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    // 连续按 Ctrl+U 直到空
+    let presses = 0;
+    while (store.getState().text !== '' && presses < 20) {
+      stdin.write('\x15');
+      presses++;
+    }
+    expect(store.getState().text).toBe('');
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('Home/End → moveCursorToStart/End（多行）', () => {
+    const store = createInputStore();
+    store.getState().insert('abc\ndef');
+    store.getState().moveCursorToEnd();
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    // Home（\x1b[H）→ 到首
+    stdin.write('\x1b[H');
+    expect(store.getState().cursor).toBe(0);
+    // End（\x1b[F）→ 到末
+    stdin.write('\x1b[F');
+    expect(store.getState().cursor).toBe(7);
+  });
+});
+
 describe('useInputHandler（鼠标序列不得污染输入框）', () => {
   // 鼠标 SGR 序列经 Ink useInput 时，parseKeypress 把整个 \x1b[<...> 当作 sequence
   // （name=""），会落到 insert 分支把转义码当文本插入。必须在 insert 前拦截含控制字符的 input。

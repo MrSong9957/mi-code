@@ -65,4 +65,16 @@ describe('光标行位置回归测试', () => {
     const cursorUps = extractCursorUpValues(out);
     expect(cursorUps[cursorUps.length - 1]).toBe(3);
   });
+
+  it('视口滚动（8行输入，cursor 在第 6 行）：光标落在视口可见区，cursorUp 数值正确', () => {
+    // 输入 8 行（超 MAX_VISIBLE_INPUT_LINES=5），viewportTop=4 → 可见 slice(4,9)=[l4,l5,l6,l7] 共 4 行
+    // footer: border(0) + 4 可见输入行(1-4) + border(5) + status(6) → footerHeight=7
+    // cursor 在绝对行 6 → 视口内行 6-4=2 → upFromBottom = 7-1-2 = 4
+    const input = 'l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7';
+    // cursorPos 指向第 6 行行首（l6）：每行 2 字符 + \n，l6 起始 = 6*3 = 18
+    renderer.renderFooter(input, 18, 'status', 80, [], 0, 4);
+    const out = mock.output;
+    const cursorUps = extractCursorUpValues(out);
+    expect(cursorUps[cursorUps.length - 1]).toBe(4);
+  });
 });

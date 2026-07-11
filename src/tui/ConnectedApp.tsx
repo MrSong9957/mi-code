@@ -27,7 +27,7 @@ import { classifyClick, type ClickState } from './selection/click-detector.js';
 import { buildRowTextMap, type RowTextMap } from './selection/row-text-map.js';
 import { getSelectedText } from './selection/get-selected-text.js';
 import { flattenMessages } from './selection/flatten-messages.js';
-import { computeScrollState } from './components/scroll-state.js';
+import { MAX_VISIBLE_INPUT_LINES } from './state/input-viewport.js';
 import type { MessagesStore } from './state/messages-store.js';
 import type { InputStore } from './state/input-store.js';
 import type { StatusStore } from './state/status-store.js';
@@ -104,9 +104,10 @@ export function ConnectedApp({
   const flatLineCount = flatLines.length;
 
   // Footer 行数 + 可见区（按行算）
-  const inputExtraLines = Math.max(0, inputText.split('\n').length - 1);
+  // 输入框视口固定为 MAX_VISIBLE_INPUT_LINES 行，不再随输入行数增长——历史区大小稳定。
+  const inputViewportExtraLines = MAX_VISIBLE_INPUT_LINES - 1;
   const suggestionRows = completionVisible ? Math.min(completionCandidates.length, 8) : 0;
-  const footerRows = FOOTER_BASE_ROWS + (spinnerActive ? 1 : 0) + suggestionRows + inputExtraLines;
+  const footerRows = FOOTER_BASE_ROWS + (spinnerActive ? 1 : 0) + suggestionRows + inputViewportExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
   const maxScroll = Math.max(0, flatLineCount - visibleRows);
   const effectiveScrollTop = scrolledAway ? scrollTop : maxScroll;

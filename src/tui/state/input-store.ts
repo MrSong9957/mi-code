@@ -36,12 +36,14 @@ export interface InputState {
   clear: () => void;
   /** 整串替换文本（补全用），光标移到末尾 */
   setText: (text: string) => void;
-  /** 在光标处插入换行（≤3 行上限，超出无操作） */
+  /** 在光标处插入换行（任意行数，超出 MAX_VISIBLE_INPUT_LINES 由视口滚动处理） */
   insertNewline: () => void;
   /** 光标上移一行（保留列，钳到上行长度；第 0 行无操作） */
   moveCursorUp: () => void;
   /** 光标下移一行（保留列，钳到下行长度；末行无操作） */
   moveCursorDown: () => void;
+  /** 删光标到行首；光标已在行首时删整行（含前导 \n），光标移到上一行末尾。连续调用可逐行删到全空 */
+  deleteToLineStart: () => void;
   /** 提交：trim 后调 onSubmit，清空；空文本返回 null 不触发 */
   submit: () => string | null;
 }
@@ -84,8 +86,6 @@ export function createInputStore(opts: InputStoreOptions = {}): InputStore {
     clear: () => set({ text: '', cursor: 0 }),
     setText: (text) => set({ text, cursor: [...text].length }),
     insertNewline: () => set((s) => {
-      const lineCount = s.text.split('\n').length;
-      if (lineCount >= 3) return s; // 上限 3 行
       const { text, cursor } = s;
       const next = text.slice(0, cursor) + '\n' + text.slice(cursor);
       return { text: next, cursor: cursor + 1 };
@@ -121,6 +121,32 @@ export function createInputStore(opts: InputStoreOptions = {}): InputStore {
         offset += lineLen + 1;
       }
       return s;
+    }),
+
+    deleteToLineStart: () => set((s) => {
+      // Unix 行编辑语义（Ctrl+U）：删光标到行首；光标已在行首时删整行（含内容 + 前导 \n），
+      // 光标移到上一行末尾。这样连续按 Ctrl+U 能从下往上逐行吞掉，直到全空。
+      const before = s.text.slice(0, s.cursor);
+      const lastNl = before.lastIndexOf('\n');
+      const lineStart = lastNl + 1; // lastNl=-1 时 lineStart=0（首行行首）
+      if (lineStart < s.cursor) {
+        // 光标不在行首：删 [lineStart, cursor) 区间（光标前到行首）
+        const next = s.text.slice(0, lineStart) + s.text.slice(s.cursor);
+        return { text: next, cursor: lineStart };
+      }
+      // 光标已在行首：删整行（本行全部内容 + 前导 \n），光标移到上一行末尾。
+      // 找本行的结尾（下一个 \n 或文本末尾）。
+      const restFromCursor = s.text.slice(s.cursor);
+      const nextNlInRest = restFromCursor.indexOf('\n');
+      const lineEnd = nextNlInRest === -1 ? s.text.length : s.cursor + nextNlInRest;
+      if (s.cursor === 0) {
+        // 首行行首：删第一行内容。若后面还有 \n，保留后续行（吃掉首行 + 它的 \n）。
+        if (nextNlInRest === -1) return { text: '', cursor: 0 };
+        return { text: s.text.slice(lineEnd + 1), cursor: 0 };
+      }
+      // 非首行行首：删 [lastNl, lineEnd]（前导 \n + 本行全部内容），光标移到 lastNl（上一行末尾位置）
+      const next = s.text.slice(0, lastNl) + s.text.slice(lineEnd + 1);
+      return { text: next, cursor: lastNl };
     }),
 
     submit: () => {

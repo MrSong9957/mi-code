@@ -139,8 +139,9 @@ describe('Logo 显示回归测试', () => {
     renderer.renderFooter('', 0, 'auto │ model');
     const afterFirst = mock.written.length;
 
-    // 多行输入：'line1\nline2'，inputLineIndex=1
-    // 正确偏移量 = 1 + 1 = 2
+    // 多行输入：'line1\nline2'，cursorPos=0 → 光标在第 0 行
+    // 视口化后 offsetToTop = 1 + cursorViewportLine = 1 + 0 = 1
+    // （从上一帧光标所在输入行上移 1 到 border 顶部）
     renderer.renderFooter('line1\nline2', 0, 'auto │ model');
 
     const rewriteWrites = mock.written.slice(afterFirst).join('');
@@ -149,10 +150,10 @@ describe('Logo 显示回归测试', () => {
     expect(matches.length).toBeGreaterThanOrEqual(1);
 
     const firstCursorUp = parseInt(matches[0][1], 10);
-    expect(firstCursorUp).toBe(2);
+    expect(firstCursorUp).toBe(1);
   });
 
-  it('覆写模式包含整行擦除序列 \\x1b[2K', () => {
+  it('覆写模式包含物理删除序列 \\x1b[<n>M（DL，删除旧行）', () => {
     renderer.appendLine(LOGO_LINE_0);
     renderer.appendLine(LOGO_LINE_1);
     renderer.appendLine(LOGO_LINE_2);
@@ -162,7 +163,7 @@ describe('Logo 显示回归测试', () => {
     renderer.renderFooter('updated', 0, 'auto │ model');
 
     const rewriteWrites = mock.written.slice(afterFirst).join('');
-    // 覆写模式必须包含 \x1b[2K（擦除整行）序列
-    expect(rewriteWrites).toContain('\x1b[2K');
+    // 覆写模式用 DL（\x1b[<n>M）物理删除旧 footer 块，比逐行擦除更可靠（折行残留也删干净）。
+    expect(rewriteWrites).toMatch(/\x1b\[\d+M/);
   });
 });
