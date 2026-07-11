@@ -157,6 +157,12 @@ export class BackgroundManager {
           // ignore
         }
         this.finishTask(id, 'completed', preview);
+      } else if (code === null) {
+        // code=null 表示进程被信号终止（非自然退出）。
+        // 全量测试并发压力下，外部信号/OS 资源回收可能杀掉子进程，
+        // 此时既非命令自身错误（code≠0）也非正常完成（code=0），判 timeout 更准确
+        // （信号终止 ≈ 被外部强制结束）。这也修了 flaky：sleep 被信号杀时不再误标 error。
+        this.finishTask(id, 'timeout', 'process terminated by signal');
       } else {
         let preview = `exit code: ${code}`;
         try {
