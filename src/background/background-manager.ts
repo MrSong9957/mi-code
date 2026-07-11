@@ -177,16 +177,28 @@ export class BackgroundManager {
     child.on('error', (err) => {
       clearTimeout(timer);
       this.processes.delete(id);
+      // 竞态防护：超时/僵尸 kill 可能触发 error 事件（Windows 下信号不支持等），
+      // 此时必须判 timeout，不能让 error 覆盖（flaky 根因）。
+      // finishTask 的幂等保护也会拦住已被处理的 task，但这里优先判 timeout 语义更正确。
+      if (this.killedByManager.has(id)) {
+        this.killedByManager.delete(id);
+        this.finishTask(id, 'timeout', 'command timed out');
+        return;
+      }
       this.finishTask(id, 'error', err.message);
     });
 
     return id;
   }
 
-  /** 完成任务：更新记录 + 写通知 + 持久化 */
+  /** 完成任务：更新记录 + 写通知 + 持久化。
+   *  幂等：task 已是终态时直接返回，防止 close/error/timeout 竞态重复 push notification
+   *  或后到的 error 覆盖先到的 timeout（flaky 根因）。 */
   private finishTask(id: string, status: TaskStatus, preview: string): void {
     const task = this.tasks.get(id);
     if (!task) return;
+    // 幂等保护：已完成的任务不再处理（防竞态重复通知 / 状态覆盖）
+    if (task.status !== 'running') return;
 
     task.status = status;
     task.finishedAt = new Date().toISOString();
