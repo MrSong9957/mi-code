@@ -1,7 +1,10 @@
 import { cursorUp, hideCursor, showCursor } from './ansi-utils.js';
 import { enterAltScreen, exitAltScreen } from '../hooks/useAltScreen.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
-import { MAX_VISIBLE_INPUT_LINES, simulateTerminalWrap } from '../state/input-viewport.js';
+import { MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
+import { wrapLine, getUsableWidth } from '../state/wrap-line.js';
+import { layoutInputCursor } from '../state/layout-cursor.js';
+import sliceAnsi from 'slice-ansi';
 
 const PROMPT = '❯ ';
 /** 续行缩进：与 PROMPT 宽度对齐（❯ 占 1 列 + 空格 1 列 = 2 列）。
@@ -16,7 +19,18 @@ export class InlineRenderer {
   /** 测试用：读取当前 footer 物理行数。 */
   getFooterHeight(): number { return this.footerHeight; }
 
-  constructor(private stdout: NodeJS.WriteStream) {}
+  constructor(private stdout: NodeJS.WriteStream) {
+    // DECAWM OFF：关闭终端自动折行，应用层自己做 wordWrap。
+    // 物理本质：终端不再因写满列而自动换行——应用决定布局，终端只负责显示。
+    // 这消除了 simulateTerminalWrap 的"猜终端折行"不确定性：
+    // physical rows = application wrapped rows（完全可控）。
+    this.stdout.write('\x1b[?7l');
+  }
+
+  /** 销毁：恢复 DECAWM ON + 光标可见。bootstrap cleanup / crash 兜底调用。 */
+  destroy(): void {
+    this.stdout.write('\x1b[?25h\x1b[?7h');
+  }
 
   appendLine(ansiText: string): void {
     this.stdout.write(ansiText + '\n');
@@ -61,104 +75,99 @@ export class InlineRenderer {
     viewportTop: number = 0,
   ): void {
     const inputLines = input.split('\n');
-    const border = '─'.repeat(cols);
+    const usableWidth = getUsableWidth(cols);
+    const border = '─'.repeat(usableWidth);
 
     // 算光标所在逻辑行号（cursorScreenPos 是纯函数，y 是相对输入区第 0 行的绝对行）。
-    // 用于视口切片与光标物理行定位。光标列改由 simulateTerminalWrap 精确计算（CJK 留空感知）。
     const { y: cursorAbsLine } = cursorScreenPos(input, cursorPos, PROMPT);
 
     // 视口切片：footer 固定高度，输入超 viewportTop+maxVisible 时只渲染窗口内行。
-    // viewportTop=0 时退化为旧行为（全部渲染），向后兼容单行/少量多行场景。
     const visibleInputLines = inputLines.slice(
       viewportTop,
       viewportTop + MAX_VISIBLE_INPUT_LINES,
     );
 
-    // 可见窗口切片：居中滚动（对齐 Claude Code 源码 PromptInputFooterSuggestions.tsx:238）
-    // startIndex = max(0, min(选中项 - 窗口高度/2, 总数 - 窗口高度))
-    // 选中项尽量在窗口中间，末尾不越界。少量候选（<8）时 startIndex=0，显示全部。
+    // 可见窗口切片：居中滚动
     const maxVisible = Math.min(suggestions.length, 8);
     const startIndex = Math.max(0, Math.min(
       selectedIndex - Math.floor(maxVisible / 2),
       suggestions.length - maxVisible,
     ));
     const visibleSuggestions = suggestions.slice(startIndex, startIndex + maxVisible);
-    // 按值匹配选中（Claude Code 风格，比相对下标更健壮——selectedIndex 越界时不会误高亮）
     const selectedName = suggestions[selectedIndex];
     const suggestionLines: string[] = visibleSuggestions.map((name) => {
       const isSelected = name === selectedName;
-      // 选中：反白 + ▸ 前缀；未选中：3 空格缩进
       return isSelected ? `\x1b[7m ▸ /${name} \x1b[0m` : `   /${name}`;
     });
 
     // 组装完整行序：border / 输入行(s) / 下拉行(s) / border / 状态
+    // DECAWM OFF + 应用层 wordWrap：每行 ≤ usableWidth，不依赖终端折行。
+    // physical rows = lines.length（完全可控，不再用 simulateTerminalWrap 猜测）。
     const lines: string[] = [border];
+    // 记录每个可见输入行 wordWrap 后的行数（用于光标定位）
+    const wrappedInputCounts: number[] = [];
     for (let i = 0; i < visibleInputLines.length; i++) {
-      // 首行 prompt 仅在视口顶=0（真首行）时显示；滚动后窗口首行用缩进对齐 prompt 宽度。
       const absLine = viewportTop + i;
       const prefix = absLine === 0 ? PROMPT : CONTINUATION_INDENT;
-      lines.push(prefix + visibleInputLines[i]!);
+      // wordWrap：超宽内容换行显示（不截断不丢弃），保留完整输入体验。
+      // 混合策略：英文优先按空格断行，CJK/无空格按字符级断行。
+      const wrapped = wrapLine(prefix + visibleInputLines[i]!, usableWidth);
+      wrappedInputCounts.push(wrapped.length);
+      lines.push(...wrapped);
     }
+    // suggestion：截断（菜单项每项1行，折行破坏对齐）
     for (const sl of suggestionLines) {
-      lines.push(sl);
+      lines.push(sliceAnsi(sl, 0, usableWidth));
     }
     lines.push(border);
-    lines.push(statusText);
+    // statusText：wordWrap（状态栏可能含颜色码+长文本）
+    const wrappedStatus = wrapLine(statusText, usableWidth);
+    lines.push(...wrappedStatus);
 
-    // 每个渲染行（lines 数组元素）占的物理行数——用精确终端折行模拟。
-    // 终端折行时 CJK（2列）放不下会留空换行（不劈字），简单 ceil(width/cols) 不考虑这个，
-    // 对 CJK 不准——累积偏差导致光标定位偏移（用户看到的"光标在文字中间"）。
-    // 注意：lines 元素已含 prefix（prompt/缩进在字符串里），故 promptWidth 传 0（不重复算前缀）。
-    const linePhysHeights: number[] = lines.map((line) => {
-      return simulateTerminalWrap(line, cols, 0).physRows;
-    });
-    const newHeight = linePhysHeights.reduce((a, b) => a + b, 0);
+    // DECAWM OFF 后每行恰好 1 物理行，newHeight = lines.length
+    const newHeight = lines.length;
+    let writtenLineCount = newHeight;
 
     if (this.footerHeight === 0) {
-      // 追加模式：逐逻辑行写 + \n（终端自动折行）。
+      // 追加模式：逐行写 + \n
       for (const line of lines) {
         this.stdout.write(line + '\n');
       }
     } else {
-      // 覆写模式。
-      // 物理模型：先把旧 footer 块（footerHeight 个物理行）整体清空再重画。
-      // 上一帧光标停在输入框行（cursorToTop 记录到块顶距离），上移到块顶，
-      // 用 DL（\x1b[<n>M 删除 N 行，下方上移）删除全部旧物理行——DL 是物理删除，
-      // 不依赖终端折行模拟，比逐行擦除更可靠（折行残留也能删干净）。
+      // 覆写模式：逐行擦写（不依赖 DL，ConPTY 把 DL→EL 导致堆叠）
       this.stdout.write(cursorUp(this.cursorToTop));
-      this.stdout.write(`\x1b[${this.footerHeight}M`);
-      for (const line of lines) {
-        this.stdout.write(line + '\n');
+      const maxLines = Math.max(this.footerHeight, newHeight);
+      for (let i = 0; i < maxLines; i++) {
+        const content = i < lines.length ? lines[i]! : '';
+        this.stdout.write(`\r\x1b[2K${content}\n`);
       }
+      writtenLineCount = maxLines;
     }
 
     this.footerHeight = newHeight;
 
-    // 光标定位到输入框——用精确终端折行模拟算光标的物理行 + 列。
-    // 取光标所在逻辑行的「光标之前内容」，用 simulateTerminalWrap 得到真实的 (row, col)。
+    // 光标定位到输入框——用 layoutInputCursor 算 wordWrap 后的物理行 + 列。
     // 块内物理行（0-based）：行0=顶部border，行1..=输入区，底部border，status。
     let cursorPhysLine0 = 1; // 跳过顶部 border
-    let cursorColInPhysLine = 0; // 光标在物理行内的列（0-based，含 prompt 偏移）
+    let cursorColInPhysLine = 0;
     for (let i = 0; i < visibleInputLines.length; i++) {
       const absLine = viewportTop + i;
-      const linePhys = linePhysHeights[1 + i]!; // lines[1+i] 对应第 i 个输入行
+      const prefix = absLine === 0 ? PROMPT : CONTINUATION_INDENT;
       if (absLine === cursorAbsLine) {
-        // 光标在本逻辑行：取光标前的内容做精确折行模拟，得光标真实的物理行内 (row, col)。
-        // cursorPos 是码点索引，必须用码点安全的方式切片（emoji 代理对不能劈）。
+        // 光标在本逻辑行：用 layoutInputCursor 算 wordWrap 后的 (row, col)
+        // cursorPos 是码点索引，用码点安全切片算 cursorCpOffset
         const lines2 = input.split('\n');
         let off = 0;
         for (let j = 0; j < absLine; j++) off += [...lines2[j]!].length + 1;
         const cursorCpOffset = Math.max(0, cursorPos - off);
-        const lineCps = [...lines2[absLine]!];
-        const beforeCursor = lineCps.slice(0, cursorCpOffset).join('');
-        const wrap = simulateTerminalWrap(beforeCursor, cols, PROMPT.length);
-        cursorPhysLine0 += wrap.cursorRow;
-        cursorColInPhysLine = wrap.cursorCol;
+        const layout = layoutInputCursor(lines2[absLine]!, cursorCpOffset, prefix, usableWidth);
+        cursorPhysLine0 += layout.row;
+        cursorColInPhysLine = layout.col;
         break;
       }
-      cursorPhysLine0 += linePhys;
+      cursorPhysLine0 += wrappedInputCounts[i]!;
     }
-    const upFromBottom = newHeight - cursorPhysLine0;
+    const upFromBottom = writtenLineCount - cursorPhysLine0;
 
     // 记录光标到块顶的距离（供 commitFooter 上移）。
     this.cursorToTop = cursorPhysLine0;
@@ -168,8 +177,7 @@ export class InlineRenderer {
       this.stdout.write(cursorUp(upFromBottom));
     }
     // CHA：光标在物理行内的列（0-based），1-based = cursorColInPhysLine + 1。
-    // 钳制到 cols：恰好填满物理行时 cursorCol=cols（延迟换行边界），CHA 应停在末列而非超界。
-    const chaCol = Math.min(cursorColInPhysLine + 1, cols);
+    const chaCol = Math.min(cursorColInPhysLine + 1, usableWidth);
     this.stdout.write(`\r\x1b[${chaCol}G`);
     this.stdout.write(showCursor);
   }
@@ -305,7 +313,7 @@ export class InlineRenderer {
     // 标题
     this.stdout.write(title + '\n');
     // 分隔线
-    this.stdout.write('━'.repeat(cols) + '\n');
+    this.stdout.write('━'.repeat(getUsableWidth(cols)) + '\n');
     // 内容行
     for (const line of lines) {
       this.stdout.write(line + '\n');

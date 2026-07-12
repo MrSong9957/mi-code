@@ -44,6 +44,7 @@ import { PlanStore } from './plan/plan-store.js';
 import { createWritePlanTool, createExitPlanModeTool } from './agent/tools/plan-tools.js';
 import { setWorkdir, getWorkdir } from './agent/tools/path-sandbox.js';
 import { HistoryManager } from './history.js';
+import { expandPastedTextRefs } from './tui/input/paste-handler.js';
 
 const VERSION = "1.0.0";
 
@@ -308,7 +309,10 @@ function handleToggleOverlay(handle: BootstrapHandle | null): void {
  * input=''/cursorPos=0/syncInput；layout.* → tuiHandle.statusStore。
  */
 async function handleUserSubmit(rawText: string): Promise<void> {
-  const userInput = rawText.trim();
+  // 历史存占位符版本（省磁盘），agent/解析/回显用展开版本（需完整上下文）。
+  // sessionStore 仍存展开版本（resume 后占位符 ID 跨 session 失效，需完整文本）。
+  const trimmedRaw = rawText.trim();
+  const userInput = expandPastedTextRefs(trimmedRaw);
   if (userInput === 'exit') {
     tuiHandle?.cleanup();
     process.exit(0);
@@ -340,7 +344,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
 
   // 2. 新 turn
   if (!userInput || isProcessing) return;
-  await historyManager.addEntry(userInput, currentProject);
+  await historyManager.addEntry(trimmedRaw, currentProject);
   // clearTurnState 必须在 user_input emit 之前（见旧注释）
   pipeline.clearTurnState();
   pipeline.emit({ kind: 'user_input', text: userInput });

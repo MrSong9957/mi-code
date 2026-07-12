@@ -13,7 +13,7 @@
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
-import { useInput, useStdin } from 'ink';
+import { useInput, useStdin, usePaste } from 'ink';
 import { App } from './App.js';
 import { useInputHandler } from './input/use-input-handler.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
@@ -23,6 +23,7 @@ import { InlineApp } from './inline/InlineApp.js';
 import { createSelectionStore } from './state/selection-store.js';
 import { createMouseParser } from './input/mouse-events.js';
 import { writeClipboard } from './input/clipboard.js';
+import { storePastedContent } from './input/paste-handler.js';
 import { classifyClick, type ClickState } from './selection/click-detector.js';
 import { buildRowTextMap, type RowTextMap } from './selection/row-text-map.js';
 import { getSelectedText } from './selection/get-selected-text.js';
@@ -161,6 +162,13 @@ export function ConnectedApp({
   // 键盘处理（必须在 early return 之前，inline 模式也需要）
   useInputHandler(inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible, handlePageScroll, completionStore);
 
+  // 粘贴占位符：bracketed paste 内容 → storePastedContent 生成占位符 → insert 到输入框。
+  // usePaste 自动管 \x1b[?2004h 生命周期，inline/alt-screen 都生效。
+  // 粘贴内容走单独通道，不泄漏到 useInput（Ink 文档：separate event channels）。
+  usePaste((text: string) => {
+    inputStore.getState().insert(storePastedContent(text));
+  });
+
   function maybeStartAutoScroll(focusRow: number): void {
     const est = effectiveScrollTop;
     const vr = visibleRows;
@@ -266,7 +274,10 @@ export function ConnectedApp({
     useEffect(() => {
       if (!stdin) return;
       setRawMode(true);
+      // 鼠标 all-motion + SGR 鼠标（仅 alt-screen 需要）。
+      // bracketed paste（\x1b[?2004h）由 usePaste 自动管理，不在此处开启。
       process.stdout.write('\x1b[?1003h\x1b[?1006h');
+
       return () => {
         process.stdout.write('\x1b[?1003l\x1b[?1006l');
         setRawMode(false);

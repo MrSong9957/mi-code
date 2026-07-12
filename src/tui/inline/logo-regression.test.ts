@@ -28,6 +28,9 @@ describe('Logo 显示回归测试', () => {
   beforeEach(() => {
     mock = createMockStdout();
     renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
+    // constructor 写入 \x1b[?7l（DECAWM OFF），清空后再开始业务输出，
+    // 使后续 logo 行精确匹配不被首部的 ANSI 序列污染。
+    mock.written.length = 0;
   });
 
   it('Logo 三行精确格式匹配', () => {
@@ -153,7 +156,7 @@ describe('Logo 显示回归测试', () => {
     expect(firstCursorUp).toBe(1);
   });
 
-  it('覆写模式包含物理删除序列 \\x1b[<n>M（DL，删除旧行）', () => {
+  it('覆写模式逐行擦除旧行（\\x1b[2K，零残留）', () => {
     renderer.appendLine(LOGO_LINE_0);
     renderer.appendLine(LOGO_LINE_1);
     renderer.appendLine(LOGO_LINE_2);
@@ -163,8 +166,8 @@ describe('Logo 显示回归测试', () => {
     renderer.renderFooter('updated', 0, 'auto │ model');
 
     const rewriteWrites = mock.written.slice(afterFirst).join('');
-    // 覆写模式用 DL 物理删除旧 footer 块。首帧空输入 footerHeight=4（border+空行+border+status）。
-    // DL 必须精确删 4 行（少删残留，多删吃下方 logo 行）。
-    expect(rewriteWrites).toMatch(/\x1b\[4M/);
+    // 覆写模式逐行 \r\x1b[2K 擦整行后重画。首帧 footerHeight=4，必须擦 ≥4 行。
+    const eraseCount = (rewriteWrites.match(/\x1b\[2K/g) || []).length;
+    expect(eraseCount).toBeGreaterThanOrEqual(4);
   });
 });

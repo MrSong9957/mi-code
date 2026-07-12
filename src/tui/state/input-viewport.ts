@@ -134,6 +134,11 @@ export interface TerminalWrapResult {
 }
 
 /**
+ * @deprecated DECAWM OFF 后不再需要终端折行模拟。
+ * 用 `wrapLine`（src/tui/state/wrap-line.ts）替代——应用层自己做 wordWrap，
+ * physical rows = application wrapped rows，不依赖终端 DECAWM 行为。
+ * 本函数表达的是"猜测终端折行"的错误模型，保留仅供旧测试参考。
+ *
  * 精确模拟终端折行，返回物理行数 + 光标位置。
  *
  * 物理本质：终端逐字符放置，CJK（2列）放不下当前行剩余空间时**留空换行**（不劈字）。
@@ -160,6 +165,24 @@ export function simulateTerminalWrap(text: string, cols: number, promptWidth: nu
   // 用 contentCol 跟踪不含 prompt 的内容列，便于判断 budget
   let contentCol = 0;
   for (let i = 0; i < chars.length; i++) {
+    // 跳过 ANSI 转义序列：\x1b[...<letter>（SGR 颜色码等，零显示宽度）。
+    // 不跳过的话，[、数字、字母会被 stringWidth 算成 1 列，导致含颜色的行
+    // physRows 虚高 → footerHeight 偏大 → cursorUp 偏移 → 光标漂移。
+    if (chars[i] === '\x1b') {
+      let j = i + 1;
+      // CSI 序列：\x1b[ + params(0-9;) + 终止字母
+      if (chars[j] === '[') {
+        j++;
+        while (j < chars.length && /[0-9;]/.test(chars[j]!)) j++;
+        if (j < chars.length && /[A-Za-z]/.test(chars[j]!)) j++;
+      } else {
+        // OSC 等其他序列：跳到 BEL 或 ST(\x1b\)
+        while (j < chars.length && chars[j] !== '\x07' && chars[j] !== '\x1b') j++;
+        if (j < chars.length && chars[j] === '\x07') j++;
+      }
+      i = j - 1; // for 循环会 i++，故 -1
+      continue;
+    }
     const w = stringWidth(chars[i]!);
     if (contentCol + w > budget) {
       // 放不下：留空当前行剩余空间，换行

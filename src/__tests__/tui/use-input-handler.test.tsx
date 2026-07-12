@@ -7,6 +7,7 @@ import React from 'react';
 import { Text } from 'ink';
 import { createInputStore, type InputStore } from '../../tui/state/input-store.js';
 import { useInputHandler } from '../../tui/input/use-input-handler.js';
+import { resetPasteState } from '../../tui/input/paste-handler.js';
 
 /** 用 input-store 渲染一个 probe，把当前 text 显示出来。
  *  onExit 可选，传给 useInputHandler。 */
@@ -279,5 +280,18 @@ describe('useInputHandler: Ctrl+O 覆盖层', () => {
     vi.advanceTimersByTime(30);
     expect(onToggle).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
+  });
+
+  // bracketed paste → 占位符 的集成测试已迁移到 paste-inline-integration.test.tsx
+  // （用 Ink 官方 usePaste 真实流程，而非手动模拟 paste-state）
+
+  it('Ctrl+C 正常退出', () => {
+    resetPasteState();
+    const store = createInputStore();
+    const onExit = vi.fn();
+    const { stdin } = render(React.createElement(InputProbe, { store, onExit }));
+    stdin.write('\x03');
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(store.getState().text).toBe('');
   });
 });

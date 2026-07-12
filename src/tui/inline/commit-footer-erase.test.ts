@@ -14,6 +14,10 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { InlineRenderer } from './InlineRenderer.js';
+import { wrapLine, getUsableWidth } from '../state/wrap-line.js';
+
+const PROMPT = '❯ ';
+const CONTINUATION_INDENT = '  ';
 
 function createMockStdout() {
   const written: string[] = [];
@@ -22,6 +26,29 @@ function createMockStdout() {
     get output() { return written.join(''); },
     write: (s: string) => { written.push(s); return true; },
   };
+}
+
+/**
+ * 复刻 InlineRenderer.renderFooter 的行数算法（无 suggestions，viewportTop=0）。
+ *
+ * 当前模型（DECAWM OFF + 应用层 wordWrap）：
+ * - usableWidth = cols - 1（留 1 安全列）。
+ * - 每个输入行用 wrapLine(prefix + content, usableWidth) 折行（不截断）。
+ * - footerHeight = border + 折行后输入行 + border + 折行后 status。
+ *
+ * 用 wrapLine 现场算预期 footerHeight，不硬编码（长输入会折成多行，footerHeight > 4）。
+ */
+function expectedFooterHeight(input: string, statusText: string, cols: number): number {
+  const usableWidth = getUsableWidth(cols);
+  const inputLines = input.split('\n');
+  const lines: string[] = ['─'.repeat(usableWidth)];
+  for (let i = 0; i < inputLines.length; i++) {
+    const prefix = i === 0 ? PROMPT : CONTINUATION_INDENT;
+    lines.push(...wrapLine(prefix + inputLines[i]!, usableWidth));
+  }
+  lines.push('─'.repeat(usableWidth));
+  lines.push(...wrapLine(statusText, usableWidth));
+  return lines.length;
 }
 
 /**
@@ -198,14 +225,16 @@ describe('commitFooter 擦除行为', () => {
     expect(mock.written.length).toBe(beforeLen);
   });
 
-  it('折行后 commit：footerHeight>4（物理行折算），commit 归零 + 追加模式恢复', () => {
+  it('长输入 wordWrap 后 commit：footerHeight 用 wrapLine 算（多行），commit 归零 + 追加模式恢复', () => {
     expect.hasAssertions();
-    // 200 字符单行 → 折成 3 物理行，footerHeight = 1+3+1+1 = 6（不是 4）
+    // DECAWM OFF + 应用层 wordWrap：超宽内容换行显示（不截断）。
+    // usableWidth=79，'❯ ' + 200a 共 202 列 → wrapLine 折成 4 行（displayWidth [1,79,79,42]）。
+    // footerHeight = 1(border) + 4 + 1(border) + 1(status) = 7。
     const text = 'a'.repeat(200);
     renderer.renderFooter(text, 200, 'STATUS', 80);
-    expect(renderer.getFooterHeight()).toBe(6);
+    expect(renderer.getFooterHeight()).toBe(expectedFooterHeight(text, 'STATUS', 80));
 
-    // commit 应正确清理（用物理行 footerHeight 上移 + DL），footerHeight 归零
+    // commit 应正确清理（按实际 footerHeight 上移 + 逐行擦除），footerHeight 归零
     renderer.commitFooter();
     expect(renderer.getFooterHeight()).toBe(0);
 
@@ -216,22 +245,23 @@ describe('commitFooter 擦除行为', () => {
     expect(newWrites).toContain('─');
   });
 
-  it('CJK 折行后 commit：物理行清理无残留', () => {
+  it('CJK 长输入 wordWrap 后 commit：footerHeight 用 wrapLine 算（多行），物理行清理无残留', () => {
     expect.hasAssertions();
     const term = new Terminal();
     const orig = mock.write;
     mock.write = (s: string) => { term.write(s); return orig(s); };
 
-    // 50 个汉字（100 列）→ 折行，footerHeight>4
+    // DECAWM OFF + 应用层 wordWrap：50 个汉字（100 列）→ wrapLine 折成 3 行（[1,78,22]）。
+    // footerHeight = 1(border) + 3 + 1(border) + 1(status) = 6。
     renderer.renderFooter('中'.repeat(50), 50, 'STATUS', 80);
     const fh = renderer.getFooterHeight();
-    expect(fh).toBeGreaterThan(4);
+    expect(fh).toBe(expectedFooterHeight('中'.repeat(50), 'STATUS', 80));
 
     renderer.commitFooter();
     renderer.appendLine('❯ 用户消息');
     renderer.renderFooter('', 0, 'STATUS', 80);
 
-    // 历史区只有用户消息 1 次（折行的 footer 残留被 commit 清理干净）
+    // 历史区只有用户消息 1 次（wordWrap 的 footer 残留被 commit 清理干净）
     const nonEmpty = term.nonEmptyLines;
     expect(nonEmpty.filter(l => l === '❯ 用户消息').length).toBe(1);
     // 不应有残留的 CJK 内容（footer 的输入被清理）

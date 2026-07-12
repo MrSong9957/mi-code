@@ -27,6 +27,8 @@ describe('InlineRenderer.rewriteStreamingLines：多行覆写', () => {
   beforeEach(() => {
     mock = createMockStdout();
     renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
+    // 清空 constructor 的 DECAWM OFF 序列（\x1b[?7l），不污染测试断言
+    mock.written.length = 0;
   });
 
   it('首次调用 = 追加（无 cursorUp，含文本 + \\n）', () => {
@@ -105,6 +107,7 @@ describe('InlineRenderer.eraseStreamingLines：固化时擦除草稿（防重复
   beforeEach(() => {
     mock = createMockStdout();
     renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
+    mock.written.length = 0; // 清空 constructor 的 DECAWM OFF 序列
   });
 
   it('eraseStreamingLines 物理删除草稿行（cursorUp + \x1b[<n>M），不留空行', () => {

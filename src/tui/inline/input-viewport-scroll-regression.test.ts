@@ -12,8 +12,10 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { InlineRenderer } from './InlineRenderer.js';
-import { computeInputViewport, MAX_VISIBLE_INPUT_LINES, simulateTerminalWrap } from '../state/input-viewport.js';
+import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
+import { wrapLine, getUsableWidth } from '../state/wrap-line.js';
+import { layoutInputCursor } from '../state/layout-cursor.js';
 
 function createMockStdout() {
   const written: string[] = [];
@@ -148,7 +150,7 @@ describe('CJK × 视口滚动 × 物理折行组合回归', () => {
     const input = lines.join('\n');
     const cursorPos = [...input].length;
     const totalLines = input.split('\n').length;
-    const cursorLine = cursorScreenPos(input, cursorPos, '❯ ').y;
+    const cursorLine: number = Number(cursorScreenPos(input, cursorPos, '❯ ').y);
     const vp = computeInputViewport(totalLines, cursorLine, MAX_VISIBLE_INPUT_LINES);
     renderer.renderFooter(input, cursorPos, 'status', 80, [], 0, vp.viewportTop);
     const out = mock.output;
@@ -161,37 +163,54 @@ describe('CJK × 视口滚动 × 物理折行组合回归', () => {
     expect(out).toContain(`第${lastVisibleIdx}行`);
   });
 
-  it('CJK 折行 + 视口滚动：footerHeight 按物理行记账（border 不堆叠）', () => {
+  it('CJK 折行 + 视口滚动：footerHeight 按 wordWrap 物理行记账（border 不堆叠）', () => {
     expect.hasAssertions();
-    // 每行 50 个汉字 = 100 列，cols=80 → 每逻辑行折 2 物理行。8 行 → 16 物理输入行。
+    // 每行 50 个汉字 = 100 列，cols=80。DECAWM OFF 后应用层用 wrapLine 做 wordWrap，
+    // 每逻辑行按 usableWidth 折成多行（不截断不丢弃）。物理行 = wordWrap 后的行数。
+    // 8 行 → 视口只渲染 MAX_VISIBLE_INPUT_LINES=5 个逻辑行（每行 wordWrap 后多物理行）。
+    const cols = 80;
+    const usableWidth = getUsableWidth(cols);
     const lines: string[] = [];
     for (let i = 0; i < 8; i++) lines.push('中'.repeat(50));
     const input = lines.join('\n');
     const cursorPos = [...input].length;
     const vp = computeInputViewport(8, 7, MAX_VISIBLE_INPUT_LINES);
-    renderer.renderFooter(input, cursorPos, 'status', 80, [], 0, vp.viewportTop);
-    // footerHeight = 1(border) + 视口内可见行的物理行数 + 1(border) + 1(status)
-    // 视口只渲染 MAX_VISIBLE_INPUT_LINES=5 个逻辑行，每行 2 物理行 = 10 物理行
-    // footerHeight = 1 + 10 + 1 + 1 = 13
-    expect(renderer.getFooterHeight()).toBe(13);
+    renderer.renderFooter(input, cursorPos, 'status', cols, [], 0, vp.viewportTop);
+    // 用 wrapLine 算视口内可见行 wordWrap 后的总物理行数（单一真理源）。
+    // 可见逻辑行 = inputLines.slice(viewportTop, viewportTop + maxVisible)。
+    const visible = lines.slice(vp.viewportTop, vp.viewportTop + MAX_VISIBLE_INPUT_LINES);
+    let totalInputPhys = 0;
+    for (let i = 0; i < visible.length; i++) {
+      const absLine = vp.viewportTop + i;
+      const prefix = absLine === 0 ? '❯ ' : '  ';
+      totalInputPhys += wrapLine(prefix + visible[i]!, usableWidth).length;
+    }
+    const statusPhys = wrapLine('status', usableWidth).length;
+    // footerHeight = 1(border) + totalInputPhys + 1(border) + statusPhys
+    const expectedHeight = 1 + totalInputPhys + 1 + statusPhys;
+    expect(renderer.getFooterHeight()).toBe(expectedHeight);
   });
 
-  it('CJK 视口滚动 + 光标在中间行：cursorUp + CHA 与精确模拟自洽', () => {
+  it('CJK 视口滚动 + 光标在中间行：CHA 与 layoutInputCursor 自洽', () => {
     expect.hasAssertions();
     // 7 行中文，每行 50 字。cursor 在第 3 行末尾（触发视口）。
+    const cols = 80;
+    const usableWidth = getUsableWidth(cols);
     const lines: string[] = [];
     for (let i = 0; i < 7; i++) lines.push('中'.repeat(50));
     const input = lines.join('\n');
     // cursor 在第 3 行末尾
     let cursorPos = 0;
     for (let i = 0; i <= 3; i++) cursorPos += [...lines[i]!].length + (i < 3 ? 1 : 0);
-    const cursorLine = 3;
+    const cursorLine: number = 3;
     const vp = computeInputViewport(7, cursorLine, MAX_VISIBLE_INPUT_LINES);
-    renderer.renderFooter(input, cursorPos, 'status', 80, [], 0, vp.viewportTop);
+    renderer.renderFooter(input, cursorPos, 'status', cols, [], 0, vp.viewportTop);
     const out = mock.output;
-    // CHA = 光标在第 3 行内的精确列（simulateTerminalWrap）+ 1，钳到 cols
-    const wrap = simulateTerminalWrap(lines[3]!, 80, 2);
-    const expectedCha = Math.min(wrap.cursorCol + 1, 80);
+    // CHA = layoutInputCursor 算出的 wordWrap 后光标列 + 1，钳到 usableWidth。
+    // 续行（absLine>0）前缀是缩进；测试必须用相同前缀算期望值。
+    const prefix = cursorLine === 0 ? '❯ ' : '  ';
+    const layout = layoutInputCursor(lines[cursorLine]!, [...lines[cursorLine]!].length, prefix, usableWidth);
+    const expectedCha = Math.min(layout.col + 1, usableWidth);
     const chaMatch = out.match(/\x1b\[(\d+)G/);
     expect(parseInt(chaMatch![1], 10)).toBe(expectedCha);
   });
@@ -207,7 +226,7 @@ describe('CJK × 视口滚动 × 物理折行组合回归', () => {
       for (let i = 0; i < lineCount; i++) lines.push(`行${i}`.repeat(charsPerLine));
       const input = lines.join('\n');
       const cursorPos = Math.floor(Math.random() * ([...input].length + 1));
-      const cursorLine = cursorScreenPos(input, cursorPos, '❯ ').y;
+      const cursorLine: number = Number(cursorScreenPos(input, cursorPos, '❯ ').y);
       const vp = computeInputViewport(lineCount, cursorLine, MAX_VISIBLE_INPUT_LINES);
       renderer.renderFooter(input, cursorPos, 'status', 80, [], 0, vp.viewportTop);
       // 不变量：本帧输出 border 数 ≤ 2（上+下，不应堆叠）

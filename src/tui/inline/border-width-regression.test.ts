@@ -24,11 +24,11 @@ describe('边框宽度自适应回归测试', () => {
     renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
   });
 
-  it('边框宽度等于传入的 cols 参数', () => {
+  it('边框宽度等于 cols - 1（usableWidth）', () => {
     renderer.renderFooter('', 0, 'status', 80);
     const out = mock.output;
-    // 上边框应为 80 个 ─
-    expect(out).toContain('─'.repeat(80));
+    // 上边框应为 79 个 ─（getUsableWidth(80) = 80 - 1，留 1 安全列）
+    expect(out).toContain('─'.repeat(79));
   });
 
   it('不同终端宽度产生不同边框', () => {
@@ -39,14 +39,15 @@ describe('边框宽度自适应回归测试', () => {
     renderer.renderFooter('', 0, 'status', 120);
     const out120 = mock.output;
 
-    expect(out60).toContain('─'.repeat(60));
-    expect(out120).toContain('─'.repeat(120));
-    expect(out60).not.toContain('─'.repeat(120));
+    expect(out60).toContain('─'.repeat(59));
+    expect(out120).toContain('─'.repeat(119));
+    expect(out60).not.toContain('─'.repeat(119));
   });
 
   it('默认宽度为 80（未传 cols 时）', () => {
     renderer.renderFooter('', 0, 'status');
     const out = mock.output;
-    expect(out).toContain('─'.repeat(80));
+    // getUsableWidth(80) = 79
+    expect(out).toContain('─'.repeat(79));
   });
 });

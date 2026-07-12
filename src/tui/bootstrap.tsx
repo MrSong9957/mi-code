@@ -158,6 +158,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
 
   const cleanup = (): void => {
     try {
+      inlineRenderer?.destroy(); // 恢复 DECAWM ON + 光标可见
       inkInstance?.unmount();
     } catch {
       // unmount 可能已调用，忽略

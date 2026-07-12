@@ -32,10 +32,11 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     const output = stdoutChunks.join('');
 
     // 行序断言：border → 输入行 → 候选行 → border → 状态行
-    const borderIdx = output.indexOf('─'.repeat(80));
+    // border 宽度 = usableWidth = cols - 1（DECAWM OFF 留安全列）
+    const borderIdx = output.indexOf('─'.repeat(79));
     const inputIdx = output.indexOf('❯ /c');
     const candidateIdx = output.indexOf('/config');
-    const secondBorderIdx = output.indexOf('─'.repeat(80), borderIdx + 1);
+    const secondBorderIdx = output.indexOf('─'.repeat(79), borderIdx + 1);
     const statusIdx = output.indexOf('STATUS');
 
     expect(inputIdx).toBeGreaterThan(borderIdx);
@@ -69,10 +70,11 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     renderer.renderFooter('/', 1, 'S', 80, [], 0);
     const output = stdoutChunks.join('');
 
-    // 新策略：DL 整块删除（\x1b[<n>M）后从头追加。
-    // n 必须精确 = 旧 footerHeight：border(1) + 输入(1) + 8下拉 + border(1) + status(1) = 12。
-    // 数字错了会导致残留（少删）或吃掉下方内容（多删）。
-    expect(output).toMatch(/\x1b\[12M/);
+    // 逐行擦写策略：\r\x1b[2K 擦整行后重画。旧行被擦除（零残留）。
+    // 旧 footerHeight = border(1) + 输入(1) + 8下拉 + border(1) + status(1) = 12。
+    // 必须擦除 ≥12 行（Math.max(旧高, 新高)），否则旧行残留。
+    const eraseCount = (output.match(/\x1b\[2K/g) || []).length;
+    expect(eraseCount).toBeGreaterThanOrEqual(12);
     // 核心契约：输出不含任何旧候选名（零残留）
     for (const name of eight) {
       expect(output).not.toContain(`/${name}`);
@@ -96,9 +98,11 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     expect(output).toContain('/f');
     expect(output).toContain('/g');
     expect(output).toContain('/h');
-    // 新策略统一 DL 整块删除 + 重画。旧 5 下拉的 footerHeight = border(1)+输入(1)+5下拉+border(1)+status(1) = 9。
-    // DL 必须精确删 9 行（少删残留旧行，多删吃下方内容）。
-    expect(output).toMatch(/\x1b\[9M/);
+    // 逐行擦写策略：\r\x1b[2K 擦整行后重画。
+    // 旧 footerHeight = border(1)+输入(1)+5下拉+border(1)+status(1) = 9。
+    // 必须擦除 ≥9 行，否则旧行残留。
+    const eraseCount = (output.match(/\x1b\[2K/g) || []).length;
+    expect(eraseCount).toBeGreaterThanOrEqual(9);
   });
 
   it('多次连续覆写：候选名恰好出现一次（无重复）', async () => {
