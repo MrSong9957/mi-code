@@ -38,6 +38,28 @@ describe('input-viewport（输入框视口计算）', () => {
     expect(vp.viewportTop).toBe(expectedCenter);
   });
 
+  it('光标居中【中段精确断言，防 clamp 掩盖公式破坏】', () => {
+    expect.hasAssertions();
+    // 关键：选 cursor 在中段，使 centered ∈ (0, maxScroll) 严格成立，
+    // 此时 clamp 不介入，viewportTop 必须精确等于居中公式值。
+    // 若居中公式被改成 cursorLine（不加 -floor(maxVisible/2)），
+    // 这里能抓到（旧用例 total=10/cursor=7 因 centered=maxScroll 被 clamp 掩盖，抓不到）。
+    const maxVisible = MAX_VISIBLE_INPUT_LINES; // 5
+    const total = 20; // maxScroll = 15
+    const half = Math.floor(maxVisible / 2); // 2
+    // 随机取中段 cursor，保证 centered ∈ (0, maxScroll)
+    for (let i = 0; i < 15; i++) {
+      const cursorLine = half + 1 + Math.floor(Math.random() * (total - maxVisible - half));
+      const centered = cursorLine - half;
+      // 确认确实在中段（防随机退化成边界用例）
+      expect(centered).toBeGreaterThan(0);
+      expect(centered).toBeLessThan(total - maxVisible);
+      const vp = computeInputViewport(total, cursorLine, maxVisible);
+      // 精确断言：viewportTop = 居中公式值（非 clamp 结果）
+      expect(vp.viewportTop).toBe(centered);
+    }
+  });
+
   it('边界保护：光标在首行时 viewportTop 钳到 0', () => {
     expect.hasAssertions();
     const vp = computeInputViewport(20, 0, MAX_VISIBLE_INPUT_LINES);
