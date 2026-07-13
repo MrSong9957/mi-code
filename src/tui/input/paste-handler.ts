@@ -10,12 +10,19 @@
 
 const TRUNCATE_THRESHOLD = 10000;
 const PREVIEW_CHARS = 500;
+// 短文本直显阈值：单行且 ≤ 此字符数的内容原样返回，不折叠为占位符。
+// 避免粘贴几个字也变成 [Pasted text #N]，偏离"粘贴长文本才折叠"的语义。
+const DIRECT_DISPLAY_THRESHOLD = 80;
 
 let nextPasteId = 1;
 const pastedContents = new Map<number, string>();
 
-/** 存储粘贴内容，返回占位符 */
+/** 存储粘贴内容，返回占位符（短文本直接原样返回，不折叠） */
 export function storePastedContent(content: string): string {
+  // 短文本直显：单行且 ≤80 字符不折叠，原样返回，不进 Map、不消耗 ID
+  if (!content.includes('\n') && content.length <= DIRECT_DISPLAY_THRESHOLD) {
+    return content;
+  }
   const id = nextPasteId++;
   pastedContents.set(id, content);
   const lineCount = content.split('\n').length;

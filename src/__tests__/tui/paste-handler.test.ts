@@ -17,9 +17,9 @@ describe('paste-handler', () => {
 
   it('多次粘贴 ID 递增', () => {
     const p1 = storePastedContent('a\nb');
-    const p2 = storePastedContent('c');
+    const p2 = storePastedContent('c\nd');
     expect(p1).toBe('[Pasted text #1 +2 lines]');
-    expect(p2).toBe('[Pasted text #2 +1 lines]');
+    expect(p2).toBe('[Pasted text #2 +2 lines]');
   });
 
   it('expandPastedTextRefs 还原原始内容', () => {
@@ -58,16 +58,16 @@ describe('paste-handler', () => {
   });
 
   it('resetPasteState 清空所有存储', () => {
-    storePastedContent('aaa');
-    storePastedContent('bbb');
+    storePastedContent('aaa\nbbb');
+    storePastedContent('ccc\nddd');
     resetPasteState();
-    const p = storePastedContent('ccc');
-    expect(p).toBe('[Pasted text #1 +1 lines]');
+    const p = storePastedContent('eee\nfff');
+    expect(p).toBe('[Pasted text #1 +2 lines]');
   });
 
-  it('单行内容显示 +1 lines', () => {
-    const placeholder = storePastedContent('just one line');
-    expect(placeholder).toBe('[Pasted text #1 +1 lines]');
+  it('多行内容显示 +N lines', () => {
+    const placeholder = storePastedContent('line one\nline two');
+    expect(placeholder).toBe('[Pasted text #1 +2 lines]');
   });
 
   it('expandPastedTextRefs 保留占位符周围的文本', () => {
@@ -101,15 +101,15 @@ describe('paste-handler', () => {
     expect(placeholder).toMatch(/^\[x{500}\.\.\.Truncated text #1 \+1 lines\.\.\.x{500}\]$/);
   });
 
-  it('空内容粘贴：返回 +1 lines 占位符', () => {
+  it('空内容粘贴：直显空串（单行 0 字符，不折叠）', () => {
+    // 空内容直显，不产生占位符噪音
     const placeholder = storePastedContent('');
-    expect(placeholder).toBe('[Pasted text #1 +1 lines]');
+    expect(placeholder).toBe('');
   });
 
-  it('空内容粘贴：展开后为空字符串', () => {
-    const placeholder = storePastedContent('');
-    const expanded = expandPastedTextRefs(placeholder);
-    expect(expanded).toBe('');
+  it('多行内容首行空：折叠 + 行数正确', () => {
+    const placeholder = storePastedContent('\nsecond');
+    expect(placeholder).toBe('[Pasted text #1 +2 lines]');
   });
 
   it('纯换行内容：行数正确', () => {
@@ -162,11 +162,88 @@ describe('paste-handler', () => {
   });
 
   it('resetPasteState 后旧 ID 指向新内容', () => {
-    const p1 = storePastedContent('old');
+    const p1 = storePastedContent('old\ncontent');
     resetPasteState();
-    const p2 = storePastedContent('new');
-    // p1 的 ID=1 现在指向 'new'，不是 'old'
-    expect(expandPastedTextRefs(p1)).toBe('new');
-    expect(expandPastedTextRefs(p2)).toBe('new');
+    const p2 = storePastedContent('new\ncontent');
+    // p1 的 ID=1 现在指向 'new\ncontent'，不是 'old\ncontent'
+    expect(expandPastedTextRefs(p1)).toBe('new\ncontent');
+    expect(expandPastedTextRefs(p2)).toBe('new\ncontent');
+  });
+});
+
+describe('图片占位符 [Image #N] 不展开（走单独 content block）', () => {
+  beforeEach(() => {
+    resetPasteState();
+  });
+
+  it('图片占位符原样保留，不展开', () => {
+    expect.hasAssertions();
+    expect(expandPastedTextRefs('[Image #1]')).toBe('[Image #1]');
+  });
+
+  it('图片占位符与粘贴占位符混存：仅展开粘贴占位符', () => {
+    expect.hasAssertions();
+    // 用多行内容确保触发折叠（短文本现在直显，不生成占位符）
+    const pasted = storePastedContent('文本内容\n第二行');
+    const result = expandPastedTextRefs(`${pasted} 配图 [Image #1]`);
+    expect(result).toContain('文本内容\n第二行');
+    expect(result).not.toContain('[Pasted text #');
+    expect(result).toContain('[Image #1]');
+  });
+});
+
+describe('短文本直显阈值（单行且 ≤80 字符不折叠）', () => {
+  beforeEach(() => {
+    resetPasteState();
+  });
+
+  it('短单行文本：原样返回，不生成占位符', () => {
+    expect.hasAssertions();
+    const result = storePastedContent('hello world');
+    expect(result).toBe('hello world');
+    expect(result).not.toContain('[Pasted text');
+  });
+
+  it('短单行中文：原样返回', () => {
+    expect.hasAssertions();
+    const result = storePastedContent('你好世界');
+    expect(result).toBe('你好世界');
+  });
+
+  it('恰好 80 字符单行：直显（边界，≤ 阈值）', () => {
+    expect.hasAssertions();
+    const content = 'x'.repeat(80);
+    const result = storePastedContent(content);
+    expect(result).toBe(content);
+    expect(result).not.toContain('[Pasted text');
+  });
+
+  it('81 字符单行：折叠（> 阈值）', () => {
+    expect.hasAssertions();
+    const content = 'x'.repeat(81);
+    const result = storePastedContent(content);
+    expect(result).toBe('[Pasted text #1 +1 lines]');
+  });
+
+  it('多行文本（即使每行很短）：折叠', () => {
+    expect.hasAssertions();
+    const result = storePastedContent('a\nb');
+    expect(result).toBe('[Pasted text #1 +2 lines]');
+  });
+
+  it('空字符串：直显（单行 0 字符，不折叠）', () => {
+    expect.hasAssertions();
+    const result = storePastedContent('');
+    // 空字符串直显——粘贴空内容无意义，不应产生占位符噪音
+    expect(result).toBe('');
+  });
+
+  it('短文本不进 pastedContents Map：不影响后续 ID 自增', () => {
+    expect.hasAssertions();
+    // 第一个短文本不进 Map（不消耗 ID）
+    storePastedContent('short');
+    // 第二个长文本（多行）应该是 #1，不是 #2
+    const p2 = storePastedContent('line1\nline2');
+    expect(p2).toBe('[Pasted text #1 +2 lines]');
   });
 });
