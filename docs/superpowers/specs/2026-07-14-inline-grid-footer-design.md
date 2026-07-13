@@ -68,37 +68,79 @@ InlineApp
 
 持有 footer 区域的 DoubleBuffer，提供 commitFooter 接口。
 
+**footerTopRow 不作为实例字段**——每次 commitFooter 实时用公式算，避免状态过期。
+只缓存上一次的 height/cols/footerTopRow，供 clearRegion 清旧区域用。
+
 ```ts
 class InlineGridRenderer {
-  private db: DoubleBuffer;        // footerHeight × cols 的局部网格
-  private footerTopRow: number;    // footer 顶在屏幕上的绝对行号（1-based）
-  private footerHeight: number;    // footer 当前逻辑高度（行数）
+  private db: DoubleBuffer | null = null;
+  // 缓存上一次的尺寸（供 clearRegion 清旧区域，不是"当前 footer 位置"）
+  private lastHeight = 0;
+  private lastCols = 0;
+  private lastFooterTopRow = 0;  // 上一次 footer 顶的绝对行号（1-based）
 
   constructor(private stdout: NodeJS.WriteStream) {}
 
-  /** 写入 footer（核心接口） */
-  commitFooter(layout: FooterLayout): void {
-    // 1. 高度变化时重建 DoubleBuffer
-    // 2. back.clear() → blitAnsi 写入每行 footer 内容
-    // 3. diff(front, back) → optimize → emit（yBias = footerTopRow - 1）
-    // 4. swap
-    // 5. 更新 footerHeight
+  /** 清除屏幕上指定区域：CUP(topRow,1) + ED（从 topRow 清到屏幕底） */
+  private clearRegion(topRow: number): void {
+    this.stdout.write(`\x1b[${topRow};1H\x1b[0J`);
   }
 
-  /** resize 时彻底擦除旧 footer + 重建 buffer */
+  /** 写入 footer（核心接口） */
+  commitFooter(layout: FooterLayout, rows: number, cols: number): void {
+    const newHeight = layout.lines.length;
+    const footerTopRow = rows - newHeight + 1;  // 实时算，不依赖实例字段
+
+    // 高度或宽度变化 → 先清旧区域（用缓存的 last 值）
+    if (this.db && (this.lastHeight !== newHeight || this.lastCols !== cols)) {
+      this.clearRegion(this.lastFooterTopRow);
+    }
+    // 重建 DoubleBuffer（尺寸变化或首次）
+    if (!this.db || this.lastHeight !== newHeight || this.lastCols !== cols) {
+      this.db = new DoubleBuffer(newHeight, cols);
+    }
+
+    // back.clear() → blitAnsi 写入每行 footer 内容
+    this.db.back.clear();
+    for (let y = 0; y < layout.lines.length; y++) {
+      blitAnsi(this.db.back, 0, y, layout.lines[y]);
+    }
+
+    // diff → optimize → emit（yBias = footerTopRow - 1）
+    const patches = optimize(diff(this.db.front, this.db.back));
+    emit(patches, {
+      charPool: this.db.charPool, stylePool: this.db.stylePool,
+      stdout: this.stdout, yBias: footerTopRow - 1,
+      cursor: { x: layout.cursorCol, y: layout.cursorToTop },
+    });
+
+    this.db.swap();
+    this.lastHeight = newHeight;
+    this.lastCols = cols;
+    this.lastFooterTopRow = footerTopRow;
+  }
+
+  /** resize 时彻底擦除旧 footer + 丢弃 buffer */
   clearForResize(): void {
-    // CUP(footerTopRow, 1) + ED
-    // 丢弃 DoubleBuffer，下次 commitFooter 重建
+    if (this.lastFooterTopRow > 0) {
+      this.clearRegion(this.lastFooterTopRow);
+    }
+    this.db = null;
+    this.lastHeight = 0;
+    this.lastFooterTopRow = 0;
+  }
+
+  /** unmount 时清除 footer（替代原 InlineRenderer.commitFooter 的生命周期清理） */
+  dispose(): void {
+    this.clearForResize();
   }
 }
 ```
 
-#### footer lines → grid 的 blit 逻辑
-
-FooterLayout.lines 是 ANSI 字符串数组（border / ❯输入 / suggestion / border / status）。
-逐行用 `blitAnsi(screen, 0, y, line)` 写入 back buffer（x=0，y=行号）。
-
-这是最简单的"walk"——footer 是固定结构（顺序行），不需要 Yoga 布局遍历。
+**DoubleBuffer 宽度 = cols 契约**：DoubleBuffer 尺寸为 `height × cols`。
+blitAnsi 写入的行短于 cols 时（如输入框只有 20 字符），back buffer 右侧保持初始状态
+（char=0 空白，style=默认）。diff 自动产出清除 Patch（ERASE_CHAR_ID → `\x1b[K`）。
+layout 保证 border 行正好 cols 宽；输入行/suggestion 行可能短于 cols，由 diff 处理。
 
 ### 4.3 修改组件
 
@@ -114,10 +156,9 @@ export interface EmitContext {
 }
 ```
 
-emit 输出改为：
-```ts
-out.push(`\x1b[${patch.y + (yBias ?? 0) + 1};${patch.x + 1}H`);
-```
+emit 内**所有** `\x1b[row;colH` 定位都需要加 yBias，包括：
+1. Patch 定位（每个 cell 写入前）：`\x1b[(patch.y + yBias + 1);(patch.x + 1)H`
+2. 末尾光标定位：`\x1b[(cursor.y + yBias + 1);(cursor.x + 1)H`
 
 alt-screen 模式不传 yBias（默认 0），行为不变。inline 模式传 `footerTopRow - 1`。
 
@@ -210,6 +251,9 @@ resize 事件 → useTerminalSize → cols prop 变化
 因为 footer 总在屏幕底部 footerHeight 行，`footerTopRow = rows - footerHeight + 1` 恒成立。
 gridRenderer 不需要跟踪"footer 当前在哪"——每次 commitFooter 都用公式重新算 footerTopRow。
 
+**消息行数约束**：DECAWM OFF（`\x1b[?7l`）已防止终端自动折行，消息物理行数 = 应用层算的行数。
+如果消息行数 + footerHeight > rows，消息会被推进 scrollback，footer 仍在底部——正确的终端行为。
+
 ## 7. 边界条件
 
 ### 7.1 footer 高度变化（输入折行 / suggestion 展开）
@@ -224,16 +268,19 @@ footerHeight 变化时（如 suggestion 从 0 条变 3 条，footer 从 4 行变
 
 ### 7.2 流式草稿（streaming）
 
-流式草稿在 footer 上方，目前走 InlineRenderer.rewriteStreamingLines。
-本设计只改 footer 路径，流式草稿暂时保持现状（cursorUp + overwriteLine）。
+流式草稿在 footer **上方**，目前走 InlineRenderer.rewriteStreamingLines（cursorUp 相对定位）。
+本设计只改 footer 路径，流式草稿暂时保持现状。
 
-**风险**：resize 时流式草稿也会被 reflow 弄乱，但本设计不处理它。
-**缓解**：resize 时如果正在流式，clearForResize 的 ED 会清掉流式草稿（它在 footer 上方），
-流式文本在下一帧 effect 重跑时重新 appendLine（因为 streamingText 还在 store 里）。
-但这需要 InlineApp effect 在 resize 后重新输出流式草稿——当前逻辑可能需要调整。
+**resize 时的影响**：
+- `clearForResize` 的 CUP 定位到 footer 顶 + ED 清到屏幕底——**只清 footer 区域**，
+  清不到上方的流式草稿（流式草稿在 footer 顶之上的行）。
+- 但 reflow 同样会弄乱流式草稿（超宽草稿行被折成多行），而流式仍用 cursorUp 相对定位，
+  reflow 后定位失效 → **流式草稿在 resize 后可能堆叠**。
 
-**决策**：第一阶段只处理 footer，流式草稿的 resize 处理作为第二阶段。
-resize 时如果正在流式，接受草稿短暂消失（下一帧重画）。
+**决策**：第一阶段只处理 footer 的 resize。流式草稿的 resize 处理作为第二阶段。
+- 如果 resize 时正好在流式，接受草稿短暂堆叠（下次 streamingText 更新触发 effect 重跑时会重画）。
+- **P5 风险标记**：P5 实现时需验证 resize + 正在流式时的实际表现。如果流式堆叠严重影响使用，
+  P5 可能需要增加一步：resize 时检测 isStreamingNow，如果是则同时清除流式草稿区域。
 
 ### 7.3 overlay（Ctrl+O 备用屏）
 
@@ -271,11 +318,11 @@ overlay 打开时主渲染 effect 跳过，不受影响。
 
 | 阶段 | 内容 | 风险 |
 |---|---|---|
-| P1 | emit.ts 加 yBias 支持 + 测试 | 低（加可选参数，默认 0 不影响 alt-screen） |
-| P2 | InlineGridRenderer 骨架 + commitFooter + 单元测试 | 中（新类，但复用成熟渲染核心） |
-| P3 | clearForResize（CUP + ED）+ 测试 | 低（简单序列） |
-| P4 | InlineApp 接入：footer 路径从 writeFooter 切到 gridRenderer | 高（改动主渲染路径） |
-| P5 | resize 检测接入（cols 变化 → clearForResize + 重画） | 中 |
+| P1 | emit.ts 加 yBias 支持 + 测试。实施时 **grep emit.ts 所有 `\x1b[` 序列**，逐一判断是否需要 yBias（不只是 patch 定位和光标定位，确认无遗漏） | 低（加可选参数，默认 0 不影响 alt-screen） |
+| P2 | InlineGridRenderer 骨架 + commitFooter（含 clearRegion 统一清旧区域）+ 单元测试 | 中（新类，但复用成熟渲染核心） |
+| P3 | clearForResize + dispose + 测试 | 低（简单序列，复用 clearRegion） |
+| P4 | InlineApp 接入：footer 路径从 writeFooter 切到 gridRenderer。commit() 内部 commitFooter 调用改为 gridRenderer 版 | 高（改动主渲染路径） |
+| P5 | resize 检测接入（cols 变化 → clearForResize + 重画）。**风险**：需验证 resize + 正在流式时的表现——流式草稿仍用 cursorUp 相对定位，resize 后可能堆叠。如果影响严重，P5 需增加流式草稿清除逻辑 | 中→高 |
 | P6 | 真实终端验证（用户环境：独立 cmd 窗口） | — |
 
 每阶段 TDD：先写测试，再实现，再验证不破坏现有测试。
