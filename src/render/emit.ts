@@ -20,10 +20,13 @@ export interface EmitContext {
   stdout: { write: (s: string) => boolean };
   /** 光标位置（绝对，0-based）；无则隐藏光标 */
   cursor?: CursorPos;
+  /** y 轴偏移（alt-screen=0，inline=footerTopRow-1）。所有 CUP 定位加此偏移。 */
+  yBias?: number;
 }
 
 export function emit(patches: Patch[], ctx: EmitContext): void {
-  const { charPool, stylePool, stdout, cursor } = ctx;
+  const { charPool, stylePool, stdout, cursor, yBias } = ctx;
+  const bias = yBias ?? 0;
   const out: string[] = [];
 
   out.push('\x1b[?2026h');  // BSU
@@ -37,7 +40,7 @@ export function emit(patches: Patch[], ctx: EmitContext): void {
     // cursor 邻接判断（emit 自己做兜底，spec §4.4 决策）
     const adjacent = (patch.y === prevY && patch.x === prevX + 1);
     if (!adjacent) {
-      out.push(`\x1b[${patch.y + 1};${patch.x + 1}H`);
+      out.push(`\x1b[${patch.y + bias + 1};${patch.x + 1}H`);
     }
 
     if (patch.charId === ERASE_CHAR_ID) {
@@ -56,7 +59,7 @@ export function emit(patches: Patch[], ctx: EmitContext): void {
 
   // 末尾 cursor 定位
   if (cursor) {
-    out.push(`\x1b[${cursor.y + 1};${cursor.x + 1}H`);
+    out.push(`\x1b[${cursor.y + bias + 1};${cursor.x + 1}H`);
     out.push('\x1b[?25h');  // showCursor
   } else {
     out.push('\x1b[?25l');  // hideCursor
