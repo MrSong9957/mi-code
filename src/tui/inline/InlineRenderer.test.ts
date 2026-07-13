@@ -91,13 +91,12 @@ describe('InlineRenderer.commit(frame) — render commit boundary', () => {
     };
   }
 
-  it('基础场景：commit 画 footer（无新行、无流式）', () => {
+  it('基础场景：commit 不写 footer（footer 由 gridRenderer 负责）', () => {
     const beforeWrites = mock.written.length;
     renderer.commit(makeFrame());
-    // commit 应写入 footer 内容（border/status 等）
-    expect(mock.written.length).toBeGreaterThan(beforeWrites);
-    const output = mock.written.slice(beforeWrites).join('');
-    expect(output).toContain('test'); // status 文本
+    // commit 不再写 footer（footer 移到 InlineGridRenderer.commitFooter）
+    // 无新行、无流式 → commit 应是 no-op（不写入任何内容）
+    expect(mock.written.length).toBe(beforeWrites);
   });
 
   it('有新增固化行：appendLine 写入每行', () => {
@@ -110,22 +109,16 @@ describe('InlineRenderer.commit(frame) — render commit boundary', () => {
     expect(output).toContain('LINE_B\n');
   });
 
-  it('有新增固化行时：先 commitFooter 再 appendLine（顺序契约）', () => {
-    // 先画一次 footer 建立 footerHeight>0（否则 commitFooter 是 no-op）
-    renderer.commit(makeFrame());
-    const afterFirstCommit = mock.written.length;
-
-    // 第二次 commit：有新增固化行 → commitFooter（擦旧 footer）→ appendLine
+  it('有新增固化行时：commit 只 appendLine（footer 擦除由 gridRenderer 负责）', () => {
     renderer.commit(makeFrame({
       newLines: ['MARKER_LINE'],
       hasNewFinalized: true,
     }));
-    const secondCommitOutput = mock.written.slice(afterFirstCommit).join('');
-    const markerIdx = secondCommitOutput.indexOf('MARKER_LINE');
-    expect(markerIdx).toBeGreaterThanOrEqual(0);
-    // MARKER_LINE 之前应有 cursorUp 序列（commitFooter 擦 footer 留下的）
-    const beforeMarker = secondCommitOutput.slice(0, markerIdx);
-    expect(beforeMarker).toMatch(/\x1b\[\d+A/); // cursorUp
+    const output = mock.written.join('');
+    expect(output).toContain('MARKER_LINE\n');
+    // commit 不再写 footer（footer 移到 gridRenderer）
+    // 不应含 border 字符（─）或 status 文本
+    expect(output).not.toContain('─');
   });
 
   it('流式场景：rewriteStreamingLines 写入草稿行', () => {

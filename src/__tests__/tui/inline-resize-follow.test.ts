@@ -27,6 +27,7 @@ import { createCompletionStore } from '../../tui/state/completion-store.js';
 import { createSelectionStore } from '../../tui/state/selection-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import { InlineRenderer } from '../../tui/inline/InlineRenderer.js';
+import { InlineGridRenderer } from '../../tui/inline/grid-renderer.js';
 import { InlineApp } from '../../tui/inline/InlineApp.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../../tui/types.js';
 
@@ -51,12 +52,12 @@ function setup(initialCols: number = 80) {
   const adapter = new PipelineToStoreAdapter(messagesStore);
   const pipeline = new BlockPipeline(adapter);
   const renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
+  const gridRenderer = new InlineGridRenderer(mock as unknown as NodeJS.WriteStream);
 
-  // spy writeFooter（Phase 2：footer 写入走 writeFooter，接收 FooterLayout）
+  // spy gridRenderer.commitFooter（footer 写入走 grid 双缓冲）
   const writeFooterCalls: { usableWidth: number; height: number }[] = [];
-  vi.spyOn(renderer, 'writeFooter').mockImplementation((layout) => {
+  vi.spyOn(gridRenderer, 'commitFooter').mockImplementation((layout: { usableWidth: number; height: number }) => {
     writeFooterCalls.push({ usableWidth: layout.usableWidth, height: layout.height });
-    return undefined;
   });
   vi.spyOn(renderer, 'appendLine').mockImplementation(() => undefined);
 
@@ -65,6 +66,7 @@ function setup(initialCols: number = 80) {
     status: dummyStatus,
     logo: dummyLogo,
     renderer,
+    gridRenderer,
     messagesStore,
     inputStore: createInputStore(),
     statusStore: createStatusStore({ mode: 'chat', model: 'test', dir: '/tmp', branch: 'main' }),

@@ -25,6 +25,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, act } from '@testing-library/react';
 import { InlineRenderer } from './InlineRenderer.js';
+import { InlineGridRenderer } from './grid-renderer.js';
 import { wrapStreamingText } from './text-layout.js';
 import { InlineApp } from './InlineApp.js';
 import { createMessagesStore } from '../state/messages-store.js';
@@ -115,8 +116,10 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
   void createLogoStore(dummyLogo);
 
   const renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
+  const gridRenderer = new InlineGridRenderer(mock as unknown as NodeJS.WriteStream);
   // spy clearStreamingHeight：统计它在流式渲染中被调用的次数
   const clearSpy = vi.spyOn(renderer, 'clearStreamingHeight');
+  vi.spyOn(gridRenderer, 'commitFooter').mockImplementation(() => {});
 
   const status: StatusBarData = dummyStatus;
   const logo: LogoData = dummyLogo;
@@ -131,6 +134,7 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
         status,
         logo,
         renderer,
+        gridRenderer,
         messagesStore,
         inputStore,
         statusStore,
@@ -161,6 +165,7 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
         status,
         logo,
         renderer,
+        gridRenderer,
         messagesStore,
         inputStore,
         statusStore,

@@ -31,6 +31,7 @@ import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
 import { USE_DOUBLE_BUFFER, createCustomRenderer, setCursorPos } from '../render/index.js';
 import { InlineRenderer } from './inline/InlineRenderer.js';
+import { InlineGridRenderer } from './inline/grid-renderer.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
 import type { ThemeName } from '../utils/theme.js';
@@ -140,6 +141,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   }
 
   const inlineRenderer = isInline ? new InlineRenderer(process.stdout) : null;
+  const inlineGridRenderer = isInline ? new InlineGridRenderer(process.stdout) : null;
 
   const themeStore = createThemeStore(opts.themeName);
 
@@ -150,6 +152,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
           messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore,
           onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
           inlineRenderer: inlineRenderer ?? undefined,
+          inlineGridRenderer,
         }),
       ),
     }),
@@ -159,6 +162,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const cleanup = (): void => {
     try {
       inlineRenderer?.destroy(); // 恢复 DECAWM ON + 光标可见
+      inlineGridRenderer?.dispose(); // 清除 footer 残留
       inkInstance?.unmount();
     } catch {
       // unmount 可能已调用，忽略

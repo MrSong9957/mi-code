@@ -7,6 +7,7 @@ import React, { useEffect, useRef } from 'react';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { InlineRenderer } from './InlineRenderer.js';
+import { InlineGridRenderer } from './grid-renderer.js';
 import { colorizeLogo, colorizeStatus, RESET, magentaBright, redBright, cyanBright } from './colors.js';
 import { sgr } from './ansi-utils.js';
 import { SPINNER_FRAMES } from '../state/spinner-store.js';
@@ -29,6 +30,8 @@ export interface InlineAppProps {
   status: StatusBarData;
   logo: LogoData;
   renderer: InlineRenderer;
+  /** grid 渲染器：footer 双缓冲 + 绝对坐标定位（resize 免疫） */
+  gridRenderer: InlineGridRenderer;
   messagesStore: MessagesStore;
   inputStore: InputStore;
   statusStore: StatusStore;
@@ -48,6 +51,7 @@ export function InlineApp({
   status: _status,
   logo,
   renderer,
+  gridRenderer,
   messagesStore,
   inputStore,
   statusStore,
@@ -206,10 +210,15 @@ export function InlineApp({
       suggestions, dropdownIndex, viewportTop: vp.viewportTop,
     });
 
-    // ── 4. 提交：渲染顺序由 renderer.commit 内部编排 ──
-    // cols 故意不在依赖数组：resize 时 ConPTY 会重放历史输出，与应用层写入异步交错
-    // 导致 footer 堆叠（EL/DL/full-repaint/debounce 均无法解决）。不主动 resize 重绘
-    // → 不堆叠；cols 的新值在下次 messages/input 变化时自然生效。
+    // ── 4. 新消息/流式转换时：先擦旧 footer 让位 ──
+    // gridRenderer.clearForResize 擦掉旧 footer 区域（CUP + ED），
+    // 让光标回到旧 footer 顶，appendLine 从该位置写新消息（把旧内容推进 scrollback）。
+    // 流式草稿的 eraseStreamingLines 也在 commit 内部处理（需要 footer 已擦）。
+    if (hasNewFinalized || justFinalized || needEraseDraft) {
+      gridRenderer.clearForResize();
+    }
+
+    // ── 5. 提交：commit 负责 appendLine + 流式草稿（不含 footer）──
     renderer.commit({
       newLines,
       streamingLines,
@@ -217,12 +226,16 @@ export function InlineApp({
       hasNewFinalized,
       transitions: { justFinalized, needEraseDraft },
     });
-  }, [messages, renderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex]);
+
+    // ── 6. Footer 由 gridRenderer 用双缓冲 + 绝对坐标渲染 ──
+    const rows = process.stdout.rows ?? 24;
+    gridRenderer.commitFooter(footerLayout, rows, cols);
+  }, [messages, renderer, gridRenderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex]);
 
   // 卸载时清理 footer（生命周期清理，非内容渲染——属于 Renderer 生命周期管理）
   useEffect(() => {
-    return () => { renderer.commitFooter(); };
-  }, [renderer]);
+    return () => { gridRenderer.dispose(); };
+  }, [gridRenderer]);
 
   // 返回空元素——所有渲染通过 stdout 副作用完成
   return <></>;

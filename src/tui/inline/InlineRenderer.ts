@@ -288,8 +288,8 @@ export class InlineRenderer {
       this.rewriteStreamingLines(frame.streamingLines);
     }
 
-    // ── 4. Footer：写入已算好布局的 footer（Phase 2：布局在 layout.ts 计算）──
-    this.writeFooter(frame.footer);
+    // Footer 写入已移到 InlineGridRenderer.commitFooter（grid 双缓冲 + 绝对坐标）。
+    // commit() 不再写 footer。
   }
 }
 
