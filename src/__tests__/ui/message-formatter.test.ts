@@ -122,5 +122,51 @@ describe('MessageFormatter', () => {
       expect(lines[0].style.fg).toBe('success');
       expect(lines[0].style.bold).toBe(true);
     });
+
+    // ─────────────── input 多行：按 \n 拆成多条 FormattedLine ───────────────
+    // 回归：含 \n 的 input 被塞进单条 FormattedLine 会导致渲染层 footerHeight
+    // 账本错乱（content 内的 \n 提前断行，但账本只记 1 行 → 下一帧覆写丢失前面行）。
+    // 修复：format('input') 按 \n 拆成多条，首行带 ❯，续行无前缀同色。
+    it('input 多行 → 按行数返回多条 FormattedLine', () => {
+      const lines = MessageFormatter.format('input', {}, '第一行\n第二行\n第三行');
+      expect(lines.length).toBe(3);
+    });
+
+    it('input 多行首行带 ❯ 前缀，续行无前缀', () => {
+      const lines = MessageFormatter.format('input', {}, '第一行\n第二行\n第三行');
+      expect(lines[0].content).toBe('❯ 第一行');
+      expect(lines[1].content).toBe('第二行');
+      expect(lines[2].content).toBe('第三行');
+    });
+
+    it('input 多行所有行同样式（greenBold, indent 0）', () => {
+      const lines = MessageFormatter.format('input', {}, '第一行\n第二行');
+      for (const line of lines) {
+        expect(line.style.fg).toBe('success');
+        expect(line.style.bold).toBe(true);
+        expect(line.indent).toBe(0);
+      }
+    });
+
+    it('input 连续 \\n 产生空行 FormattedLine（content 为空）', () => {
+      // 空行必须保留为独立 FormattedLine（content: ''），否则行数对不上 + 渲染错位
+      const lines = MessageFormatter.format('input', {}, '第一行\n\n第三行');
+      expect(lines.length).toBe(3);
+      expect(lines[0].content).toBe('❯ 第一行');
+      expect(lines[1].content).toBe('');
+      expect(lines[2].content).toBe('第三行');
+    });
+
+    it('input 单行行为不变（返回长度 1，保护现有契约）', () => {
+      const lines = MessageFormatter.format('input', {}, '单行文本');
+      expect(lines.length).toBe(1);
+      expect(lines[0].content).toBe('❯ 单行文本');
+    });
+
+    it('input 空字符串 → 单行（边界保护）', () => {
+      const lines = MessageFormatter.format('input', {}, '');
+      expect(lines.length).toBe(1);
+      expect(lines[0].content).toBe('❯ ');
+    });
   });
 });

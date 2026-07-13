@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { InlineRenderer } from './InlineRenderer.js';
-import { wrapStreamingText, wrapThinkingText } from './InlineApp.js';
+import { wrapStreamingText, wrapThinkingText } from './text-layout.js';
 
 function createMockStdout() {
   const written: string[] = [];

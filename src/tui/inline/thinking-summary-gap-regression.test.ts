@@ -76,6 +76,7 @@ function setupWithPipeline() {
     completionStore: createCompletionStore(),
     selectionStore: createSelectionStore(),
     overlayStore: createOverlayStore(),
+    cols: 80,
   };
 
   const utils = render(React.createElement(InlineApp, props));

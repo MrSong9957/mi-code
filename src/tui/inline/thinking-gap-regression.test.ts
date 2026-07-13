@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { BlockPipeline } from '../../ui/block-pipeline.js';
 import { PipelineToStoreAdapter } from '../../tui/state/pipeline-adapter.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
-import { renderFinalizedLine } from './InlineApp.js';
+import { renderFinalizedLine } from './text-layout.js';
 
 /** 构造完整流程的 store（user → thinking → assistant），返回 messages */
 function setupFullConversation() {

@@ -25,7 +25,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, act } from '@testing-library/react';
 import { InlineRenderer } from './InlineRenderer.js';
-import { wrapStreamingText, InlineApp } from './InlineApp.js';
+import { wrapStreamingText } from './text-layout.js';
+import { InlineApp } from './InlineApp.js';
 import { createMessagesStore } from '../state/messages-store.js';
 import { createInputStore } from '../state/input-store.js';
 import { createStatusStore } from '../state/status-store.js';
@@ -137,6 +138,7 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
         completionStore,
         selectionStore,
         overlayStore,
+        cols: 80,
       }),
     );
 
@@ -166,6 +168,7 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
         completionStore,
         selectionStore,
         overlayStore,
+        cols: 80,
       }),
     );
   };

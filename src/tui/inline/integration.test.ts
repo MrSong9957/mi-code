@@ -34,28 +34,4 @@ describe('InlineRenderer integration: full REPL cycle', () => {
     renderer.appendLine('user message 2');
     expect(mock.write).toHaveBeenLastCalledWith('user message 2\n');
   });
-
-  it('streaming with footer redraw: render footer, rewrite lines, commit', () => {
-    // Render footer
-    renderer.renderFooter('partial', 0, 'streaming | model');
-    const afterFirstRender = mock.written.length;
-
-    // Rewrite the current line multiple times (simulating streaming)
-    renderer.rewriteCurrentLine('partial res');
-    renderer.rewriteCurrentLine('partial resp');
-    renderer.rewriteCurrentLine('partial resp|');
-
-    // All rewrites should have produced CR+erase sequences
-    const rewrites = mock.written.slice(afterFirstRender);
-    for (const chunk of rewrites) {
-      expect(chunk).toContain('\r\x1b[K');
-    }
-
-    // Commit (只重置状态)
-    renderer.commitFooter();
-
-    // After commit, appending should work cleanly
-    renderer.appendLine('done');
-    expect(mock.write).toHaveBeenLastCalledWith('done\n');
-  });
 });

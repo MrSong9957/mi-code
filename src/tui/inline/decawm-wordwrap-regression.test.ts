@@ -270,3 +270,67 @@ describe('DECAWM OFF + wordWrap 回归', () => {
     }
   });
 });
+
+// ───────────────────────────────────────────────────────────
+// resize 跟随回归：cols 变化时 footer 覆写必须正确，border 不堆叠。
+//
+// 历史 bug：Bug B 修复（cols 加入 InlineApp effect 依赖）后，resize 触发 effect
+// 重跑 → renderFooter 覆写。但若覆写逻辑在 cols 变化时光标定位错误，
+// 会出现 border 重复绘制（屏幕上 4+ 条 ───）。
+//
+// 关键：模拟真实光标位置连续性（PreciseCursorSimulator），而非每帧独立。
+// 旧测试全程 cols=80，无法发现 resize 退化。
+// ───────────────────────────────────────────────────────────
+describe('resize 跟随：cols 变化时 border 不堆叠', () => {
+  let mock: ReturnType<typeof createMockStdout>;
+  let renderer: InlineRenderer;
+
+  beforeEach(() => {
+    mock = createMockStdout();
+    renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
+  });
+
+  it('连续 resize（宽→窄）：每帧 border 恒为 2', () => {
+    expect.hasAssertions();
+    const sim = new PreciseCursorSimulator();
+    sim.row = 4; // 模拟 logo 3 行 + 已有内容 1 行后光标位置
+
+    // 帧1：cols=180（初始宽屏），追加模式
+    renderer.renderFooter('', 0, 'status', 180, [], 0, 0);
+    // 跳过 constructor 的 \x1b[?7l
+    const writes1 = mock.written[0] === '\x1b[?7l' ? mock.written.slice(1) : [...mock.written];
+    for (const s of writes1) sim.apply(s, 180);
+    expect(countBorders(mock.output)).toBe(2);
+    mock.written.length = 0;
+
+    // 帧2：resize 到 120（覆写模式）
+    renderer.renderFooter('', 0, 'status', 120, [], 0, 0);
+    for (const s of mock.written) sim.apply(s, 120);
+    expect(countBorders(mock.output)).toBe(2);
+    mock.written.length = 0;
+
+    // 帧3：resize 到 80（覆写模式）
+    renderer.renderFooter('', 0, 'status', 80, [], 0, 0);
+    for (const s of mock.written) sim.apply(s, 80);
+    expect(countBorders(mock.output)).toBe(2);
+    mock.written.length = 0;
+
+    // 帧4：resize 到 40（覆写模式，窄屏）
+    renderer.renderFooter('', 0, 'status', 40, [], 0, 0);
+    for (const s of mock.written) sim.apply(s, 40);
+    expect(countBorders(mock.output)).toBe(2);
+  });
+
+  it('resize 后 footerHeight 不漂移（与帧1 一致，4 行）', () => {
+    expect.hasAssertions();
+    renderer.renderFooter('', 0, 'status', 180, [], 0, 0);
+    const h1 = renderer.getFooterHeight();
+    expect(h1).toBe(4); // border + 输入框 + border + status
+
+    renderer.renderFooter('', 0, 'status', 120, [], 0, 0);
+    expect(renderer.getFooterHeight()).toBe(h1);
+
+    renderer.renderFooter('', 0, 'status', 80, [], 0, 0);
+    expect(renderer.getFooterHeight()).toBe(h1);
+  });
+});

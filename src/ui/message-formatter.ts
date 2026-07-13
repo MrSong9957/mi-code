@@ -64,7 +64,16 @@ export class MessageFormatter {
         return [{ content: content ?? '', style: BLOCK_STYLES.red, indent: 0 }];
 
       case 'input':
-        return [{ content: `❯ ${content ?? ''}`, style: BLOCK_STYLES.greenBold, indent: 0 }];
+        // 多行 input 按 \n 拆成多条 FormattedLine：
+        // 单条 content 含 \n 会让渲染层 footerHeight 账本错乱（物理行被 \n 提前断开，
+        // 但账本只记 1 行 → 下一帧 cursorUp 覆写丢失前面行，表现为"只显示最后一句"）。
+        // 首行带 ❯ 前缀，续行无前缀同色（与输入框多行续行视觉一致）。
+        // 单行输入：split 返回长度 1，行为完全不变。
+        return (content ?? '').split('\n').map((line, i) => ({
+          content: i === 0 ? `❯ ${line}` : line,
+          style: BLOCK_STYLES.greenBold,
+          indent: 0,
+        }));
 
       default:
         return [{ content: content ?? '', style: BLOCK_STYLES.default, indent: 0 }];
