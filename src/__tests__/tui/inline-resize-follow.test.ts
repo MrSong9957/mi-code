@@ -101,34 +101,36 @@ function setup(initialCols: number = 80) {
   return { utils, pipeline, renderer, writeFooterCalls, emit, changeCols, baseProps };
 }
 
-describe('Inline 模式 resize 渲染契约（ConPTY 兼容性回退）', () => {
-  it('纯 cols 变化（无新消息）不触发 writeFooter → 不堆叠', () => {
+describe('Inline 模式 resize 渲染契约（grid 双缓冲 + 绝对坐标）', () => {
+  it('纯 cols 变化（resize）触发 commitFooter，用新宽度布局', () => {
     const { emit, changeCols, writeFooterCalls } = setup(80);
 
     // 先 emit 一条消息建立 footer
     emit({ kind: 'user_input', text: 'hello' });
-    const callsAfterFirstMsg = writeFooterCalls.length;
-    expect(callsAfterFirstMsg).toBeGreaterThan(0);
+    expect(writeFooterCalls.length).toBeGreaterThan(0);
+    const lastBefore = writeFooterCalls[writeFooterCalls.length - 1]!;
+    expect(lastBefore.usableWidth).toBe(79); // 80-1
 
-    // 纯改 cols（无新消息）：writeFooter 不应被再次调用
+    // 纯改 cols（resize）：commitFooter 被再次调用，用新宽度布局
     changeCols(40);
+    const lastAfter40 = writeFooterCalls[writeFooterCalls.length - 1]!;
+    expect(lastAfter40.usableWidth).toBe(39); // 40-1
+
     changeCols(120);
-    changeCols(60);
-    expect(writeFooterCalls.length).toBe(callsAfterFirstMsg);
+    const lastAfter120 = writeFooterCalls[writeFooterCalls.length - 1]!;
+    expect(lastAfter120.usableWidth).toBe(119); // 120-1
   });
 
-  it('有新消息时 footer layout 用最新 cols 渲染（wordWrap 延迟更新）', () => {
+  it('有新消息时 footer layout 用最新 cols 渲染', () => {
     const { emit, writeFooterCalls } = setup(80);
 
     emit({ kind: 'user_input', text: 'hello' });
     const lastBefore = writeFooterCalls[writeFooterCalls.length - 1]!;
-    // usableWidth = cols - 1 = 79
     expect(lastBefore.usableWidth).toBe(79);
 
     // emit 新消息 + 同时改 cols：effect 重跑（messages 变化），footer 用新 cols 布局
     emit({ kind: 'assistant_text', text: 'reply', isFinal: true }, 40);
     const lastAfter = writeFooterCalls[writeFooterCalls.length - 1]!;
-    // usableWidth = 40 - 1 = 39
     expect(lastAfter.usableWidth).toBe(39);
   });
 });

@@ -63,6 +63,8 @@ export function InlineApp({
   // 消息渲染账本（uuid → 已渲染行数）已迁移到 renderer.state.renderedLines（Phase 1 统一状态）。
   /** 上次 effect 看到的末条消息 finalized 状态，用于检测 streaming→finalized 转换 */
   const prevLastFinalizedRef = useRef<boolean | undefined>(undefined);
+  /** 上次 effect 看到的 cols，用于检测 resize 触发显式 footer 清除 */
+  const prevColsRef = useRef<number>(cols);
 
   // Logo 同步写入（首次渲染时），确保在所有 useEffect 之前出现在 stdout
   if (!logoRendered) {
@@ -130,7 +132,16 @@ export function InlineApp({
   // 统一写入：已固化新消息 → 流式覆写 → Footer
   useEffect(() => {
     // overlay 打开时：主渲染 effect 跳过（不与 overlay 竞争 stdout）
-    if (overlay.visible) return;
+    if (overlay.visible) {
+      prevColsRef.current = cols;
+      return;
+    }
+
+    // ── 0. Resize 检测：cols 变化 → gridRenderer 清旧 footer + 下一帧全量重画 ──
+    if (cols !== prevColsRef.current) {
+      gridRenderer.clearForResize();
+      prevColsRef.current = cols;
+    }
 
     // ── 1. 收集新增固化行（渲染账本在 renderer.state.renderedLines）──
     const finalizedMessages = messages.filter(m => m.finalized);
@@ -230,7 +241,7 @@ export function InlineApp({
     // ── 6. Footer 由 gridRenderer 用双缓冲 + 绝对坐标渲染 ──
     const rows = process.stdout.rows ?? 24;
     gridRenderer.commitFooter(footerLayout, rows, cols);
-  }, [messages, renderer, gridRenderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex]);
+  }, [messages, renderer, gridRenderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, cols]);
 
   // 卸载时清理 footer（生命周期清理，非内容渲染——属于 Renderer 生命周期管理）
   useEffect(() => {
