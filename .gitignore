@@ -17,3 +17,5 @@ mouse-diag.log
 
 # ZCode 工具临时产物（规划文件等，同 .claude/.opencode）
 .zcode/
+ignore
+*.log

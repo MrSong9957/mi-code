@@ -27,7 +27,7 @@ import { createCompletionStore } from '../../tui/state/completion-store.js';
 import { createSelectionStore } from '../../tui/state/selection-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import { InlineRenderer } from '../../tui/inline/InlineRenderer.js';
-import { InlineGridRenderer } from '../../tui/inline/grid-renderer.js';
+import { InlineDynamicGrid } from '../../tui/inline/inline-dynamic-grid.js';
 import { InlineApp } from '../../tui/inline/InlineApp.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../../tui/types.js';
 
@@ -52,13 +52,17 @@ function setup(initialCols: number = 80) {
   const adapter = new PipelineToStoreAdapter(messagesStore);
   const pipeline = new BlockPipeline(adapter);
   const renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
-  const gridRenderer = new InlineGridRenderer(mock as unknown as NodeJS.WriteStream);
+  const dynamicGrid = new InlineDynamicGrid(mock as unknown as NodeJS.WriteStream);
 
-  // spy gridRenderer.commitFooter（footer 写入走 grid 双缓冲）
+  // spy dynamicGrid.commit（footer 写入走 grid 双缓冲，commit 第二个参数是 FooterLayout）
   const writeFooterCalls: { usableWidth: number; height: number }[] = [];
-  vi.spyOn(gridRenderer, 'commitFooter').mockImplementation((layout: { usableWidth: number; height: number }) => {
+  vi.spyOn(dynamicGrid, 'commit').mockImplementation((
+    _streamingLines: string[] | null,
+    layout: { usableWidth: number; height: number },
+  ) => {
     writeFooterCalls.push({ usableWidth: layout.usableWidth, height: layout.height });
   });
+  vi.spyOn(dynamicGrid, 'clear').mockImplementation(() => {});
   vi.spyOn(renderer, 'appendLine').mockImplementation(() => undefined);
 
   const baseProps = {
@@ -66,7 +70,7 @@ function setup(initialCols: number = 80) {
     status: dummyStatus,
     logo: dummyLogo,
     renderer,
-    gridRenderer,
+    dynamicGrid,
     messagesStore,
     inputStore: createInputStore(),
     statusStore: createStatusStore({ mode: 'chat', model: 'test', dir: '/tmp', branch: 'main' }),
@@ -102,7 +106,7 @@ function setup(initialCols: number = 80) {
 }
 
 describe('Inline 模式 resize 渲染契约（grid 双缓冲 + 绝对坐标）', () => {
-  it('纯 cols 变化（resize）触发 commitFooter，用新宽度布局', () => {
+  it('纯 cols 变化（resize）触发 commit，用新宽度布局', () => {
     const { emit, changeCols, writeFooterCalls } = setup(80);
 
     // 先 emit 一条消息建立 footer
@@ -111,7 +115,7 @@ describe('Inline 模式 resize 渲染契约（grid 双缓冲 + 绝对坐标）',
     const lastBefore = writeFooterCalls[writeFooterCalls.length - 1]!;
     expect(lastBefore.usableWidth).toBe(79); // 80-1
 
-    // 纯改 cols（resize）：commitFooter 被再次调用，用新宽度布局
+    // 纯改 cols（resize）：commit 被再次调用，用新宽度布局
     changeCols(40);
     const lastAfter40 = writeFooterCalls[writeFooterCalls.length - 1]!;
     expect(lastAfter40.usableWidth).toBe(39); // 40-1

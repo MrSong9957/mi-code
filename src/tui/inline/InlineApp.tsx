@@ -7,7 +7,7 @@ import React, { useEffect, useRef } from 'react';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { InlineRenderer } from './InlineRenderer.js';
-import { InlineGridRenderer } from './grid-renderer.js';
+import { InlineDynamicGrid } from './inline-dynamic-grid.js';
 import { colorizeLogo, colorizeStatus, RESET, magentaBright, redBright, cyanBright } from './colors.js';
 import { sgr } from './ansi-utils.js';
 import { SPINNER_FRAMES } from '../state/spinner-store.js';
@@ -30,8 +30,8 @@ export interface InlineAppProps {
   status: StatusBarData;
   logo: LogoData;
   renderer: InlineRenderer;
-  /** grid 渲染器：footer 双缓冲 + 绝对坐标定位（resize 免疫） */
-  gridRenderer: InlineGridRenderer;
+  /** 动态区域 grid：草稿+footer 统一双缓冲（cell diff + 绝对坐标） */
+  dynamicGrid: InlineDynamicGrid;
   messagesStore: MessagesStore;
   inputStore: InputStore;
   statusStore: StatusStore;
@@ -51,7 +51,7 @@ export function InlineApp({
   status: _status,
   logo,
   renderer,
-  gridRenderer,
+  dynamicGrid,
   messagesStore,
   inputStore,
   statusStore,
@@ -139,9 +139,9 @@ export function InlineApp({
       return;
     }
 
-    // ── 0. Resize 检测：cols 变化 → gridRenderer 清旧 footer + 下一帧全量重画 ──
+    // ── 0. Resize 检测：cols 变化 → 清旧动态区域 + 下一帧全量重画 ──
     if (cols !== prevColsRef.current) {
-      gridRenderer.clearForResize();
+      dynamicGrid.clear();
       prevColsRef.current = cols;
     }
 
@@ -223,42 +223,33 @@ export function InlineApp({
       suggestions, dropdownIndex, viewportTop: vp.viewportTop,
     });
 
-    // ── 4. footer 让位 ──
-    // 流式首帧：清 gridRenderer footer 让草稿有空间（writeFooter 接管）
-    // 固化/新消息：清 gridRenderer footer 让 appendLine 从正确位置写
-    if ((streamingLines !== null && renderer.state.lastStreamingHeight === 0) || hasNewFinalized || justFinalized || needEraseDraft) {
-      gridRenderer.clearForResize();
+    // ── 4. 固化时：先清动态区域，再 appendLine ──
+    // 固化/新消息时动态区域位置变化 → 先清旧区域
+    if (hasNewFinalized || justFinalized || needEraseDraft) {
+      dynamicGrid.clear();
     }
 
-    // ── 5. 提交：commit 负责 appendLine + 流式草稿（不含 footer）──
+    // ── 5. commit 处理 appendLine（静态行 + 固化行）──
+    // streamingLines 传 null——草稿由 dynamicGrid 管
     renderer.commit({
       newLines,
-      streamingLines,
+      streamingLines: null,
       footer: footerLayout,
       hasNewFinalized,
       transitions: { justFinalized, needEraseDraft },
     });
-
-    // ── 6. Footer 渲染 ──
-    // totalContentRowsRef 追踪物理行数（含折行），确保 footer 不覆盖固化内容
     totalContentRowsRef.current += newLines.length;
+
+    // ── 6. 动态区域（草稿+footer）一次 commit ──
     const rows = process.stdout.rows ?? 24;
+    const topRow = Math.min(totalContentRowsRef.current + 1, rows);
+    dynamicGrid.commit(streamingLines, footerLayout, topRow, cols);
+  }, [messages, renderer, dynamicGrid, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, cols]);
 
-    if (streamingLines !== null) {
-      // 流式时：用旧版 writeFooter（cursorUp 覆写，和 rewriteStreamingLines 在同一次 flush → 不闪）
-      renderer.writeFooter(footerLayout);
-    } else {
-      // 非流式：用 gridRenderer 双缓冲 + 绝对坐标（resize 免疫）
-      const contentLines = totalContentRowsRef.current;
-      const footerTopRow = Math.min(contentLines + 1, rows - footerLayout.height + 1);
-      gridRenderer.commitFooter(footerLayout, footerTopRow, cols);
-    }
-  }, [messages, renderer, gridRenderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, cols]);
-
-  // 卸载时清理 footer（生命周期清理，非内容渲染——属于 Renderer 生命周期管理）
+  // 卸载时清理动态区域（生命周期清理）
   useEffect(() => {
-    return () => { gridRenderer.dispose(); };
-  }, [gridRenderer]);
+    return () => { dynamicGrid.dispose(); };
+  }, [dynamicGrid]);
 
   // 返回空元素——所有渲染通过 stdout 副作用完成
   return <></>;
