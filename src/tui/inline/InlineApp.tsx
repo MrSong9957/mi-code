@@ -65,6 +65,8 @@ export function InlineApp({
   const prevLastFinalizedRef = useRef<boolean | undefined>(undefined);
   /** 上次 effect 看到的 cols，用于检测 resize 触发显式 footer 清除 */
   const prevColsRef = useRef<number>(cols);
+  /** 累积已输出的物理行数（logo 3 + hook 1 + 所有固化消息折行后行数）。用于算 footerTopRow。 */
+  const totalContentRowsRef = useRef<number>(4);
 
   // Logo 同步写入（首次渲染时），确保在所有 useEffect 之前出现在 stdout
   if (!logoRendered) {
@@ -221,11 +223,10 @@ export function InlineApp({
       suggestions, dropdownIndex, viewportTop: vp.viewportTop,
     });
 
-    // ── 4. 新消息/流式转换时：先擦旧 footer 让位 ──
-    // gridRenderer.clearForResize 擦掉旧 footer 区域（CUP + ED），
-    // 让光标回到旧 footer 顶，appendLine 从该位置写新消息（把旧内容推进 scrollback）。
-    // 流式草稿的 eraseStreamingLines 也在 commit 内部处理（需要 footer 已擦）。
-    if (hasNewFinalized || justFinalized || needEraseDraft) {
+    // ── 4. footer 让位 ──
+    // 流式首帧：清 gridRenderer footer 让草稿有空间（writeFooter 接管）
+    // 固化/新消息：清 gridRenderer footer 让 appendLine 从正确位置写
+    if ((streamingLines !== null && renderer.state.lastStreamingHeight === 0) || hasNewFinalized || justFinalized || needEraseDraft) {
       gridRenderer.clearForResize();
     }
 
@@ -238,13 +239,20 @@ export function InlineApp({
       transitions: { justFinalized, needEraseDraft },
     });
 
-    // ── 6. Footer 由 gridRenderer 用双缓冲 + 绝对坐标渲染 ──
-    // footerTopRow = footer 上方所有内容行数 + 1（logo 3 + hook 1 + 已渲染消息 + 流式草稿）
-    // 如果总行数超出屏幕，footer 自然在屏幕底部（终端把上方推进 scrollback）
+    // ── 6. Footer 渲染 ──
+    // totalContentRowsRef 追踪物理行数（含折行），确保 footer 不覆盖固化内容
+    totalContentRowsRef.current += newLines.length;
     const rows = process.stdout.rows ?? 24;
-    const contentLines = 3 /* logo */ + 1 /* hook */ + state.renderedCount + renderer.state.lastStreamingHeight;
-    const footerTopRow = Math.min(contentLines + 1, rows - footerLayout.height + 1);
-    gridRenderer.commitFooter(footerLayout, footerTopRow, cols);
+
+    if (streamingLines !== null) {
+      // 流式时：用旧版 writeFooter（cursorUp 覆写，和 rewriteStreamingLines 在同一次 flush → 不闪）
+      renderer.writeFooter(footerLayout);
+    } else {
+      // 非流式：用 gridRenderer 双缓冲 + 绝对坐标（resize 免疫）
+      const contentLines = totalContentRowsRef.current;
+      const footerTopRow = Math.min(contentLines + 1, rows - footerLayout.height + 1);
+      gridRenderer.commitFooter(footerLayout, footerTopRow, cols);
+    }
   }, [messages, renderer, gridRenderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, cols]);
 
   // 卸载时清理 footer（生命周期清理，非内容渲染——属于 Renderer 生命周期管理）
