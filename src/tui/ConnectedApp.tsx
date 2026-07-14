@@ -67,12 +67,10 @@ export interface ConnectedAppProps {
   inlineRenderer?: import('./inline/InlineRenderer.js').InlineRenderer;
   /** inline 模式 grid 渲染器（footer 双缓冲 + 绝对坐标定位） */
   inlineGridRenderer?: import('./inline/grid-renderer.js').InlineGridRenderer | null;
-  /** inline 模式流式草稿 grid 渲染器（cell diff） */
-  inlineStreamingGrid?: import('./inline/streaming-grid-renderer.js').StreamingGridRenderer | null;
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit, onTab, onToggleOverlay, inlineRenderer: _inlineRenderer, inlineGridRenderer: _inlineGridRenderer, inlineStreamingGrid: _inlineStreamingGrid,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit, onTab, onToggleOverlay, inlineRenderer: _inlineRenderer, inlineGridRenderer: _inlineGridRenderer,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store（拖拽写入，所有区域订阅高亮）
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -301,7 +299,6 @@ export function ConnectedApp({
           logo={logo}
           renderer={_inlineRenderer}
           gridRenderer={_inlineGridRenderer!}
-          streamingGrid={_inlineStreamingGrid!}
           messagesStore={messagesStore}
           inputStore={inputStore}
           statusStore={statusStore}
