@@ -28,6 +28,7 @@ import { createSelectionStore } from '../../tui/state/selection-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import { InlineRenderer } from '../../tui/inline/InlineRenderer.js';
 import { InlineGridRenderer } from '../../tui/inline/grid-renderer.js';
+import { StreamingGridRenderer } from '../../tui/inline/streaming-grid-renderer.js';
 import { InlineApp } from '../../tui/inline/InlineApp.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../../tui/types.js';
 
@@ -53,6 +54,7 @@ function setup(initialCols: number = 80) {
   const pipeline = new BlockPipeline(adapter);
   const renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
   const gridRenderer = new InlineGridRenderer(mock as unknown as NodeJS.WriteStream);
+  const streamingGrid = new StreamingGridRenderer(mock as unknown as NodeJS.WriteStream);
 
   // spy gridRenderer.commitFooter（footer 写入走 grid 双缓冲）
   const writeFooterCalls: { usableWidth: number; height: number }[] = [];
@@ -60,6 +62,8 @@ function setup(initialCols: number = 80) {
     writeFooterCalls.push({ usableWidth: layout.usableWidth, height: layout.height });
   });
   vi.spyOn(renderer, 'appendLine').mockImplementation(() => undefined);
+  vi.spyOn(streamingGrid, 'commitStream').mockImplementation(() => {});
+  vi.spyOn(streamingGrid, 'clear').mockImplementation(() => {});
 
   const baseProps = {
     messages: [] as TuiMessage[],
@@ -67,6 +71,7 @@ function setup(initialCols: number = 80) {
     logo: dummyLogo,
     renderer,
     gridRenderer,
+    streamingGrid,
     messagesStore,
     inputStore: createInputStore(),
     statusStore: createStatusStore({ mode: 'chat', model: 'test', dir: '/tmp', branch: 'main' }),

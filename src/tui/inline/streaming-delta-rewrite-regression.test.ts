@@ -26,6 +26,7 @@ import React from 'react';
 import { render, act } from '@testing-library/react';
 import { InlineRenderer } from './InlineRenderer.js';
 import { InlineGridRenderer } from './grid-renderer.js';
+import { StreamingGridRenderer } from './streaming-grid-renderer.js';
 import { wrapStreamingText } from './text-layout.js';
 import { InlineApp } from './InlineApp.js';
 import { createMessagesStore } from '../state/messages-store.js';
@@ -117,9 +118,12 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
 
   const renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
   const gridRenderer = new InlineGridRenderer(mock as unknown as NodeJS.WriteStream);
+  const streamingGrid = new StreamingGridRenderer(mock as unknown as NodeJS.WriteStream);
   // spy clearStreamingHeight：统计它在流式渲染中被调用的次数
   const clearSpy = vi.spyOn(renderer, 'clearStreamingHeight');
   vi.spyOn(gridRenderer, 'commitFooter').mockImplementation(() => {});
+  vi.spyOn(streamingGrid, 'commitStream').mockImplementation(() => {});
+  vi.spyOn(streamingGrid, 'clear').mockImplementation(() => {});
 
   const status: StatusBarData = dummyStatus;
   const logo: LogoData = dummyLogo;
@@ -135,6 +139,7 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
         logo,
         renderer,
         gridRenderer,
+        streamingGrid,
         messagesStore,
         inputStore,
         statusStore,
@@ -166,6 +171,7 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
         logo,
         renderer,
         gridRenderer,
+        streamingGrid,
         messagesStore,
         inputStore,
         statusStore,
