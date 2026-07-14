@@ -35,6 +35,7 @@ import { createSelectionStore } from '../state/selection-store.js';
 import { createOverlayStore } from '../state/overlay-store.js';
 import { InlineRenderer } from './InlineRenderer.js';
 import { InlineGridRenderer } from './grid-renderer.js';
+import { StreamingGridRenderer } from './streaming-grid-renderer.js';
 import { InlineApp } from './InlineApp.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../types.js';
 
@@ -59,6 +60,7 @@ function setupWithPipeline() {
   const pipeline = new BlockPipeline(adapter);
   const renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
   const gridRenderer = new InlineGridRenderer(mock as unknown as NodeJS.WriteStream);
+  const streamingGrid = new StreamingGridRenderer(mock as unknown as NodeJS.WriteStream);
 
   // 收集所有 appendLine 调用的纯文本（去 ANSI）
   const appended: string[] = [];
@@ -66,6 +68,8 @@ function setupWithPipeline() {
     appended.push(text.replace(/\x1b\[[0-9;]*m/g, ''));
   });
   vi.spyOn(gridRenderer, 'commitFooter').mockImplementation(() => {});
+  vi.spyOn(streamingGrid, 'commitStream').mockImplementation(() => {});
+  vi.spyOn(streamingGrid, 'clear').mockImplementation(() => {});
 
   const props = {
     messages: [] as TuiMessage[],
@@ -73,6 +77,7 @@ function setupWithPipeline() {
     logo: dummyLogo,
     renderer,
     gridRenderer,
+    streamingGrid,
     messagesStore,
     inputStore: createInputStore(),
     statusStore: createStatusStore({ mode: 'chat', model: 'test', dir: '/tmp', branch: 'main' }),

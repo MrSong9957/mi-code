@@ -32,6 +32,7 @@ import { exitAltScreen } from './hooks/useAltScreen.js';
 import { USE_DOUBLE_BUFFER, createCustomRenderer, setCursorPos } from '../render/index.js';
 import { InlineRenderer } from './inline/InlineRenderer.js';
 import { InlineGridRenderer } from './inline/grid-renderer.js';
+import { StreamingGridRenderer } from './inline/streaming-grid-renderer.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
 import type { ThemeName } from '../utils/theme.js';
@@ -142,6 +143,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
 
   const inlineRenderer = isInline ? new InlineRenderer(process.stdout) : null;
   const inlineGridRenderer = isInline ? new InlineGridRenderer(process.stdout) : null;
+  const inlineStreamingGrid = isInline ? new StreamingGridRenderer(process.stdout) : null;
 
   const themeStore = createThemeStore(opts.themeName);
 
@@ -153,6 +155,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
           onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
           inlineRenderer: inlineRenderer ?? undefined,
           inlineGridRenderer,
+          inlineStreamingGrid,
         }),
       ),
     }),
