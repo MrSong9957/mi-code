@@ -35,12 +35,11 @@ export class InlineGridRenderer {
   /**
    * 写入 footer（核心接口）。
    *
-   * footerTopRow 每次实时计算（rows - newHeight + 1），不作为实例字段。
+   * footerTopRow 由调用方传入（inline 模式下 footer 紧跟内容，不在屏幕底部）。
    * 高度或宽度变化时，先用缓存的旧值清旧区域，再重建 buffer 全量重画。
    */
-  commitFooter(layout: FooterLayout, rows: number, cols: number): void {
+  commitFooter(layout: FooterLayout, footerTopRow: number, cols: number): void {
     const newHeight = layout.lines.length;
-    const footerTopRow = rows - newHeight + 1;
 
     const sizeChanged = (this.lastHeight !== newHeight || this.lastCols !== cols);
 

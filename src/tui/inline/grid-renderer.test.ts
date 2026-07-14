@@ -27,7 +27,7 @@ describe('InlineGridRenderer.commitFooter', () => {
       input: '', cursor: 0, status: 'test', cols: 80,
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout, 30, 80);
+    renderer.commitFooter(layout, 27, 80);
     const output = mock.output;
     // footerTopRow = 30 - 4 + 1 = 27, yBias = 26
     // 应含 CUP 定位到 row 27+
@@ -41,10 +41,10 @@ describe('InlineGridRenderer.commitFooter', () => {
       input: '', cursor: 0, status: 'test', cols: 80,
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout, 30, 80);
+    renderer.commitFooter(layout, 27, 80);
     mock.written.length = 0;  // 清空，只看第二次
 
-    renderer.commitFooter(layout, 30, 80);
+    renderer.commitFooter(layout, 27, 80);
     const output = mock.output;
     // diff(front, back) 应无变化 → emit 只输出 BSU + reset + ESU + cursor
     // 不应含 border 字符（没变化不需要重写）
@@ -56,14 +56,14 @@ describe('InlineGridRenderer.commitFooter', () => {
       input: '', cursor: 0, status: 'test', cols: 80,
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout1, 30, 80);
+    renderer.commitFooter(layout1, 27,80);
     mock.written.length = 0;
 
     const layout2 = layoutFooter({
       input: 'hi', cursor: 2, status: 'test', cols: 80,
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout2, 30, 80);
+    renderer.commitFooter(layout2, 27,80);
     const output = mock.output;
     // 应含 'h' 和 'i'（输入框新增的字符）
     expect(output).toMatch(/hi/);
@@ -74,14 +74,14 @@ describe('InlineGridRenderer.commitFooter', () => {
       input: '', cursor: 0, status: 'test', cols: 80,
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout1, 30, 80);
+    renderer.commitFooter(layout1, 27,80);
     mock.written.length = 0;
 
     const layout2 = layoutFooter({
       input: '', cursor: 0, status: 'test', cols: 40,
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout2, 30, 40);
+    renderer.commitFooter(layout2, 27,40);
     const output = mock.output;
     // 新 border 应是 39 个 ─（usableWidth=40-1=39）
     expect(output).toContain('─'.repeat(39));
@@ -94,7 +94,7 @@ describe('InlineGridRenderer.commitFooter', () => {
       input: '/', cursor: 1, status: 'test', cols: 80,
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout1, 30, 80);
+    renderer.commitFooter(layout1, 27,80);
     expect(layout1.height).toBe(4);
     mock.written.length = 0;
 
@@ -102,7 +102,7 @@ describe('InlineGridRenderer.commitFooter', () => {
       input: '/', cursor: 1, status: 'test', cols: 80,
       suggestions: ['cmd-a', 'cmd-b', 'cmd-c'], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout2, 30, 80);
+    renderer.commitFooter(layout2, 27,80);
     expect(layout2.height).toBe(7);
     const output = mock.output;
     // 高度变化 → 先清旧区域（CUP + ED）
@@ -124,7 +124,7 @@ describe('InlineGridRenderer.clearForResize', () => {
       input: 'hi', cursor: 2, status: 'test', cols: 80,
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout, 30, 80);
+    renderer.commitFooter(layout, 27, 80);
     mock.written.length = 0;
 
     renderer.clearForResize();
@@ -140,11 +140,11 @@ describe('InlineGridRenderer.clearForResize', () => {
       input: 'hi', cursor: 2, status: 'test', cols: 80,
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout, 30, 80);
+    renderer.commitFooter(layout, 27, 80);
     renderer.clearForResize();
     mock.written.length = 0;
 
-    renderer.commitFooter(layout, 30, 80);
+    renderer.commitFooter(layout, 27, 80);
     const output = mock.output;
     // 全量重画：应含 border 字符（所有 cell 都变）
     expect(output).toContain('─');
@@ -161,7 +161,7 @@ describe('InlineGridRenderer.clearForResize', () => {
       input: '', cursor: 0, status: 'test', cols: 80,
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
-    renderer.commitFooter(layout, 30, 80);
+    renderer.commitFooter(layout, 27, 80);
     mock.written.length = 0;
 
     renderer.dispose();

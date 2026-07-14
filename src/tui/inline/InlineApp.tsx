@@ -239,8 +239,12 @@ export function InlineApp({
     });
 
     // ── 6. Footer 由 gridRenderer 用双缓冲 + 绝对坐标渲染 ──
+    // footerTopRow = footer 上方所有内容行数 + 1（logo 3 + hook 1 + 已渲染消息 + 流式草稿）
+    // 如果总行数超出屏幕，footer 自然在屏幕底部（终端把上方推进 scrollback）
     const rows = process.stdout.rows ?? 24;
-    gridRenderer.commitFooter(footerLayout, rows, cols);
+    const contentLines = 3 /* logo */ + 1 /* hook */ + state.renderedCount + renderer.state.lastStreamingHeight;
+    const footerTopRow = Math.min(contentLines + 1, rows - footerLayout.height + 1);
+    gridRenderer.commitFooter(footerLayout, footerTopRow, cols);
   }, [messages, renderer, gridRenderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, cols]);
 
   // 卸载时清理 footer（生命周期清理，非内容渲染——属于 Renderer 生命周期管理）
