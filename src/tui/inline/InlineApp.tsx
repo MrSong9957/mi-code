@@ -8,7 +8,6 @@ import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { InlineRenderer } from './InlineRenderer.js';
 import { InlineGridRenderer } from './grid-renderer.js';
-import { StreamingGridRenderer } from './streaming-grid-renderer.js';
 import { colorizeLogo, colorizeStatus, RESET, magentaBright, redBright, cyanBright } from './colors.js';
 import { sgr } from './ansi-utils.js';
 import { SPINNER_FRAMES } from '../state/spinner-store.js';
@@ -33,8 +32,6 @@ export interface InlineAppProps {
   renderer: InlineRenderer;
   /** grid 渲染器：footer 双缓冲 + 绝对坐标定位（resize 免疫） */
   gridRenderer: InlineGridRenderer;
-  /** 流式草稿 grid 渲染器：cell diff（消除闪烁） */
-  streamingGrid: StreamingGridRenderer;
   messagesStore: MessagesStore;
   inputStore: InputStore;
   statusStore: StatusStore;
@@ -55,7 +52,6 @@ export function InlineApp({
   logo,
   renderer,
   gridRenderer,
-  streamingGrid,
   messagesStore,
   inputStore,
   statusStore,
@@ -227,59 +223,37 @@ export function InlineApp({
       suggestions, dropdownIndex, viewportTop: vp.viewportTop,
     });
 
-    // ── 4. 渲染（路径2+3同时用绝对坐标，最后统一 CUP 定位输入框）──
+    // ── 4. footer 让位 ──
+    // 流式首帧：清 gridRenderer footer 让草稿有空间（writeFooter 接管）
+    // 固化/新消息：清 gridRenderer footer 让 appendLine 从正确位置写
+    if ((streamingLines !== null && renderer.state.lastStreamingHeight === 0) || hasNewFinalized || justFinalized || needEraseDraft) {
+      gridRenderer.clearForResize();
+    }
+
+    // ── 5. 提交：commit 负责 appendLine + 流式草稿（不含 footer）──
+    renderer.commit({
+      newLines,
+      streamingLines,
+      footer: footerLayout,
+      hasNewFinalized,
+      transitions: { justFinalized, needEraseDraft },
+    });
+
+    // ── 6. Footer 渲染 ──
+    // totalContentRowsRef 追踪物理行数（含折行），确保 footer 不覆盖固化内容
+    totalContentRowsRef.current += newLines.length;
     const rows = process.stdout.rows ?? 24;
 
     if (streamingLines !== null) {
-      // ══ 流式帧 ══
-      // 路径 1：commit 处理 newLines（gap 空行等）+ 清旧 footer
-      if (hasNewFinalized || justFinalized || needEraseDraft) {
-        gridRenderer.clearForResize();
-      }
-      renderer.commit({
-        newLines,
-        streamingLines: null,  // 草稿由 streamingGrid 管，commit 不处理
-        footer: footerLayout,
-        hasNewFinalized,
-        transitions: { justFinalized, needEraseDraft },
-      });
-      totalContentRowsRef.current += newLines.length;
-
-      // 路径 2：草稿用 streamingGrid cell diff（绝对坐标，零光标依赖）
-      const streamTopRow = totalContentRowsRef.current + 1;
-      streamingGrid.commitStream(streamingLines, streamTopRow, cols);
-
-      // 路径 3：footer 用 gridRenderer（绝对坐标，零光标依赖）
-      const footerTopRow = Math.min(streamTopRow + streamingLines.length, rows - footerLayout.height + 1);
-      gridRenderer.commitFooter(footerLayout, footerTopRow, cols);
-
+      // 流式时：用旧版 writeFooter（cursorUp 覆写，和 rewriteStreamingLines 在同一次 flush → 不闪）
+      renderer.writeFooter(footerLayout);
     } else {
-      // ══ 非流式帧（固化/新消息/纯输入）══
-      // 固化时：先清草稿区，再 appendLine（顺序关键：clear 先清空草稿，appendLine 紧接写入）
-      if (justFinalized || needEraseDraft) {
-        streamingGrid.clear();
-        renderer.state.lastStreamingHeight = 0;
-      }
-      if (hasNewFinalized || justFinalized || needEraseDraft) {
-        gridRenderer.clearForResize();
-      }
-
-      renderer.commit({
-        newLines,
-        streamingLines: null,
-        footer: footerLayout,
-        hasNewFinalized,
-        transitions: { justFinalized, needEraseDraft },
-      });
-
-      totalContentRowsRef.current += newLines.length;
-
-      // footer 用 gridRenderer（绝对坐标）
+      // 非流式：用 gridRenderer 双缓冲 + 绝对坐标（resize 免疫）
       const contentLines = totalContentRowsRef.current;
       const footerTopRow = Math.min(contentLines + 1, rows - footerLayout.height + 1);
       gridRenderer.commitFooter(footerLayout, footerTopRow, cols);
     }
-  }, [messages, renderer, gridRenderer, streamingGrid, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, cols]);
+  }, [messages, renderer, gridRenderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, cols]);
 
   // 卸载时清理 footer（生命周期清理，非内容渲染——属于 Renderer 生命周期管理）
   useEffect(() => {
