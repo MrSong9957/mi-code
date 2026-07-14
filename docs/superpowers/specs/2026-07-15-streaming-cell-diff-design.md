@@ -71,21 +71,26 @@ class StreamingGridRenderer {
   private db: DoubleBuffer | null = null;
   private lastHeight = 0;
   private lastCols = 0;
+  private lastTopRow = 0;  // MiMo 审查：内部存储，clear() 不依赖外部传值
 
   constructor(private stdout: NodeJS.WriteStream) {}
 
   /** 写入草稿（流式增量核心接口） */
   commitStream(lines: string[], topRow: number, cols: number): void {
     const newHeight = lines.length;
+    this.lastTopRow = topRow;
     const sizeChanged = (this.lastHeight !== newHeight || this.lastCols !== cols);
 
-    // 行数变化 → 重建 DoubleBuffer，旧 front 内容保留（拷贝到新 front）
+    // 行数或列数变化 → 重建 DoubleBuffer，旧 front 内容保留
+    // 关键：buffer 高度取 max(lastHeight, newHeight)——行数缩减时不能缩小 buffer，
+    // 否则 diff 看不见被裁掉的旧行 → 屏幕残留（MiMo 审查 Bug 修正）
+    const bufferHeight = Math.max(this.lastHeight, newHeight);
     if (!this.db || sizeChanged) {
       const oldFront = this.db?.front ?? null;
-      this.db = new DoubleBuffer(newHeight, cols);
+      this.db = new DoubleBuffer(bufferHeight, cols);
       if (oldFront) {
-        // 拷贝旧行到新 front（min(oldRows, newRows) 行）
-        const copyRows = Math.min(oldFront.rows, newHeight);
+        // 拷贝旧行到新 front（min(oldRows, bufferHeight) 行）
+        const copyRows = Math.min(oldFront.rows, bufferHeight);
         for (let y = 0; y < copyRows; y++) {
           for (let x = 0; x < Math.min(oldFront.cols, cols); x++) {
             const oldIdx = (y * oldFront.cols + x) * 2;
@@ -114,12 +119,12 @@ class StreamingGridRenderer {
     });
 
     this.db.swap();
-    this.lastHeight = newHeight;
+    this.lastHeight = newHeight;  // 记实际草稿行数（不是 bufferHeight）
     this.lastCols = cols;
   }
 
   /** 固化时清空草稿区 + emit 空格（清除屏幕上的草稿） */
-  clear(topRow: number): void {
+  clear(): void {  // MiMo 审查：不传 topRow，用内部 lastTopRow
     if (!this.db || this.lastHeight === 0) return;
     // front 保持（有上一帧内容），back 全空 → diff 输出全部清除 patch
     this.db.back.clear();
@@ -128,7 +133,7 @@ class StreamingGridRenderer {
       charPool: this.db.charPool,
       stylePool: this.db.stylePool,
       stdout: this.stdout,
-      yBias: topRow - 1,
+      yBias: this.lastTopRow - 1,  // 用内部存储的 topRow
     });
     // 丢弃 buffer（下次 commitStream 全量重建）
     this.db = null;
@@ -144,7 +149,7 @@ class StreamingGridRenderer {
 ### 4.3 行数变化时的 front 保留
 
 草稿从 2 行变 5 行：
-1. 新建 DoubleBuffer(5, cols)
+1. bufferHeight = max(2, 5) = 5，新建 DoubleBuffer(5, cols)
 2. 旧 front（2 行）的前 2 行拷贝到新 front
 3. 新 front 的后 3 行全 0（空白）
 4. back.clear() → blitAnsi 5 行新草稿
@@ -153,13 +158,26 @@ class StreamingGridRenderer {
    - 后 3 行：全 0 → 有内容，全部输出（追加）
 6. emit → 前 2 行增量更新 + 后 3 行追加
 
+**行数减少（5 行 → 2 行，MiMo 审查 Bug 修正）：**
+1. bufferHeight = max(5, 2) = 5，新建 DoubleBuffer(5, cols)——**不缩小 buffer**
+2. 旧 front（5 行）全部拷贝到新 front（5 行）
+3. back.clear() → blitAnsi 2 行新草稿（第 3-5 行保持空）
+4. diff(front[5行], back[2行内容+3行空])：
+   - 前 2 行：只输出变化的 cell
+   - 后 3 行：front 有旧内容，back 为空 → 输出清除 patch（擦除残留）✅
+5. emit → 前 2 行增量 + 后 3 行清除
+
+**列数变化**同理——buffer 列数取 max(lastCols, cols)，blitAnsi 只写新 cols 宽度内容，
+多出的列在 back 里为空，diff 输出清除 patch。
+
 ### 4.4 不变的部分
 
 - footer 的 gridRenderer 不变（已有 posChanged 检测处理位置变化）
 - wrapStreamingText / wrapThinkingText 不变
 - pipeline-adapter / messages-store 不变
-- emit.ts / diff.ts / optimize.ts / blitAnsi 不变
+- emit.ts / optimize.ts / blitAnsi 不变
 - 固化后的 appendLine 路径不变
+- **diff.ts 不改**（要求 front/back 尺寸相同——通过 buffer 高度取 max 保证）
 
 ## 5. 固化时序（MiMo 审查建议）
 
