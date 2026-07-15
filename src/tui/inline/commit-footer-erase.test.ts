@@ -204,10 +204,10 @@ describe('commitFooter 擦除行为', () => {
 
   it('commitFooter 后 footerHeight 归零（后续 renderFooter 走追加模式）', () => {
     renderer.renderFooter('hello', 5, 'STATUS');
-    expect((renderer as unknown as { footerHeight: number }).footerHeight).toBe(4);
+    expect(renderer.state.footerHeight).toBe(4);
 
     renderer.commitFooter();
-    expect((renderer as unknown as { footerHeight: number }).footerHeight).toBe(0);
+    expect(renderer.state.footerHeight).toBe(0);
 
     // 后续 renderFooter 应是追加模式（无 cursorUp 到 footer 顶部的序列）
     const afterCommit = mock.written.length;

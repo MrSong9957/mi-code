@@ -27,7 +27,13 @@ export function useTerminalSize(): TerminalSize {
   useEffect(() => {
     if (!stdout) return;
     const handler = (): void => {
-      setSize({ rows: stdout.rows ?? 24, cols: stdout.columns ?? 80 });
+      const next = { rows: stdout.rows ?? 24, cols: stdout.columns ?? 80 };
+      // 同尺寸去重：连续 resize 事件如果尺寸相同则跳过（ink.tsx:314-315 同策略）。
+      // 防止拖拽窗口时相同尺寸的中间事件重复触发重渲染。
+      setSize(prev => {
+        if (prev.rows === next.rows && prev.cols === next.cols) return prev;
+        return next;
+      });
     };
     handler(); // 初始化同步一次
     stdout.on('resize', handler);

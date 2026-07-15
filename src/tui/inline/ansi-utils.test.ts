@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cursorUp, cursorDown, eraseLine, eraseLines, hideCursor, showCursor, sgr } from './ansi-utils.js';
+import { cursorUp, cursorDown, cursorForward, cursorBack, eraseLine, eraseLines, hideCursor, showCursor, sgr } from './ansi-utils.js';
 
 describe('ansi-utils', () => {
   it('cursorUp generates correct escape', () => {
@@ -9,6 +9,16 @@ describe('ansi-utils', () => {
 
   it('cursorDown generates correct escape', () => {
     expect(cursorDown(2)).toBe('\x1b[2B');
+  });
+
+  it('cursorForward generates correct escape', () => {
+    expect(cursorForward(3)).toBe('\x1b[3C');
+    expect(cursorForward(1)).toBe('\x1b[1C');
+  });
+
+  it('cursorBack generates correct escape', () => {
+    expect(cursorBack(2)).toBe('\x1b[2D');
+    expect(cursorBack(1)).toBe('\x1b[1D');
   });
 
   it('eraseLine is correct escape', () => {

@@ -8,7 +8,7 @@
 // 测试直接调用它，不复制任何缩进/上色逻辑。
 
 import { describe, it, expect } from 'vitest';
-import { renderFinalizedLine } from './InlineApp.js';
+import { renderFinalizedLine } from './text-layout.js';
 import { MessageFormatter } from '../../ui/message-formatter.js';
 import type { FormattedLine } from '../../ui/types.js';
 

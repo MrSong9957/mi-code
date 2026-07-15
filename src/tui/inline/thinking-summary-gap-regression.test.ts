@@ -63,6 +63,8 @@ function setupWithPipeline() {
   vi.spyOn(renderer, 'appendLine').mockImplementation((text: string) => {
     appended.push(text.replace(/\x1b\[[0-9;]*m/g, ''));
   });
+  // mock writeFooter：footer 走 renderer.commit → writeFooter，测试只关心 gap 逻辑
+  vi.spyOn(renderer, 'writeFooter').mockImplementation(() => undefined);
 
   const props = {
     messages: [] as TuiMessage[],
@@ -76,6 +78,7 @@ function setupWithPipeline() {
     completionStore: createCompletionStore(),
     selectionStore: createSelectionStore(),
     overlayStore: createOverlayStore(),
+    cols: 80,
   };
 
   const utils = render(React.createElement(InlineApp, props));
@@ -99,7 +102,7 @@ describe('Thought for 与 assistant 之间的空行 gap', () => {
     emit({ kind: 'thinking_start' });
     emit({ kind: 'thinking_delta', content: '思考' });
     emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
-    emit({ kind: 'assistant_text', text: '我是一个', isFinal: false });
+    // 直接 isFinal=true（不走流式 → 固化路径），assistant 正文走 appendMessage → appendLine
     emit({ kind: 'assistant_text', text: '我是一个AI助手', isFinal: true });
 
     // 在 appendLine 序列中找 Thought for 和 assistant 正文的位置

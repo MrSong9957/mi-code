@@ -303,6 +303,7 @@ export function ConnectedApp({
           completionStore={completionStore}
           selectionStore={selectionStore}
           overlayStore={overlayStore}
+          cols={cols}
         />
       </DropdownProvider>
     );

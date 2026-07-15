@@ -1,29 +1,40 @@
 import { cursorUp, hideCursor, showCursor } from './ansi-utils.js';
 import { enterAltScreen, exitAltScreen } from '../hooks/useAltScreen.js';
-import { cursorScreenPos } from '../state/cursor-position.js';
-import { MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
-import { wrapLine, getUsableWidth } from '../state/wrap-line.js';
-import { layoutInputCursor } from '../state/layout-cursor.js';
-import sliceAnsi from 'slice-ansi';
-
-const PROMPT = '❯ ';
-/** 续行缩进：与 PROMPT 宽度对齐（❯ 占 1 列 + 空格 1 列 = 2 列）。
- *  多行输入时续行前缀 2 空格，视觉上与首行的输入起点对齐。 */
-const CONTINUATION_INDENT = '  ';
+import { getUsableWidth } from '../state/wrap-line.js';
+import { InlineRenderState } from './render-state.js';
+import { layoutFooter, type FooterLayout } from './layout.js';
+import {
+  diffFooterOverlay, diffStreamingOverlay, diffFooterCommit,
+  type RenderOperation,
+} from './diff.js';
 
 export class InlineRenderer {
-  /** footer 占用的物理行数。0 表示无 footer 或已 commit。 */
-  private footerHeight = 0;
-  /** 光标所在行到 footer 顶部的物理行距离（用于 commitFooter 精确上移）。 */
-  private cursorToTop = 0;
-  /** 测试用：读取当前 footer 物理行数。 */
-  getFooterHeight(): number { return this.footerHeight; }
+  /** 渲染状态（footer/streaming/消息账本）。Phase 1：统一所有者。 */
+  readonly state: InlineRenderState;
+  /** 测试用：读取当前 footer 物理行数（代理到 state）。 */
+  getFooterHeight(): number { return this.state.footerHeight; }
+
+  /**
+   * 单次 write 缓冲：commit() 期间所有 write 进此 buffer，
+   * 结束时一次 stdout.write 刷出。单次 write 是防闪烁的核心手段——
+   * 即使终端不支持 DEC 2026，终端处理一个完整字符串时中间状态更少。
+   * （Claude Code terminal.ts:205 "Buffer all writes into a single string"）
+   * 非(commit)路径直接 write stdout（appendLine 的 logo 初始化、destroy 等）。
+   */
+  private writeBuf: string[] | null = null;
+
+  /** 统一写入入口：commit 期间进 buffer，否则直接 write stdout。 */
+  private write(s: string): void {
+    if (this.writeBuf !== null) {
+      this.writeBuf.push(s);
+    } else {
+      this.stdout.write(s);
+    }
+  }
 
   constructor(private stdout: NodeJS.WriteStream) {
+    this.state = new InlineRenderState();
     // DECAWM OFF：关闭终端自动折行，应用层自己做 wordWrap。
-    // 物理本质：终端不再因写满列而自动换行——应用决定布局，终端只负责显示。
-    // 这消除了 simulateTerminalWrap 的"猜终端折行"不确定性：
-    // physical rows = application wrapped rows（完全可控）。
     this.stdout.write('\x1b[?7l');
   }
 
@@ -33,11 +44,47 @@ export class InlineRenderer {
   }
 
   appendLine(ansiText: string): void {
-    this.stdout.write(ansiText + '\n');
+    this.write(ansiText + '\n');
   }
 
-  rewriteCurrentLine(ansiText: string): void {
-    this.stdout.write('\r\x1b[K' + ansiText);
+  /**
+   * Writer：执行 RenderOperation 序列，写入 stdout。
+   *
+   * Phase 3：cursor 操作集中到此处。每个操作的 stdout 语义：
+   * - cursorUp: \x1b[<count>A
+   * - appendLine: content + \n
+   * - overwriteLine: \r\x1b[2K + content + \n
+   * - eraseAndAdvance: \r\x1b[2K + \n
+   * - eraseNoAdvance: \r\x1b[2K
+   * - advanceNewLine: \n
+   * - deleteLines: \x1b[<count>M
+   */
+  executeOperations(ops: RenderOperation[]): void {
+    for (const op of ops) {
+      switch (op.type) {
+        case 'cursorUp':
+          this.write(cursorUp(op.count));
+          break;
+        case 'appendLine':
+          this.write(op.content + '\n');
+          break;
+        case 'overwriteLine':
+          this.write(`\r\x1b[2K${op.content}\n`);
+          break;
+        case 'eraseAndAdvance':
+          this.write('\r\x1b[2K\n');
+          break;
+        case 'eraseNoAdvance':
+          this.write('\r\x1b[2K');
+          break;
+        case 'advanceNewLine':
+          this.write('\n');
+          break;
+        case 'deleteLines':
+          this.write(`\x1b[${op.count}M`);
+          break;
+      }
+    }
   }
 
   /**
@@ -74,138 +121,54 @@ export class InlineRenderer {
     selectedIndex: number = 0,
     viewportTop: number = 0,
   ): void {
-    const inputLines = input.split('\n');
-    const usableWidth = getUsableWidth(cols);
-    const border = '─'.repeat(usableWidth);
-
-    // 算光标所在逻辑行号（cursorScreenPos 是纯函数，y 是相对输入区第 0 行的绝对行）。
-    const { y: cursorAbsLine } = cursorScreenPos(input, cursorPos, PROMPT);
-
-    // 视口切片：footer 固定高度，输入超 viewportTop+maxVisible 时只渲染窗口内行。
-    const visibleInputLines = inputLines.slice(
-      viewportTop,
-      viewportTop + MAX_VISIBLE_INPUT_LINES,
-    );
-
-    // 可见窗口切片：居中滚动
-    const maxVisible = Math.min(suggestions.length, 8);
-    const startIndex = Math.max(0, Math.min(
-      selectedIndex - Math.floor(maxVisible / 2),
-      suggestions.length - maxVisible,
-    ));
-    const visibleSuggestions = suggestions.slice(startIndex, startIndex + maxVisible);
-    const selectedName = suggestions[selectedIndex];
-    const suggestionLines: string[] = visibleSuggestions.map((name) => {
-      const isSelected = name === selectedName;
-      return isSelected ? `\x1b[7m ▸ /${name} \x1b[0m` : `   /${name}`;
-    });
-
-    // 组装完整行序：border / 输入行(s) / 下拉行(s) / border / 状态
-    // DECAWM OFF + 应用层 wordWrap：每行 ≤ usableWidth，不依赖终端折行。
-    // physical rows = lines.length（完全可控，不再用 simulateTerminalWrap 猜测）。
-    const lines: string[] = [border];
-    // 记录每个可见输入行 wordWrap 后的行数（用于光标定位）
-    const wrappedInputCounts: number[] = [];
-    for (let i = 0; i < visibleInputLines.length; i++) {
-      const absLine = viewportTop + i;
-      const prefix = absLine === 0 ? PROMPT : CONTINUATION_INDENT;
-      // wordWrap：超宽内容换行显示（不截断不丢弃），保留完整输入体验。
-      // 混合策略：英文优先按空格断行，CJK/无空格按字符级断行。
-      const wrapped = wrapLine(prefix + visibleInputLines[i]!, usableWidth);
-      wrappedInputCounts.push(wrapped.length);
-      lines.push(...wrapped);
-    }
-    // suggestion：截断（菜单项每项1行，折行破坏对齐）
-    for (const sl of suggestionLines) {
-      lines.push(sliceAnsi(sl, 0, usableWidth));
-    }
-    lines.push(border);
-    // statusText：wordWrap（状态栏可能含颜色码+长文本）
-    const wrappedStatus = wrapLine(statusText, usableWidth);
-    lines.push(...wrappedStatus);
-
-    // DECAWM OFF 后每行恰好 1 物理行，newHeight = lines.length
-    const newHeight = lines.length;
-    let writtenLineCount = newHeight;
-
-    if (this.footerHeight === 0) {
-      // 追加模式：逐行写 + \n
-      for (const line of lines) {
-        this.stdout.write(line + '\n');
-      }
-    } else {
-      // 覆写模式：逐行擦写（不依赖 DL，ConPTY 把 DL→EL 导致堆叠）
-      this.stdout.write(cursorUp(this.cursorToTop));
-      const maxLines = Math.max(this.footerHeight, newHeight);
-      for (let i = 0; i < maxLines; i++) {
-        const content = i < lines.length ? lines[i]! : '';
-        this.stdout.write(`\r\x1b[2K${content}\n`);
-      }
-      writtenLineCount = maxLines;
-    }
-
-    this.footerHeight = newHeight;
-
-    // 光标定位到输入框——用 layoutInputCursor 算 wordWrap 后的物理行 + 列。
-    // 块内物理行（0-based）：行0=顶部border，行1..=输入区，底部border，status。
-    let cursorPhysLine0 = 1; // 跳过顶部 border
-    let cursorColInPhysLine = 0;
-    for (let i = 0; i < visibleInputLines.length; i++) {
-      const absLine = viewportTop + i;
-      const prefix = absLine === 0 ? PROMPT : CONTINUATION_INDENT;
-      if (absLine === cursorAbsLine) {
-        // 光标在本逻辑行：用 layoutInputCursor 算 wordWrap 后的 (row, col)
-        // cursorPos 是码点索引，用码点安全切片算 cursorCpOffset
-        const lines2 = input.split('\n');
-        let off = 0;
-        for (let j = 0; j < absLine; j++) off += [...lines2[j]!].length + 1;
-        const cursorCpOffset = Math.max(0, cursorPos - off);
-        const layout = layoutInputCursor(lines2[absLine]!, cursorCpOffset, prefix, usableWidth);
-        cursorPhysLine0 += layout.row;
-        cursorColInPhysLine = layout.col;
-        break;
-      }
-      cursorPhysLine0 += wrappedInputCounts[i]!;
-    }
-    const upFromBottom = writtenLineCount - cursorPhysLine0;
-
-    // 记录光标到块顶的距离（供 commitFooter 上移）。
-    this.cursorToTop = cursorPhysLine0;
-
-    this.stdout.write(hideCursor);
-    if (upFromBottom > 0) {
-      this.stdout.write(cursorUp(upFromBottom));
-    }
-    // CHA：光标在物理行内的列（0-based），1-based = cursorColInPhysLine + 1。
-    const chaCol = Math.min(cursorColInPhysLine + 1, usableWidth);
-    this.stdout.write(`\r\x1b[${chaCol}G`);
-    this.stdout.write(showCursor);
+    // Phase 2：布局计算委托 layoutFooter（纯函数），本方法只写 stdout。
+    const layout = layoutFooter({ input, cursor: cursorPos, status: statusText, cols, suggestions, dropdownIndex: selectedIndex, viewportTop });
+    this.writeFooter(layout);
   }
 
-  commitFooter(): void {
-    // 擦除 footer：上移到 footer 顶部，逐行擦除，光标回到 footer 顶部。
-    // 这样后续 appendLine 的消息覆盖 footer 原位置，历史区域无重复框架。
-    //
-    // 物理模型（黑板擦除）：footer 是临时草稿区，commit = 擦干净草稿，
-    // 让粉笔（appendLine）在干净区域写正式内容。
-    //
-    // cursorToTop 由 renderFooter 记录，是光标当前所在行到 footer 顶部的精确距离。
-    if (this.footerHeight > 0) {
-      // 上移到 footer 顶部
-      this.stdout.write(cursorUp(this.cursorToTop));
-      // 逐行擦除整个 footer
-      for (let i = 0; i < this.footerHeight; i++) {
-        this.stdout.write('\r\x1b[2K');
-        if (i < this.footerHeight - 1) {
-          this.stdout.write('\n');
-        }
-      }
-      // 光标现在在 footer 最后一行（已擦除）。回到 footer 顶部，
-      // 让 appendLine 从 footer 原顶部开始覆盖。
-      this.stdout.write(cursorUp(this.footerHeight - 1));
-      this.cursorToTop = 0;
+  /**
+   * 写入已算好布局的 footer（只写 stdout，不做内容计算）。
+   *
+   * Phase 3：覆写逻辑由 diff.ts 的 diffFooterOverlay 生成 RenderOperation[]，
+   * 本方法执行操作序列 + 光标定位。
+   */
+  writeFooter(layout: FooterLayout): void {
+    const { lines, height: newHeight, cursorToTop, cursorCol, usableWidth } = layout;
+
+    // diff：根据 footerHeight 决定追加/覆写（覆写用 cursorToTop 定位）
+    const ops = diffFooterOverlay(this.state.footerHeight, this.state.cursorToTop, lines);
+    this.executeOperations(ops);
+
+    // writtenLineCount：覆写模式下是 max(prevHeight, newHeight)
+    const writtenLineCount = this.state.footerHeight === 0
+      ? newHeight
+      : Math.max(this.state.footerHeight, newHeight);
+
+    this.state.footerHeight = newHeight;
+    this.state.cursorToTop = cursorToTop;
+
+    // 光标定位到输入框
+    const upFromBottom = writtenLineCount - cursorToTop;
+    this.write(hideCursor);
+    if (upFromBottom > 0) {
+      this.write(cursorUp(upFromBottom));
     }
-    this.footerHeight = 0;
+    const chaCol = Math.min(cursorCol + 1, usableWidth);
+    this.write(`\r\x1b[${chaCol}G`);
+    this.write(showCursor);
+  }
+
+  /**
+   * 擦除 footer（生命周期清理）。
+   *
+   * Phase 3：操作序列由 diff.ts 的 diffFooterCommit 生成。
+   * cursorToTop 由 writeFooter 记录，是光标当前所在行到 footer 顶部的精确距离。
+   */
+  commitFooter(): void {
+    const ops = diffFooterCommit(this.state.footerHeight, this.state.cursorToTop);
+    this.executeOperations(ops);
+    this.state.cursorToTop = 0;
+    this.state.footerHeight = 0;
   }
 
   // ─────────────── 流式 assistant 文本覆写 ───────────────
@@ -220,53 +183,23 @@ export class InlineRenderer {
   //   lastStreamingHeight>0 → 覆写：上移旧行数，逐行擦写
   //   clearStreamingHeight  → 重置，下次回到追加模式（finalize 后调用）
 
-  /** 上次流式占用的物理行数。0 表示无草稿（首次或已固化）。 */
-  private lastStreamingHeight = 0;
-
   /**
    * 覆写流式行。
    *
-   * @param lines 本次要显示的行（已折行、已上色，不含 \n）
+   * Phase 3：操作序列由 diff.ts 的 diffStreamingOverlay 生成。
+   * 行数减少时用 DL 物理删除（streaming 场景的已知正确行为）。
    *
-   * 首次（lastStreamingHeight=0）：逐行追加 + \n。
-   * 后续：cursorUp(旧高度) → 逐行 \r\x1b[2K + 内容 + \n。
-   *   - 新行数 < 旧行数：多出的旧行用空内容覆写（擦除残余）
-   *   - 新行数 > 旧行数：循环按旧行数擦写，多出的新行因光标已下移而自然追加
+   * @param lines 本次要显示的行（已折行、已上色，不含 \n）
    */
   rewriteStreamingLines(lines: string[]): void {
-    const newHeight = lines.length;
-    if (this.lastStreamingHeight === 0) {
-      // 首次：直接追加
-      for (const l of lines) {
-        this.stdout.write(l + '\n');
-      }
-    } else {
-      // 覆写：上移旧行数到草稿顶部，逐行擦写新内容。
-      this.stdout.write(cursorUp(this.lastStreamingHeight));
-      // 写入新内容行（逐行擦写）
-      for (let i = 0; i < newHeight; i++) {
-        this.stdout.write(`\r\x1b[2K${lines[i]}`);
-        this.stdout.write('\n');
-      }
-      // 行数减少时：物理删除多余的旧行（\x1b[<n>M），
-      // 而非只擦空——擦空的行仍占屏幕空间，变成虚假"间隔"。
-      if (newHeight < this.lastStreamingHeight) {
-        const excess = this.lastStreamingHeight - newHeight;
-        // 光标现在在最后一行写入内容下方一行。
-        // 上移到新内容末行，删除 excess 行（该行及下方上移）。
-        this.stdout.write(cursorUp(1));
-        this.stdout.write(`\x1b[${excess}M`);
-        // 删除后光标停在被删行的位置（已上移填充），
-        // 写一个 \n 让光标回到新内容下方（与追加模式的光标基准对齐）。
-        this.stdout.write('\n');
-      }
-    }
-    this.lastStreamingHeight = newHeight;
+    const ops = diffStreamingOverlay(this.state.lastStreamingHeight, lines);
+    this.executeOperations(ops);
+    this.state.lastStreamingHeight = lines.length;
   }
 
   /** 重置流式高度（finalize 后调用，下次 rewriteStreamingLines 回到追加模式）。 */
   clearStreamingHeight(): void {
-    this.lastStreamingHeight = 0;
+    this.state.lastStreamingHeight = 0;
   }
 
   /**
@@ -280,12 +213,12 @@ export class InlineRenderer {
    * 无草稿（height=0）时 no-op。
    */
   eraseStreamingLines(): void {
-    if (this.lastStreamingHeight === 0) return;
+    if (this.state.lastStreamingHeight === 0) return;
     // 上移到草稿顶部
-    this.stdout.write(cursorUp(this.lastStreamingHeight));
+    this.write(cursorUp(this.state.lastStreamingHeight));
     // 物理删除全部草稿行（\x1b[<n>M：该行及下方上移，不留空行）
-    this.stdout.write(`\x1b[${this.lastStreamingHeight}M`);
-    this.lastStreamingHeight = 0;
+    this.write(`\x1b[${this.state.lastStreamingHeight}M`);
+    this.state.lastStreamingHeight = 0;
   }
 
   /**
@@ -321,4 +254,106 @@ export class InlineRenderer {
     // 返回提示
     this.stdout.write('\n按 q / Ctrl+O / Esc 返回\n');
   }
+
+  /**
+   * Render commit boundary：组件层渲染的唯一入口。
+   *
+   * Phase 0（本阶段）：commit 内部按固定顺序复用现有方法（commitFooter/
+   * eraseStreamingLines/appendLine/clearStreamingHeight/rewriteStreamingLines/
+   * renderFooter），逻辑与改造前 InlineApp 主 effect 完全一致，只是把
+   * "渲染顺序编排"从组件层搬进 Renderer，让组件层只负责构建 Frame 数据。
+   *
+   * 组件层不再直接调 appendLine/commitFooter/eraseStreamingLines/
+   * clearStreamingHeight/rewriteStreamingLines/renderFooter。
+   *
+   * 未来 Phase（State/Layout/Diff Layer）会替换 commit 内部实现，
+   * 但 commit(frame) 这个入口签名保持稳定。
+   *
+   * @param frame 这一帧要渲染的内容（已转成 ANSI string[]）+ 状态转换信号
+   */
+  commit(frame: CommitFrame): void {
+    const { justFinalized, needEraseDraft } = frame.transitions;
+
+    // 单次 write 防闪烁：所有操作拼进 writeBuf，结束时一次 stdout.write。
+    // 这是防闪烁的核心手段——即使终端不支持 DEC 2026（conhost），
+    // 单次 write 也能让终端在一个完整字符串内完成渲染，中间状态最少。
+    // （Claude Code terminal.ts:205 "Buffer all writes into a single string"）
+    this.writeBuf = [];
+    this.write('\x1b[?2026h');  // BSU（支持的终端原子更新；不支持的忽略，无害）
+
+    // ── 0. 前置输出（logo 首次渲染 / resize 清屏+logo）──
+    // 在 BSU 后、步骤 1 之前输出，确保整帧原子更新。
+    if (frame.prefix) {
+      for (const s of frame.prefix) {
+        this.write(s);
+      }
+    }
+
+    // ── 1. 转换前置：清理 footer + 流式草稿 ──
+    // 顺序关键：必须先 commitFooter（否则光标在 footer 内，erase 的 cursorUp 会算错）。
+    if (justFinalized || frame.hasNewFinalized) {
+      this.commitFooter();
+    }
+    if (needEraseDraft) {
+      this.eraseStreamingLines();
+    }
+
+    // ── 2. 新增固化行：逐行追加（\n 推进，自然进 scrollback）──
+    for (const ansiLine of frame.newLines) {
+      this.appendLine(ansiLine);
+    }
+
+    // ── 3. 流式草稿：覆写或首次追加 ──
+    if (frame.streamingLines !== null) {
+      // 流式中：先 commit footer（清除 footer，让光标回到草稿正下方），
+      // 否则 rewriteStreamingLines 的 cursorUp 会算错位置。
+      // needEraseDraft 时已在上面 commit + erase 过，跳过。
+      if (!justFinalized && !needEraseDraft) {
+        this.commitFooter();
+      }
+      // 仅在固化→流式转换时清零草稿高度（详见 rewriteStreamingLines 注释）。
+      if (justFinalized || needEraseDraft) {
+        this.clearStreamingHeight();
+      }
+      this.rewriteStreamingLines(frame.streamingLines);
+    }
+
+    // ── 4. Footer 写入（cursorUp + 全行覆写 + 光标定位）──
+    this.writeFooter(frame.footer);
+
+    this.write('\x1b[?2026l');  // ESU
+
+    // 一次 write 刷出整个帧
+    this.stdout.write(this.writeBuf.join(''));
+    this.writeBuf = null;
+  }
+}
+
+/**
+ * commit(frame) 的输入：组件层构建的一帧渲染数据（Phase 2 起含 LayoutResult）。
+ *
+ * 设计原则：Frame 携带"已转成 ANSI 的内容"+ 已算好的 footer 布局 + 状态转换信号，
+ * 不含 cursor/ANSI/调用顺序决策——那些由 commit 内部处理。
+ */
+export interface CommitFrame {
+  /** 前置输出（logo 首次渲染 / resize 清屏+logo 重写）。
+   *  每项是已含 \n 的 ANSI 字符串，在 BSU 后、步骤 1 之前输出。
+   *  使 commit() 成为唯一 stdout 出口——所有输出都在 writeBuf 内。 */
+  prefix?: string[];
+  /** 新增的固化行（已 renderFinalizedLine 转成 ANSI string[]，逐行 appendLine） */
+  newLines: string[];
+  /** 流式草稿行（已 wrapStreamingText/wrapThinkingText 转 ANSI string[]）。
+   *  null = 当前不流式（不调 rewriteStreamingLines） */
+  streamingLines: string[] | null;
+  /** footer 布局结果（Phase 2：由 layout.ts 的 layoutFooter 计算，Renderer 只写入） */
+  footer: FooterLayout;
+  /** 是否有新增固化行（决定是否 commitFooter 前置清理） */
+  hasNewFinalized: boolean;
+  /** 状态转换信号（决定 commit 内部 commitFooter/erase/clearStreamingHeight 调用） */
+  transitions: {
+    /** 上一帧在流式，本帧不在流式 → 刚固化 */
+    justFinalized: boolean;
+    /** 需要擦除流式草稿（thinking→固化 或 流式中有新固化消息） */
+    needEraseDraft: boolean;
+  };
 }
