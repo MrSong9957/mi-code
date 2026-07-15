@@ -91,12 +91,16 @@ describe('InlineRenderer.commit(frame) — render commit boundary', () => {
     };
   }
 
-  it('基础场景：commit 不写 footer（footer 由 gridRenderer 负责）', () => {
+  it('基础场景：commit 写 footer（统一管线，无新行无流式时只写 footer）', () => {
     const beforeWrites = mock.written.length;
     renderer.commit(makeFrame());
-    // commit 不再写 footer（footer 移到 InlineGridRenderer.commitFooter）
-    // 无新行、无流式 → commit 应是 no-op（不写入任何内容）
-    expect(mock.written.length).toBe(beforeWrites);
+    // commit 现在写 footer（统一管线：writeFooter 始终在 commit 末尾调用）
+    // 无新行、无流式 → commit 只写 footer + BSU/ESU 包裹
+    expect(mock.written.length).toBeGreaterThan(beforeWrites);
+    const output = mock.written.slice(beforeWrites).join('');
+    // 含 BSU/ESU 原子包裹
+    expect(output).toContain('\x1b[?2026h');
+    expect(output).toContain('\x1b[?2026l');
   });
 
   it('有新增固化行：appendLine 写入每行', () => {
@@ -109,16 +113,19 @@ describe('InlineRenderer.commit(frame) — render commit boundary', () => {
     expect(output).toContain('LINE_B\n');
   });
 
-  it('有新增固化行时：commit 只 appendLine（footer 擦除由 gridRenderer 负责）', () => {
+  it('有新增固化行时：commit appendLine + writeFooter（统一管线）', () => {
     renderer.commit(makeFrame({
       newLines: ['MARKER_LINE'],
       hasNewFinalized: true,
     }));
     const output = mock.written.join('');
     expect(output).toContain('MARKER_LINE\n');
-    // commit 不再写 footer（footer 移到 gridRenderer）
-    // 不应含 border 字符（─）或 status 文本
-    expect(output).not.toContain('─');
+    // commit 现在写 footer（统一管线：appendLine + writeFooter 都在 commit 内）
+    // 含 border 字符（─）
+    expect(output).toContain('─');
+    // BSU/ESU 原子包裹
+    expect(output).toContain('\x1b[?2026h');
+    expect(output).toContain('\x1b[?2026l');
   });
 
   it('流式场景：rewriteStreamingLines 写入草稿行', () => {
@@ -143,5 +150,19 @@ describe('InlineRenderer.commit(frame) — render commit boundary', () => {
     // justFinalized 路径不触发"非转换的 commitFooter"（:73 的 if 分支跳过）
     // 但会触发 :61 的 commitFooter（justFinalized→true）+ clearStreamingHeight
     // 这里验证不崩溃 + 内容写入即可（精确字节断言留给底层方法测试）
+  });
+
+  it('单次 write 防闪烁：commit 只调一次 stdout.write（writeBuf 缓冲）', () => {
+    // constructor 调了一次 write（\x1b[?7l），commit 应只多调一次
+    const callsBeforeCommit = mock.write.mock.calls.length;
+    renderer.commit(makeFrame({
+      newLines: ['LINE_A'],
+      hasNewFinalized: true,
+      streamingLines: ['STREAM_A'],
+    }));
+    // commit 期间所有操作进 writeBuf，结束时一次 stdout.write
+    // 只应多 1 次调用（writeBuf flush）
+    const callsAfterCommit = mock.write.mock.calls.length;
+    expect(callsAfterCommit - callsBeforeCommit).toBe(1);
   });
 });

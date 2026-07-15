@@ -25,7 +25,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, act } from '@testing-library/react';
 import { InlineRenderer } from './InlineRenderer.js';
-import { InlineDynamicGrid } from './inline-dynamic-grid.js';
 import { wrapStreamingText } from './text-layout.js';
 import { InlineApp } from './InlineApp.js';
 import { createMessagesStore } from '../state/messages-store.js';
@@ -116,11 +115,10 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
   void createLogoStore(dummyLogo);
 
   const renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
-  const dynamicGrid = new InlineDynamicGrid(mock as unknown as NodeJS.WriteStream);
   // spy clearStreamingHeight：统计它在流式渲染中被调用的次数
   const clearSpy = vi.spyOn(renderer, 'clearStreamingHeight');
-  vi.spyOn(dynamicGrid, 'commit').mockImplementation(() => {});
-  vi.spyOn(dynamicGrid, 'clear').mockImplementation(() => {});
+  // mock writeFooter：footer 走 renderer.commit → writeFooter，测试只关心流式契约
+  vi.spyOn(renderer, 'writeFooter').mockImplementation(() => undefined);
 
   const status: StatusBarData = dummyStatus;
   const logo: LogoData = dummyLogo;
@@ -135,7 +133,6 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
         status,
         logo,
         renderer,
-        dynamicGrid,
         messagesStore,
         inputStore,
         statusStore,
@@ -166,7 +163,6 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
         status,
         logo,
         renderer,
-        dynamicGrid,
         messagesStore,
         inputStore,
         statusStore,
@@ -181,6 +177,48 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
 
   return { utils, messagesStore, renderer, mock, clearSpy, pushDelta };
 }
+
+describe('needEraseDraft 回归：已固化消息后流式不堆叠', () => {
+  it('有已固化消息 + 新流式 delta：clearStreamingHeight 不被调用', () => {
+    const mock = createMockStdout();
+    const mount = mountInlineApp(mock);
+    const { messagesStore, clearSpy, renderer } = mount;
+
+    // 1. 固化一条 user 消息（建立 renderedCount > 0）
+    act(() => {
+      messagesStore.getState().appendMessage('user', [
+        { content: 'hello', style: { fg: 'success' }, indent: 0 },
+      ]);
+    });
+    mount.utils.rerender(
+      React.createElement(InlineApp, {
+        messages: messagesStore.getState().messages,
+        status: dummyStatus,
+        logo: dummyLogo,
+        renderer,
+        messagesStore,
+        inputStore: createInputStore(),
+        statusStore: createStatusStore(dummyStatus),
+        spinnerStore: createSpinnerStore(),
+        completionStore: createCompletionStore(),
+        selectionStore: createSelectionStore(),
+        overlayStore: createOverlayStore(),
+        cols: 80,
+      }),
+    );
+    // 此时 renderedCount > 0
+
+    // 2. 开始新的流式 delta
+    mount.pushDelta('● reply', true);
+    // needEraseDraft 不应为 true → clearStreamingHeight 不被调用
+    // 旧 bug：state.renderedCount > 0 && prevLastFinalizedRef === false → 每帧 true → 堆叠
+    expect(clearSpy).not.toHaveBeenCalled();
+
+    // 3. 第二个 delta
+    mount.pushDelta('● reply more', false);
+    expect(clearSpy).not.toHaveBeenCalled();
+  });
+});
 
 describe('InlineApp 流式 delta 契约：连续 delta 必须覆写，不得堆叠', () => {
   beforeEach(() => {

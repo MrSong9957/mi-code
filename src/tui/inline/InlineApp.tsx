@@ -2,12 +2,17 @@
 // Inline 模式的根组件：统一控制所有 stdout 写入顺序。
 // 物理本质：Logo → 消息 → Footer，全部在一个 useEffect 中按序写入，
 // 消除多个 useEffect 竞争 stdout 导致的覆盖问题。
+//
+// 渲染模型（统一管线）：所有写入都通过 renderer.commit()，
+// 内部用 cursorUp 全行覆写 + \n 推进（活跃区在 BSU/ESU 原子块内）。
+// 固化消息用 \n 推进自然进 scrollback；草稿+footer 用 cursorUp 覆写。
+// logo 首次渲染和 resize 清屏通过 frame.prefix 折叠进 commit 的单次 write。
+// commit() 是唯一 stdout 出口——无直接 stdout.write 调用。
 
 import React, { useEffect, useRef } from 'react';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { InlineRenderer } from './InlineRenderer.js';
-import { InlineDynamicGrid } from './inline-dynamic-grid.js';
 import { colorizeLogo, colorizeStatus, RESET, magentaBright, redBright, cyanBright } from './colors.js';
 import { sgr } from './ansi-utils.js';
 import { SPINNER_FRAMES } from '../state/spinner-store.js';
@@ -30,8 +35,6 @@ export interface InlineAppProps {
   status: StatusBarData;
   logo: LogoData;
   renderer: InlineRenderer;
-  /** 动态区域 grid：草稿+footer 统一双缓冲（cell diff + 绝对坐标） */
-  dynamicGrid: InlineDynamicGrid;
   messagesStore: MessagesStore;
   inputStore: InputStore;
   statusStore: StatusStore;
@@ -44,14 +47,20 @@ export interface InlineAppProps {
   cols: number;
 }
 
-let logoRendered = false;
+/** 构建 logo 3 行的 ANSI 字符串（含 \n），供 prefix 使用 */
+function buildLogoAnsi(logo: LogoData): string[] {
+  return [
+    colorizeLogo(` ▐▛███▜▌   MiCode v${logo.version}`) + '\n',
+    colorizeLogo('▝▜█████▛▘  TypeScript CLI · Node.js Runtime') + '\n',
+    colorizeLogo(`  ▘▘ ▝▝    ${logo.dir}`) + '\n',
+  ];
+}
 
 export function InlineApp({
   messages,
   status: _status,
   logo,
   renderer,
-  dynamicGrid,
   messagesStore,
   inputStore,
   statusStore,
@@ -60,26 +69,12 @@ export function InlineApp({
   overlayStore,
   cols,
 }: InlineAppProps): React.ReactElement {
-  // 消息渲染账本（uuid → 已渲染行数）已迁移到 renderer.state.renderedLines（Phase 1 统一状态）。
   /** 上次 effect 看到的末条消息 finalized 状态，用于检测 streaming→finalized 转换 */
   const prevLastFinalizedRef = useRef<boolean | undefined>(undefined);
-  /** 上次 effect 看到的 cols，用于检测 resize 触发显式 footer 清除 */
+  /** 上次 effect 看到的 cols，用于检测 resize → 清屏重画 */
   const prevColsRef = useRef<number>(cols);
-  /** 累积已输出的物理行数（logo 3 + hook 1 + 所有固化消息折行后行数）。用于算 footerTopRow。 */
-  const totalContentRowsRef = useRef<number>(4);
-
-  // Logo 同步写入（首次渲染时），确保在所有 useEffect 之前出现在 stdout
-  if (!logoRendered) {
-    logoRendered = true;
-    const lines = [
-      ` ▐▛███▜▌   MiCode v${logo.version}`,
-      '▝▜█████▛▘  TypeScript CLI · Node.js Runtime',
-      `  ▘▘ ▝▝    ${logo.dir}`,
-    ];
-    for (const line of lines) {
-      renderer.appendLine(colorizeLogo(line));
-    }
-  }
+  /** logo 是否已输出（首次 effect 时输出，之后不再重复） */
+  const logoRenderedRef = useRef(false);
 
   // 订阅 store 状态
   const inputText = useStore(inputStore, (s) => s.text);
@@ -114,11 +109,10 @@ export function InlineApp({
       overlayWasVisibleRef.current = true;
     } else if (overlayWasVisibleRef.current) {
       // 关闭：退出备用屏（\x1b[?1049l）——终端自动恢复主屏内容，零重绘。
-      // 主屏的 scrollback 和 footer 进入 overlay 前是什么样，退出后还是什么样。
       overlayWasVisibleRef.current = false;
       renderer.exitOverlay();
     }
-  }, [overlay, renderer]); // cols 不在依赖：resize 不主动重画（ConPTY 兼容性，见主 effect 注释）
+  }, [overlay, renderer]); // cols 不在依赖：resize 不主动重画（ConPTY 兼容性）
 
   // 驱动 spinner 动画（inline 模式没挂载 Spinner.tsx，需自行 setInterval 推进帧）
   useEffect(() => {
@@ -139,15 +133,44 @@ export function InlineApp({
       return;
     }
 
-    // ── 0. Resize 检测：cols 变化 → 清旧动态区域 + 下一帧全量重画 ──
+    // ── 0. 构建前置输出（prefix）：logo 首次渲染 / resize 清屏+logo ──
+    const prefix: string[] = [];
+
+    // logo 首次渲染（折叠进 commit 的单次 write）
+    if (!logoRenderedRef.current) {
+      logoRenderedRef.current = true;
+      prefix.push(...buildLogoAnsi(logo));
+    }
+
+    // Resize 检测：cols 变化 → 清屏 + 重置状态 + 全量重画
+    // cursorUp 全行覆写模式在 reflow 后无法自纠正（footerHeight/lastStreamingHeight
+    // 和屏幕实际行数不一致 → cursorUp 距离算错 → 堆叠）。
+    // Claude Code 也在 resize 后清屏重画（log-update.ts:142 fullResetSequence）。
     if (cols !== prevColsRef.current) {
-      dynamicGrid.clear();
       prevColsRef.current = cols;
+      // 清屏 + 清 scrollback + 光标归位（\x1b[3J 防止多次 resize 累积重复内容）
+      prefix.push('\x1b[2J\x1b[3J\x1b[H\n');
+      // 重写 logo
+      prefix.push(...buildLogoAnsi(logo));
+      // 重置渲染状态：让所有已固化消息变成 pending → 重新 appendLine
+      renderer.state.renderedLines.clear();
+      renderer.state.footerHeight = 0;
+      renderer.state.lastStreamingHeight = 0;
+      renderer.state.cursorToTop = 0;
+      // 重置流式状态（下一帧从头开始）
+      prevLastFinalizedRef.current = undefined;
     }
 
     // ── 1. 收集新增固化行（渲染账本在 renderer.state.renderedLines）──
     const finalizedMessages = messages.filter(m => m.finalized);
     const state = renderer.state;
+    const last = messages[messages.length - 1];
+    const isStreamingNow = last && !last.finalized && last.streamingText !== undefined;
+
+    // 状态转换信号（用于 commit 内部决定 commitFooter/erase/clearStreamingHeight 调用）
+    const justFinalized = prevLastFinalizedRef.current === false && !isStreamingNow;
+    const needEraseDraft = justFinalized;
+
     const pendingLines: { role: string; line: FormattedLine }[] = [];
     for (const msg of finalizedMessages) {
       const rendered = state.getRenderedLineCount(msg.uuid);
@@ -160,15 +183,22 @@ export function InlineApp({
 
     // 无消息且无输入时，不绘制 footer（避免首次启动时多余的空 footer）
     if (!hasAnyContent && !hasNewFinalized && state.renderedCount === 0 && !streamingText) {
+      // 首次启动只有 logo 时，仍需 flush prefix（logo）
+      if (prefix.length > 0) {
+        renderer.commit({
+          prefix,
+          newLines: [],
+          streamingLines: null,
+          footer: layoutFooter({
+            input: '', cursor: 0, status: '', cols,
+            suggestions: [], dropdownIndex: 0, viewportTop: 0,
+          }),
+          hasNewFinalized: false,
+          transitions: { justFinalized: false, needEraseDraft: false },
+        });
+      }
       return;
     }
-
-    const last = messages[messages.length - 1];
-    const isStreamingNow = last && !last.finalized && last.streamingText !== undefined;
-
-    // 状态转换信号（用于 commit 内部决定 commitFooter/erase/clearStreamingHeight 调用）
-    const justFinalized = prevLastFinalizedRef.current === false && !isStreamingNow;
-    const needEraseDraft = (justFinalized || (hasNewFinalized && prevLastFinalizedRef.current === false));
 
     // ── 2. 构建 Frame 数据（组件层只负责"渲染什么"，不含调用顺序）──
     // 新增固化行 → ANSI（renderFinalizedLine 负责 style + 折行）
@@ -223,33 +253,19 @@ export function InlineApp({
       suggestions, dropdownIndex, viewportTop: vp.viewportTop,
     });
 
-    // ── 4. 固化时：先清动态区域，再 appendLine ──
-    // 固化/新消息时动态区域位置变化 → 先清旧区域
-    if (hasNewFinalized || justFinalized || needEraseDraft) {
-      dynamicGrid.clear();
-    }
-
-    // ── 5. commit 处理 appendLine（静态行 + 固化行）──
-    // streamingLines 传 null——草稿由 dynamicGrid 管
+    // ── 4. commit：一个 BSU/ESU 原子块处理全部渲染 ──
+    // commit 是唯一 stdout 出口：prefix（logo/clear）+ appendLine（固化）+
+    // rewriteStreamingLines（草稿覆写）+ writeFooter（footer 覆写）→ 一次 write
     renderer.commit({
+      prefix: prefix.length > 0 ? prefix : undefined,
       newLines,
-      streamingLines: null,
+      streamingLines,
       footer: footerLayout,
       hasNewFinalized,
       transitions: { justFinalized, needEraseDraft },
     });
-    totalContentRowsRef.current += newLines.length;
-
-    // ── 6. 动态区域（草稿+footer）一次 commit ──
-    const rows = process.stdout.rows ?? 24;
-    const topRow = Math.min(totalContentRowsRef.current + 1, rows);
-    dynamicGrid.commit(streamingLines, footerLayout, topRow, cols);
-  }, [messages, renderer, dynamicGrid, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, cols]);
-
-  // 卸载时清理动态区域（生命周期清理）
-  useEffect(() => {
-    return () => { dynamicGrid.dispose(); };
-  }, [dynamicGrid]);
+  // cols 在依赖数组：resize 时 effect 重跑，footer 用新 cols 布局（border 自适应）。
+  }, [messages, renderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, cols]);
 
   // 返回空元素——所有渲染通过 stdout 副作用完成
   return <></>;

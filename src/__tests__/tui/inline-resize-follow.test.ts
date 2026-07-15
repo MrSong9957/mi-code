@@ -7,10 +7,11 @@
 // 均无法解决）。
 //
 // 当前契约（ConPTY 兼容性回退）：
-//   1. cols 故意不在 InlineApp effect 依赖数组里 → 纯 resize 不主动重绘 → 不堆叠
+//   1. cols 在 InlineApp effect 依赖数组里，但纯 cols 变化只更新 prevColsRef，
+//      不主动重绘 footer → 不堆叠
 //   2. cols 仍作为 prop 传入，effect body 用 cols 渲染 → 下次 messages/input
 //      变化触发 effect 时，自然用最新 cols（wordWrap 更新延迟到下次交互）
-//   3. 保留 cols prop 接口，未来通过 layout/render pipeline 重构重新支持动态 resize
+//   3. Bug 3（resize 堆叠）暂不修复——ConPTY 回退避免更严重错乱
 //
 // 本测试验证这两个契约。
 
@@ -27,7 +28,6 @@ import { createCompletionStore } from '../../tui/state/completion-store.js';
 import { createSelectionStore } from '../../tui/state/selection-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import { InlineRenderer } from '../../tui/inline/InlineRenderer.js';
-import { InlineDynamicGrid } from '../../tui/inline/inline-dynamic-grid.js';
 import { InlineApp } from '../../tui/inline/InlineApp.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../../tui/types.js';
 
@@ -52,25 +52,28 @@ function setup(initialCols: number = 80) {
   const adapter = new PipelineToStoreAdapter(messagesStore);
   const pipeline = new BlockPipeline(adapter);
   const renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
-  const dynamicGrid = new InlineDynamicGrid(mock as unknown as NodeJS.WriteStream);
 
-  // spy dynamicGrid.commit（footer 写入走 grid 双缓冲，commit 第二个参数是 FooterLayout）
+  // spy writeFooter（footer 写入走 renderer.commit → writeFooter）
   const writeFooterCalls: { usableWidth: number; height: number }[] = [];
-  vi.spyOn(dynamicGrid, 'commit').mockImplementation((
-    _streamingLines: string[] | null,
-    layout: { usableWidth: number; height: number },
-  ) => {
+  vi.spyOn(renderer, 'writeFooter').mockImplementation((layout: { usableWidth: number; height: number }) => {
     writeFooterCalls.push({ usableWidth: layout.usableWidth, height: layout.height });
   });
-  vi.spyOn(dynamicGrid, 'clear').mockImplementation(() => {});
+  // spy appendLine：commit 内部的 appendLine 仍走这里（固化消息）
   vi.spyOn(renderer, 'appendLine').mockImplementation(() => undefined);
+  // spy commit：记录 frame.prefix，但仍然调用 writeFooter 让测试能检查 footer 布局
+  const commitCalls: { prefix?: string[] }[] = [];
+  const realCommit = renderer.commit.bind(renderer);
+  vi.spyOn(renderer, 'commit').mockImplementation((frame: Parameters<typeof realCommit>[0]) => {
+    commitCalls.push({ prefix: frame.prefix });
+    // 调用 writeFooter 让测试能检查 footer 布局
+    renderer.writeFooter(frame.footer);
+  });
 
   const baseProps = {
     messages: [] as TuiMessage[],
     status: dummyStatus,
     logo: dummyLogo,
     renderer,
-    dynamicGrid,
     messagesStore,
     inputStore: createInputStore(),
     statusStore: createStatusStore({ mode: 'chat', model: 'test', dir: '/tmp', branch: 'main' }),
@@ -102,11 +105,11 @@ function setup(initialCols: number = 80) {
     }));
   };
 
-  return { utils, pipeline, renderer, writeFooterCalls, emit, changeCols, baseProps };
+  return { utils, pipeline, renderer, writeFooterCalls, commitCalls, emit, changeCols, baseProps };
 }
 
-describe('Inline 模式 resize 渲染契约（grid 双缓冲 + 绝对坐标）', () => {
-  it('纯 cols 变化（resize）触发 commit，用新宽度布局', () => {
+describe('Inline 模式 resize 渲染契约', () => {
+  it('纯 cols 变化（resize）触发 writeFooter，用新宽度布局', () => {
     const { emit, changeCols, writeFooterCalls } = setup(80);
 
     // 先 emit 一条消息建立 footer
@@ -115,7 +118,7 @@ describe('Inline 模式 resize 渲染契约（grid 双缓冲 + 绝对坐标）',
     const lastBefore = writeFooterCalls[writeFooterCalls.length - 1]!;
     expect(lastBefore.usableWidth).toBe(79); // 80-1
 
-    // 纯改 cols（resize）：commit 被再次调用，用新宽度布局
+    // 纯改 cols（resize）：effect 重跑，footer 用新宽度
     changeCols(40);
     const lastAfter40 = writeFooterCalls[writeFooterCalls.length - 1]!;
     expect(lastAfter40.usableWidth).toBe(39); // 40-1
@@ -136,5 +139,35 @@ describe('Inline 模式 resize 渲染契约（grid 双缓冲 + 绝对坐标）',
     emit({ kind: 'assistant_text', text: 'reply', isFinal: true }, 40);
     const lastAfter = writeFooterCalls[writeFooterCalls.length - 1]!;
     expect(lastAfter.usableWidth).toBe(39);
+  });
+
+  it('resize 清屏 + 清 scrollback + 状态重置', () => {
+    const { emit, changeCols, commitCalls, renderer } = setup(80);
+
+    // 先 emit 一条消息建立渲染账本
+    emit({ kind: 'user_input', text: 'hello' });
+    expect(renderer.state.renderedCount).toBeGreaterThan(0);
+
+    // 记录 resize 前的 commit 调用数
+    const callsBefore = commitCalls.length;
+
+    // resize
+    changeCols(40);
+
+    // resize 后 commit 的 frame.prefix 应包含清屏序列
+    const resizeCommits = commitCalls.slice(callsBefore);
+    // 找到含 prefix 的 commit
+    const prefixCommit = resizeCommits.find(c => c.prefix && c.prefix.length > 0);
+    expect(prefixCommit).toBeDefined();
+    const allPrefixOutput = (prefixCommit!.prefix ?? []).join('');
+
+    // \x1b[2J 清屏
+    expect(allPrefixOutput).toContain('\x1b[2J');
+    // \x1b[3J 清 scrollback（防止多次 resize 累积重复内容）
+    expect(allPrefixOutput).toContain('\x1b[3J');
+    // \x1b[H 光标归位
+    expect(allPrefixOutput).toContain('\x1b[H');
+    // logo 重写（含版本号）
+    expect(allPrefixOutput).toContain('MiCode');
   });
 });

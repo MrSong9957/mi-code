@@ -4,6 +4,12 @@ export const cursorUp = (n: number): string => `\x1b[${n}A`
 /** 光标下移 n 行 */
 export const cursorDown = (n: number): string => `\x1b[${n}B`
 
+/** 光标右移 n 列（cursorForward） */
+export const cursorForward = (n: number): string => `\x1b[${n}C`
+
+/** 光标左移 n 列（cursorBack） */
+export const cursorBack = (n: number): string => `\x1b[${n}D`
+
 /** 擦除当前行（从光标到行尾） */
 export const eraseLine = '\x1b[K'
 

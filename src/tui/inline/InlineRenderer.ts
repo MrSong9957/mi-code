@@ -14,12 +14,27 @@ export class InlineRenderer {
   /** 测试用：读取当前 footer 物理行数（代理到 state）。 */
   getFooterHeight(): number { return this.state.footerHeight; }
 
+  /**
+   * 单次 write 缓冲：commit() 期间所有 write 进此 buffer，
+   * 结束时一次 stdout.write 刷出。单次 write 是防闪烁的核心手段——
+   * 即使终端不支持 DEC 2026，终端处理一个完整字符串时中间状态更少。
+   * （Claude Code terminal.ts:205 "Buffer all writes into a single string"）
+   * 非(commit)路径直接 write stdout（appendLine 的 logo 初始化、destroy 等）。
+   */
+  private writeBuf: string[] | null = null;
+
+  /** 统一写入入口：commit 期间进 buffer，否则直接 write stdout。 */
+  private write(s: string): void {
+    if (this.writeBuf !== null) {
+      this.writeBuf.push(s);
+    } else {
+      this.stdout.write(s);
+    }
+  }
+
   constructor(private stdout: NodeJS.WriteStream) {
     this.state = new InlineRenderState();
     // DECAWM OFF：关闭终端自动折行，应用层自己做 wordWrap。
-    // 物理本质：终端不再因写满列而自动换行——应用决定布局，终端只负责显示。
-    // 这消除了 simulateTerminalWrap 的"猜终端折行"不确定性：
-    // physical rows = application wrapped rows（完全可控）。
     this.stdout.write('\x1b[?7l');
   }
 
@@ -29,7 +44,7 @@ export class InlineRenderer {
   }
 
   appendLine(ansiText: string): void {
-    this.stdout.write(ansiText + '\n');
+    this.write(ansiText + '\n');
   }
 
   /**
@@ -48,25 +63,25 @@ export class InlineRenderer {
     for (const op of ops) {
       switch (op.type) {
         case 'cursorUp':
-          this.stdout.write(cursorUp(op.count));
+          this.write(cursorUp(op.count));
           break;
         case 'appendLine':
-          this.stdout.write(op.content + '\n');
+          this.write(op.content + '\n');
           break;
         case 'overwriteLine':
-          this.stdout.write(`\r\x1b[2K${op.content}\n`);
+          this.write(`\r\x1b[2K${op.content}\n`);
           break;
         case 'eraseAndAdvance':
-          this.stdout.write('\r\x1b[2K\n');
+          this.write('\r\x1b[2K\n');
           break;
         case 'eraseNoAdvance':
-          this.stdout.write('\r\x1b[2K');
+          this.write('\r\x1b[2K');
           break;
         case 'advanceNewLine':
-          this.stdout.write('\n');
+          this.write('\n');
           break;
         case 'deleteLines':
-          this.stdout.write(`\x1b[${op.count}M`);
+          this.write(`\x1b[${op.count}M`);
           break;
       }
     }
@@ -134,13 +149,13 @@ export class InlineRenderer {
 
     // 光标定位到输入框
     const upFromBottom = writtenLineCount - cursorToTop;
-    this.stdout.write(hideCursor);
+    this.write(hideCursor);
     if (upFromBottom > 0) {
-      this.stdout.write(cursorUp(upFromBottom));
+      this.write(cursorUp(upFromBottom));
     }
     const chaCol = Math.min(cursorCol + 1, usableWidth);
-    this.stdout.write(`\r\x1b[${chaCol}G`);
-    this.stdout.write(showCursor);
+    this.write(`\r\x1b[${chaCol}G`);
+    this.write(showCursor);
   }
 
   /**
@@ -200,9 +215,9 @@ export class InlineRenderer {
   eraseStreamingLines(): void {
     if (this.state.lastStreamingHeight === 0) return;
     // 上移到草稿顶部
-    this.stdout.write(cursorUp(this.state.lastStreamingHeight));
+    this.write(cursorUp(this.state.lastStreamingHeight));
     // 物理删除全部草稿行（\x1b[<n>M：该行及下方上移，不留空行）
-    this.stdout.write(`\x1b[${this.state.lastStreamingHeight}M`);
+    this.write(`\x1b[${this.state.lastStreamingHeight}M`);
     this.state.lastStreamingHeight = 0;
   }
 
@@ -259,6 +274,21 @@ export class InlineRenderer {
   commit(frame: CommitFrame): void {
     const { justFinalized, needEraseDraft } = frame.transitions;
 
+    // 单次 write 防闪烁：所有操作拼进 writeBuf，结束时一次 stdout.write。
+    // 这是防闪烁的核心手段——即使终端不支持 DEC 2026（conhost），
+    // 单次 write 也能让终端在一个完整字符串内完成渲染，中间状态最少。
+    // （Claude Code terminal.ts:205 "Buffer all writes into a single string"）
+    this.writeBuf = [];
+    this.write('\x1b[?2026h');  // BSU（支持的终端原子更新；不支持的忽略，无害）
+
+    // ── 0. 前置输出（logo 首次渲染 / resize 清屏+logo）──
+    // 在 BSU 后、步骤 1 之前输出，确保整帧原子更新。
+    if (frame.prefix) {
+      for (const s of frame.prefix) {
+        this.write(s);
+      }
+    }
+
     // ── 1. 转换前置：清理 footer + 流式草稿 ──
     // 顺序关键：必须先 commitFooter（否则光标在 footer 内，erase 的 cursorUp 会算错）。
     if (justFinalized || frame.hasNewFinalized) {
@@ -268,7 +298,7 @@ export class InlineRenderer {
       this.eraseStreamingLines();
     }
 
-    // ── 2. 新增固化行：逐行追加 ──
+    // ── 2. 新增固化行：逐行追加（\n 推进，自然进 scrollback）──
     for (const ansiLine of frame.newLines) {
       this.appendLine(ansiLine);
     }
@@ -288,8 +318,14 @@ export class InlineRenderer {
       this.rewriteStreamingLines(frame.streamingLines);
     }
 
-    // Footer 写入已移到 InlineGridRenderer.commitFooter（grid 双缓冲 + 绝对坐标）。
-    // commit() 不再写 footer。
+    // ── 4. Footer 写入（cursorUp + 全行覆写 + 光标定位）──
+    this.writeFooter(frame.footer);
+
+    this.write('\x1b[?2026l');  // ESU
+
+    // 一次 write 刷出整个帧
+    this.stdout.write(this.writeBuf.join(''));
+    this.writeBuf = null;
   }
 }
 
@@ -300,6 +336,10 @@ export class InlineRenderer {
  * 不含 cursor/ANSI/调用顺序决策——那些由 commit 内部处理。
  */
 export interface CommitFrame {
+  /** 前置输出（logo 首次渲染 / resize 清屏+logo 重写）。
+   *  每项是已含 \n 的 ANSI 字符串，在 BSU 后、步骤 1 之前输出。
+   *  使 commit() 成为唯一 stdout 出口——所有输出都在 writeBuf 内。 */
+  prefix?: string[];
   /** 新增的固化行（已 renderFinalizedLine 转成 ANSI string[]，逐行 appendLine） */
   newLines: string[];
   /** 流式草稿行（已 wrapStreamingText/wrapThinkingText 转 ANSI string[]）。

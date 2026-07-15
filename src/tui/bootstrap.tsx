@@ -31,7 +31,6 @@ import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
 import { USE_DOUBLE_BUFFER, createCustomRenderer, setCursorPos } from '../render/index.js';
 import { InlineRenderer } from './inline/InlineRenderer.js';
-import { InlineDynamicGrid } from './inline/inline-dynamic-grid.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
 import type { ThemeName } from '../utils/theme.js';
@@ -141,7 +140,6 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   }
 
   const inlineRenderer = isInline ? new InlineRenderer(process.stdout) : null;
-  const inlineDynamicGrid = isInline ? new InlineDynamicGrid(process.stdout) : null;
 
   const themeStore = createThemeStore(opts.themeName);
 
@@ -152,7 +150,6 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
           messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore,
           onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
           inlineRenderer: inlineRenderer ?? undefined,
-          inlineDynamicGrid,
         }),
       ),
     }),
@@ -162,7 +159,6 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const cleanup = (): void => {
     try {
       inlineRenderer?.destroy(); // 恢复 DECAWM ON + 光标可见
-      inlineDynamicGrid?.dispose(); // 清除动态区域残留
       inkInstance?.unmount();
     } catch {
       // unmount 可能已调用，忽略

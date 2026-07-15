@@ -34,7 +34,6 @@ import { createCompletionStore } from '../state/completion-store.js';
 import { createSelectionStore } from '../state/selection-store.js';
 import { createOverlayStore } from '../state/overlay-store.js';
 import { InlineRenderer } from './InlineRenderer.js';
-import { InlineDynamicGrid } from './inline-dynamic-grid.js';
 import { InlineApp } from './InlineApp.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../types.js';
 
@@ -58,22 +57,20 @@ function setupWithPipeline() {
   const adapter = new PipelineToStoreAdapter(messagesStore);
   const pipeline = new BlockPipeline(adapter);
   const renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
-  const dynamicGrid = new InlineDynamicGrid(mock as unknown as NodeJS.WriteStream);
 
   // 收集所有 appendLine 调用的纯文本（去 ANSI）
   const appended: string[] = [];
   vi.spyOn(renderer, 'appendLine').mockImplementation((text: string) => {
     appended.push(text.replace(/\x1b\[[0-9;]*m/g, ''));
   });
-  vi.spyOn(dynamicGrid, 'commit').mockImplementation(() => {});
-  vi.spyOn(dynamicGrid, 'clear').mockImplementation(() => {});
+  // mock writeFooter：footer 走 renderer.commit → writeFooter，测试只关心 gap 逻辑
+  vi.spyOn(renderer, 'writeFooter').mockImplementation(() => undefined);
 
   const props = {
     messages: [] as TuiMessage[],
     status: dummyStatus,
     logo: dummyLogo,
     renderer,
-    dynamicGrid,
     messagesStore,
     inputStore: createInputStore(),
     statusStore: createStatusStore({ mode: 'chat', model: 'test', dir: '/tmp', branch: 'main' }),
@@ -105,7 +102,7 @@ describe('Thought for 与 assistant 之间的空行 gap', () => {
     emit({ kind: 'thinking_start' });
     emit({ kind: 'thinking_delta', content: '思考' });
     emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
-    emit({ kind: 'assistant_text', text: '我是一个', isFinal: false });
+    // 直接 isFinal=true（不走流式 → 固化路径），assistant 正文走 appendMessage → appendLine
     emit({ kind: 'assistant_text', text: '我是一个AI助手', isFinal: true });
 
     // 在 appendLine 序列中找 Thought for 和 assistant 正文的位置

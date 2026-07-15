@@ -65,12 +65,10 @@ export interface ConnectedAppProps {
   onToggleOverlay?: () => void;
   /** inline 模式渲染器（alt-screen 模式为 undefined） */
   inlineRenderer?: import('./inline/InlineRenderer.js').InlineRenderer;
-  /** inline 模式动态区域 grid（草稿+footer 统一双缓冲） */
-  inlineDynamicGrid?: import('./inline/inline-dynamic-grid.js').InlineDynamicGrid | null;
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit, onTab, onToggleOverlay, inlineRenderer: _inlineRenderer, inlineDynamicGrid: _inlineDynamicGrid,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit, onTab, onToggleOverlay, inlineRenderer: _inlineRenderer,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store（拖拽写入，所有区域订阅高亮）
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -298,7 +296,6 @@ export function ConnectedApp({
           status={status}
           logo={logo}
           renderer={_inlineRenderer}
-          dynamicGrid={_inlineDynamicGrid!}
           messagesStore={messagesStore}
           inputStore={inputStore}
           statusStore={statusStore}

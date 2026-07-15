@@ -18,6 +18,7 @@ import { streamingQuery } from './agent/streaming-query.js';
 import { StreamEventBus } from './agent/stream-event-bus.js';
 import { BlockPipeline } from './ui/block-pipeline.js';
 import { bootstrap, type BootstrapHandle } from './tui/bootstrap.js';
+import { writeResumeHint } from './cli/resume-hint.js';
 import { ConfigStore } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
 import { TodoManager } from './agent/todo.js';
@@ -629,12 +630,14 @@ if (cliOpts.list) {
   // 终端尺寸变化由 useTerminalSize hook 自动响应（ConnectedApp 内），无需手动 listener。
 
   // 进程退出兜底：杀后台子进程 + 卸载 Ink + 退 alt screen + 主屏 resume hint
+  let cleanedUp = false;
   function cleanupOnExit(): void {
+    if (cleanedUp) return;
+    cleanedUp = true;
     backgroundManager.killAll();
     tuiHandle?.stopSpinner();
     tuiHandle?.cleanup();
-    // 退出 alt screen 后，在主屏打印 resume hint（对齐 Claude Code）
-    process.stdout.write(`\x1b[2mResume this session with:\nmicode --resume ${sessionId}\n\x1b[0m`);
+    writeResumeHint(process.stdout, sessionId);
   }
   process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });
   process.on('SIGTERM', () => { cleanupOnExit(); process.exit(0); });
