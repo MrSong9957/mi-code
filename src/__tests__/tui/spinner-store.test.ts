@@ -62,13 +62,14 @@ describe('spinner-store', () => {
     expect(s.getState().active).toBe(true);
   });
 
-  it('setMode：切到 thinking 时记录 thinkStartTime', () => {
+  it('setMode：切到 thinking 时记录当前 tick 值作为 thinkStartTime', () => {
     const s = createSpinnerStore();
     s.getState().start('generating');
-    vi.setSystemTime(5000);
+    s.getState().tick(); // time=50
+    s.getState().tick(); // time=100
     s.getState().setMode('thinking');
     expect(s.getState().mode).toBe('thinking');
-    expect(s.getState().thinkStartTime).toBe(5000);
+    expect(s.getState().thinkStartTime).toBe(100);
   });
 
   it('setLabel：工具模式覆盖显示文字', () => {

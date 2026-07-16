@@ -32,8 +32,8 @@ export interface SpinnerState {
   verb: string;
   /** 工具模式覆盖文字（如 "Running Bash"）；空则用 verb */
   label: string;
-  /** thinking 开始时刻（Date.now()）；非 thinking 模式为 null。
-   *  渲染层用 (time) 算 sine 呼吸（前 3s opacity=0，对标 THINKING_DELAY_MS） */
+  /** thinking 开始的 tick 值（time 单位）；非 thinking 模式为 null。
+   *  渲染层用 (time - thinkStartTime) 算 sine 呼吸（前 3s opacity=0，对标 THINKING_DELAY_MS） */
   thinkStartTime: number | null;
   stalled: boolean;
   /** 最近一次收到 token 的时间戳（Date.now()） */
@@ -68,7 +68,7 @@ export function createSpinnerStore(): SpinnerStore {
       mode,
       verb: sampleVerb(),
       label: '',
-      thinkStartTime: mode === 'thinking' ? Date.now() : null,
+      thinkStartTime: mode === 'thinking' ? 0 : null,
       stalled: false,
       lastTokenAt: Date.now(),
     }),
@@ -78,7 +78,7 @@ export function createSpinnerStore(): SpinnerStore {
     }),
     setMode: (mode) => set((s) => ({
       mode,
-      thinkStartTime: mode === 'thinking' ? Date.now() : null,
+      thinkStartTime: mode === 'thinking' ? s.time : null,
       // 切到非 tool 模式清 label（回到 verb 显示）
       label: mode === 'tool' ? s.label : '',
     })),

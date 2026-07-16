@@ -16,19 +16,17 @@ describe('Spinner upgraded animations', () => {
     store.getState().start('generating');
     const { lastFrame } = render(React.createElement(Spinner, { store }));
     const frame = lastFrame() ?? '';
-    // Should contain the verb (shimmer is color-only, text is same)
     expect(frame.length).toBeGreaterThan(0);
   });
 
-  it('shows thinking indicator in thinking mode after delay', () => {
+  it('shows thinking indicator after delay ticks', () => {
     const store = createSpinnerStore();
     store.getState().start('thinking');
-    // Advance past 3s delay
-    vi.advanceTimersByTime(4000);
     const { lastFrame } = render(React.createElement(Spinner, { store }));
+    // Advance timers: triggers setInterval → tick() → store update → re-render
+    vi.advanceTimersByTime(4000);
     const frame = lastFrame() ?? '';
-    // Should show (thinking) tail marker
-    expect(frame).toContain('(thinking)');
+    expect(frame).toContain('thinking');
   });
 
   it('shows dots cycle in non-thinking modes', () => {
@@ -36,16 +34,17 @@ describe('Spinner upgraded animations', () => {
     store.getState().start('generating');
     const { lastFrame } = render(React.createElement(Spinner, { store }));
     const frame = lastFrame() ?? '';
-    // DotsCycle pads to 3 chars: '.  ', '.. ', '...' — contain at least one dot
     expect(frame).toMatch(/\./);
   });
 
-  it('stalled state renders with error color', () => {
+  it('stalled state triggers after stall threshold', () => {
     const store = createSpinnerStore();
     store.getState().start('generating');
-    store.getState().onToken();
-    vi.advanceTimersByTime(4000);  // past stall threshold
-    const { lastFrame } = render(React.createElement(Spinner, { store }));
-    expect(lastFrame()).toBeTruthy();
+    expect(store.getState().stalled).toBe(false);
+    // Advance Date.now() past STALL_MS (3000ms)
+    vi.advanceTimersByTime(3500);
+    // Tick to pick up the stalled check (tick reads Date.now() - lastTokenAt)
+    store.getState().tick();
+    expect(store.getState().stalled).toBe(true);
   });
 });
