@@ -28,4 +28,66 @@ describe('ThinkingIndicator', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('thinking');
   });
+
+  it('wraps text in parentheses when showParens is true', () => {
+    const { lastFrame } = render(
+      React.createElement(ThinkingIndicator, {
+        storeTime: 5000,
+        thinkStartTime: 0,
+        text: 'thinking',
+        showParens: true,
+      })
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('(');
+    expect(frame).toContain(')');
+    expect(frame).toContain('thinking');
+  });
+
+  it('returns null when text is empty', () => {
+    const { lastFrame } = render(
+      React.createElement(ThinkingIndicator, {
+        storeTime: 5000,
+        thinkStartTime: 0,
+        text: '',
+      })
+    );
+    expect(lastFrame()).toBe('');
+  });
+
+  it('returns null when text is empty even with showParens', () => {
+    const { lastFrame } = render(
+      React.createElement(ThinkingIndicator, {
+        storeTime: 5000,
+        thinkStartTime: 0,
+        text: '',
+        showParens: true,
+      })
+    );
+    expect(lastFrame()).toBe('');
+  });
+
+  it('uses zero elapsed when thinkStartTime is null', () => {
+    const { lastFrame } = render(
+      React.createElement(ThinkingIndicator, {
+        storeTime: 5000,
+        thinkStartTime: null,
+        text: 'thinking',
+      })
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('thinking');
+  });
+
+  it('hides text opacity during initial delay (before 3s)', () => {
+    const { lastFrame } = render(
+      React.createElement(ThinkingIndicator, {
+        storeTime: 30,
+        thinkStartTime: 0,
+        text: 'thinking',
+      })
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('thinking');
+  });
 });

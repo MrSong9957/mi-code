@@ -22,11 +22,13 @@ export function toRGBColor(c: RGB): string {
 const THINKING_INACTIVE: RGB = { r: 153, g: 153, b: 153 };
 const THINKING_INACTIVE_SHIMMER: RGB = { r: 185, g: 185, b: 185 };
 const THINKING_GLOW_PERIOD_S = 2;
+const THINKING_DELAY_TICKS = 60;  // 3000ms / 50ms = 60 ticks
+const TICK_TO_SECONDS = 0.05;  // 50ms per tick
 
 export interface ThinkingIndicatorProps {
   /** Spinner store time (50ms tick), used for sine wave calculation */
   storeTime: number;
-  /** Timestamp when thinking started (Date.now()), null if not thinking */
+  /** Timestamp (storeTime ticks) when thinking started, null if not thinking */
   thinkStartTime: number | null;
   /** Text to display (e.g. "thinking") */
   text: string;
@@ -42,11 +44,8 @@ export function ThinkingIndicator({
 }: ThinkingIndicatorProps): React.ReactElement | null {
   if (!text) return null;
 
-  // Use storeTime (50ms tick) for animation, not Date.now()
-  // thinkStartTime is storeTime when thinking began; compute elapsed from store clock
   const elapsed = thinkStartTime !== null ? storeTime - thinkStartTime : 0;
-  const THINKING_DELAY_TICKS = 60;  // 3000ms / 50ms = 60 ticks
-  const elapsedSec = Math.max(0, elapsed - THINKING_DELAY_TICKS) * 0.05;  // ticks * 50ms = seconds
+  const elapsedSec = Math.max(0, elapsed - THINKING_DELAY_TICKS) * TICK_TO_SECONDS;
   const thinkingOpacity = elapsed < THINKING_DELAY_TICKS
     ? 0
     : (Math.sin(elapsedSec * Math.PI * 2 / THINKING_GLOW_PERIOD_S) + 1) / 2;
