@@ -13,14 +13,21 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { createDefaultRegistry } from './agent/tool-registry.js';
 import { AnthropicStreamClient } from './agent/anthropic-stream-client.js';
+import { OpenAIStreamClient } from './agent/openai-stream-client.js';
+import { GoogleStreamClient } from './agent/google-stream-client.js';
+import type { StreamingLLMClient } from './agent/types.js';
 import { formatErrorForDisplay } from './cli/format-error.js';
 import { streamingQuery } from './agent/streaming-query.js';
 import { StreamEventBus } from './agent/stream-event-bus.js';
+import { stripImagesForPersistence } from './agent/image-utils.js';
+import type { ContentBlock } from './agent/types.js';
 import { BlockPipeline } from './ui/block-pipeline.js';
 import { bootstrap, type BootstrapHandle } from './tui/bootstrap.js';
 import { writeResumeHint } from './cli/resume-hint.js';
-import { ConfigStore } from './config/index.js';
+import { ConfigStore, SUPPORTED_PROVIDERS } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
+import { processImageCommand } from './commands/image-command.js';
+import { getModelsForProvider } from './commands/model-options.js';
 import { TodoManager } from './agent/todo.js';
 import { createTaskTool } from './agent/tools/task-tool.js';
 import { createSpawnAgentTool } from './agent/tools/spawn-agent-tool.js';
@@ -53,13 +60,59 @@ const VERSION = "1.0.0";
 // 初始化
 // ─────────────────────────────────────────────────────────────
 const configStore = new ConfigStore();
-// MODEL/SMALL_MODEL 显式取自 anthropic provider 槽位（不读 defaultProvider）。
-// 原因：客户端恒为 AnthropicStreamClient（new Anthropic()），只支持 Anthropic 兼容端点。
-// 若用 getModel()（读 defaultProvider），当 defaultProvider=openai 时会拿到 gpt-4o，
-// 但 key 也会取错槽位（见下方 getApiKey 修复），导致 401。
-const ANTHROPIC_PROVIDER = configStore.getProvider('anthropic');
-const MODEL = ANTHROPIC_PROVIDER?.model || configStore.getModel();
-const SMALL_MODEL = configStore.getSmallModel('anthropic');
+
+// ── 模型/provider 解析（动态,支持运行时 /model /provider 切换）──
+// 旧实现：顶层 const MODEL = anthropic 槽位硬编码 → /model 命令改配置但不生效。
+// 新实现：getter 函数每次调用时读当前 configStore → /model /provider 即时生效。
+//
+// createStreamClient 工厂按 provider 分发:
+//   anthropic → AnthropicStreamClient
+//   openai    → OpenAIStreamClient
+//   google    → GoogleStreamClient
+//   default   → AnthropicStreamClient(回退)
+const SUPPORTED_PROVIDERS_SET = new Set(SUPPORTED_PROVIDERS);
+
+/** 当前 defaultProvider(校验是否支持) */
+function currentProvider(): string {
+  const p = configStore.getDefaultProvider();
+  return SUPPORTED_PROVIDERS_SET.has(p) ? p : 'anthropic';
+}
+
+/** 当前主模型名(读当前 provider 槽位) */
+function currentModel(): string {
+  return configStore.getModel();
+}
+
+/** 当前小模型名(子代理/压缩用) */
+function currentSmallModel(): string {
+  return configStore.getSmallModel();
+}
+
+/**
+ * 创建流式客户端(工厂,按 provider 分发)。
+ *
+ * 三大 provider 已全部接入:
+ *   anthropic → AnthropicStreamClient
+ *   openai    → OpenAIStreamClient
+ *   google    → GoogleStreamClient
+ * 未识别的 provider 回退 anthropic。
+ * compactClient(小模型)也走此工厂。
+ */
+function createStreamClient(provider: string, apiKey: string, model: string): StreamingLLMClient {
+  switch (provider) {
+    case 'openai':
+      return new OpenAIStreamClient({ apiKey, model });
+    case 'google':
+      return new GoogleStreamClient({ apiKey, model });
+    case 'anthropic':
+    default:
+      return new AnthropicStreamClient({ apiKey, model });
+  }
+}
+
+// 子代理工具用的 small model(启动快照,工具接口暂不支持 getter)。
+// 主对话模型已动态化(currentModel),子代理 small model 留后续。
+const SMALL_MODEL_SNAPSHOT = currentSmallModel();
 
 const todoManager = new TodoManager();
 const skillRegistry = new SkillRegistry();
@@ -116,13 +169,13 @@ const SHORT_DIR = getShortDir();
 
 const childToolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, backgroundManager, taskBoard, worktreeManager);
 const toolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, backgroundManager, taskBoard, worktreeManager);
-const taskTool = createTaskTool(childToolRegistry, worktreeManager, SMALL_MODEL);
+const taskTool = createTaskTool(childToolRegistry, worktreeManager, SMALL_MODEL_SNAPSHOT);
 toolRegistry.register(taskTool.definition, taskTool.executor);
-const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, { model: SMALL_MODEL });
+const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, { model: SMALL_MODEL_SNAPSHOT });
 toolRegistry.register(spawnSoTool.definition, spawnSoTool.executor);
 // spawn_agent：派角色化子代理（explore/plan/general）
 // 透传 permissionChecker：让子代理也受 plan 模式约束（读 allow / 写 deny）
-const spawnAgentTool = createSpawnAgentTool(childToolRegistry, SMALL_MODEL, permissionChecker);
+const spawnAgentTool = createSpawnAgentTool(childToolRegistry, SMALL_MODEL_SNAPSHOT, permissionChecker);
 toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 const loadSkillTool = createLoadSkillTool(skillRegistry);
 toolRegistry.register(loadSkillTool.definition, loadSkillTool.executor);
@@ -254,21 +307,21 @@ function handleTab(
   const completion = handle.completionStore.getState();
 
   // 分支 1：补全（input 以 / 开头）
+  // TAB = 接受当前高亮项(对标 Claude Code):选中 + 尾空格 + 关闭菜单
+  // 上下箭头负责 cycle(handleTab 不 cycle,只接受第一项或当前高亮项)
   if (text.startsWith('/')) {
     const prefix = text.slice(1);
-    // 候选已可见且仍匹配当前 text（输入框前缀未变）→ cycle；否则重算
+    // 如未打开或前缀不匹配,先 filter 打开;否则直接接受当前高亮
     const stillMatches = completion.visible
       && completion.candidates.length > 0
-      && completion.candidates.every(c => c.startsWith(prefix));
-    if (stillMatches) {
-      completion.cycle();
-    } else {
-      const candidates = COMMAND_NAMES.filter(n => n.startsWith(prefix));
-      completion.setCandidates(candidates);
+      && completion.candidates.every(c => c.name.startsWith(prefix));
+    if (!stillMatches) {
+      completion.filter(prefix);
     }
     const sel = completion.selected();
+    completion.hide();
     if (sel) {
-      handle.inputStore.getState().setText('/' + sel);
+      handle.inputStore.getState().setText('/' + sel + ' ');
     }
     return;
   }
@@ -362,7 +415,30 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   }
 
   const cmd = parseCommand(userInput);
-  if (cmd) {
+  // /image 特殊路径:提取图片后继续走 agent loop(不短路 return)。
+  // 其他斜杠命令短路 return,不进 agent loop。
+  let userMessageForAgent: string | ContentBlock[] | null = null;
+  if (cmd && cmd.name === 'image') {
+    const imgResult = await processImageCommand(cmd.args, sessionId);
+    if ('error' in imgResult) {
+      printLine(`✗ ${imgResult.error}`);
+      return;
+    }
+    userMessageForAgent = imgResult.content;
+  } else if (cmd) {
+    // /model 无参数 → 打开交互式模型选择界面
+    if (cmd.name === 'model' && cmd.args.length === 0) {
+      const provider = currentProvider();
+      const model = currentModel();
+      const providerConfig = configStore.getProvider(provider);
+      const options = getModelsForProvider(provider, model, providerConfig?.models);
+      tuiHandle?.selectStore.getState().open('Select model', options, (opt) => {
+        configStore.setModel(provider, opt.value);
+        tuiHandle?.statusStore.getState().setModel(opt.value);
+        printLine(`Model switched to: ${opt.label} (${opt.value})`);
+      });
+      return;
+    }
     if (['skill', 'trigger', 'y', 'n', 'edit'].includes(cmd.name)) {
       const result = executeCommand(cmd, { skillRegistry, negotiator: skillNegotiator, userId: 'default' });
       printLine(result.message);
@@ -371,6 +447,10 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       printLine(result.message);
       if (cmd.name === 'plan' || cmd.name === 'build' || cmd.name === 'auto') {
         tuiHandle?.statusStore.getState().setMode(permissionChecker.getMode());
+      }
+      // /model /provider:即时更新状态栏模型显示(下次对话用新 model 构造 streamClient)
+      if (cmd.name === 'model' || cmd.name === 'provider') {
+        tuiHandle?.statusStore.getState().setModel(currentModel());
       }
     }
     return;
@@ -423,21 +503,20 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   isProcessing = true;
   let thinkingContent = '';
   let thinkingStart = Date.now();
-  pipeline.emit({ kind: 'thinking_start' });
 
-  // API Key 显式取自 anthropic provider 槽位（不读 defaultProvider）。
-  // 原因：客户端恒为 AnthropicStreamClient，只支持 Anthropic 兼容端点 + X-Api-Key 头。
-  // 若用 getApiKey(getDefaultProvider())，当 defaultProvider=openai 时会拿到假 key
-  // （如 sk-test-123），发给 miMo 网关 → 401 Invalid API Key。
-  const apiKey = configStore.getApiKey('anthropic');
+  // 动态读 provider/apiKey/model(支持运行时 /model /provider 切换)。
+  // createStreamClient 工厂按 provider 分发(anthropic/openai)。
+  const provider = currentProvider();
+  const model = currentModel();
+  const apiKey = configStore.getApiKey(provider);
   if (!apiKey) {
-    tuiHandle?.printStyled(`[Error] No API Key for anthropic provider. Use /login anthropic <key> to configure.`, 'error');
+    tuiHandle?.printStyled(`[Error] No API Key for ${provider} provider. Use /login ${provider} <key> to configure.`, 'error');
     isProcessing = false;
     return;
   }
 
-  const streamClient = new AnthropicStreamClient({ apiKey, model: MODEL });
-  const compactClient = new AnthropicStreamClient({ apiKey, model: SMALL_MODEL });
+  const streamClient = createStreamClient(provider, apiKey, model);
+  const compactClient = createStreamClient(provider, apiKey, currentSmallModel());
   const eventBus = new StreamEventBus();
   eventBus.onToolCall(d => {
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
@@ -460,10 +539,16 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   let assistantText = '';
   let persistedCount = sessionMessages.length;
   const blockTypes = new Map<number, string>();
-  let thinkingActive = true; // 已乐观 emit thinking_start
+  let thinkingActive = false; // 收到 content_block_start(thinking) 时设 true
+  // Spinner 立即启动(label="Connecting..."),收到第一个 event 后切到正常 verb。
+  // 兼顾"用户有即时反馈"和"状态准确"。
+  let spinnerStarted = false;
+  let gotAnyResponse = false; // 是否收到过任何 assistant 内容(用于空响应检测)
   tuiHandle?.startSpinner('thinking');
+  tuiHandle?.setSpinnerLabel('Connecting');
+  spinnerStarted = true;
   try {
-    for await (const msg of streamingQuery(streamClient, toolRegistry, userInput, {
+    for await (const msg of streamingQuery(streamClient, toolRegistry, userMessageForAgent ?? userInput, {
       systemPrompt, tools, signal: ac.signal, maxTurns: 10,
       eventBus, compactClient, permissionChecker,
       initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
@@ -472,10 +557,17 @@ async function handleUserSubmit(rawText: string): Promise<void> {
         sessionMessages = finalMessages;
         persistedCount = finalMessages.length;
         for (const m of newMsgs) {
-          void sessionStore.append(sessionId, m);
+          // 持久化前 strip image base64(只存 cachePath),避免 JSONL 膨胀
+          void sessionStore.append(sessionId, stripImagesForPersistence(m));
         }
       },
     })) {
+      // 第一个 event 到达 → 清除 "Connecting" label,恢复到 spinner 默认 verb
+      if (spinnerStarted) {
+        tuiHandle?.setSpinnerLabel('');
+        spinnerStarted = false;
+      }
+
       if ('type' in msg && msg.type === 'content_block_start') {
         const cbs = msg as { type: 'content_block_start'; index: number; blockType: string };
         blockTypes.set(cbs.index, cbs.blockType);
@@ -497,6 +589,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
         const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
         if (delta.content) tuiHandle?.spinnerOnToken();
         if (delta.deltaType === 'text' && delta.content) {
+          gotAnyResponse = true;
           if (assistantText === '' && thinkingContent) {
             const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
             pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
@@ -517,6 +610,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
           tuiHandle?.statusStore.getState().setContextPct(ms.inputTokens / 200000);
         }
       } else if ('type' in msg && msg.type === 'assistant') {
+        gotAnyResponse = true;
         if (assistantText) {
           pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: true });
           assistantText = '';
@@ -535,6 +629,16 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     if (assistantText) {
       pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: true });
       assistantText = '';
+    }
+    // 空响应检测:stream 结束但没收到任何 assistant 内容
+    if (!gotAnyResponse) {
+      const hasImage = Array.isArray(userMessageForAgent) && userMessageForAgent.some(b => b.type === 'image');
+      tuiHandle?.printStyled(
+        hasImage
+          ? '[Warning] API 返回空响应。该模型可能不支持图片输入(vision)。请换用支持 vision 的模型。'
+          : '[Warning] API 返回空响应,没有生成任何内容。',
+        'error',
+      );
     }
   } catch (err) {
     // formatErrorForDisplay 只取 message（不含堆栈），超长截断——
@@ -588,7 +692,7 @@ if (cliOpts.list) {
     logo: { version: VERSION, dir: SHORT_DIR },
     status: {
       mode: configStore.getPermissionMode(),
-      model: MODEL,
+      model: currentModel(),
       dir: SHORT_DIR,
       branch: GIT_BRANCH,
     },

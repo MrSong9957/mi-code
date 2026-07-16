@@ -132,9 +132,10 @@ export class BlockPipeline {
         break;
 
       case 'thinking_start':
-        // thinking 进行时不在消息区显示占位行——对标 Claude Code：
-        // thinking 状态在 spinner 行尾部显示 (thinking)，消息区不占位。
+        // 固化 ● Thinking… 标题行(magenta)。下方流式显示思考内容(dim)。
+        // thinking_end 时擦除流式内容,打印摘要行(Thought for Ns)。
         this.openModelBlock();
+        this.print(MessageFormatter.format('thinking', {}, 'Thinking…'), 'thinking_header');
         this.thinkingActive = true;
         break;
 
