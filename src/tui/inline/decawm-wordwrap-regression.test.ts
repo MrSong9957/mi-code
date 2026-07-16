@@ -117,7 +117,7 @@ describe('DECAWM OFF + wordWrap 回归', () => {
       }
       mock.written.length = 0;
       const rowAfterAppend = sim.row;
-      expect(rowAfterAppend).toBe(5);
+      expect(rowAfterAppend).toBe(7);
 
       // 帧2：78个a（❯ +78a=80列 > 79 usableWidth，wordWrap 折行）
       renderer.renderFooter('a'.repeat(78), 78, 'status', cols, [], 0, 0);
@@ -321,11 +321,11 @@ describe('resize 跟随：cols 变化时 border 不堆叠', () => {
     expect(countBorders(mock.output)).toBe(2);
   });
 
-  it('resize 后 footerHeight 不漂移（与帧1 一致，4 行）', () => {
+  it('resize 后 footerHeight 不漂移（与帧1 一致，6 行）', () => {
     expect.hasAssertions();
     renderer.renderFooter('', 0, 'status', 180, [], 0, 0);
     const h1 = renderer.getFooterHeight();
-    expect(h1).toBe(4); // border + 输入框 + border + status
+    expect(h1).toBe(6); // 预留位(2) + 顶部border + 输入框 + 底部border + status
 
     renderer.renderFooter('', 0, 'status', 120, [], 0, 0);
     expect(renderer.getFooterHeight()).toBe(h1);

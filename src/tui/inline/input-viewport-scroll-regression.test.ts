@@ -98,7 +98,7 @@ describe('输入框视口滚动回归', () => {
     }
   });
 
-  it('光标落点：视口滚动后 cursorUp 数值 = footerHeight - 1 - cursorViewportLine', () => {
+  it('光标落点：视口滚动后 cursorUp 数值 = footerHeight - cursorToTop', () => {
     expect.hasAssertions();
     // 10 行输入，cursor 在第 7 行
     const lines: string[] = [];
@@ -111,9 +111,11 @@ describe('输入框视口滚动回归', () => {
     const out = mock.output;
     const cursorUps = extractCursorUpValues(out);
     const cursorViewportLine = cursorLine - vp.viewportTop;
-    // footerHeight = 1(border) + maxVisible + 1(border) + 1(status) = 8
-    const footerHeight = 1 + MAX_VISIBLE_INPUT_LINES + 1 + 1;
-    const expectedUp = footerHeight - 1 - cursorViewportLine;
+    // footer 结构：footerHeight = 预留位(2) + 顶部border + maxVisible + 底部border + 1(status) = 10
+    // cursorToTop = 3（初始偏移：2 预留位 + 1 顶部border）+ cursorViewportLine
+    const footerHeight = 2 + 1 + MAX_VISIBLE_INPUT_LINES + 1 + 1;
+    const cursorToTop = 3 + cursorViewportLine;
+    const expectedUp = footerHeight - cursorToTop;
     expect(cursorUps[cursorUps.length - 1]).toBe(expectedUp);
   });
 
@@ -186,8 +188,8 @@ describe('CJK × 视口滚动 × 物理折行组合回归', () => {
       totalInputPhys += wrapLine(prefix + visible[i]!, usableWidth).length;
     }
     const statusPhys = wrapLine('status', usableWidth).length;
-    // footerHeight = 1(border) + totalInputPhys + 1(border) + statusPhys
-    const expectedHeight = 1 + totalInputPhys + 1 + statusPhys;
+    // footer 结构：footerHeight = 预留位(2) + 顶部border + totalInputPhys + 底部border + statusPhys
+    const expectedHeight = 2 + 1 + totalInputPhys + 1 + statusPhys;
     expect(renderer.getFooterHeight()).toBe(expectedHeight);
   });
 

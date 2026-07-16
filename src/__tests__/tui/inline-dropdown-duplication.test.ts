@@ -31,18 +31,19 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     renderer.renderFooter('/c', 2, 'STATUS', 80, suggestions, 0);
     const output = stdoutChunks.join('');
 
-    // 行序断言：border → 输入行 → 候选行 → border → 状态行
-    // border 宽度 = usableWidth = cols - 1（DECAWM OFF 留安全列）
-    const borderIdx = output.indexOf('─'.repeat(79));
+    // 行序断言：预留位 → 顶部border → 输入行 → 候选行 → 底部border → 状态行
+    // footer 结构：lines 前面 2 行预留位（间距+spinner）+ 顶部 border。
+    // border 宽度 = usableWidth = cols - 1（DECAWM OFF 留安全列），顶部 + 底部各 1 条。
     const inputIdx = output.indexOf('❯ /c');
     const candidateIdx = output.indexOf('/config');
-    const secondBorderIdx = output.indexOf('─'.repeat(79), borderIdx + 1);
+    // footer 现有 2 个相同 border，底部 border 在候选行之后——用 lastIndexOf 取最后一条
+    const borderIdx = output.lastIndexOf('─'.repeat(79));
     const statusIdx = output.indexOf('STATUS');
 
-    expect(inputIdx).toBeGreaterThan(borderIdx);
+    expect(inputIdx).toBeGreaterThan(-1);
     expect(candidateIdx).toBeGreaterThan(inputIdx);
-    expect(secondBorderIdx).toBeGreaterThan(candidateIdx);
-    expect(statusIdx).toBeGreaterThan(secondBorderIdx);
+    expect(borderIdx).toBeGreaterThan(candidateIdx);
+    expect(statusIdx).toBeGreaterThan(borderIdx);
   });
 
   it('选中候选行反白（\x1b[7m），未选中行不反白', async () => {
@@ -71,7 +72,7 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     const output = stdoutChunks.join('');
 
     // 逐行擦写策略：\r\x1b[2K 擦整行后重画。旧行被擦除（零残留）。
-    // 旧 footerHeight = border(1) + 输入(1) + 8下拉 + border(1) + status(1) = 12。
+    // footerHeight = 预留位(2) + 输入(1) + 8下拉 + border(1) + status(1) = 13。
     // 必须擦除 ≥12 行（Math.max(旧高, 新高)），否则旧行残留。
     const eraseCount = (output.match(/\x1b\[2K/g) || []).length;
     expect(eraseCount).toBeGreaterThanOrEqual(12);
@@ -99,7 +100,7 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     expect(output).toContain('/g');
     expect(output).toContain('/h');
     // 逐行擦写策略：\r\x1b[2K 擦整行后重画。
-    // 旧 footerHeight = border(1)+输入(1)+5下拉+border(1)+status(1) = 9。
+    // footerHeight = 预留位(2)+输入(1)+5下拉+border(1)+status(1) = 10。
     // 必须擦除 ≥9 行，否则旧行残留。
     const eraseCount = (output.match(/\x1b\[2K/g) || []).length;
     expect(eraseCount).toBeGreaterThanOrEqual(9);
@@ -140,11 +141,11 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     renderer.commitFooter();
     const commitOutput = stdoutChunks.join('');
     // commitFooter 必须向上移动足够行数以擦除整个块（含 dropdown 的 2 行）
-    // footerHeight = border+input+2suggestions+border+status = 6；cursorToTop = 1（border）= 1
-    // 擦除 6 行
+    // 新 footer 结构：footerHeight = 预留位(2)+input(1)+2suggestions+border(1)+status(1) = 7；
+    // cursorToTop = 3（光标在 input 行 = 第 3 行，上移 3 到预留位顶）
     const cursorUpMatch = commitOutput.match(/\x1b\[(\d+)A/);
     expect(cursorUpMatch).not.toBeNull();
-    expect(parseInt(cursorUpMatch![1], 10)).toBe(1);
+    expect(parseInt(cursorUpMatch![1], 10)).toBe(3);
 
     // commit 后追加消息，不残留 dropdown
     renderer.appendLine('❯ /config');

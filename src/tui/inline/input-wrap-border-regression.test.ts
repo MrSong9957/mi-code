@@ -14,8 +14,8 @@
 //   footerHeight = lines.length，光标定位用 layoutInputCursor（wordWrap 后的 row/col）。
 //
 // 不变量：
-//   1. 跨帧光标绝对位置 = 块顶 + 1(顶部border) + layoutInputCursor.row（与输入物理行一致，不漂移）
-//   2. 输出中 border 数量恒为 2（上 border + 下 border，不堆叠）
+//   1. 跨帧光标绝对位置 = 块顶 + 3(2行预留位) + layoutInputCursor.row（与输入物理行一致，不漂移）
+//   2. 输出中 border 数量恒为 1（footer 现只有底部 border，顶部 border 被预留位替代），不堆叠
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import stringWidth from 'string-width';
@@ -26,13 +26,13 @@ import { layoutInputCursor } from '../state/layout-cursor.js';
 const PROMPT = '❯ ';
 
 /**
- * 算空输入光标行的基准：块顶(4) + 顶部border(1) + layoutInputCursor.row。
- * 输入超宽时 wordWrap 产生多个物理行，光标跟着移到对应物理行（不再恒在行5）。
+ * 算空输入光标行的基准：块顶(4) + 2行预留位 + layoutInputCursor.row。
+ * 输入超宽时 wordWrap 产生多个物理行，光标跟着移到对应物理行。
  */
 function expectedCursorRow(blockTop: number, input: string, cursorPos: number, usableWidth: number): number {
   // 单行输入；多行需逐行累加（本测试只覆盖单行）
   const layout = layoutInputCursor(input, cursorPos, PROMPT, usableWidth);
-  return blockTop + 1 + layout.row;
+  return blockTop + 3 + layout.row;
 }
 
 class PreciseCursorSimulator {
@@ -124,7 +124,7 @@ describe('输入行折行 border 堆叠 + 光标漂移回归', () => {
     for (const s of mock.written) sim.apply(s, cols);
     mock.written.length = 0;
     const rowAfterAppend = sim.row;
-    expect(rowAfterAppend).toBe(expectedCursorRow(4, '', 0, usableWidth)); // 块顶+1+0=5
+    expect(rowAfterAppend).toBe(expectedCursorRow(4, '', 0, usableWidth)); // 块顶+3+0=7
 
     // 帧2：78个a。2+78=80 > usableWidth(79)，wrapLine 折成 2 行，光标在物理行1。
     renderer.renderFooter('a'.repeat(78), 78, 'status', cols, [], 0, 0);
@@ -145,7 +145,7 @@ describe('输入行折行 border 堆叠 + 光标漂移回归', () => {
     expect(sim.row).toBe(expectedCursorRow(4, 'a'.repeat(100), 100, usableWidth));
   });
 
-  it('连续输入至超宽：每帧 border 数量恒为 2（不堆叠）', () => {
+  it('连续输入至超宽：每帧 border 数量恒为 1（不堆叠）', () => {
     expect.hasAssertions();
     // 追加模式
     renderer.renderFooter('', 0, 'status', cols, [], 0, 0);
@@ -154,7 +154,7 @@ describe('输入行折行 border 堆叠 + 光标漂移回归', () => {
       mock.written.length = 0;
       renderer.renderFooter('a'.repeat(i), i, 'status', cols, [], 0, 0);
       const borders = countBorders(mock.output);
-      // 覆写模式下每次只应写 2 个 border（上+下），不堆叠
+      // 覆写模式下每次应写 2 个 border（footer 有顶部 + 底部 border），不堆叠
       if (i > 1) { // 第1次覆写开始检查
         expect(borders).toBe(2);
       }
@@ -203,7 +203,7 @@ describe('输入行折行 border 堆叠 + 光标漂移回归', () => {
     for (const s of mock.written) sim.apply(s, cols);
 
     // footerHeight 应稳定（每行截断到 cols 后各 1 物理行）
-    // border 不堆叠
+    // border 不堆叠（footer 只有底部 border）
     expect(countBorders(mock.output)).toBe(2);
   });
 });

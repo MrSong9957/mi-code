@@ -193,19 +193,32 @@ export function summarizeOutput(
 }
 
 /**
- * 格式化 thinking 结束摘要：`Thought for Ns, read M files (ctrl+o to expand)`。
+ * 格式化 thinking 结束摘要：`thought for Ns, read M files (ctrl+o to expand)`。
  *
+ * 对标 Claude Code SpinnerAnimationRow.tsx:172：固定 "thought"（小写），dim 色。
  * - filesRead=0 时省略 "read M files"。
  * - filesRead=1 单数 file，否则 files。
- * - duration 始终输出（含 0）。
+ * - duration 始终输出（含 0），>= 60s 用分钟格式（如 1m 40s）。
  */
 export function formatThinkingSummary(durationSec: number, filesRead: number): string {
-  let text = `Thought for ${durationSec}s`;
+  let text = `thought for ${formatDuration(durationSec)}`;
   if (filesRead > 0) {
     text += `, read ${filesRead} file${filesRead > 1 ? 's' : ''}`;
   }
   text += ' (ctrl+o to expand)';
   return text;
+}
+
+/**
+ * 格式化时长：< 60s 显示 Ns，>= 60s 显示 Nm Ms（对标 Claude Code formatDuration）。
+ * 始终至少 1（Math.max(1, round)）。
+ */
+function formatDuration(sec: number): string {
+  const s = Math.max(1, Math.round(sec));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rest = s % 60;
+  return rest === 0 ? `${m}m` : `${m}m ${rest}s`;
 }
 
 /**

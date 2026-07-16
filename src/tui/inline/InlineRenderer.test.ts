@@ -165,4 +165,36 @@ describe('InlineRenderer.commit(frame) — render commit boundary', () => {
     const callsAfterCommit = mock.write.mock.calls.length;
     expect(callsAfterCommit - callsBeforeCommit).toBe(1);
   });
+
+  it('草稿消失时擦除残留：streamingLines=null 但 lastStreamingHeight>0 → eraseStreamingLines', () => {
+    // 第一帧：有草稿（如 spinner 行），建立 lastStreamingHeight>0
+    renderer.commit(makeFrame({
+      streamingLines: ['✶ Crafting'],
+    }));
+    expect(renderer.state.lastStreamingHeight).toBe(1);
+
+    // 第二帧：草稿消失（spinner 停止），streamingLines=null
+    // 新增的 else 分支应擦除残留行（eraseStreamingLines：cursorUp + DL）
+    mock.written.length = 0;
+    renderer.commit(makeFrame({
+      streamingLines: null,
+    }));
+    const output = mock.written.join('');
+    // 应含物理删除序列（擦除草稿行）
+    expect(output).toContain('\x1b[1M');
+    // lastStreamingHeight 被清零
+    expect(renderer.state.lastStreamingHeight).toBe(0);
+  });
+
+  it('草稿消失无残留时 no-op：streamingLines=null 且 lastStreamingHeight=0', () => {
+    // 从未有草稿，streamingLines=null → 不触发擦除
+    const beforeWrites = mock.written.length;
+    renderer.commit(makeFrame({
+      streamingLines: null,
+    }));
+    // 不应含删除序列（无残留可擦）
+    const output = mock.written.slice(beforeWrites).join('');
+    expect(output).not.toContain('\x1b[1M');
+    expect(output).not.toMatch(/\x1b\[\d+M/);
+  });
 });

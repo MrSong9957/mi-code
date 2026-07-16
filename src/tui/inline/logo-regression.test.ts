@@ -119,7 +119,7 @@ describe('Logo 显示回归测试', () => {
     const afterFirst = mock.written.length;
 
     // 覆写 footer：输入为单行 'hello'，inputLineIndex=0
-    // 正确偏移量 = 1 + 0 = 1（上移 1 行到 border 行）
+    // 新 footer 结构：cursorToTop = 3（上移 3 行到预留位顶部：2 预留 + 输入行）
     renderer.renderFooter('hello', 0, 'auto │ model');
 
     // 收集覆写阶段的所有写入
@@ -130,9 +130,9 @@ describe('Logo 显示回归测试', () => {
     const matches = [...rewriteWrites.matchAll(cursorUpPattern)];
     expect(matches.length).toBeGreaterThanOrEqual(1);
 
-    // 第一个 cursorUp 是上移到 footer 顶部，n 应为 1
+    // 第一个 cursorUp 是上移到 footer 顶部（cursorToTop = 3）
     const firstCursorUp = parseInt(matches[0][1], 10);
-    expect(firstCursorUp).toBe(1);
+    expect(firstCursorUp).toBe(3);
   });
 
   it('覆写模式多行输入时偏移量正确', () => {
@@ -143,8 +143,8 @@ describe('Logo 显示回归测试', () => {
     const afterFirst = mock.written.length;
 
     // 多行输入：'line1\nline2'，cursorPos=0 → 光标在第 0 行
-    // 视口化后 offsetToTop = 1 + cursorViewportLine = 1 + 0 = 1
-    // （从上一帧光标所在输入行上移 1 到 border 顶部）
+    // 新 footer 结构：cursorToTop = 3（2 预留位 + 输入行 cursorViewportLine=0）
+    // （从上一帧光标所在输入行上移 3 到预留位顶部）
     renderer.renderFooter('line1\nline2', 0, 'auto │ model');
 
     const rewriteWrites = mock.written.slice(afterFirst).join('');
@@ -153,7 +153,7 @@ describe('Logo 显示回归测试', () => {
     expect(matches.length).toBeGreaterThanOrEqual(1);
 
     const firstCursorUp = parseInt(matches[0][1], 10);
-    expect(firstCursorUp).toBe(1);
+    expect(firstCursorUp).toBe(3);
   });
 
   it('覆写模式逐行擦除旧行（\\x1b[2K，零残留）', () => {
@@ -166,7 +166,8 @@ describe('Logo 显示回归测试', () => {
     renderer.renderFooter('updated', 0, 'auto │ model');
 
     const rewriteWrites = mock.written.slice(afterFirst).join('');
-    // 覆写模式逐行 \r\x1b[2K 擦整行后重画。首帧 footerHeight=4，必须擦 ≥4 行。
+    // 覆写模式逐行 \r\x1b[2K 擦整行后重画。新 footer 结构首帧 footerHeight=5
+    // （预留位2 + input1 + border1 + status1），必须擦 ≥4 行。
     const eraseCount = (rewriteWrites.match(/\x1b\[2K/g) || []).length;
     expect(eraseCount).toBeGreaterThanOrEqual(4);
   });

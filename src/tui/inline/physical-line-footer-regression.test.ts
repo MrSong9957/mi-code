@@ -8,7 +8,7 @@
 // - InlineRenderer constructor 写 \x1b[?7l（DECAWM OFF），终端不再自动折行。
 // - 每个输入行用 wrapLine(prefix + content, usableWidth) 折行（不截断）。
 // - usableWidth = cols - 1（留 1 安全列）。
-// - footerHeight = lines.length（border + 折行后输入行 + border + 折行后 status）。
+// - footerHeight = lines.length（预留位(2) + 折行后输入行 + border + 折行后 status）。
 // - 物理行 = 应用层折出的行（完全可控，不再依赖终端折行或 simulateTerminalWrap）。
 //
 // mock stdout 无法模拟终端折行（它不折行），故不能靠"数 border"测。
@@ -36,32 +36,33 @@ function createMockStdout() {
  * 复刻 InlineRenderer.renderFooter 的行数算法（无 suggestions，viewportTop=0）。
  * 用 wrapLine 现场算预期 footerHeight，避免硬编码。
  *
- * 行序：border / wrapLine(prefix+每输入行) / border / wrapLine(status)
+ * 行序：预留位(2行) / 顶部border / wrapLine(prefix+每输入行) / 底部border / wrapLine(status)
+ * （footer 顶部 2 行预留位 + 顶部 border + 底部 border，共 2 个 border）
  */
 function expectedFooterHeight(input: string, statusText: string, cols: number): number {
   const usableWidth = getUsableWidth(cols);
   const border = '─'.repeat(usableWidth);
   const inputLines = input.split('\n');
-  const lines: string[] = [border];
+  const lines: string[] = ['', '', border]; // 预留位(2) + 顶部 border
   for (let i = 0; i < inputLines.length; i++) {
     const prefix = i === 0 ? PROMPT : CONTINUATION_INDENT;
     lines.push(...wrapLine(prefix + inputLines[i]!, usableWidth));
   }
-  lines.push(border);
+  lines.push(border); // 底部 border
   lines.push(...wrapLine(statusText, usableWidth));
   return lines.length;
 }
 
 /**
  * 复刻 InlineRenderer.renderFooter 的光标 cursorUp 值（append 模式，footerHeight 从 0 开始）。
- * writtenLineCount = newHeight；cursorPhysLine0 = 1(border) + layout.row；
+ * writtenLineCount = newHeight；cursorPhysLine0 = 3(预留位2 + 顶部) + layout.row；
  * upFromBottom = writtenLineCount - cursorPhysLine0。
  */
 function expectedCursorUp(input: string, cursorPos: number, statusText: string, cols: number): number {
   const usableWidth = getUsableWidth(cols);
   const h = expectedFooterHeight(input, statusText, cols);
   const layout = layoutInputCursor(input, cursorPos, PROMPT, usableWidth);
-  return h - (1 + layout.row);
+  return h - (3 + layout.row);
 }
 
 /**
@@ -82,11 +83,11 @@ describe('物理行折算回归（Bug 4）', () => {
     renderer = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
   });
 
-  it('短输入不折行：物理行=逻辑行，footerHeight=4（border+1行+border+status）', () => {
+  it('短输入不折行：物理行=逻辑行，footerHeight=5（预留位2+1行+border+status）', () => {
     expect.hasAssertions();
     renderer.renderFooter('hello', 5, 'status', 80);
     // wrapLine('❯ hello', 79) = 1 行；wrapLine('status', 79) = 1 行
-    // footerHeight = 1(border) + 1 + 1(border) + 1 = 4
+    // footerHeight = 预留位(2) + 1 + 1(border) + 1 = 5
     expect(renderer.getFooterHeight()).toBe(expectedFooterHeight('hello', 'status', 80));
   });
 
@@ -148,7 +149,7 @@ describe('物理行折算回归（Bug 4）', () => {
   it('多行超宽：每行独立 wordWrap 后求和', () => {
     expect.hasAssertions();
     // 两逻辑行各 100a：每行 wrapLine(prefix+100a, 79) 折成 3 行（prefix+100a 超 usableWidth）。
-    // footerHeight = 1(border) + 行0折行数 + 行1折行数 + 1(border) + 1(status)
+    // footerHeight = 预留位(2) + 行0折行数 + 行1折行数 + 1(border) + 1(status)
     const text = 'a'.repeat(100) + '\n' + 'a'.repeat(100);
     renderer.renderFooter(text, 201, 'status', 80);
     expect(renderer.getFooterHeight()).toBe(expectedFooterHeight(text, 'status', 80));
@@ -156,9 +157,9 @@ describe('物理行折算回归（Bug 4）', () => {
 
   it('光标定位契约：单行 wordWrap 后光标 cursorUp 数值正确（光标在末尾）', () => {
     expect.hasAssertions();
-    // 200a wordWrap 成 4 行（块内 0-based 物理：0=border，1..4=输入行，5=border，6=status）。
-    // 光标在 200 字符末尾，layoutInputCursor 算得 row=3 → 块内 = 1+3 = 4。
-    // footerHeight=7，append 模式 writtenLineCount=7，上移 = 7-4 = 3。
+    // 200a wordWrap 成 4 行（块内 0-based 物理：0/1=预留位，2..5=输入行，6=border，7=status）。
+    // 光标在 200 字符末尾，layoutInputCursor 算得 row=3 → 块内 = 3+3 = 6。
+    // footerHeight=8，append 模式 writtenLineCount=8，上移 = 8-6 = 2。
     const text = 'a'.repeat(200);
     renderer.renderFooter(text, 200, 'status', 80);
     const out = mock.output;
@@ -171,8 +172,8 @@ describe('物理行折算回归（Bug 4）', () => {
 
   it('光标定位契约：光标在行首（cursorPos=0）cursorUp 正确（wordWrap 后）', () => {
     expect.hasAssertions();
-    // 光标在行首：layoutInputCursor 算得 row=0 → 块内 = 1（border 下方第1行）。
-    // footerHeight=7，append 模式 writtenLineCount=7，上移 = 7-1 = 6。
+    // 光标在行首：layoutInputCursor 算得 row=0 → 块内 = 3（预留位2 + 输入首行）。
+    // footerHeight=8，append 模式 writtenLineCount=8，上移 = 8-3 = 5。
     const text = 'a'.repeat(200);
     renderer.renderFooter(text, 0, 'status', 80);
     const out = mock.output;

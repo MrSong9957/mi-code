@@ -32,9 +32,6 @@ export class MessageFormatter {
    */
   static format(type: UIMessageType, meta: UIMessageMeta = {}, content?: string): FormattedLine[] {
     switch (type) {
-      case 'thinking':
-        return [{ content: '● Thinking…', style: BLOCK_STYLES.magenta, indent: 0 }];
-
       case 'thinking_content':
         // thinking 折叠模式下不再实时显示内容，仅保留分支以防外部调用
         return [{ content: content ?? '', style: BLOCK_STYLES.dim, indent: 2 }];
@@ -83,7 +80,7 @@ export class MessageFormatter {
   /**
    * 格式化 thinking 结束摘要（委托 block-format）
    *
-   * 示例：Thought for 17s, read 2 files (ctrl+o to expand)
+   * 示例：thought for 17s, read 2 files (ctrl+o to expand)
    */
   private static formatThinkingEnd(meta: UIMessageMeta): FormattedLine {
     return {

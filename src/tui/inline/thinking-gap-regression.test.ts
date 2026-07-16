@@ -28,9 +28,9 @@ describe('thinking_end → assistant 间距数据契约', () => {
     // 展开所有消息的所有行
     const allLines = msgs.flatMap(m => m.lines.map(l => ({ role: m.role, content: l.content })));
 
-    const thoughtIdx = allLines.findIndex(l => l.content.includes('Thought for'));
+    const thoughtIdx = allLines.findIndex(l => l.content.includes('thought for'));
     const assistantIdx = allLines.findIndex(l =>
-      l.content.startsWith('●') && !l.content.includes('Thinking') && !l.content.includes('Thought')
+      l.content.startsWith('●') && !l.content.includes('Thinking') && !l.content.includes('thought')
     );
 
     expect(thoughtIdx).toBeGreaterThanOrEqual(0);

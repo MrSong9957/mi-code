@@ -13,13 +13,18 @@ import React, { useEffect, useRef } from 'react';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { InlineRenderer } from './InlineRenderer.js';
-import { colorizeLogo, colorizeStatus, RESET, magentaBright, redBright, cyanBright } from './colors.js';
+import { colorizeLogo, colorizeStatus, RESET, magentaBright, redBright } from './colors.js';
 import { sgr } from './ansi-utils.js';
 import { SPINNER_FRAMES } from '../state/spinner-store.js';
 import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
 import { layoutFooter } from './layout.js';
-import { renderFinalizedLine, wrapStreamingText, wrapThinkingText } from './text-layout.js';
+import { computeGlimmerIndex, computeShimmerSegments } from './shimmer.js';
+import { displayWidth } from './text-layout.js';
+import { getTheme } from '../../utils/theme.js';
+import { resolveSGR as themeSGR } from '../../utils/theme-resolve.js';
+import { renderFinalizedLine, wrapStreamingTextTrimmed, wrapThinkingTextTrimmed } from './text-layout.js';
+import { useThrottledStreamingText } from './use-throttled-streaming-text.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../types.js';
 import type { FormattedLine } from '../../ui/types.js';
 import type { MessagesStore } from '../state/messages-store.js';
@@ -56,6 +61,106 @@ function buildLogoAnsi(logo: LogoData): string[] {
   ];
 }
 
+// ─────────────── Spinner 动画（对标 Claude Code 四套动画） ───────────────
+//
+// 四套动画由单时间戳 time 派生：
+//   符号旋转（120ms/帧）、点循环（300ms/帧）、shimmer（200ms/步）、thinking sine（2s 周期）
+
+/** RGB → SGR TrueColor 前景序列 */
+function rgbSGR(r: number, g: number, b: number): string {
+  return sgr(`38;2;${r};${g};${b}`);
+}
+
+/** 线性 RGB 插值（对标 Claude Code Spinner/utils.ts interpolateColor） */
+function interpolateColor(
+  c1: { r: number; g: number; b: number },
+  c2: { r: number; g: number; b: number },
+  t: number,
+): { r: number; g: number; b: number } {
+  return {
+    r: Math.round(c1.r + (c2.r - c1.r) * t),
+    g: Math.round(c1.g + (c2.g - c1.g) * t),
+    b: Math.round(c1.b + (c2.b - c1.b) * t),
+  };
+}
+
+/** thinking 灰系配色（对标 THINKING_INACTIVE / _SHIMMER） */
+const THINKING_BASE = { r: 153, g: 153, b: 153 };
+const THINKING_SHIMMER = { r: 185, g: 185, b: 185 };
+/** thinking 前 3s 不 shimmer（对标 THINKING_DELAY_MS） */
+const THINKING_DELAY_MS = 3000;
+
+/** spinner 文字：verb + 动态省略号点（. → .. → ...，300ms/帧） */
+function spinnerDots(time: number): string {
+  const dotFrame = Math.floor(time / 300) % 3;
+  return '.'.repeat(dotFrame + 1).padEnd(3);
+}
+
+/** spinner 渲染所需的运行时状态快照 */
+interface SpinnerSnapshot {
+  active: boolean;
+  time: number;
+  mode: 'thinking' | 'generating' | 'tool';
+  verb: string;
+  label: string;
+  thinkStartTime: number | null;
+  stalled: boolean;
+}
+
+/**
+ * 构建 spinner 行的 ANSI 字符串（对标 Claude Code SpinnerGlyph + SpinnerAnimationRow + GlimmerMessage）。
+ *
+ * 组成：符号 + ' ' + [shimmer 着色的文字（verb/label + 动态点）]
+ * - 符号：SPINNER_FRAMES[floor(time/120)%12]
+ * - 文字：工具模式用 label，否则 verb；后接动态点（dim）
+ * - 着色：thinking 走灰系 sine 呼吸；其余走 theme spinnerActive + spinnerShimmer 右→左扫
+ * - stalled：变红（spinnerStalled），shimmer 停
+ */
+function buildSpinnerLine(snap: SpinnerSnapshot): string {
+  const sym = SPINNER_FRAMES[Math.floor(snap.time / 120) % SPINNER_FRAMES.length];
+  // 显示文字：工具模式用 label，否则随机 verb
+  const text = snap.label || snap.verb;
+  let message = text + spinnerDots(snap.time);
+  // thinking 模式：尾部加 (thinking)，对标 Claude Code SpinnerAnimationRow.tsx:172,210
+  if (snap.mode === 'thinking' && snap.thinkStartTime !== null) {
+    message += ' (thinking)';
+  }
+  const msgWidth = displayWidth(message);
+
+  // shimmer 高亮段位置（右→左扫）
+  const glimmerIndex = computeGlimmerIndex(snap.time, msgWidth, {
+    speed: 200, cyclePad: 10, stalled: snap.stalled,
+  });
+  const { before, shimmer, after } = computeShimmerSegments(message, glimmerIndex);
+
+  const theme = getTheme();
+
+  if (snap.stalled) {
+    // 卡住：整体 spinnerStalled 色（红），文字不 shimmer
+    const color = themeSGR(theme, 'spinnerStalled');
+    return `${color}${sym} ${message}${RESET}`;
+  }
+
+  if (snap.mode === 'thinking' && snap.thinkStartTime !== null) {
+    // thinking 模式：灰系 sine 呼吸（前 3s opacity=0 静态灰）
+    const elapsed = snap.time;
+    const opacity = elapsed < THINKING_DELAY_MS
+      ? 0
+      : (Math.sin((elapsed - THINKING_DELAY_MS) * Math.PI / 1000) + 1) / 2;
+    const { r, g, b } = interpolateColor(THINKING_BASE, THINKING_SHIMMER, opacity);
+    const color = rgbSGR(r, g, b);
+    const shimmerColor = rgbSGR(
+      Math.min(255, r + 30), Math.min(255, g + 30), Math.min(255, b + 30),
+    );
+    return `${color}${sym} ${before}${shimmerColor}${shimmer}${color}${after}${RESET}`;
+  }
+
+  // 生成中 / 工具模式：theme spinnerActive + spinnerShimmer 右→左扫
+  const color = themeSGR(theme, 'spinnerActive');
+  const shimmerColor = themeSGR(theme, 'spinnerShimmer');
+  return `${color}${sym} ${before}${shimmerColor}${shimmer}${color}${after}${RESET}`;
+}
+
 export function InlineApp({
   messages,
   status: _status,
@@ -82,9 +187,10 @@ export function InlineApp({
   const statusData = useStore(statusStore, useShallow((s) => ({
     mode: s.mode, model: s.model, dir: s.dir, branch: s.branch, contextPct: s.contextPct,
   })));
-  // spinner 完整状态：label/frameIndex/stalled（驱动状态栏动画）
+  // spinner 完整状态（驱动四套动画：time 派生符号/点/shimmer，mode 决定配色）
   const spinner = useStore(spinnerStore, useShallow((s) => ({
-    active: s.active, label: s.label, frameIndex: s.frameIndex, stalled: s.stalled,
+    active: s.active, time: s.time, mode: s.mode, verb: s.verb,
+    label: s.label, thinkStartTime: s.thinkStartTime, stalled: s.stalled,
   })));
   // overlay（ctrl+o 备用屏）：visible 时渲染覆盖层，替代正常输出
   const overlay = useStore(overlayStore, useShallow((s) => ({
@@ -115,15 +221,20 @@ export function InlineApp({
   }, [overlay, renderer]); // cols 不在依赖：resize 不主动重画（ConPTY 兼容性）
 
   // 驱动 spinner 动画（inline 模式没挂载 Spinner.tsx，需自行 setInterval 推进帧）
+  // 50ms 高频 tick：各动画按 floor(time/period) 派生（符号120ms/点300ms/shimmer200ms/sine2s）
   useEffect(() => {
     if (!spinner.active) return;
-    const id = setInterval(() => { spinnerStore.getState().tick(); }, 120);
+    const id = setInterval(() => { spinnerStore.getState().tick(); }, 50);
     return () => clearInterval(id);
   }, [spinner.active, spinnerStore]);
 
   // 末条消息的流式文本（驱动逐字渲染）
   const lastMsg = messages[messages.length - 1];
-  const streamingText = lastMsg?.streamingText;
+  // 节流：多个 token 在 cooldown（32ms）内合并，只 flush 最新值到渲染层。
+  // 对标 Claude Code 机制四（Ink throttle + React batching 合并多 token 到一帧）。
+  // finalize（undefined）走立即同步，绕过节流，保证固化行及时进 scrollback。
+  const realStreamingText = lastMsg?.streamingText;
+  const streamingText = useThrottledStreamingText(realStreamingText);
 
   // 统一写入：已固化新消息 → 流式覆写 → Footer
   useEffect(() => {
@@ -212,16 +323,20 @@ export function InlineApp({
       state.setRenderedLineCount(msg.uuid, msg.lines.length);
     }
 
-    // 流式草稿 → ANSI（wrapStreamingText / wrapThinkingText）
-    const streamingLines = isStreamingNow
-      ? (last.role === 'thinking'
-          ? wrapThinkingText(last.streamingText!, cols)
-          : wrapStreamingText(last.streamingText!, cols))
-      : null;
+    // 流式草稿 → ANSI（trimmed 版：只显示完整行，对标 Claude Code 机制二）
+    // 守卫 streamingText !== undefined：cooldown 中 throttled 值可能滞后于真实状态，
+    // 用旧值渲染不冲突；但 isStreamingNow（基于 messages 真实状态）为 true 时
+    // 若 throttled 尚未 flush，跳过草稿绘制避免用过期 undefined。
+    let draftLines: string[] | null = null;
+    if (isStreamingNow && streamingText !== undefined) {
+      draftLines = last.role === 'thinking'
+        ? wrapThinkingTextTrimmed(streamingText, cols)
+        : wrapStreamingTextTrimmed(streamingText, cols);
+    }
     // 更新流式状态标志（供下一帧检测转换）
     prevLastFinalizedRef.current = !isStreamingNow;
 
-    // Footer 数据组装（statusText + spinner + 视口）
+    // Footer 数据组装（statusText + 视口；spinner 不在 footer 内）
     const barWidth = 10;
     const pct = Math.max(0, Math.min(1, statusData.contextPct));
     const filled = Math.round(pct * barWidth);
@@ -234,28 +349,42 @@ export function InlineApp({
       branch: statusData.branch,
       context: `${bar} ${pctLabel}`,
     });
-    let spinnerLine = '';
-    if (spinner.active) {
-      const frame = SPINNER_FRAMES[spinner.frameIndex % SPINNER_FRAMES.length];
-      const color = spinner.stalled ? redBright : cyanBright;
-      const bold = sgr('1');
-      spinnerLine = `${bold}${color}${frame} ${spinner.label}${RESET}`;
-    }
-    const fullStatus = [spinnerLine, statusText].filter(Boolean).join(' │ ');
+
+    // spinner 行：footer 顶部预留位（border 上方），由 writeFooter 统一覆写。
+    // 可见性：只在生成 assistant 正文时隐藏（对标 Claude Code !visibleStreamingText）。
+    // 预留位始终 2 行（1 间距 + 1 spinner 位），spinner 隐藏时第 2 行留空，位置不收缩。
+    const spinnerVisible = spinner.active
+      && !(isStreamingNow && last.role !== 'thinking' && streamingText !== undefined);
+    const spinnerAnsi = spinnerVisible
+      ? buildSpinnerLine({
+          active: spinner.active,
+          time: spinner.time,
+          mode: spinner.mode,
+          verb: spinner.verb,
+          label: spinner.label,
+          thinkStartTime: spinner.thinkStartTime,
+          stalled: spinner.stalled,
+        })
+      : null;
+
+    // 草稿区只含文本（thinking/正文 trimmed），不含 spinner——spinner 在 footer 预留位。
+    const streamingLines = draftLines;
+
     const suggestions = (dropdownVisible && dropdownCandidates.length > 0) ? dropdownCandidates : [];
     const totalInputLines = inputText.split('\n').length;
     const cursorLine = cursorScreenPos(inputText, cursor, '❯ ').y;
     const vp = computeInputViewport(totalInputLines, cursorLine, MAX_VISIBLE_INPUT_LINES);
 
-    // ── 3. footer 布局计算（纯函数，Phase 2 抽离到 layout.ts）──
+    // ── 3. footer 布局计算（含顶部 2 行预留位 + spinner）──
     const footerLayout = layoutFooter({
-      input: inputText, cursor, status: fullStatus, cols,
+      input: inputText, cursor, status: statusText, cols,
       suggestions, dropdownIndex, viewportTop: vp.viewportTop,
+      spinnerLine: spinnerAnsi,
     });
 
     // ── 4. commit：一个 BSU/ESU 原子块处理全部渲染 ──
     // commit 是唯一 stdout 出口：prefix（logo/clear）+ appendLine（固化）+
-    // rewriteStreamingLines（草稿覆写）+ writeFooter（footer 覆写）→ 一次 write
+    // rewriteStreamingLines（草稿+spinner 统一覆写）+ writeFooter（footer 覆写）→ 一次 write
     renderer.commit({
       prefix: prefix.length > 0 ? prefix : undefined,
       newLines,

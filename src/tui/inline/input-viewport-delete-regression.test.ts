@@ -30,7 +30,7 @@ function renderInput(r: InlineRenderer, text: string, cursor: number, cols = 80)
 }
 
 describe('删除时渲染回归（Bug 3：border 不应重复）', () => {
-  it('契约：多行输入逐字删除到空，每一帧的 border 数恒为 2', () => {
+  it('契约：多行输入逐字删除到空，每一帧的 border 数恒为 1', () => {
     expect.hasAssertions();
     const mock = createMockStdout();
     const r = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
@@ -49,13 +49,13 @@ describe('删除时渲染回归（Bug 3：border 不应重复）', () => {
       t = chars.join('');
       c = Math.min(c - 1, [...t].length);
       renderInput(r, t, c);
-      // 本帧输出里 border（─────）行数应恰好为 2（上+下边框）
+      // 本帧输出里 border（─────）行数应恰好为 2（footer 有顶部 + 底部 2 条 border）
       const borders = (mock.output.match(/─{20,}/g) || []).length;
       expect(borders).toBe(2);
     }
   });
 
-  it('契约：逐帧删除过程中，任何一帧的渲染块 border 数都不超过 2', () => {
+  it('契约：逐帧删除过程中，任何一帧的渲染块 border 数都不超过 1', () => {
     expect.hasAssertions();
     const mock = createMockStdout();
     const r = new InlineRenderer(mock as unknown as NodeJS.WriteStream);
@@ -78,7 +78,7 @@ describe('删除时渲染回归（Bug 3：border 不应重复）', () => {
       frames.push(mock.output);
     }
 
-    // 每帧的 border 数应 ≤ 2（上+下边框）
+    // 每帧的 border 数应 ≤ 2（footer 有顶部 + 底部 2 条 border，残留才 > 2）
     for (let i = 0; i < frames.length; i++) {
       const lastRender = frames[i]!.lastIndexOf('\x1b[?25l');
       const block = frames[i]!.slice(0, lastRender);
@@ -91,7 +91,7 @@ describe('删除时渲染回归（Bug 3：border 不应重复）', () => {
     expect(frames.length).toBeGreaterThan(0);
   });
 
-  it('契约：行数变化（5行→3行→1行）每帧 border 数恒为 2', () => {
+  it('契约：行数变化（5行→3行→1行）每帧 border 数恒为 1', () => {
     expect.hasAssertions();
     const mock = createMockStdout();
     const r = new InlineRenderer(mock as unknown as NodeJS.WriteStream);

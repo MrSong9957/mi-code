@@ -106,7 +106,7 @@ describe('Thought for 与 assistant 之间的空行 gap', () => {
     emit({ kind: 'assistant_text', text: '我是一个AI助手', isFinal: true });
 
     // 在 appendLine 序列中找 Thought for 和 assistant 正文的位置
-    const thoughtIdx = appended.findIndex(s => s.includes('Thought for'));
+    const thoughtIdx = appended.findIndex(s => s.includes('thought for'));
     expect(thoughtIdx).toBeGreaterThanOrEqual(0);
 
     // 找 Thought for 之后第一个 assistant 正文（以 ● 开头，排除 ● Thinking…）

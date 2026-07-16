@@ -67,9 +67,12 @@ export interface BootstrapHandle {
   completionStore: CompletionStore;
   overlayStore: OverlayStore;
   themeStore: ThemeStore;
-  /** spinner 控制（对齐旧 layout.startSpinner 等） */
-  startSpinner: (label: string) => void;
+  /** spinner 控制（对标 Claude Code 四套动画：mode 决定配色，verb 决定文字） */
+  startSpinner: (mode: 'thinking' | 'generating' | 'tool') => void;
   stopSpinner: () => void;
+  /** 切换 spinner 模式（thinking/generating/tool，决定配色） */
+  setSpinnerMode: (mode: 'thinking' | 'generating' | 'tool') => void;
+  /** 工具模式覆盖显示文字（如 "Running Bash"）；空串清回 verb */
   setSpinnerLabel: (label: string) => void;
   spinnerOnToken: () => void;
   /** 把一行系统消息固化进 store（替代旧 printLine） */
@@ -175,8 +178,9 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     completionStore,
     overlayStore,
     themeStore,
-    startSpinner: (label: string) => { spinnerStore.getState().start(label); },
+    startSpinner: (mode) => { spinnerStore.getState().start(mode); },
     stopSpinner: () => { spinnerStore.getState().stop(); },
+    setSpinnerMode: (mode) => { spinnerStore.getState().setMode(mode); },
     setSpinnerLabel: (label: string) => { spinnerStore.getState().setLabel(label); },
     spinnerOnToken: () => { spinnerStore.getState().onToken(); },
     printLine, printStyled, cleanup,

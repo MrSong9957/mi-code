@@ -18,22 +18,28 @@ function makeFooterInput(overrides: Partial<FooterInput> = {}): FooterInput {
 
 describe('layoutFooter — 纯函数布局计算', () => {
   describe('基本结构', () => {
-    it('空输入：footer = border + 输入行(❯) + border + status（4 行）', () => {
+    it('空输入：footer = 预留位(2) + 顶部border + 输入行(❯) + 底部border + status（6 行）', () => {
       const layout = layoutFooter(makeFooterInput());
-      expect(layout.height).toBe(4);
-      expect(layout.lines).toHaveLength(4);
-      // 行0 = border，行1 = 输入框，行2 = border，行3 = status
-      expect(layout.lines[0]).toMatch(/^─+$/);
+      expect(layout.height).toBe(6);
+      expect(layout.lines).toHaveLength(6);
+      // 行0/1 = 预留位（空行 + spinner 位），行2 = 顶部border，行3 = 输入框(❯)，行4 = 底部border，行5 = status
+      expect(layout.lines[0]).toBe('');
+      expect(layout.lines[1]).toBe('');
       expect(layout.lines[2]).toMatch(/^─+$/);
+      expect(layout.lines[3]).toMatch(/^❯/);
+      expect(layout.lines[4]).toMatch(/^─+$/);
     });
 
     it('border 长度 = usableWidth = cols - 1', () => {
       const l80 = layoutFooter(makeFooterInput({ cols: 80 }));
-      expect(l80.lines[0]).toHaveLength(79);
+      // 顶部 border 在 lines[2]，底部 border 在 lines[4]
+      expect(l80.lines[2]).toHaveLength(79);
+      expect(l80.lines[4]).toHaveLength(79);
       expect(l80.usableWidth).toBe(79);
 
       const l40 = layoutFooter(makeFooterInput({ cols: 40 }));
-      expect(l40.lines[0]).toHaveLength(39);
+      expect(l40.lines[2]).toHaveLength(39);
+      expect(l40.lines[4]).toHaveLength(39);
       expect(l40.usableWidth).toBe(39);
     });
   });
@@ -41,8 +47,8 @@ describe('layoutFooter — 纯函数布局计算', () => {
   describe('输入行 wordWrap', () => {
     it('单行短输入：输入框 1 行', () => {
       const layout = layoutFooter(makeFooterInput({ input: 'hello', cursor: 5 }));
-      // border + 1 输入行 + border + status = 4
-      expect(layout.height).toBe(4);
+      // 预留位(2) + 顶部border + 1 输入行 + 底部border + status = 6
+      expect(layout.height).toBe(6);
     });
 
     it('超宽输入 wordWrap：输入区占多行', () => {
@@ -50,7 +56,7 @@ describe('layoutFooter — 纯函数布局计算', () => {
       const layout = layoutFooter(makeFooterInput({
         input: 'a'.repeat(200), cursor: 200, cols: 80,
       }));
-      // border(1) + 折行输入(>1) + border(1) + status(1) > 4
+      // 顶部border(1) + 折行输入(>1) + 底部border(1) + status(1) > 4
       expect(layout.height).toBeGreaterThan(4);
     });
 
@@ -58,8 +64,8 @@ describe('layoutFooter — 纯函数布局计算', () => {
       const layout = layoutFooter(makeFooterInput({
         input: 'line1\nline2', cursor: 11, cols: 80,
       }));
-      // border + 2 输入行 + border + status = 5
-      expect(layout.height).toBe(5);
+      // 预留位(2) + 顶部border + 2 输入行 + 底部border + status = 7
+      expect(layout.height).toBe(7);
     });
   });
 
@@ -68,8 +74,8 @@ describe('layoutFooter — 纯函数布局计算', () => {
       const layout = layoutFooter(makeFooterInput({
         suggestions: ['cmd-a', 'cmd-b'], dropdownIndex: 0,
       }));
-      // border + 输入 + suggestion×2 + border + status = 6
-      expect(layout.height).toBe(6);
+      // 预留位(2) + 顶部border + 输入 + suggestion×2 + 底部border + status = 8
+      expect(layout.height).toBe(8);
       // suggestion 行含 /cmd-a
       const joined = layout.lines.join('\n');
       expect(joined).toContain('cmd-a');
@@ -91,8 +97,8 @@ describe('layoutFooter — 纯函数布局计算', () => {
       const layout = layoutFooter(makeFooterInput({
         suggestions: many, dropdownIndex: 10, cols: 80,
       }));
-      // border + 输入 + 8 suggestions + border + status = 12
-      expect(layout.height).toBe(12);
+      // 预留位(2) + 顶部border + 输入 + 8 suggestions + 底部border + status = 14
+      expect(layout.height).toBe(14);
     });
   });
 
@@ -108,9 +114,9 @@ describe('layoutFooter — 纯函数布局计算', () => {
   });
 
   describe('光标定位参数', () => {
-    it('空输入：cursorToTop=1（输入框是块内第 1 行），cursorCol=2（❯ 后）', () => {
+    it('空输入：cursorToTop=3（跳过 2 行预留位 + 顶部 border），cursorCol=2（❯ 后）', () => {
       const layout = layoutFooter(makeFooterInput({ input: '', cursor: 0 }));
-      expect(layout.cursorToTop).toBe(1);
+      expect(layout.cursorToTop).toBe(3);
       // ❯ 占 1 列 + 空格 1 列 = 光标在第 2 列（0-based col=2... 实际看 layoutInputCursor）
       // cursorCol 来自 layoutInputCursor，空输入时光标在 prefix 后
       expect(layout.cursorCol).toBeGreaterThanOrEqual(0);
@@ -118,7 +124,7 @@ describe('layoutFooter — 纯函数布局计算', () => {
 
     it('光标在输入中间：cursorCol 反映光标在物理行的列位置', () => {
       const layout = layoutFooter(makeFooterInput({ input: 'hello', cursor: 3 }));
-      expect(layout.cursorToTop).toBe(1); // 仍在第 1 行（输入框）
+      expect(layout.cursorToTop).toBe(3); // 跳过 2 行预留位 + 顶部 border，仍在输入框首行
       // cursor=3 → 光标在 'hel|lo'，prefix '❯ '(2列) + 3 = col 5（0-based... 取决于 layoutInputCursor）
       expect(layout.cursorCol).toBeGreaterThan(0);
     });

@@ -34,6 +34,9 @@ export interface FooterInput {
   suggestions: string[];
   dropdownIndex: number;
   viewportTop: number;
+  /** spinner 行 ANSI（显示在 footer border 上方的预留位）。
+   *  null/undefined = 无 spinner（预留位留空）。始终保留 2 行（间距 + spinner 位）。 */
+  spinnerLine?: string | null;
 }
 
 /**
@@ -81,7 +84,7 @@ export interface LayoutResult {
  * 无 stdout.write，无副作用。
  */
 export function layoutFooter(fi: FooterInput): FooterLayout {
-  const { input, cursor: cursorPos, status, cols, suggestions, dropdownIndex, viewportTop } = fi;
+  const { input, cursor: cursorPos, status, cols, suggestions, dropdownIndex, viewportTop, spinnerLine } = fi;
   const inputLines = input.split('\n');
   const usableWidth = getUsableWidth(cols);
   const border = '─'.repeat(usableWidth);
@@ -108,8 +111,11 @@ export function layoutFooter(fi: FooterInput): FooterLayout {
     return isSelected ? `\x1b[7m ▸ /${name} \x1b[0m` : `   /${name}`;
   });
 
-  // 组装完整行序：border / 输入行(s) / 下拉行(s) / border / 状态
-  const lines: string[] = [border];
+  // 组装完整行序：预留位(2行) / border / 输入行(s) / 下拉行(s) / border / 状态
+  // 预留位：始终 2 行（1 空行间距 + 1 spinner 位），对标 Claude Code marginTop={1} + spinner 行。
+  // spinner 可见时第 2 行填 spinner ANSI，否则空行。这样 footer 上方始终有空间，
+  // 消息/草稿不会紧贴 footer border，spinner 隐藏时位置也不收缩。
+  const lines: string[] = ['', spinnerLine ?? '', border];
   const wrappedInputCounts: number[] = [];
   for (let i = 0; i < visibleInputLines.length; i++) {
     const absLine = viewportTop + i;
@@ -126,7 +132,7 @@ export function layoutFooter(fi: FooterInput): FooterLayout {
   lines.push(...wrappedStatus);
 
   // 光标物理行/列计算（纯函数，结果供 Renderer 写 cursorUp/CHA）
-  let cursorPhysLine0 = 1; // 跳过顶部 border
+  let cursorPhysLine0 = 3; // 跳过 2 行预留位 + 顶部 border
   let cursorColInPhysLine = 0;
   for (let i = 0; i < visibleInputLines.length; i++) {
     const absLine = viewportTop + i;

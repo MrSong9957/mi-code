@@ -29,9 +29,10 @@ describe('InlineGridRenderer.commitFooter', () => {
     });
     renderer.commitFooter(layout, 27, 80);
     const output = mock.output;
-    // footerTopRow = 30 - 4 + 1 = 27, yBias = 26
-    // 应含 CUP 定位到 row 27+
-    expect(output).toContain('\x1b[27;');
+    // footerTopRow = 27, yBias = 26。新 footer 结构 lines 前 2 行是预留位（空行），
+    // 不产生 CUP（无字符变化）；首个非空内容行（输入 '❯ '）在 lines[2]，
+    // CUP row = yBias(26) + 2 + 1 = 29。
+    expect(output).toContain('\x1b[29;');
     // 应含 border 字符（─）
     expect(output).toContain('─');
   });
@@ -95,7 +96,8 @@ describe('InlineGridRenderer.commitFooter', () => {
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
     renderer.commitFooter(layout1, 27,80);
-    expect(layout1.height).toBe(4);
+    // footer 结构：height = 预留位(2) + 顶部border(1) + input(1) + 底部border(1) + status(1) = 6
+    expect(layout1.height).toBe(6);
     mock.written.length = 0;
 
     const layout2 = layoutFooter({
@@ -103,7 +105,8 @@ describe('InlineGridRenderer.commitFooter', () => {
       suggestions: ['cmd-a', 'cmd-b', 'cmd-c'], dropdownIndex: 0, viewportTop: 0,
     });
     renderer.commitFooter(layout2, 27,80);
-    expect(layout2.height).toBe(7);
+    // footer 结构：height = 预留位(2) + 顶部border(1) + input(1) + 3suggestions + 底部border(1) + status(1) = 9
+    expect(layout2.height).toBe(9);
     const output = mock.output;
     // 高度变化 → 先清旧区域（CUP + ED）
     expect(output).toContain('\x1b[0J');

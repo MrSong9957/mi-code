@@ -132,10 +132,10 @@ export class BlockPipeline {
         break;
 
       case 'thinking_start':
-        // 第一个模型块：强制加空行（前面总有 banner/用户输入等非模型内容）
+        // thinking 进行时不在消息区显示占位行——对标 Claude Code：
+        // thinking 状态在 spinner 行尾部显示 (thinking)，消息区不占位。
         this.openModelBlock();
         this.thinkingActive = true;
-        this.print(MessageFormatter.format('thinking'), 'assistant');
         break;
 
       case 'thinking_delta':

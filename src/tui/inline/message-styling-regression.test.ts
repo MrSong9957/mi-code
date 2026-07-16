@@ -53,19 +53,13 @@ describe('逐行样式渲染契约（对齐 Claude Code）—— 调用真实 re
     expect(rendered).toContain('\x1b[1m');  // bold
   });
 
-  it('thinking：● Thinking… 前缀白色（不再品红全染色）', () => {
-    const lines = MessageFormatter.format('thinking', {});
-    const rendered = renderReal('assistant', lines[0]);
-    expect(rendered).toContain('● Thinking…');
-  });
-
-  it('thinking_end：2 空格缩进，不被双重缩进', () => {
+  it('thinking_end：2 空格缩进，小写 thought，不被双重缩进', () => {
     const lines = MessageFormatter.format('thinking_end', { duration: 8 });
     const rendered = renderReal('assistant', lines[0]);
     // content 已烤进 2 空格，indent=2，补齐后应正好 2 空格（不重复补）
-    expect(rendered).toContain('  Thought for 8s');
+    expect(rendered).toContain('  thought for 8s');
     // 关键：不应有 4 空格（双重缩进 bug）
-    expect(rendered).not.toMatch(/    Thought/);
+    expect(rendered).not.toMatch(/    thought/);
     expect(rendered).toContain('\x1b[2m'); // dim
   });
 

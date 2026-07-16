@@ -126,6 +126,67 @@ export function wrapThinkingText(text: string, cols: number): string[] {
 }
 
 /**
+ * 超长兜底阈值：无完整行时，raw 超过此长度则强制显示全部 tail。
+ * 约 3 行终端宽度（3 × 80 = 240），避免长段无换行文字时长时间空白。
+ */
+export const TAIL_OVERFLOW_THRESHOLD = 240;
+
+/**
+ * 流式预览版折行：只显示到最后一个 \n 的完整行，未完成的最后一行隐藏。
+ *
+ * 对标 Claude Code（Linux/macOS）机制二：
+ *   visibleStreamingText = streamingText.substring(0, lastIndexOf('\n') + 1) || null
+ * 用户看到的是"按行出现"而非"逐字打印"——正在打的那行攒着，等 \n 才显示。
+ *
+ * 固化安全：流式期间隐藏的 tail 在 isFinal 时由 renderFinalizedLine 完整渲染，
+ * 不经过本函数，无内容丢失。
+ *
+ * 超长兜底：长段无换行文字（超 TAIL_OVERFLOW_THRESHOLD）时强制显示全部，
+ * 避免"模型输出一大段无换行文字时用户盯着空白 ● 占位数秒"。
+ *
+ * 占位返回 ['● ']（非 []）：rewriteStreamingLines([]) 会走物理删除分支导致
+ * 定位错乱，单行占位与空文本契约一致。
+ */
+export function wrapStreamingTextTrimmed(text: string, cols: number): string[] {
+  const raw = text.startsWith(STREAM_PREFIX) ? text.slice(STREAM_PREFIX.length) : text;
+  const lastNl = raw.lastIndexOf('\n');
+
+  // 超长兜底（无 \n）：长段无换行文字 → 显示全部，避免空白
+  if (lastNl < 0 && raw.length > TAIL_OVERFLOW_THRESHOLD) {
+    return wrapStreamingText(text, cols);
+  }
+  // 无完整行（无 \n 或只有开头的 \n）→ 占位
+  if (lastNl < 0) return [STREAM_PREFIX];
+  const stableRaw = raw.slice(0, lastNl);  // 去掉末尾 \n 及之后的 tail
+  if (stableRaw === '') return [STREAM_PREFIX];
+  // 超长兜底（有 \n）：完整行部分自身超阈值 → 显示完整 text
+  if (stableRaw.length > TAIL_OVERFLOW_THRESHOLD) {
+    return wrapStreamingText(text, cols);
+  }
+  return wrapStreamingText(stableRaw, cols);
+}
+
+/**
+ * thinking 流式预览版折行：只显示完整行，未完成行隐藏（dim 灰色占位）。
+ * 逻辑同 wrapStreamingTextTrimmed，占位样式为 dim 2 空格。
+ */
+export function wrapThinkingTextTrimmed(text: string, cols: number): string[] {
+  const lastNl = text.lastIndexOf('\n');
+
+  // 超长兜底（无 \n）：长段无换行 → 显示全部
+  if (lastNl < 0 && text.length > TAIL_OVERFLOW_THRESHOLD) {
+    return wrapThinkingText(text, cols);
+  }
+  if (lastNl < 0) return [colorizeStyled('  ', { dim: true })];
+  const stableRaw = text.slice(0, lastNl);
+  if (stableRaw === '') return [colorizeStyled('  ', { dim: true })];
+  if (stableRaw.length > TAIL_OVERFLOW_THRESHOLD) {
+    return wrapThinkingText(text, cols);
+  }
+  return wrapThinkingText(stableRaw, cols);
+}
+
+/**
  * 把单条已固化的 FormattedLine 渲染成终端字符串数组。
  * 补齐缩进 → 上色。assistant 长文本额外按终端宽度折行（续行缩进 2 空格）。
  */

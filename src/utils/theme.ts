@@ -57,6 +57,7 @@ export interface Theme {
 
   // Spinner 状态
   spinnerActive: string;  // 旋转中（cyan）
+  spinnerShimmer: string; // shimmer 高亮段（亮版 active）
   spinnerStalled: string; // 停滞/错误（red）
 
   // Diff（工具输出）
@@ -114,6 +115,7 @@ export const darkTheme: Theme = {
 
   // Spinner
   spinnerActive:   'rgb(100, 200, 240)',
+  spinnerShimmer:  'rgb(170, 230, 255)',
   spinnerStalled:  'rgb(255, 90, 90)',
 
   // Diff
@@ -171,6 +173,7 @@ export const lightTheme: Theme = {
 
   // Spinner
   spinnerActive:   'rgb(0, 140, 190)',
+  spinnerShimmer:  'rgb(90, 200, 235)',
   spinnerStalled:  'rgb(220, 50, 50)',
 
   // Diff

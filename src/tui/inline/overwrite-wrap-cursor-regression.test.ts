@@ -11,8 +11,9 @@
 //   但如果 simulateTerminalWrap 算错 physRows，追加和覆写都偏移同样的量，
 //   相对漂移仍=0，测试通过——这是"模拟器与被测代码同源错误"导致的假测试。
 //
-// 修复：断言光标的**绝对位置**（应在输入框行=块顶+1），而非仅比较相对漂移。
-// 块顶=起始行（logo3+hook1=行4），输入框=块顶+1=行5（0-based）。
+// 修复：断言光标的**绝对位置**（应在输入框行=块顶+3），而非仅比较相对漂移。
+// 块顶=起始行（logo3+hook1=行4），输入框=块顶+3=行7（0-based）。
+// （footer lines 顶部有 2 行预留位 + border，输入框在第 3 行）
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import stringWidth from 'string-width';
@@ -104,9 +105,9 @@ describe('覆写模式折行光标回归', () => {
     renderer.renderFooter('', 0, statusText, cols, [], 0, 0);
     for (const s of mock.written) sim.apply(s, cols);
 
-    // 绝对位置断言：光标应在输入框行 = 块顶(4) + 1 = 行5
-    // bug 代码下（simulateTerminalWrap 不跳过 ANSI）：footerHeight=5，cursorUp(4) → 行4（块顶，border上）
-    expect(sim.row).toBe(5);
+    // 绝对位置断言：光标应在输入框行 = 块顶(4) + 3 = 行7
+    // （footer lines 顶部有 2 行预留位 + border，输入框在第 3 行）
+    expect(sim.row).toBe(7);
   });
 
   it('超宽含ANSI statusText：覆写后光标仍在输入框行（与追加相同）', () => {
@@ -125,8 +126,8 @@ describe('覆写模式折行光标回归', () => {
     renderer.renderFooter('c', 1, statusText, cols, [], 0, 0);
     for (const s of mock.written) sim.apply(s, cols);
 
-    // 双重断言：绝对位置正确（行5）+ 与追加相同（不漂移）
-    expect(sim.row).toBe(5);
+    // 双重断言：绝对位置正确（行7）+ 与追加相同（不漂移）
+    expect(sim.row).toBe(7);
     expect(sim.row).toBe(rowAfterAppend);
   });
 
@@ -140,12 +141,12 @@ describe('覆写模式折行光标回归', () => {
 
     renderer.renderFooter('', 0, shortStatus, cols, [], 0, 0);
     for (const s of mock.written) sim.apply(s, cols);
-    expect(sim.row).toBe(5); // 绝对位置
+    expect(sim.row).toBe(7); // 绝对位置
 
     mock.written.length = 0;
     renderer.renderFooter('c', 1, shortStatus, cols, [], 0, 0);
     for (const s of mock.written) sim.apply(s, cols);
-    expect(sim.row).toBe(5);
+    expect(sim.row).toBe(7);
   });
 
   it('连续多帧覆写（超宽含ANSI statusText）：光标始终在输入框行，不累计漂移', () => {
@@ -160,12 +161,12 @@ describe('覆写模式折行光标回归', () => {
     for (const s of mock.written) sim.apply(s, cols);
     mock.written.length = 0;
 
-    // 连续覆写 5 帧，每帧光标都应在行5（输入框行）
+    // 连续覆写 5 帧，每帧光标都应在行7（输入框行）
     for (let i = 1; i <= 5; i++) {
       renderer.renderFooter('c'.repeat(i), i, statusText, cols, [], 0, 0);
       for (const s of mock.written) sim.apply(s, cols);
       mock.written.length = 0;
-      expect(sim.row).toBe(5); // 每帧绝对位置断言
+      expect(sim.row).toBe(7); // 每帧绝对位置断言
     }
   });
 
@@ -180,11 +181,11 @@ describe('覆写模式折行光标回归', () => {
 
     renderer.renderFooter('', 0, cjkStatus, cols, [], 0, 0);
     for (const s of mock.written) sim.apply(s, cols);
-    expect(sim.row).toBe(5);
+    expect(sim.row).toBe(7);
 
     mock.written.length = 0;
     renderer.renderFooter('中', 1, cjkStatus, cols, [], 0, 0);
     for (const s of mock.written) sim.apply(s, cols);
-    expect(sim.row).toBe(5);
+    expect(sim.row).toBe(7);
   });
 });

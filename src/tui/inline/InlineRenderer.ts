@@ -221,6 +221,9 @@ export class InlineRenderer {
     this.state.lastStreamingHeight = 0;
   }
 
+  // 注：spinner 行不再作为独立第三区——合并进 streamingLines 草稿区末尾，
+  // 由 rewriteStreamingLines 统一覆写（cursorUp 基准不断裂）。详见 InlineApp。
+
   /**
    * 退出备用屏（overlay 关闭时调用）。
    * 终端自动恢复主屏内容（\x1b[?1049l），无需手动重绘——主屏 scrollback 完好无损。
@@ -316,9 +319,17 @@ export class InlineRenderer {
         this.clearStreamingHeight();
       }
       this.rewriteStreamingLines(frame.streamingLines);
+    } else if (this.state.lastStreamingHeight > 0) {
+      // 草稿消失但屏幕有残留（如 spinner 停止：loopEnd→stopSpinner→streamingLines 变 null）。
+      // 必须擦除残留行，否则它们会留在屏幕上被误认为消息。先 commitFooter 让光标回到草稿正下方。
+      if (!justFinalized && !needEraseDraft) {
+        this.commitFooter();
+      }
+      this.eraseStreamingLines();
     }
 
     // ── 4. Footer 写入（cursorUp + 全行覆写 + 光标定位）──
+    // spinner 行已合并进 streamingLines 末尾（方案 A），无独立第三区。
     this.writeFooter(frame.footer);
 
     this.write('\x1b[?2026l');  // ESU
@@ -343,7 +354,8 @@ export interface CommitFrame {
   /** 新增的固化行（已 renderFinalizedLine 转成 ANSI string[]，逐行 appendLine） */
   newLines: string[];
   /** 流式草稿行（已 wrapStreamingText/wrapThinkingText 转 ANSI string[]）。
-   *  null = 当前不流式（不调 rewriteStreamingLines） */
+   *  null = 当前不流式（不调 rewriteStreamingLines）。
+   *  spinner 行（若可见）已拼到此数组末尾——合并活跃区，cursorUp 基准不断裂。 */
   streamingLines: string[] | null;
   /** footer 布局结果（Phase 2：由 layout.ts 的 layoutFooter 计算，Renderer 只写入） */
   footer: FooterLayout;

@@ -441,6 +441,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const eventBus = new StreamEventBus();
   eventBus.onToolCall(d => {
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
+    tuiHandle?.setSpinnerMode('tool');
     tuiHandle?.setSpinnerLabel(`Running ${d.name}`);
   });
   eventBus.onToolResult(d => {
@@ -460,7 +461,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   let persistedCount = sessionMessages.length;
   const blockTypes = new Map<number, string>();
   let thinkingActive = true; // 已乐观 emit thinking_start
-  tuiHandle?.startSpinner('Thinking…');
+  tuiHandle?.startSpinner('thinking');
   try {
     for await (const msg of streamingQuery(streamClient, toolRegistry, userInput, {
       systemPrompt, tools, signal: ac.signal, maxTurns: 10,
@@ -490,7 +491,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
           pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
           thinkingContent = '';
           thinkingActive = false;
-          tuiHandle?.setSpinnerLabel('Generating…');
+          tuiHandle?.setSpinnerMode('generating');
         }
       } else if ('type' in msg && msg.type === 'content_block_delta') {
         const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
@@ -501,7 +502,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
             pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
             thinkingContent = '';
             thinkingActive = false;
-            tuiHandle?.setSpinnerLabel('Generating…');
+            tuiHandle?.setSpinnerMode('generating');
           }
           assistantText += delta.content;
           pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: false });
