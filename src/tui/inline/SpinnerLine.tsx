@@ -1,6 +1,6 @@
 // Inline mode spinner line builder (ANSI string output)
 import { computeGlimmerIndex, computeShimmerSegments } from './shimmer.js';
-import { SPINNER_FRAMES } from '../state/spinner-store.js';
+import { SPINNER_FRAMES, TICK_MS } from '../state/spinner-store.js';
 
 const SHIMMER_SPEED = 200;
 const SHIMMER_PAD = 10;
@@ -25,7 +25,7 @@ interface SpinnerLineOpts {
 
 function parseRGB(color: string): { r: number; g: number; b: number } {
   const match = color.match(/rgb\((\d+),(\d+),(\d+)\)/);
-  if (!match) return { r: 153, g: 153, b: 153 };
+  if (!match) return THINKING_INACTIVE;
   return { r: +match[1], g: +match[2], b: +match[3] };
 }
 
@@ -47,6 +47,7 @@ function toAnsiColor(rgb: string): string {
 
 const THINKING_INACTIVE = { r: 153, g: 153, b: 153 };
 const THINKING_INACTIVE_SHIMMER = { r: 185, g: 185, b: 185 };
+const THINKING_DELAY_TICKS = Math.ceil(3000 / TICK_MS);
 const RESET = '\x1b[0m';
 
 export function buildSpinnerLine(opts: SpinnerLineOpts): string {
@@ -73,8 +74,7 @@ export function buildSpinnerLine(opts: SpinnerLineOpts): string {
   // Dots or thinking
   if (opts.mode === 'thinking' && opts.thinkStartTime !== null) {
     const elapsed = opts.time - opts.thinkStartTime;
-    const THINKING_DELAY_TICKS = 60;
-    const elapsedSec = Math.max(0, elapsed - THINKING_DELAY_TICKS) * 0.05;
+    const elapsedSec = Math.max(0, elapsed - THINKING_DELAY_TICKS) * (TICK_MS / 1000);
     const opacity = elapsed < THINKING_DELAY_TICKS
       ? 0
       : (Math.sin(elapsedSec * Math.PI * 2 / THINKING_GLOW_PERIOD_S) + 1) / 2;
