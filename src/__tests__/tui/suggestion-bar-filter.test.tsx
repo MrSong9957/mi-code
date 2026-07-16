@@ -16,13 +16,13 @@ describe('SuggestionBar filter → 渲染', () => {
     store.getState().filter('');
     const { lastFrame } = render(React.createElement(SuggestionBar, { store }));
     const frame = lastFrame() ?? '';
-    // COMMAND_NAMES 前 8 个：config, login, provider, model, compact, build, plan, auto
+    // COMMAND_SUGGESTIONS 前 8 个：config, login, provider, model, theme, build, plan, auto
     expect(frame).toContain('/config');
     expect(frame).toContain('/login');
     expect(frame).toContain('/build');
     expect(frame).toContain('/plan');
-    // theme 排第 17，不在前 8 个可见窗口内
-    expect(frame).not.toContain('/theme');
+    // compact 排第 16，不在前 8 个可见窗口内
+    expect(frame).not.toContain('/compact');
   });
 
   it('filter("th") 后只渲染 theme', () => {
@@ -43,14 +43,14 @@ describe('SuggestionBar filter → 渲染', () => {
     expect(lastFrame() ?? '').toBe('');
   });
 
-  it('filter 后选中项有 ▸ 前缀', () => {
+  it('filter 后选中项有主题色高亮', () => {
     const store = createCompletionStore();
     store.getState().filter('');
     const { lastFrame } = render(React.createElement(SuggestionBar, { store }));
     const frame = lastFrame() ?? '';
-    // 第一个命令被选中，应有 ▸ 前缀
-    const firstCmd = store.getState().candidates[0];
-    expect(frame).toContain(`▸/${firstCmd}`);
+    // 第一个命令被选中,用主题色(TrueColor SGR)高亮
+    const firstCmd = store.getState().candidates[0]!.name;
+    expect(frame).toMatch(new RegExp(`\\x1b\\[38;2;\\d+;\\d+;\\d+m/${firstCmd}`));
   });
 
   it('cycle 后选中项变化', () => {
@@ -59,10 +59,11 @@ describe('SuggestionBar filter → 渲染', () => {
     store.getState().cycle(); // index → 1
     const { lastFrame } = render(React.createElement(SuggestionBar, { store }));
     const frame = lastFrame() ?? '';
-    const secondCmd = store.getState().candidates[1];
-    expect(frame).toContain(`▸/${secondCmd}`);
-    // 第一个命令不再是选中态
-    const firstCmd = store.getState().candidates[0];
-    expect(frame).not.toContain(`▸/${firstCmd}`);
+    const secondCmd = store.getState().candidates[1]!.name;
+    // 第二个命令被选中(主题色高亮)
+    expect(frame).toMatch(new RegExp(`\\x1b\\[38;2;\\d+;\\d+;\\d+m/${secondCmd}`));
+    // 第一个命令不再是选中态(TrueColor SGR 不再紧邻该命令名)
+    const firstCmd = store.getState().candidates[0]!.name;
+    expect(frame).not.toMatch(new RegExp(`\\x1b\\[38;2;\\d+;\\d+;\\d+m/${firstCmd}`));
   });
 });

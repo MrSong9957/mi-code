@@ -10,6 +10,12 @@
 // 3. 多次覆写不产生重复候选行
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { COMMAND_SUGGESTIONS, type SuggestionItem } from '../../commands/executor.js';
+
+/** 构造最小 SuggestionItem（用于只需要名字/数量的测试） */
+function items(names: string[]): SuggestionItem[] {
+  return names.map(name => ({ name, description: '', group: 'Session' }));
+}
 
 describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
   let stdoutChunks: string[];
@@ -24,44 +30,43 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     });
   });
 
-  it('下拉候选行出现在输入框与状态栏之间（向下布局）', async () => {
+  it('下拉候选行出现在输入框下方(footer 替换模式,无底部 border 和状态行)', async () => {
     const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
     const renderer = new InlineRenderer(process.stdout);
-    const suggestions = ['config', 'compact'];
+    const suggestions = COMMAND_SUGGESTIONS.filter(s => ['config', 'compact'].includes(s.name));
     renderer.renderFooter('/c', 2, 'STATUS', 80, suggestions, 0);
     const output = stdoutChunks.join('');
 
-    // 行序断言：预留位 → 顶部border → 输入行 → 候选行 → 底部border → 状态行
-    // footer 结构：lines 前面 2 行预留位（间距+spinner）+ 顶部 border。
-    // border 宽度 = usableWidth = cols - 1（DECAWM OFF 留安全列），顶部 + 底部各 1 条。
+    // 行序断言(对标 Claude Code footer 整体替换):
+    // 预留位 → 顶部border → 输入行 → 候选行
+    // suggestion 可见时不渲染底部 border 和状态行
     const inputIdx = output.indexOf('❯ /c');
     const candidateIdx = output.indexOf('/config');
-    // footer 现有 2 个相同 border，底部 border 在候选行之后——用 lastIndexOf 取最后一条
-    const borderIdx = output.lastIndexOf('─'.repeat(79));
-    const statusIdx = output.indexOf('STATUS');
 
     expect(inputIdx).toBeGreaterThan(-1);
     expect(candidateIdx).toBeGreaterThan(inputIdx);
-    expect(borderIdx).toBeGreaterThan(candidateIdx);
-    expect(statusIdx).toBeGreaterThan(borderIdx);
+    // STATUS 不应出现(footer 替换模式不渲染状态行)
+    expect(output.indexOf('STATUS')).toBe(-1);
   });
 
-  it('选中候选行反白（\x1b[7m），未选中行不反白', async () => {
+  it('选中候选行主题色高亮(TrueColor SGR),未选中行不高亮', async () => {
     const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
     const renderer = new InlineRenderer(process.stdout);
-    renderer.renderFooter('/', 1, 'S', 80, ['config', 'compact'], 1);
+    const suggestions = COMMAND_SUGGESTIONS.filter(s => ['config', 'compact'].includes(s.name));
+    renderer.renderFooter('/', 1, 'S', 80, suggestions, 1);
     const output = stdoutChunks.join('');
 
-    // selectedIndex=1 → compact 反白，config 不反白
-    expect(output).toContain('\x1b[7m ▸ /compact');
-    expect(output).not.toContain('\x1b[7m ▸ /config');
-    expect(output).toContain('   /config');
+    // selectedIndex=1 → compact 主题色高亮(TrueColor SGR + /compact),config 不高亮
+    expect(output).toMatch(/\x1b\[38;2;\d+;\d+;\d+m\/compact/);
+    expect(output).not.toMatch(/\x1b\[38;2;\d+;\d+;\d+m\/config/);
+    // 未选中项仍以命令名出现（两空格缩进 + /config）
+    expect(output).toContain('  /config');
   });
 
   it('从 8 行下拉 → 0 行时零残留（物理删除整块后重画）', async () => {
     const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
     const renderer = new InlineRenderer(process.stdout);
-    const eight = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const eight = items(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
 
     // 第一帧：8 行下拉
     renderer.renderFooter('/', 1, 'S', 80, eight, 0);
@@ -77,21 +82,21 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     const eraseCount = (output.match(/\x1b\[2K/g) || []).length;
     expect(eraseCount).toBeGreaterThanOrEqual(12);
     // 核心契约：输出不含任何旧候选名（零残留）
-    for (const name of eight) {
-      expect(output).not.toContain(`/${name}`);
+    for (const item of eight) {
+      expect(output).not.toContain(`/${item.name}`);
     }
   });
 
   it('下拉行数增加时新行出现且无残留（5→8）', async () => {
     const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
     const renderer = new InlineRenderer(process.stdout);
-    const five = ['a', 'b', 'c', 'd', 'e'];
+    const five = items(['a', 'b', 'c', 'd', 'e']);
 
     renderer.renderFooter('/', 1, 'S', 80, five, 0);
     stdoutChunks.length = 0;
 
     // 扩展到 8 行
-    const eight = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const eight = items(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
     renderer.renderFooter('/', 1, 'S', 80, eight, 0);
     const output = stdoutChunks.join('');
 
@@ -109,7 +114,7 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
   it('多次连续覆写：候选名恰好出现一次（无重复）', async () => {
     const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
     const renderer = new InlineRenderer(process.stdout);
-    const suggestions = ['config', 'compact'];
+    const suggestions = COMMAND_SUGGESTIONS.filter(s => ['config', 'compact'].includes(s.name));
 
     // 第一次渲染（追加模式）
     renderer.renderFooter('/c', 2, 'S', 80, suggestions, 0);
@@ -131,7 +136,7 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     // 之后 appendLine 从原块顶覆盖，新 renderFooter 重新追加。
     const { InlineRenderer } = await import('../../tui/inline/InlineRenderer.js');
     const renderer = new InlineRenderer(process.stdout);
-    const suggestions = ['config', 'compact'];
+    const suggestions = COMMAND_SUGGESTIONS.filter(s => ['config', 'compact'].includes(s.name));
 
     // 渲染带 dropdown 的 footer
     renderer.renderFooter('/c', 2, 'S', 80, suggestions, 0);
@@ -141,11 +146,11 @@ describe('renderFooter 原子渲染 footer + 下拉菜单', () => {
     renderer.commitFooter();
     const commitOutput = stdoutChunks.join('');
     // commitFooter 必须向上移动足够行数以擦除整个块（含 dropdown 的 2 行）
-    // 新 footer 结构：footerHeight = 预留位(2)+input(1)+2suggestions+border(1)+status(1) = 7；
-    // cursorToTop = 3（光标在 input 行 = 第 3 行，上移 3 到预留位顶）
+    // 新 footer 结构：footerHeight = 预留位(1)+顶部border(1)+input(1)+下border(1)+2suggestions = 6；
+    // cursorToTop = 2（预留位 1 + 顶部 border 1，光标在 input 行，上移 2 到预留位顶）
     const cursorUpMatch = commitOutput.match(/\x1b\[(\d+)A/);
     expect(cursorUpMatch).not.toBeNull();
-    expect(parseInt(cursorUpMatch![1], 10)).toBe(3);
+    expect(parseInt(cursorUpMatch![1], 10)).toBe(2);
 
     // commit 后追加消息，不残留 dropdown
     renderer.appendLine('❯ /config');

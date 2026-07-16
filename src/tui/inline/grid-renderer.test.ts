@@ -96,8 +96,8 @@ describe('InlineGridRenderer.commitFooter', () => {
       suggestions: [], dropdownIndex: 0, viewportTop: 0,
     });
     renderer.commitFooter(layout1, 27,80);
-    // footer 结构：height = 预留位(2) + 顶部border(1) + input(1) + 底部border(1) + status(1) = 6
-    expect(layout1.height).toBe(6);
+    // footer 结构：height = 预留位(1) + 顶部border(1) + input(1) + 底部border(1) + status(1) = 5
+    expect(layout1.height).toBe(5);
     mock.written.length = 0;
 
     const layout2 = layoutFooter({
@@ -105,8 +105,9 @@ describe('InlineGridRenderer.commitFooter', () => {
       suggestions: ['cmd-a', 'cmd-b', 'cmd-c'], dropdownIndex: 0, viewportTop: 0,
     });
     renderer.commitFooter(layout2, 27,80);
-    // footer 结构：height = 预留位(2) + 顶部border(1) + input(1) + 3suggestions + 底部border(1) + status(1) = 9
-    expect(layout2.height).toBe(9);
+    // footer 结构(suggestion 可见,footer 替换模式):
+    // height = 预留位(1) + 顶部border(1) + input(1) + 下border(1) + 3suggestions = 7(保留 border,无 status)
+    expect(layout2.height).toBe(7);
     const output = mock.output;
     // 高度变化 → 先清旧区域（CUP + ED）
     expect(output).toContain('\x1b[0J');

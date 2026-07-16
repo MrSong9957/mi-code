@@ -15,9 +15,12 @@ import { layoutInputCursor } from '../state/layout-cursor.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
 import { MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
 import { computeInputViewport } from '../state/input-viewport.js';
-import { renderFinalizedLine, wrapStreamingText, wrapThinkingText } from './text-layout.js';
+import { renderFinalizedLine, wrapStreamingText, wrapThinkingText, displayWidth } from './text-layout.js';
 import sliceAnsi from 'slice-ansi';
 import type { FormattedLine } from '../../ui/types.js';
+import type { SuggestionItem } from '../../commands/suggestion-data.js';
+import { getTheme } from '../../utils/theme.js';
+import { resolveSGR, RESET as THEME_RESET } from '../../utils/theme-resolve.js';
 
 const PROMPT = '❯ ';
 const CONTINUATION_INDENT = '  ';
@@ -31,12 +34,26 @@ export interface FooterInput {
   cursor: number;
   status: string;
   cols: number;
-  suggestions: string[];
+  /** 终端行数(用于下拉菜单动态高度)。0 或未传时回退到默认上限。 */
+  rows?: number;
+  suggestions: SuggestionItem[];
   dropdownIndex: number;
   viewportTop: number;
   /** spinner 行 ANSI（显示在 footer border 上方的预留位）。
    *  null/undefined = 无 spinner（预留位留空）。始终保留 2 行（间距 + spinner 位）。 */
   spinnerLine?: string | null;
+  /** Select 界面(交互式选择器)。可见时替换整个 footer(标题+列表+提示)。 */
+  selectView?: SelectView | null;
+}
+
+/** Select 界面布局数据(预渲染 ANSI 行) */
+export interface SelectView {
+  /** 标题行 ANSI(如 "Select model") */
+  title: string;
+  /** 选项行 ANSI(已含高亮/dim) */
+  items: string[];
+  /** 快捷键提示行 ANSI(如 "↑↓ navigate · Enter confirm · Esc cancel") */
+  hint: string;
 }
 
 /**
@@ -55,6 +72,8 @@ export interface FooterLayout {
   cursorCol: number;
   /** usableWidth（cols - 1），供 Renderer CHA 钳位光标列 */
   usableWidth: number;
+  /** Select 界面标志:每次 writeFooter 前先 commitFooter 清屏再 appendLine(避免覆写错位) */
+  isSelect?: boolean;
 }
 
 /**
@@ -84,7 +103,30 @@ export interface LayoutResult {
  * 无 stdout.write，无副作用。
  */
 export function layoutFooter(fi: FooterInput): FooterLayout {
-  const { input, cursor: cursorPos, status, cols, suggestions, dropdownIndex, viewportTop, spinnerLine } = fi;
+  const { input, cursor: cursorPos, status, cols, rows, suggestions, dropdownIndex, viewportTop, spinnerLine, selectView } = fi;
+
+  // ── Select 模式:替换整个 footer(标题 + 列表 + 提示) ──
+  // 不渲染预留位/border/输入框/status。footerHeight 自动管理,退出时 cursorUp 覆写自动擦除。
+  if (selectView) {
+    const usableWidth = getUsableWidth(cols);
+    const lines: string[] = [
+      sliceAnsi(selectView.title, 0, usableWidth),
+      '',
+      ...selectView.items.map(item => sliceAnsi(item, 0, usableWidth)),
+      '',
+      sliceAnsi(selectView.hint, 0, usableWidth),
+    ];
+    return {
+      lines,
+      height: lines.length,
+      // Select 模式无输入框,光标定位不需要(光标隐藏)
+      cursorToTop: 0,
+      cursorCol: 0,
+      usableWidth,
+      isSelect: true,
+    };
+  }
+
   const inputLines = input.split('\n');
   const usableWidth = getUsableWidth(cols);
   const border = '─'.repeat(usableWidth);
@@ -99,23 +141,62 @@ export function layoutFooter(fi: FooterInput): FooterLayout {
   );
 
   // suggestion 可见窗口（居中滚动）
-  const maxVisible = Math.min(suggestions.length, 8);
+  // 动态高度:终端行数 - 预留(输入框区域 ~5 行:预留位2 + border1 + 输入1 + 留白1)
+  // 上限不硬编码,让菜单占满可用空间(对标 Claude Code 的"半屏"效果)
+  const SUGGESTION_RESERVE = 5; // 输入框+border+预留位+留白
+  const maxByTerminal = rows ? Math.max(1, rows - SUGGESTION_RESERVE) : 8;
+  const maxVisible = Math.min(suggestions.length, maxByTerminal);
   const startIndex = Math.max(0, Math.min(
     dropdownIndex - Math.floor(maxVisible / 2),
     suggestions.length - maxVisible,
   ));
   const visibleSuggestions = suggestions.slice(startIndex, startIndex + maxVisible);
-  const selectedName = suggestions[dropdownIndex];
-  const suggestionLines: string[] = visibleSuggestions.map((name) => {
-    const isSelected = name === selectedName;
-    return isSelected ? `\x1b[7m ▸ /${name} \x1b[0m` : `   /${name}`;
+
+  // 命令名列宽度:所有可见候选的最大宽度 + padding,上限终端 40%(对标 Claude Code)
+  const SUGGESTION_LEFT_PAD = 2; // paddingX={2}
+  const nameMaxWidth = Math.min(
+    Math.max(...visibleSuggestions.map(s => displayWidth('/' + s.name)), 0) + 3,
+    Math.floor(usableWidth * 0.4),
+  );
+  const theme = getTheme();
+  const suggestionSGR = resolveSGR(theme, 'suggestion');
+  const suggestionLines: string[] = visibleSuggestions.map((item, i) => {
+    const actualIndex = startIndex + i;
+    const isSelected = actualIndex === dropdownIndex;
+
+    // 命令名列:固定宽度对齐
+    const nameStr = '/' + item.name;
+    const namePad = ' '.repeat(Math.max(0, nameMaxWidth - displayWidth(nameStr)));
+    const nameCol = nameStr + namePad;
+
+    // 描述:参数提示 + 描述,截断到剩余宽度
+    const argPart = item.argHint ? `${item.argHint} ` : '';
+    const fullDesc = `${argPart}${item.description}`.replace(/\s+/g, ' ').trim();
+    const descReserved = SUGGESTION_LEFT_PAD + nameMaxWidth + 2; // 左pad + 命令名列 + 2空格分隔
+    const maxDescWidth = Math.max(0, usableWidth - descReserved);
+    const desc = fullDesc ? fullDesc.slice(0, maxDescWidth) : '';
+
+    const separator = desc ? '  ' : '';
+
+    if (isSelected) {
+      // 选中:整行 suggestion 主题色(对标 Claude Code,无箭头无背景色)
+      return `${' '.repeat(SUGGESTION_LEFT_PAD)}${suggestionSGR}${nameCol}${separator}${desc}${THEME_RESET}`;
+    }
+    // 未选中:命令名正常色,描述 dim
+    const dimDesc = desc ? `\x1b[2m${separator}${desc}\x1b[0m` : '';
+    return `${' '.repeat(SUGGESTION_LEFT_PAD)}${nameCol}${dimDesc}`;
   });
 
-  // 组装完整行序：预留位(2行) / border / 输入行(s) / 下拉行(s) / border / 状态
-  // 预留位：始终 2 行（1 空行间距 + 1 spinner 位），对标 Claude Code marginTop={1} + spinner 行。
-  // spinner 可见时第 2 行填 spinner ANSI，否则空行。这样 footer 上方始终有空间，
-  // 消息/草稿不会紧贴 footer border，spinner 隐藏时位置也不收缩。
-  const lines: string[] = ['', spinnerLine ?? '', border];
+  // 组装完整行序：预留位(2行) / border / 输入行(s) / [下拉行(s)] / [border / 状态]
+  //
+  // 下拉菜单可见时(对标 Claude Code footer 替换):
+  // - 保留下 border(输入框边框始终可见)
+  // - 不渲染状态行 → suggestion 替换状态行区域,占据 border 下方全部空间
+  // - 终端原生滚动让菜单保持视野内
+  //
+  // 无下拉菜单时:正常渲染 border + 状态行
+  // 预留位:spinner 可见时 2 行(1 间距 + 1 spinner),不可见时 1 行(仅间距)
+  const lines: string[] = spinnerLine ? ['', spinnerLine, border] : ['', border];
   const wrappedInputCounts: number[] = [];
   for (let i = 0; i < visibleInputLines.length; i++) {
     const absLine = viewportTop + i;
@@ -124,15 +205,20 @@ export function layoutFooter(fi: FooterInput): FooterLayout {
     wrappedInputCounts.push(wrapped.length);
     lines.push(...wrapped);
   }
+  lines.push(border); // 下 border 始终渲染(输入框边框)
   for (const sl of suggestionLines) {
     lines.push(sliceAnsi(sl, 0, usableWidth));
   }
-  lines.push(border);
-  const wrappedStatus = wrapLine(status, usableWidth);
-  lines.push(...wrappedStatus);
+  // suggestion 可见时不渲染状态行(footer 替换模式)
+  if (suggestionLines.length === 0) {
+    const wrappedStatus = wrapLine(status, usableWidth);
+    lines.push(...wrappedStatus);
+  }
 
   // 光标物理行/列计算（纯函数，结果供 Renderer 写 cursorUp/CHA）
-  let cursorPhysLine0 = 3; // 跳过 2 行预留位 + 顶部 border
+  // 预留位行数:spinner 可见时 2 行,不可见时 1 行
+  const reserveRows = spinnerLine ? 2 : 1;
+  let cursorPhysLine0 = reserveRows + 1; // 跳过预留位 + 顶部 border
   let cursorColInPhysLine = 0;
   for (let i = 0; i < visibleInputLines.length; i++) {
     const absLine = viewportTop + i;

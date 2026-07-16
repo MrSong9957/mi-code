@@ -6,13 +6,13 @@
 // 分离渲染：菜单和输入框各画各的，通过 Context 传数据，避免互相重绘。
 
 import React, { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
-import { COMMAND_NAMES } from '../../commands/executor.js';
+import { COMMAND_SUGGESTIONS, type SuggestionItem } from '../../commands/suggestion-data.js';
 
 export interface DropdownState {
   /** 是否显示下拉菜单 */
   visible: boolean;
   /** 候选命令列表 */
-  candidates: string[];
+  candidates: SuggestionItem[];
   /** 当前选中项索引 */
   selectedIndex: number;
 }
@@ -44,11 +44,11 @@ export interface DropdownProviderProps {
  */
 export function DropdownProvider({ children }: DropdownProviderProps): React.ReactElement {
   const [visible, setVisible] = useState(false);
-  const [candidates, setCandidates] = useState<string[]>([]);
+  const [candidates, setCandidates] = useState<SuggestionItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const show = useCallback((prefix: string) => {
-    const filtered = COMMAND_NAMES.filter(n => n.startsWith(prefix));
+    const filtered = COMMAND_SUGGESTIONS.filter(s => s.name.startsWith(prefix));
     if (filtered.length > 0) {
       setCandidates(filtered);
       setSelectedIndex(0);
@@ -71,7 +71,7 @@ export function DropdownProvider({ children }: DropdownProviderProps): React.Rea
   }, [candidates.length]);
 
   const selected = useCallback(() => {
-    return candidates[selectedIndex] ?? null;
+    return candidates[selectedIndex]?.name ?? null;
   }, [candidates, selectedIndex]);
 
   return (

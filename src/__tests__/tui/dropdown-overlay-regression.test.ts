@@ -76,7 +76,7 @@ describe('DropdownOverlay 回归测试', () => {
     expect(frame).not.toContain('/config');
   });
 
-  it('选中项有 ▸ 前缀', () => {
+  it('选中项有主题色高亮', () => {
     let showFn: (prefix: string) => void = () => {};
     function App(): React.ReactElement {
       const { show } = useDropdown();
@@ -96,6 +96,7 @@ describe('DropdownOverlay 回归测试', () => {
     ));
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('▸');
+    // 选中项用主题色(TrueColor SGR)高亮,不依赖具体色值
+    expect(frame).toMatch(/\x1b\[38;2;\d+;\d+;\d+m/);
   });
 });

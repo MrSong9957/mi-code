@@ -51,7 +51,8 @@ describe('下拉菜单 E2E 回归测试', () => {
     expect(output.length).toBeGreaterThan(0); // 必须有输出
     expect(output).toContain('/config');      // 必须包含候选命令
     expect(output).toContain('/build');       // 必须包含候选命令
-    expect(output).toContain('▸');            // 必须有选中标记
+    // 必须有选中标记：选中项用主题色(TrueColor SGR)高亮
+    expect(output).toMatch(/\x1b\[38;2;\d+;\d+;\d+m/);
   });
 
   it('输入 /th 后，stdout 输出必须只包含 theme', () => {
@@ -101,7 +102,8 @@ describe('下拉菜单 E2E 回归测试', () => {
       React.createElement(App),
     ));
     const before = lastFrame() ?? '';
-    expect(before).toContain('▸ /config'); // 第一个命令被选中
+    // 第一个命令被选中(主题色 TrueColor SGR + /config)
+    expect(before).toMatch(/\x1b\[38;2;\d+;\d+;\d+m\/config/);
 
     // 向下选择
     nextFn();
@@ -109,8 +111,10 @@ describe('下拉菜单 E2E 回归测试', () => {
       React.createElement(App),
     ));
     const after = lastFrame() ?? '';
-    expect(after).toContain('▸ /login'); // 第二个命令被选中
-    expect(after).not.toContain('▸ /config'); // 第一个不再被选中
+    // 第二个命令被选中(主题色高亮)
+    expect(after).toMatch(/\x1b\[38;2;\d+;\d+;\d+m\/login/);
+    // 第一个不再被选中(TrueColor SGR 不再紧邻 /config)
+    expect(after).not.toMatch(/\x1b\[38;2;\d+;\d+;\d+m\/config/);
   });
 
   it('hide 后，stdout 输出必须为空', () => {

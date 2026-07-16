@@ -10,6 +10,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import { useStore } from 'zustand/react';
 import type { CompletionStore } from '../state/completion-store.js';
+import { getTheme } from '../../utils/theme.js';
 
 const MAX_VISIBLE = 8;
 
@@ -24,20 +25,28 @@ export function SuggestionBar({ store }: SuggestionBarProps): React.ReactElement
 
   if (!visible || candidates.length === 0) return null;
 
+  const theme = getTheme();
+  const suggestionColor = theme.suggestion;
+
   // 计算可见范围（滚动窗口）
   const startIndex = Math.max(0, index - MAX_VISIBLE + 1);
   const visibleCandidates = candidates.slice(startIndex, startIndex + MAX_VISIBLE);
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" paddingLeft={2}>
       {visibleCandidates.map((c, i) => {
         const actualIndex = startIndex + i;
         const isSelected = actualIndex === index;
         return (
-          <Text key={c}>
-            {isSelected
-              ? <Text inverse bold>{`▸/${c}`}</Text>
-              : <Text dimColor>{`  /${c}`}</Text>}
+          <Text key={c.name}>
+            <Text color={isSelected ? suggestionColor : undefined} dimColor={!isSelected}>
+              {`/${c.name}`}
+            </Text>
+            {c.description ? (
+              <Text color={isSelected ? suggestionColor : undefined} dimColor={!isSelected}>
+                {`  ${c.description}`}
+              </Text>
+            ) : null}
           </Text>
         );
       })}

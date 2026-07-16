@@ -13,9 +13,10 @@ describe('completion-store filter', () => {
     const s = store.getState();
     expect(s.visible).toBe(true);
     expect(s.candidates.length).toBeGreaterThan(0);
-    expect(s.candidates).toContain('theme');
-    expect(s.candidates).toContain('help');
-    expect(s.candidates).toContain('config');
+    const names = s.candidates.map(c => c.name);
+    expect(names).toContain('theme');
+    expect(names).toContain('help');
+    expect(names).toContain('config');
   });
 
   it('filter("th") 过滤为只含 theme', () => {
@@ -23,7 +24,7 @@ describe('completion-store filter', () => {
     store.getState().filter('th');
     const s = store.getState();
     expect(s.visible).toBe(true);
-    expect(s.candidates).toEqual(['theme']);
+    expect(s.candidates.map(c => c.name)).toEqual(['theme']);
   });
 
   it('filter("zzz") 无匹配时隐藏', () => {
@@ -66,7 +67,7 @@ describe('completion-store selected', () => {
   it('selected 返回当前高亮候选', () => {
     const store = createCompletionStore();
     store.getState().filter('');
-    const first = store.getState().candidates[0];
+    const first = store.getState().candidates[0]!.name;
     expect(store.getState().selected()).toBe(first);
   });
 
@@ -81,13 +82,13 @@ describe('completion-store selected', () => {
 });
 
 describe('下拉菜单竖排渲染', () => {
-  it('candidates 是字符串数组，每个以命令名开头', () => {
+  it('candidates 是 SuggestionItem 数组，每个有命令名', () => {
     const store = createCompletionStore();
     store.getState().filter('');
     const candidates = store.getState().candidates;
     for (const c of candidates) {
-      expect(typeof c).toBe('string');
-      expect(c.length).toBeGreaterThan(0);
+      expect(typeof c.name).toBe('string');
+      expect(c.name.length).toBeGreaterThan(0);
     }
   });
 });

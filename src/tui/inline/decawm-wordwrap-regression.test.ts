@@ -12,6 +12,7 @@ import stringWidth from 'string-width';
 import { InlineRenderer } from './InlineRenderer.js';
 import { wrapLine, getUsableWidth } from '../state/wrap-line.js';
 import { layoutInputCursor } from '../state/layout-cursor.js';
+import type { SuggestionItem } from '../../commands/suggestion-data.js';
 
 class PreciseCursorSimulator {
   row = 0;
@@ -254,7 +255,8 @@ describe('DECAWM OFF + wordWrap 回归', () => {
     expect.hasAssertions();
     // 构造超长 suggestion 名
     const longName = 'x'.repeat(120);
-    renderer.renderFooter('hel', 3, 'status', cols, [longName], 0, 0);
+    const longSuggestion: SuggestionItem = { name: longName, description: 'd', group: 'Config' };
+    renderer.renderFooter('hel', 3, 'status', cols, [longSuggestion], 0, 0);
     const out = mock.output;
     // suggestion 行应被截断，不含超过 usableWidth 的内容
     // suggestion 行格式: ' ▸ /xxx ' 或 '   /xxx'

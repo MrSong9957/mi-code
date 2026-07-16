@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createCompletionStore } from '../../tui/state/completion-store.js';
-import { COMMAND_NAMES } from '../../commands/executor.js';
+import { COMMAND_SUGGESTIONS } from '../../commands/suggestion-data.js';
 
 describe('completionStore bridge — / triggers filter', () => {
   it('filter("") shows all commands', () => {
@@ -9,7 +9,7 @@ describe('completionStore bridge — / triggers filter', () => {
     const s = store.getState();
     expect(s.visible).toBe(true);
     expect(s.candidates.length).toBeGreaterThan(0);
-    expect(s.candidates).toEqual(COMMAND_NAMES);
+    expect(s.candidates).toEqual([...COMMAND_SUGGESTIONS]);
   });
 
   it('filter("th") shows only commands starting with "th"', () => {
@@ -17,7 +17,7 @@ describe('completionStore bridge — / triggers filter', () => {
     store.getState().filter('th');
     const s = store.getState();
     expect(s.visible).toBe(true);
-    expect(s.candidates.every(c => c.startsWith('th'))).toBe(true);
+    expect(s.candidates.every(c => c.name.startsWith('th'))).toBe(true);
   });
 
   it('filter("zzznoexist") hides dropdown', () => {
