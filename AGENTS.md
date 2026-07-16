@@ -372,7 +372,7 @@ VCR（可选）：适用于 API / 网络服务。
 
 - Node.js: $\ge$ 18.0.0 (`package.json` 中的 `engines`)
 - ESM: `"type": "module"` (`package.json`)
-- TypeScript: `target: ES2022`, `strict: false`, `module: ESNext` (`tsconfig.json`)
+- TypeScript: `target: ES2022`, `strict: true`, `module: NodeNext` (`tsconfig.json`)
 - 包管理: pnpm + npm 双支持 (`pnpm-lock.yaml` 与 `package-lock.json` 共存)
 - 构建（原始）: Bun 编译时内联 (`feature()`, `MACRO`, `bun:bundle`)
 - 构建（重建）: esbuild 打包 (`--platform=node --target=node18 --format=esm --bundle`)
