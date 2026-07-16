@@ -7,6 +7,9 @@ export interface ProviderConfig {
   baseUrl?: string;
   /** 轻量任务（子代理、压缩摘要）所用模型 */
   smallModel?: string;
+  /** 可选模型列表(/model 选择界面用)。配置后替换硬编码预设。
+   *  格式:[{ "value": "model-id", "label": "显示名", "description": "描述" }] */
+  models?: Array<{ value: string; label: string; description?: string }>;
 }
 
 /** 权限模式（与 permission/types.ts 同步，本地定义避免循环依赖） */

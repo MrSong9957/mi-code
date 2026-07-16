@@ -31,6 +31,7 @@ import { createInputStore } from '../state/input-store.js';
 import { createStatusStore } from '../state/status-store.js';
 import { createSpinnerStore } from '../state/spinner-store.js';
 import { createCompletionStore } from '../state/completion-store.js';
+import { createSelectStore } from '../state/select-store.js';
 import { createSelectionStore } from '../state/selection-store.js';
 import { createOverlayStore } from '../state/overlay-store.js';
 import { InlineRenderer } from './InlineRenderer.js';
@@ -76,6 +77,7 @@ function setupWithPipeline() {
     statusStore: createStatusStore({ mode: 'chat', model: 'test', dir: '/tmp', branch: 'main' }),
     spinnerStore: createSpinnerStore(),
     completionStore: createCompletionStore(),
+    selectStore: createSelectStore(),
     selectionStore: createSelectionStore(),
     overlayStore: createOverlayStore(),
     cols: 80,

@@ -25,6 +25,7 @@ import { createInputStore } from '../../tui/state/input-store.js';
 import { createStatusStore } from '../../tui/state/status-store.js';
 import { createSpinnerStore } from '../../tui/state/spinner-store.js';
 import { createCompletionStore } from '../../tui/state/completion-store.js';
+import { createSelectStore } from '../../tui/state/select-store.js';
 import { createSelectionStore } from '../../tui/state/selection-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import { InlineRenderer } from '../../tui/inline/InlineRenderer.js';
@@ -79,6 +80,7 @@ function setup(initialCols: number = 80) {
     statusStore: createStatusStore({ mode: 'chat', model: 'test', dir: '/tmp', branch: 'main' }),
     spinnerStore: createSpinnerStore(),
     completionStore: createCompletionStore(),
+    selectStore: createSelectStore(),
     selectionStore: createSelectionStore(),
     overlayStore: createOverlayStore(),
     cols: initialCols,

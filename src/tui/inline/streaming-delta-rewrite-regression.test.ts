@@ -32,6 +32,7 @@ import { createInputStore } from '../state/input-store.js';
 import { createStatusStore } from '../state/status-store.js';
 import { createSpinnerStore } from '../state/spinner-store.js';
 import { createCompletionStore } from '../state/completion-store.js';
+import { createSelectStore } from '../state/select-store.js';
 import { createSelectionStore } from '../state/selection-store.js';
 import { createOverlayStore } from '../state/overlay-store.js';
 import { createLogoStore } from '../state/logo-store.js';
@@ -138,6 +139,7 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
         statusStore,
         spinnerStore,
         completionStore,
+        selectStore: createSelectStore(),
         selectionStore,
         overlayStore,
         cols: 80,
@@ -168,6 +170,7 @@ function mountInlineApp(mock: ReturnType<typeof createMockStdout>) {
         statusStore,
         spinnerStore,
         completionStore,
+        selectStore: createSelectStore(),
         selectionStore,
         overlayStore,
         cols: 80,
@@ -201,6 +204,7 @@ describe('needEraseDraft 回归：已固化消息后流式不堆叠', () => {
         statusStore: createStatusStore(dummyStatus),
         spinnerStore: createSpinnerStore(),
         completionStore: createCompletionStore(),
+        selectStore: createSelectStore(),
         selectionStore: createSelectionStore(),
         overlayStore: createOverlayStore(),
         cols: 80,

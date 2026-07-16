@@ -24,6 +24,7 @@ import { createStatusStore } from './state/status-store.js';
 import { createLogoStore } from './state/logo-store.js';
 import { createSpinnerStore, type SpinnerStore } from './state/spinner-store.js';
 import { createCompletionStore, type CompletionStore } from './state/completion-store.js';
+import { createSelectStore, type SelectStore } from './state/select-store.js';
 import { createOverlayStore, type OverlayStore } from './state/overlay-store.js';
 import { PipelineToStoreAdapter } from './state/pipeline-adapter.js';
 import { RenderModeProvider, type RenderMode } from './state/render-mode.js';
@@ -65,6 +66,7 @@ export interface BootstrapHandle {
   logoStore: ReturnType<typeof createLogoStore>;
   spinnerStore: SpinnerStore;
   completionStore: CompletionStore;
+  selectStore: SelectStore;
   overlayStore: OverlayStore;
   themeStore: ThemeStore;
   /** spinner 控制（对标 Claude Code 四套动画：mode 决定配色，verb 决定文字） */
@@ -93,6 +95,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const logoStore = createLogoStore(opts.logo);
   const spinnerStore = createSpinnerStore();
   const completionStore = createCompletionStore();
+  const selectStore = createSelectStore();
   const overlayStore = createOverlayStore();
   const adapter = new PipelineToStoreAdapter(messagesStore);
   const pipeline = new BlockPipeline(adapter);
@@ -150,7 +153,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     React.createElement(RenderModeProvider, { initialMode: renderMode, children:
       React.createElement(ThemeStoreProvider, { store: themeStore },
         React.createElement(ConnectedApp, {
-          messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore,
+          messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore,
           onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
           inlineRenderer: inlineRenderer ?? undefined,
         }),
@@ -176,6 +179,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     pipeline, messagesStore, inputStore, statusStore, logoStore,
     spinnerStore,
     completionStore,
+    selectStore,
     overlayStore,
     themeStore,
     startSpinner: (mode) => { spinnerStore.getState().start(mode); },

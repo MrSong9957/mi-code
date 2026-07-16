@@ -83,11 +83,11 @@ describe('useInputHandler: 斜杠命令下拉菜单（completionStore 单一数�
     const completionStore = createCompletionStore();
     const { stdin } = render(React.createElement(InputProbe, { store, completionStore }));
     stdin.write('/');
-    const selectedName = completionStore.getState().candidates[0];
+    const selectedName = completionStore.getState().candidates[0]!.name;
     expect(selectedName).toBeTruthy();
     stdin.write('\r'); // Enter
     vi.advanceTimersByTime(30);
-    expect(store.getState().text).toBe('/' + selectedName);
+    expect(store.getState().text).toBe('/' + selectedName + ' ');
     expect(completionStore.getState().visible).toBe(false);
     vi.useRealTimers();
   });
@@ -129,7 +129,7 @@ describe('useInputHandler: 斜杠命令下拉菜单（completionStore 单一数�
     stdin.write('c');  // 过滤
     const { candidates } = completionStore.getState();
     expect(candidates.length).toBeGreaterThan(0);
-    for (const name of candidates) {
+    for (const { name } of candidates) {
       expect(name.startsWith('c')).toBe(true);
     }
   });

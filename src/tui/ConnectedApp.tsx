@@ -35,6 +35,7 @@ import type { StatusStore } from './state/status-store.js';
 import type { LogoStore } from './state/logo-store.js';
 import type { SpinnerStore } from './state/spinner-store.js';
 import type { CompletionStore } from './state/completion-store.js';
+import type { SelectStore } from './state/select-store.js';
 import type { OverlayStore } from './state/overlay-store.js';
 
 /** LOGO 区占的行数（与 App.tsx 一致） */
@@ -59,6 +60,7 @@ export interface ConnectedAppProps {
   logoStore: LogoStore;
   spinnerStore: SpinnerStore;
   completionStore: CompletionStore;
+  selectStore: SelectStore;
   overlayStore: OverlayStore;
   onExit: () => void;
   onTab?: (text: string) => void;
@@ -68,7 +70,7 @@ export interface ConnectedAppProps {
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, overlayStore, onExit, onTab, onToggleOverlay, inlineRenderer: _inlineRenderer,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, onExit, onTab, onToggleOverlay, inlineRenderer: _inlineRenderer,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store（拖拽写入，所有区域订阅高亮）
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -160,7 +162,7 @@ export function ConnectedApp({
   }
 
   // 键盘处理（必须在 early return 之前，inline 模式也需要）
-  useInputHandler(inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible, handlePageScroll, completionStore);
+  useInputHandler(inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible, handlePageScroll, completionStore, selectStore);
 
   // 粘贴占位符：bracketed paste 内容 → storePastedContent 生成占位符 → insert 到输入框。
   // usePaste 自动管 \x1b[?2004h 生命周期，inline/alt-screen 都生效。
@@ -301,9 +303,11 @@ export function ConnectedApp({
           statusStore={statusStore}
           spinnerStore={spinnerStore}
           completionStore={completionStore}
+          selectStore={selectStore}
           selectionStore={selectionStore}
           overlayStore={overlayStore}
           cols={cols}
+          rows={rows}
         />
       </DropdownProvider>
     );

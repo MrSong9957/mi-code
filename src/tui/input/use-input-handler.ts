@@ -15,6 +15,7 @@
 import { useInput, type Key } from 'ink';
 import type { InputStore } from '../state/input-store.js';
 import type { CompletionStore } from '../state/completion-store.js';
+import type { SelectStore } from '../state/select-store.js';
 
 export function useInputHandler(
   store: InputStore,
@@ -24,6 +25,7 @@ export function useInputHandler(
   overlayVisible?: () => boolean,
   onPageScroll?: (direction: 'up' | 'down') => void,
   completionStore?: CompletionStore,
+  selectStore?: SelectStore,
 ): void {
   useInput((input: string, key: Key) => {
     const s = store.getState();
@@ -55,6 +57,16 @@ export function useInputHandler(
     if (key.pageUp) { onPageScroll?.('up'); return; }
     if (key.pageDown) { onPageScroll?.('down'); return; }
 
+    // ─────────── Select 界面拦截(交互式选择器)───────────
+    if (selectStore && selectStore.getState().visible) {
+      if (key.escape) { selectStore.getState().close(); return; }
+      if (key.upArrow) { selectStore.getState().cyclePrev(); return; }
+      if (key.downArrow) { selectStore.getState().cycle(); return; }
+      if (key.return) { selectStore.getState().confirm(); return; }
+      // 其余键都吞掉(Select 界面不接受文字输入)
+      return;
+    }
+
     // ─────────── 斜杠命令补全拦截（completionStore 单一数据源）───────────
     if (completion?.visible) {
       // Esc：关闭补全
@@ -75,22 +87,22 @@ export function useInputHandler(
         return;
       }
 
-      // Enter：选中项写入 input，关闭补全
+      // Enter：选中项写入 input + 尾空格(方便直接输参数),关闭补全
       if (key.return) {
         const selected = completionStore!.getState().selected();
         completionStore!.getState().hide();
         if (selected) {
-          store.getState().setText('/' + selected);
+          store.getState().setText('/' + selected + ' ');
         }
         return;
       }
 
-      // TAB：循环选择候选并写回
+      // TAB：选中当前高亮项 + 尾空格,关闭补全(对标 Claude Code:选中后直接输参数)
       if (key.tab) {
-        completionStore!.getState().cycle();
         const sel = completionStore!.getState().selected();
+        completionStore!.getState().hide();
         if (sel) {
-          store.getState().setText('/' + sel);
+          store.getState().setText('/' + sel + ' ');
         }
         return;
       }

@@ -3,6 +3,7 @@ import { enterAltScreen, exitAltScreen } from '../hooks/useAltScreen.js';
 import { getUsableWidth } from '../state/wrap-line.js';
 import { InlineRenderState } from './render-state.js';
 import { layoutFooter, type FooterLayout } from './layout.js';
+import type { SuggestionItem } from '../../commands/suggestion-data.js';
 import {
   diffFooterOverlay, diffStreamingOverlay, diffFooterCommit,
   type RenderOperation,
@@ -117,7 +118,7 @@ export class InlineRenderer {
     cursorPos: number,
     statusText: string,
     cols: number = 80,
-    suggestions: string[] = [],
+    suggestions: SuggestionItem[] = [],
     selectedIndex: number = 0,
     viewportTop: number = 0,
   ): void {
@@ -133,7 +134,13 @@ export class InlineRenderer {
    * 本方法执行操作序列 + 光标定位。
    */
   writeFooter(layout: FooterLayout): void {
-    const { lines, height: newHeight, cursorToTop, cursorCol, usableWidth } = layout;
+    const { lines, height: newHeight, cursorToTop, cursorCol, usableWidth, isSelect } = layout;
+
+    // Select 模式:每次先擦除旧 footer(commitFooter: cursorUp + ED + 归零),再 appendLine
+    // 避免 Select 高度与正常 footer 不一致、或 Select 内部覆写 cursorToTop=0 导致错位
+    if (isSelect && this.state.footerHeight > 0) {
+      this.commitFooter();
+    }
 
     // diff：根据 footerHeight 决定追加/覆写（覆写用 cursorToTop 定位）
     const ops = diffFooterOverlay(this.state.footerHeight, this.state.cursorToTop, lines);
@@ -275,7 +282,13 @@ export class InlineRenderer {
    * @param frame 这一帧要渲染的内容（已转成 ANSI string[]）+ 状态转换信号
    */
   commit(frame: CommitFrame): void {
-    const { justFinalized, needEraseDraft } = frame.transitions;
+    const { justFinalized, needEraseDraft, forceFooterReset } = frame.transitions;
+
+    // Select 界面开关切换:擦除旧 footer 并重置账本(commitFooter 内部 cursorUp+ED 擦除 + 归零)
+    // 强制下一帧 writeFooter 走 appendLine,避免高度不一致导致覆写错位
+    if (forceFooterReset && this.state.footerHeight > 0) {
+      this.commitFooter();
+    }
 
     // 单次 write 防闪烁：所有操作拼进 writeBuf，结束时一次 stdout.write。
     // 这是防闪烁的核心手段——即使终端不支持 DEC 2026（conhost），
@@ -367,5 +380,7 @@ export interface CommitFrame {
     justFinalized: boolean;
     /** 需要擦除流式草稿（thinking→固化 或 流式中有新固化消息） */
     needEraseDraft: boolean;
+    /** Select 界面开关切换 → 重置 footerHeight 强制 appendLine(避免高度不一致覆写错位) */
+    forceFooterReset?: boolean;
   };
 }
