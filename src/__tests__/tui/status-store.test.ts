@@ -44,4 +44,12 @@ describe('status-store（mode/model/dir/branch/contextPct）', () => {
     store.getState().setContextPct(50000 / 200000);
     expect(store.getState().contextPct).toBeCloseTo(0.25);
   });
+
+  it('setModel：更新模型名(动态切模型即时反映到状态栏)', () => {
+    const store = createStatusStore(INIT);
+    store.getState().setModel('claude-opus-4-20250514');
+    expect(store.getState().model).toBe('claude-opus-4-20250514');
+    // 其它字段不变
+    expect(store.getState().mode).toBe('build');
+  });
 });

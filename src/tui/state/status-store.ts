@@ -20,6 +20,8 @@ export interface StatusState extends StatusBarData {
   setMode: (mode: string) => void;
   /** 更新上下文占用比例 [0,1]（来自 message_start.inputTokens / 200000） */
   setContextPct: (pct: number) => void;
+  /** 更新模型名（/model 或 /provider 命令即时反映到状态栏） */
+  setModel: (model: string) => void;
 }
 
 export type StatusStore = StoreApi<StatusState>;
@@ -34,5 +36,6 @@ export function createStatusStore(init: StatusInit): StatusStore {
 
     setMode: (mode) => set({ mode }),
     setContextPct: (pct) => set({ contextPct: Math.max(0, Math.min(1, pct)) }),
+    setModel: (model) => set({ model }),
   }));
 }
