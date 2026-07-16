@@ -151,6 +151,30 @@ describe('estimateContextSize', () => {
   it('should estimate block content', () => {
     expect(estimateContextSize([makeToolResult('r1', 'output text')])).toBe(11);
   });
+
+  it('image block: 计入估算(非零),避免压缩永不触发', () => {
+    const imgData = 'a'.repeat(3000); // 模拟 base64 数据
+    const msg: Message = {
+      role: 'user',
+      content: [{ type: 'image', mediaType: 'image/png', data: imgData } as ContentBlock],
+    };
+    const size = estimateContextSize([msg]);
+    // 图片必须被计入(非零),具体公式是 base64长度/300
+    expect(size).toBeGreaterThan(0);
+    expect(size).toBe(10); // ceil(3000/300)
+  });
+
+  it('image + text 混合:两者都计入', () => {
+    const msg: Message = {
+      role: 'user',
+      content: [
+        { type: 'image', mediaType: 'image/png', data: 'a'.repeat(600) } as ContentBlock,
+        { type: 'text', text: 'hello' } as ContentBlock,
+      ],
+    };
+    const size = estimateContextSize([msg]);
+    expect(size).toBe(7); // ceil(600/300)=2 + 'hello'=5
+  });
 });
 
 describe('needsCompaction', () => {

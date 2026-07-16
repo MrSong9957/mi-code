@@ -4,7 +4,7 @@
 export type MessageRole = 'user' | 'assistant';
 
 /** 内容块类型 */
-export type ContentBlockType = 'text' | 'tool_use' | 'tool_result';
+export type ContentBlockType = 'text' | 'tool_use' | 'tool_result' | 'image';
 
 /** 文本内容块 */
 export interface TextBlock {
@@ -27,8 +27,21 @@ export interface ToolResultBlock {
   content: string;
 }
 
+/** 图片支持的 MIME 类型（Anthropic API 限定集） */
+export type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+
+/** 图片内容块（用户输入）。内部命名与 SDK 字段解耦，convertMessages 做映射。 */
+export interface ImageBlock {
+  type: 'image';
+  mediaType: ImageMediaType;
+  /** base64 编码的图片数据。持久化时清空（只存 cachePath），resume 时从磁盘回填。 */
+  data: string;
+  /** 磁盘缓存路径。持久化后通过此路径引用图片，避免 base64 膨胀 JSONL。 */
+  cachePath?: string;
+}
+
 /** 内容块联合类型 */
-export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock;
 
 /** 对话消息 */
 export interface Message {

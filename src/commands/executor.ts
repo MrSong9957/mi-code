@@ -22,20 +22,8 @@ export interface CommandContext {
   themeStore?: ThemeStore;
 }
 
-/**
- * 所有可识别的斜杠命令名（单一真相源）。
- * - executor.switch 用它做校验
- * - use-input-handler 的 TAB 补全用它生成候选
- * - approve/reject 虽在 index.ts 特殊路径，但 help 列出且应可补全，故纳入
- */
-export const COMMAND_NAMES: readonly string[] = Object.freeze([
-  'config', 'login', 'provider', 'model', 'compact',
-  'build', 'plan', 'auto',
-  'approve', 'reject',
-  'help',
-  'skill', 'trigger', 'y', 'n', 'edit',
-  'theme',
-]);
+// COMMAND_NAMES + COMMAND_SUGGESTIONS 已迁移到 suggestion-data.ts(单一真相源)
+export { COMMAND_NAMES, COMMAND_SUGGESTIONS, type SuggestionItem, type CommandGroup } from './suggestion-data.js';
 
 /** 执行斜杠命令 */
 export function executeCommand(cmd: Command, configOrContext: ConfigStore | CommandContext, ctx?: CommandContext): CommandResult {
@@ -299,6 +287,8 @@ function handleHelp(): CommandResult {
   /approve             (After exit_plan_mode) Approve plan & switch to build
   /reject [reason]     (After exit_plan_mode) Reject plan, stay in plan mode
   /compact             Trigger context compaction
+  /image <path> [text] Attach an image file (PNG/JPEG/GIF/WebP, max 3.75MB)
+  /image [text]        Attach image from clipboard (Win: screenshot first, then /image)
   /theme <dark|light>  Switch theme
   /skill list           List available skills
   /skill off <name>     Block a skill

@@ -9,6 +9,7 @@
 
 import type {
   Message,
+  ContentBlock,
   ToolDefinition,
   ToolUseBlock,
   ToolResultBlock,
@@ -107,7 +108,7 @@ export interface StreamingQueryOptions {
 export async function* streamingQuery(
   client: StreamingLLMClient,
   registry: ToolRegistry,
-  userMessage: string,
+  userMessage: string | ContentBlock[],
   options: StreamingQueryOptions,
 ): AsyncGenerator<StreamMessage> {
   const {

@@ -229,6 +229,7 @@ function serializeMessagesForSummary(messages: Message[]): string {
           if (block.type === 'text') return block.text;
           if (block.type === 'tool_use') return `[tool: ${block.name}]`;
           if (block.type === 'tool_result') return `[tool result]`;
+          if (block.type === 'image') return '[image]';
           return '';
         })
         .filter(Boolean)
@@ -259,6 +260,9 @@ export function estimateContextSize(messages: Message[]): number {
       for (const block of msg.content) {
         if ('text' in block) total += block.text.length;
         if ('content' in block && typeof block.content === 'string') total += block.content.length;
+        // 图片 token 估算:base64 长度 / 300(粗略对标 Anthropic ~2000 token/张)。
+        // 不计入会导致 estimateContextSize 严重低估 → 压缩永不触发 → 上下文爆炸。
+        if (block.type === 'image') total += Math.ceil(block.data.length / 300);
       }
     }
   }
@@ -278,17 +282,30 @@ function saveTranscript(messages: Message[]): void {
   } catch { /* 静默忽略 */ }
 }
 
+/** 从消息 content 提取可读文本(text 块拼接 + image 标记) */
+function contentToSummaryText(content: Message['content']): string {
+  if (typeof content === 'string') return content;
+  return content
+    .map(block => {
+      if (block.type === 'text') return block.text;
+      if (block.type === 'image') return '[image]';
+      return '';
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
 /** 生成摘要 */
 function generateSummary(messages: Message[]): string {
   const parts: string[] = [];
 
-  const userMsgs = messages.filter(m => m.role === 'user').map(m => typeof m.content === 'string' ? m.content : '').filter(Boolean);
+  const userMsgs = messages.filter(m => m.role === 'user').map(m => contentToSummaryText(m.content)).filter(Boolean);
   if (userMsgs.length > 0) {
     parts.push('User requests:');
     for (const msg of userMsgs.slice(-3)) parts.push(`- ${msg.slice(0, 100)}`);
   }
 
-  const asstMsgs = messages.filter(m => m.role === 'assistant').map(m => typeof m.content === 'string' ? m.content : '').filter(Boolean);
+  const asstMsgs = messages.filter(m => m.role === 'assistant').map(m => contentToSummaryText(m.content)).filter(Boolean);
   if (asstMsgs.length > 0) {
     parts.push('\nRecent assistant actions:');
     for (const msg of asstMsgs.slice(-3)) parts.push(`- ${msg.slice(0, 100)}`);

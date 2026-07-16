@@ -61,7 +61,8 @@ export class AnthropicStreamClient implements StreamingLLMClient {
     const { systemPrompt, maxTokens, signal } = options;
 
     // 转换工具格式（Anthropic SDK 要求 input_schema.type 必须是 "object"）
-    const anthropicTools = tools.map(t => ({
+    // 转换工具格式（Anthropic SDK 要求 input_schema.type 必须是 "object"）
+    const anthropicTools = (tools ?? []).map(t => ({
       name: t.name,
       description: t.description,
       input_schema: {
@@ -72,17 +73,31 @@ export class AnthropicStreamClient implements StreamingLLMClient {
     }));
 
     // 创建流式请求
-    const stream = await this.client.messages.create(
-      {
-        model: this.model,
-        max_tokens: maxTokens,
-        system: systemPrompt,
-        messages: this.convertMessages(messages),
-        tools: anthropicTools,
-        stream: true,
-      },
-      { signal },
-    );
+    let stream: AsyncIterable<any>;
+    try {
+      stream = await this.client.messages.create(
+        {
+          model: this.model,
+          max_tokens: maxTokens,
+          system: systemPrompt,
+          messages: this.convertMessages(messages),
+          tools: anthropicTools,
+          stream: true,
+        },
+        { signal },
+      );
+    } catch (err: any) {
+      // API 错误(403/401/400 等):包装成清晰错误,不让 streamingQuery 的恢复逻辑吞掉
+      const status = err?.status ?? '';
+      const msg = err?.message ?? String(err);
+      if (status === 403 || status === 401) {
+        throw new Error(`API 认证失败(${status}):${msg.slice(0, 200)}。请检查 API Key 和模型权限。`);
+      }
+      if (status === 400) {
+        throw new Error(`API 请求错误(400):${msg.slice(0, 200)}`);
+      }
+      throw new Error(`API 错误(${status || 'unknown'}):${msg.slice(0, 200)}`);
+    }
 
     // 状态：内容块累积
     const contentBlocks: Array<{
@@ -238,6 +253,14 @@ export class AnthropicStreamClient implements StreamingLLMClient {
             if (block.type === 'text') return { type: 'text' as const, text: block.text };
             if (block.type === 'tool_use') return { type: 'tool_use' as const, id: block.id, name: block.name, input: block.input };
             if (block.type === 'tool_result') return { type: 'tool_result' as const, tool_use_id: block.tool_use_id, content: block.content };
+            if (block.type === 'image') return {
+              type: 'image' as const,
+              source: {
+                type: 'base64' as const,
+                media_type: block.mediaType,
+                data: block.data,
+              },
+            };
             return block;
           }),
     }));
