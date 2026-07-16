@@ -32,5 +32,9 @@ export default defineConfig({
     poolOptions: {
       forks: { singleFork: true },
     },
+    // 启用 ANSI 颜色输出，以便测试可以验证 ink 组件的颜色渲染
+    env: {
+      FORCE_COLOR: '1',
+    },
   },
 });
