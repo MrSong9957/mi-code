@@ -135,4 +135,39 @@ describe('messages-store', () => {
     // user 之后的流式 assistant 也一起删除
     expect(store.getState().messages).toEqual([]);
   });
+
+  it('finalizeStreamingAsInterrupted:末条流式固化为 [interrupted]', () => {
+    const store = createMessagesStore();
+    store.getState().appendLine('user', LINE('❯ q'));
+    store.getState().startStreaming('');
+    store.getState().updateStreaming('部分内容');
+    store.getState().finalizeStreamingAsInterrupted();
+    const msgs = store.getState().messages;
+    // user 还在,assistant 末条已固化
+    expect(msgs.length).toBe(2);
+    expect(msgs[1]!.role).toBe('assistant');
+    expect(msgs[1]!.finalized).toBe(true);
+    expect(msgs[1]!.streamingText).toBeUndefined();
+    // streamingText 内容被保留为 line
+    const contents = msgs[1]!.lines.map((l) => l.content);
+    expect(contents).toContain('部分内容');
+    expect(contents).toContain('[interrupted]');
+  });
+
+  it('finalizeStreamingAsInterrupted:无流式消息时空操作', () => {
+    const store = createMessagesStore();
+    store.getState().appendLine('user', LINE('❯ q'));
+    store.getState().finalizeStreamingAsInterrupted();
+    // 没崩,也没新增
+    expect(store.getState().messages.length).toBe(1);
+  });
+
+  it('finalizeStreamingAsInterrupted:无 streamingText 时只加 [interrupted]', () => {
+    const store = createMessagesStore();
+    store.getState().startStreaming(''); // 空流式
+    store.getState().finalizeStreamingAsInterrupted();
+    const m = store.getState().messages[0]!;
+    expect(m.finalized).toBe(true);
+    expect(m.lines.some((l) => l.content === '[interrupted]')).toBe(true);
+  });
 });
