@@ -257,6 +257,10 @@ let isProcessing = false;
 let currentAbortController: AbortController | null = null;
 // 撤回时回填的原文（用户实际发送的 agentText 展开版，不是占位符 historyText）
 let lastSubmittedAgentText: string | null = null;
+// 撤回判断用:本次提交前 messagesStore 的长度(在 commitNewTurn emit user_input 之前快照)。
+// hasMeaningful 只检查 [lastSubmitMsgsLen..] 这段——避免历史 turn 残留的 assistant/tool
+// 让当前 turn 的撤回被误判为软中断。
+let lastSubmitMsgsLen = 0;
 
 /**
  * AskUserManager：AI 向用户提问的挂起-应答状态机。
@@ -392,14 +396,17 @@ async function handleRewindLastTurn(): Promise<void> {
 
   // 1. 先读当前 messages(必须在 abort 之前——abort 后流式块可能被清理)
   const msgs = handle.messagesStore.getState().messages;
+  // 只在本次提交后的范围 [lastSubmitMsgsLen..] 内找末条 user——
+  // 避免历史 turn 残留干扰(若用全表末条 user,会错误地指向历史 turn)。
   let userIdx = -1;
-  for (let i = msgs.length - 1; i >= 0; i--) {
+  for (let i = msgs.length - 1; i >= lastSubmitMsgsLen; i--) {
     if (msgs[i]!.role === 'user') { userIdx = i; break; }
   }
-  if (userIdx === -1) return; // 幂等:无 user 可撤回
+  if (userIdx === -1) return; // 幂等:本次提交范围内无 user 可撤回
 
-  // 判断 user 之后是否有"有意义的 assistant 内容"
+  // 判断本次提交的 user 之后是否有"有意义的 assistant 内容"
   // (finalized 的 lines 有非空 content,或流式的 streamingText trim 后非空)
+  // 注意:只看 userIdx 之后的消息——这些都是本次 turn 的产物(因为 user 是本范围内的末条)。
   const hasMeaningful = msgs.slice(userIdx + 1).some((m) => {
     if (m.role !== 'assistant') return false;
     if (!m.finalized) return (m.streamingText ?? '').trim().length > 0;
@@ -442,6 +449,13 @@ async function handleRewindLastTurn(): Promise<void> {
     handle.inputStore.getState().setText(lastSubmittedAgentText);
     lastSubmittedAgentText = null;
   }
+
+  // 7. 打印撤回标记(inline 模式视觉层降级)
+  // inline 模式下终端无法擦除已输出到 scrollback 的行——messagesStore 已正确删除,
+  // 但屏幕上原消息物理残留。打印一条醒目标记,让用户明确知道撤回已生效,
+  // 并把"作废的旧消息"与"新对话"在视觉上隔开。
+  // (alt-screen 模式下 Ink diff 引擎会自动擦除,此标记无害但冗余)
+  printLine('── 上一条消息已撤回(上方旧文本仅 scrollback 残留,数据层已删除)──');
 }
 
 async function handleUserSubmit(rawText: string): Promise<void> {
@@ -478,6 +492,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   }
 
   // 2. 新 turn
+  // 快照提交前的 messagesStore 长度(撤回判断用,见 handleRewindLastTurn)。
+  // 必须在 commitNewTurn emit user_input 之前——emit 后 user 消息就进 store 了。
+  lastSubmitMsgsLen = tuiHandle?.messagesStore.getState().messages.length ?? 0;
   const committed = await commitNewTurn(
     {
       addEntry: (i, p) => historyManager.addEntry(i, p),
