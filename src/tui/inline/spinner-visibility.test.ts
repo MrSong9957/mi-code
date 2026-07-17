@@ -12,14 +12,14 @@ import { describe, it, expect } from 'vitest';
 import { computeSpinnerVisible } from './spinner-visibility.js';
 
 describe('computeSpinnerVisible', () => {
-  it('正文流式中(active + streaming)：隐藏 spinner', () => {
+  it('正文流式中(active + streaming)：显示 spinner（方案 A1：active 期间持续显示）', () => {
     expect(computeSpinnerVisible({
       spinnerActive: true,
       isStreamingNow: true,
       streamingText: '部分正文',
       lastRole: 'assistant',
       lastFinalized: false,
-    })).toBe(false);
+    })).toBe(true);
   });
 
   it('thinking 流式中(active + streaming thinking)：显示 spinner', () => {

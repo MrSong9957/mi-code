@@ -12,10 +12,12 @@
 // - 数据源必须是 completionStore（而非 React Context）——因为本 hook 在
 //   DropdownProvider 之外执行（ConnectedApp 函数体内调用），Context 拿到的是 no-op stub。
 
+import { useRef } from 'react';
 import { useInput, type Key } from 'ink';
 import type { InputStore } from '../state/input-store.js';
 import type { CompletionStore } from '../state/completion-store.js';
 import type { SelectStore } from '../state/select-store.js';
+import type { SpinnerStore } from '../state/spinner-store.js';
 
 export function useInputHandler(
   store: InputStore,
@@ -26,7 +28,13 @@ export function useInputHandler(
   onPageScroll?: (direction: 'up' | 'down') => void,
   completionStore?: CompletionStore,
   selectStore?: SelectStore,
+  spinnerStore?: SpinnerStore,
+  onAbortStream?: () => void,
+  onRewindLastTurn?: () => void,
 ): void {
+  const DOUBLE_ESC_WINDOW_MS = 400;
+  const lastEscAtRef = useRef(0);
+
   useInput((input: string, key: Key) => {
     const s = store.getState();
     const completion = completionStore?.getState();
@@ -132,6 +140,25 @@ export function useInputHandler(
       }
 
       // 其它按键（方向键等）：吞掉
+      return;
+    }
+
+    // ─────────── ESC 中断/撤回(在 completion 之后,普通编辑之前)───────────
+    if (key.escape) {
+      const now = Date.now();
+      const isRunning = spinnerStore?.getState().active ?? false;
+      // 窗口内第二次 ESC → 撤回(无论此时 isRunning 与否:第一次已触发 abort,
+      // spinnerStore.active 可能还在过渡中,用时间戳判定更可靠)
+      if (now - lastEscAtRef.current <= DOUBLE_ESC_WINDOW_MS && lastEscAtRef.current !== 0) {
+        onRewindLastTurn?.();
+        lastEscAtRef.current = 0;
+        return;
+      }
+      // 第一次 ESC(或窗口外的单次):若有任务运行 → 中断
+      if (isRunning) {
+        onAbortStream?.();
+      }
+      lastEscAtRef.current = now;
       return;
     }
 

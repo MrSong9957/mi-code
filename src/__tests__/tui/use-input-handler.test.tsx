@@ -7,6 +7,7 @@ import React from 'react';
 import { Text } from 'ink';
 import { createInputStore, type InputStore } from '../../tui/state/input-store.js';
 import { useInputHandler } from '../../tui/input/use-input-handler.js';
+import { createSpinnerStore, type SpinnerStore } from '../../tui/state/spinner-store.js';
 import { resetPasteState } from '../../tui/input/paste-handler.js';
 
 /** 用 input-store 渲染一个 probe，把当前 text 显示出来。
@@ -17,14 +18,24 @@ function InputProbe({
   onTab,
   onToggleOverlay,
   overlayVisible,
+  spinnerStore,
+  onAbortStream,
+  onRewindLastTurn,
 }: {
   store: InputStore;
   onExit?: () => void;
   onTab?: (text: string) => void;
   onToggleOverlay?: () => void;
   overlayVisible?: () => boolean;
+  spinnerStore?: SpinnerStore;
+  onAbortStream?: () => void;
+  onRewindLastTurn?: () => void;
 }): React.ReactElement {
-  useInputHandler(store, onExit, onTab, onToggleOverlay, overlayVisible);
+  useInputHandler(
+    store, onExit, onTab, onToggleOverlay, overlayVisible,
+    undefined, undefined, undefined,
+    spinnerStore, onAbortStream, onRewindLastTurn,
+  );
   const text = store.getState().text;
   return React.createElement(Text, {}, `text="${text}"`);
 }
@@ -93,6 +104,76 @@ describe('useInputHandler（键事件 → store）', () => {
     expect(onExit).toHaveBeenCalledTimes(1);
     // Ctrl+C 不应改动输入文本
     expect(store.getState().text).toBe('abc');
+  });
+
+  it('ESC + spinner active → 调 onAbortStream', () => {
+    vi.useFakeTimers();
+    const spinnerStore = createSpinnerStore();
+    spinnerStore.getState().start('thinking');
+    const onAbortStream = vi.fn();
+    const store = createInputStore();
+    const { stdin } = render(React.createElement(InputProbe, {
+      store, spinnerStore, onAbortStream,
+    }));
+    stdin.write('\x1b'); // ESC(ink 缓冲 ~20ms,需推进定时器 flush)
+    vi.advanceTimersByTime(30);
+    expect(onAbortStream).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('ESC + spinner inactive → 不调 onAbortStream', () => {
+    vi.useFakeTimers();
+    const spinnerStore = createSpinnerStore();
+    const onAbortStream = vi.fn();
+    const store = createInputStore();
+    const { stdin } = render(React.createElement(InputProbe, {
+      store, spinnerStore, onAbortStream,
+    }));
+    stdin.write('\x1b');
+    vi.advanceTimersByTime(30);
+    expect(onAbortStream).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('双击 ESC(400ms 内)→ 调 onRewindLastTurn', () => {
+    vi.useFakeTimers();
+    const spinnerStore = createSpinnerStore();
+    spinnerStore.getState().start('thinking');
+    const onAbortStream = vi.fn();
+    const onRewindLastTurn = vi.fn();
+    const store = createInputStore();
+    const { stdin } = render(React.createElement(InputProbe, {
+      store, spinnerStore, onAbortStream, onRewindLastTurn,
+    }));
+    stdin.write('\x1b'); // 第一次 ESC
+    vi.advanceTimersByTime(30); // flush 第一次
+    // 立即第二次(在 400ms 窗口内)
+    stdin.write('\x1b');
+    vi.advanceTimersByTime(30); // flush 第二次
+    expect(onAbortStream).toHaveBeenCalledTimes(1);
+    expect(onRewindLastTurn).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('两次 ESC 超出 400ms → 只中断不撤回', () => {
+    vi.useFakeTimers();
+    const spinnerStore = createSpinnerStore();
+    spinnerStore.getState().start('thinking');
+    const onAbortStream = vi.fn();
+    const onRewindLastTurn = vi.fn();
+    const store = createInputStore();
+    const { stdin } = render(React.createElement(InputProbe, {
+      store, spinnerStore, onAbortStream, onRewindLastTurn,
+    }));
+    stdin.write('\x1b');
+    vi.advanceTimersByTime(30); // flush 第一次
+    // 推进 450ms 超出 400ms 窗口
+    vi.advanceTimersByTime(450);
+    stdin.write('\x1b');
+    vi.advanceTimersByTime(30); // flush 第二次
+    expect(onAbortStream).toHaveBeenCalledTimes(2); // 两次都触发中断
+    expect(onRewindLastTurn).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });
 

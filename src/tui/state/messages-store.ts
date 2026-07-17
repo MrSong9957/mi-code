@@ -39,6 +39,11 @@ export interface MessagesState {
   finalizeStreaming: (lines: FormattedLine[]) => void;
   /** 清空所有消息 */
   clear: () => void;
+  /** 硬撤回:删除末条 user 消息及其后所有消息(幂等:无 user 时空操作)。 */
+  rewindLastUserTurn: () => void;
+  /** 软中断:末条流式 assistant 固化(保留 streamingText 为 line + 追加 [interrupted] 标记)。
+   *  无流式消息时空操作。 */
+  finalizeStreamingAsInterrupted: () => void;
 }
 
 export function createMessagesStore(): MessagesStore {
@@ -146,5 +151,37 @@ export function createMessagesStore(): MessagesStore {
     }),
 
     clear: () => set({ messages: [], _idCounter: 0 }),
+
+    rewindLastUserTurn: () => set((s) => {
+      const msgs = s.messages;
+      // 从末尾向前找最后一条 user
+      let userIdx = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i]!.role === 'user') { userIdx = i; break; }
+      }
+      if (userIdx === -1) return s; // 幂等:无 user
+      return { messages: msgs.slice(0, userIdx) };
+    }),
+
+    finalizeStreamingAsInterrupted: () => set((s) => {
+      const last = s.messages[s.messages.length - 1];
+      // 只处理流式中的 assistant(finalized=false, role='assistant')
+      if (!last || last.finalized || last.role !== 'assistant') return s;
+      const text = (last.streamingText ?? '').trim();
+      const { streamingText: _drop, ...rest } = last;
+      void _drop;
+      const newLines = text
+        ? [
+            ...last.lines,
+            { content: text, style: {}, indent: 0 },
+            { content: '[interrupted]', style: { fg: 'error' }, indent: 0 },
+          ]
+        : [
+            ...last.lines,
+            { content: '[interrupted]', style: { fg: 'error' }, indent: 0 },
+          ];
+      const updated: TuiMessage = { ...rest, lines: newLines, finalized: true };
+      return { messages: [...s.messages.slice(0, -1), updated] };
+    }),
   }));
 }

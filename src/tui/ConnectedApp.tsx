@@ -65,12 +65,16 @@ export interface ConnectedAppProps {
   onExit: () => void;
   onTab?: (text: string) => void;
   onToggleOverlay?: () => void;
+  /** ESC 中断当前 LLM 流(单击 ESC 触发,无任务时空操作) */
+  onAbortStream?: () => void;
+  /** ESC 双击撤回末条 user turn */
+  onRewindLastTurn?: () => void;
   /** inline 模式渲染器（alt-screen 模式为 undefined） */
   inlineRenderer?: import('./inline/InlineRenderer.js').InlineRenderer;
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, onExit, onTab, onToggleOverlay, inlineRenderer: _inlineRenderer,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, onExit, onTab, onToggleOverlay, onAbortStream, onRewindLastTurn, inlineRenderer: _inlineRenderer,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store（拖拽写入，所有区域订阅高亮）
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -162,7 +166,11 @@ export function ConnectedApp({
   }
 
   // 键盘处理（必须在 early return 之前，inline 模式也需要）
-  useInputHandler(inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible, handlePageScroll, completionStore, selectStore);
+  useInputHandler(
+    inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible,
+    handlePageScroll, completionStore, selectStore,
+    spinnerStore, onAbortStream, onRewindLastTurn,
+  );
 
   // 粘贴占位符：bracketed paste 内容 → storePastedContent 生成占位符 → insert 到输入框。
   // usePaste 自动管 \x1b[?2004h 生命周期，inline/alt-screen 都生效。

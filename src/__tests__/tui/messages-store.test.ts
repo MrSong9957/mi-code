@@ -85,4 +85,89 @@ describe('messages-store', () => {
     store.getState().clear();
     expect(store.getState().messages).toEqual([]);
   });
+
+  it('rewindLastUserTurn:无 assistant 时,删末条 user 及其后全部', () => {
+    const store = createMessagesStore();
+    store.getState().appendLine('user', LINE('❯ 你好'));
+    store.getState().appendLine('system', LINE('thinking...'));
+    store.getState().rewindLastUserTurn();
+    expect(store.getState().messages).toEqual([]);
+  });
+
+  it('rewindLastUserTurn:保留 user 之前的消息', () => {
+    const store = createMessagesStore();
+    store.getState().appendLine('assistant', LINE('● 上次回复'));
+    store.getState().appendLine('user', LINE('❯ 第二次提问'));
+    store.getState().appendLine('system', LINE('banner'));
+    store.getState().rewindLastUserTurn();
+    const msgs = store.getState().messages;
+    expect(msgs.length).toBe(1);
+    expect(msgs[0]!.role).toBe('assistant');
+    expect(msgs[0]!.lines[0]!.content).toBe('● 上次回复');
+  });
+
+  it('rewindLastUserTurn:无 user 时幂等(空操作)', () => {
+    const store = createMessagesStore();
+    store.getState().appendLine('system', LINE('banner'));
+    store.getState().rewindLastUserTurn();
+    expect(store.getState().messages.length).toBe(1);
+  });
+
+  it('rewindLastUserTurn:连续两次第二次幂等', () => {
+    const store = createMessagesStore();
+    // 用 appendMessage 确保是两条独立 user 消息(appendLine 同 role 会合并为一条)
+    store.getState().appendMessage('user', [LINE('❯ q1')]);
+    store.getState().appendMessage('user', [LINE('❯ q2')]);
+    store.getState().rewindLastUserTurn();
+    expect(store.getState().messages.length).toBe(1);
+    store.getState().rewindLastUserTurn();
+    expect(store.getState().messages).toEqual([]);
+    store.getState().rewindLastUserTurn(); // 第三次:已空
+    expect(store.getState().messages).toEqual([]);
+  });
+
+  it('rewindLastUserTurn:移除进行中的流式 assistant(user + 未 finalize 的 assistant 一起删)', () => {
+    const store = createMessagesStore();
+    store.getState().appendMessage('user', [LINE('❯ q')]);
+    store.getState().startStreaming('partial response');
+    // 此时 messages = [user(finalized), assistant(finalized=false, streamingText='partial')]
+    store.getState().rewindLastUserTurn();
+    // user 之后的流式 assistant 也一起删除
+    expect(store.getState().messages).toEqual([]);
+  });
+
+  it('finalizeStreamingAsInterrupted:末条流式固化为 [interrupted]', () => {
+    const store = createMessagesStore();
+    store.getState().appendLine('user', LINE('❯ q'));
+    store.getState().startStreaming('');
+    store.getState().updateStreaming('部分内容');
+    store.getState().finalizeStreamingAsInterrupted();
+    const msgs = store.getState().messages;
+    // user 还在,assistant 末条已固化
+    expect(msgs.length).toBe(2);
+    expect(msgs[1]!.role).toBe('assistant');
+    expect(msgs[1]!.finalized).toBe(true);
+    expect(msgs[1]!.streamingText).toBeUndefined();
+    // streamingText 内容被保留为 line
+    const contents = msgs[1]!.lines.map((l) => l.content);
+    expect(contents).toContain('部分内容');
+    expect(contents).toContain('[interrupted]');
+  });
+
+  it('finalizeStreamingAsInterrupted:无流式消息时空操作', () => {
+    const store = createMessagesStore();
+    store.getState().appendLine('user', LINE('❯ q'));
+    store.getState().finalizeStreamingAsInterrupted();
+    // 没崩,也没新增
+    expect(store.getState().messages.length).toBe(1);
+  });
+
+  it('finalizeStreamingAsInterrupted:无 streamingText 时只加 [interrupted]', () => {
+    const store = createMessagesStore();
+    store.getState().startStreaming(''); // 空流式
+    store.getState().finalizeStreamingAsInterrupted();
+    const m = store.getState().messages[0]!;
+    expect(m.finalized).toBe(true);
+    expect(m.lines.some((l) => l.content === '[interrupted]')).toBe(true);
+  });
 });

@@ -98,15 +98,15 @@ function currentSmallModel(): string {
  * 未识别的 provider 回退 anthropic。
  * compactClient(小模型)也走此工厂。
  */
-function createStreamClient(provider: string, apiKey: string, model: string): StreamingLLMClient {
+function createStreamClient(provider: string, apiKey: string, model: string, baseUrl?: string): StreamingLLMClient {
   switch (provider) {
     case 'openai':
-      return new OpenAIStreamClient({ apiKey, model });
+      return new OpenAIStreamClient({ apiKey, model, baseUrl });
     case 'google':
       return new GoogleStreamClient({ apiKey, model });
     case 'anthropic':
     default:
-      return new AnthropicStreamClient({ apiKey, model });
+      return new AnthropicStreamClient({ apiKey, model, baseUrl });
   }
 }
 
@@ -251,6 +251,17 @@ function printStyled(text: string, role: 'system' | 'error' | 'input', style?: R
 // isProcessing 仍是模块级标志（agent loop 运行中标记，防重入）。
 let isProcessing = false;
 
+// ESC 中断句柄：handleUserSubmit 内创建 ac 时写入，abort/rewind 回调读它。
+// 模块级是因为 onAbortStream/onRewindLastTurn 在 bootstrap 时注册，
+// 远早于 handleUserSubmit 执行——闭包必须能拿到最新值。
+let currentAbortController: AbortController | null = null;
+// 撤回时回填的原文（用户实际发送的 agentText 展开版，不是占位符 historyText）
+let lastSubmittedAgentText: string | null = null;
+// 撤回判断用:本次提交前 messagesStore 的长度(在 commitNewTurn emit user_input 之前快照)。
+// hasMeaningful 只检查 [lastSubmitMsgsLen..] 这段——避免历史 turn 残留的 assistant/tool
+// 让当前 turn 的撤回被误判为软中断。
+let lastSubmitMsgsLen = 0;
+
 /**
  * AskUserManager：AI 向用户提问的挂起-应答状态机。
  * 物理本质：服务员把问题递给顾客（贴消息区 + 页脚提示）后站等回话。
@@ -362,6 +373,90 @@ function handleToggleOverlay(handle: BootstrapHandle | null): void {
  * ink-store 迁移点：input/cursorPos 已由 inputStore 管理（submit 时清空），故删除旧
  * input=''/cursorPos=0/syncInput；layout.* → tuiHandle.statusStore。
  */
+/**
+ * ESC 中断当前 LLM 流。幂等：无任务运行(ac 为 null)或已 aborted 时空操作。
+ * 由 React 层的 useInputHandler 通过 BootstrapOptions.onAbortStream 调用。
+ */
+function handleAbortStream(): void {
+  currentAbortController?.abort();
+}
+
+/**
+ * ESC 双击撤回末条 user turn。
+ * 时序:先读当前 messages 判断 hasMeaningful(abort 前流式块还在),
+ *       再中断流并等 finally 完成,最后操作 store + 同步 sessionMessages + 回填输入框。
+ *
+ * 语义:
+ *  - 硬撤回(无有意义 assistant 内容):删末条 user 及其后 + 同步 sessionMessages + 换 sessionId + 回填
+ *  - 软中断(有有意义内容):仅 finalize 流式为 [interrupted],不删、不回填、不换 sessionId
+ */
+async function handleRewindLastTurn(): Promise<void> {
+  const handle = tuiHandle;
+  if (!handle) return;
+
+  // 1. 先读当前 messages(必须在 abort 之前——abort 后流式块可能被清理)
+  const msgs = handle.messagesStore.getState().messages;
+  // 只在本次提交后的范围 [lastSubmitMsgsLen..] 内找末条 user——
+  // 避免历史 turn 残留干扰(若用全表末条 user,会错误地指向历史 turn)。
+  let userIdx = -1;
+  for (let i = msgs.length - 1; i >= lastSubmitMsgsLen; i--) {
+    if (msgs[i]!.role === 'user') { userIdx = i; break; }
+  }
+  if (userIdx === -1) return; // 幂等:本次提交范围内无 user 可撤回
+
+  // 判断本次提交的 user 之后是否有"有意义的 assistant 内容"
+  // (finalized 的 lines 有非空 content,或流式的 streamingText trim 后非空)
+  // 注意:只看 userIdx 之后的消息——这些都是本次 turn 的产物(因为 user 是本范围内的末条)。
+  const hasMeaningful = msgs.slice(userIdx + 1).some((m) => {
+    if (m.role !== 'assistant') return false;
+    if (!m.finalized) return (m.streamingText ?? '').trim().length > 0;
+    return m.lines.some((l) => (l.content ?? '').trim().length > 0);
+  });
+
+  // 2. 若仍在跑,先中断并等流真正停止(isProcessing 翻 false)
+  if (currentAbortController && !currentAbortController.signal.aborted) {
+    currentAbortController.abort();
+    // 轮询等 finally 完成,2s 超时兜底防止死锁
+    for (let i = 0; i < 100 && isProcessing; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
+  // 3. 操作 store
+  if (hasMeaningful) {
+    // 软中断:仅 finalize 流式为 [interrupted]
+    handle.messagesStore.getState().finalizeStreamingAsInterrupted();
+    return; // 不删 user、不回填、不换 sessionId
+  }
+
+  // 硬撤回:删末条 user 及其后
+  handle.messagesStore.getState().rewindLastUserTurn();
+
+  // 4. 同步 sessionMessages(关注点分离:store 外做)
+  let uIdx = -1;
+  for (let i = sessionMessages.length - 1; i >= 0; i--) {
+    if (sessionMessages[i]!.role === 'user') { uIdx = i; break; }
+  }
+  if (uIdx !== -1) {
+    sessionMessages = sessionMessages.slice(0, uIdx);
+  }
+
+  // 5. 换 sessionId(旧 jsonl 保留,resume 时新会话不带撤回的消息)
+  sessionId = randomUUID();
+
+  // 6. 回填输入框(用户实际发送的 agentText 展开版)
+  if (lastSubmittedAgentText !== null) {
+    handle.inputStore.getState().setText(lastSubmittedAgentText);
+    lastSubmittedAgentText = null;
+  }
+
+  // 7. 打印撤回标记(inline 模式视觉层降级)
+  // inline 模式下终端无法擦除已输出到 scrollback 的行——messagesStore 已正确删除,
+  // 但屏幕上原消息物理残留。打印简短标记让用户知道撤回已生效,把"作废的旧消息"
+  // 与"新对话"在视觉上隔开。(alt-screen 模式下 Ink diff 引擎会自动擦除,此标记冗余)
+  printLine('── 上一条消息已撤回 ──');
+}
+
 async function handleUserSubmit(rawText: string): Promise<void> {
   // 历史存占位符版本（省磁盘），agent/解析/回显用展开版本（需完整上下文）。
   // sessionStore 仍存展开版本（resume 后占位符 ID 跨 session 失效，需完整文本）。
@@ -396,6 +491,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   }
 
   // 2. 新 turn
+  // 快照提交前的 messagesStore 长度(撤回判断用,见 handleRewindLastTurn)。
+  // 必须在 commitNewTurn emit user_input 之前——emit 后 user 消息就进 store 了。
+  lastSubmitMsgsLen = tuiHandle?.messagesStore.getState().messages.length ?? 0;
   const committed = await commitNewTurn(
     {
       addEntry: (i, p) => historyManager.addEntry(i, p),
@@ -515,8 +613,11 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     return;
   }
 
-  const streamClient = createStreamClient(provider, apiKey, model);
-  const compactClient = createStreamClient(provider, apiKey, currentSmallModel());
+  // baseUrl(可选):用于第三方 Anthropic/OpenAI 兼容服务(如 MiMo)。
+  // 不配置时各 SDK 走官方端点。
+  const baseUrl = configStore.getProvider(provider)?.baseUrl;
+  const streamClient = createStreamClient(provider, apiKey, model, baseUrl);
+  const compactClient = createStreamClient(provider, apiKey, currentSmallModel(), baseUrl);
   const eventBus = new StreamEventBus();
   eventBus.onToolCall(d => {
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
@@ -534,6 +635,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     ? allToolDefs.filter(t => !WRITE_TOOLS.includes(t.name))
     : allToolDefs;
   const ac = new AbortController();
+  currentAbortController = ac;
+  lastSubmittedAgentText = userInput;
 
   // agent 循环（与旧实现 verbatim，仅 layout.* → tuiHandle.statusStore）
   let assistantText = '';
@@ -641,12 +744,25 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       );
     }
   } catch (err) {
-    // formatErrorForDisplay 只取 message（不含堆栈），超长截断——
-    // 避免把整个 Error.stack 刷屏到终端（之前的 [system] [Error] Error [ERR_UNHANDLED_ERROR]... 问题）
-    tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
+    // 中断判断：用 ac.signal.aborted，不用 err.name/instanceof Error。
+    // 实测：ac.abort('user-cancel') 抛出的 err 是字符串(不是 Error)，err.name 是 undefined。
+    // 只有 ac.signal.aborted 在三种 abort 形态下都为 true。
+    if (ac.signal.aborted) {
+      // 用户主动中断：静默退出，不打印 [Error]
+    } else {
+      // formatErrorForDisplay 只取 message（不含堆栈），超长截断——
+      // 避免把整个 Error.stack 刷屏到终端（之前的 [system] [Error] Error [ERR_UNHANDLED_ERROR]... 问题）
+      tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
+    }
   } finally {
     tuiHandle?.stopSpinner();
     isProcessing = false;
+    currentAbortController = null;
+    // lastSubmittedAgentText 在 turn 结束时清空。
+    // 硬撤回分支(本函数之外)在用过后会单独置 null;正常完成 / soft-interrupt /
+    // 异常退出都不会用它,但为防止边缘时序下读到上一轮的陈旧值,统一在此清。
+    // (新 turn 的 handleUserSubmit 会重新赋值)
+    lastSubmittedAgentText = null;
     if (thinkingContent) {
       const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
       pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
@@ -702,6 +818,8 @@ if (cliOpts.list) {
     onExit: () => { cleanupOnExit(); process.exit(0); },
     onTab: (text) => { handleTab(text, tuiHandle, configStore, permissionChecker); },
     onToggleOverlay: () => { handleToggleOverlay(tuiHandle); },
+    onAbortStream: () => { void handleAbortStream(); },
+    onRewindLastTurn: () => { void handleRewindLastTurn(); },
   });
   // pipeline 由 bootstrap 内构造，赋值到外层 let pipeline（agent loop 使用）
   pipeline = tuiHandle.pipeline;
