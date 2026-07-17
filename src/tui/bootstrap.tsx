@@ -52,6 +52,10 @@ export interface BootstrapOptions {
   onTab?: (text: string) => void;
   /** Ctrl+O 切换覆盖层回调 */
   onToggleOverlay?: () => void;
+  /** ESC 中断当前 LLM 流(单击 ESC 触发,无任务时空操作) */
+  onAbortStream?: () => void;
+  /** ESC 双击撤回末条 user turn(中断流 + 删消息 + 回填输入框) */
+  onRewindLastTurn?: () => void;
   /** 渲染模式：inline（原生屏，默认）或 alt-screen（备用屏） */
   renderMode?: RenderMode;
   /** 主题名（dark/light），默认 dark */
@@ -155,6 +159,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
         React.createElement(ConnectedApp, {
           messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore,
           onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
+          onAbortStream: opts.onAbortStream, onRewindLastTurn: opts.onRewindLastTurn,
           inlineRenderer: inlineRenderer ?? undefined,
         }),
       ),
