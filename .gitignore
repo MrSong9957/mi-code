@@ -19,3 +19,6 @@ mouse-diag.log
 .zcode/
 ignore
 *.log
+
+# Git worktree 隔离工作区（superpowers 工作流）
+.worktrees/
