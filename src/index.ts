@@ -251,6 +251,13 @@ function printStyled(text: string, role: 'system' | 'error' | 'input', style?: R
 // isProcessing 仍是模块级标志（agent loop 运行中标记，防重入）。
 let isProcessing = false;
 
+// ESC 中断句柄：handleUserSubmit 内创建 ac 时写入，abort/rewind 回调读它。
+// 模块级是因为 onAbortStream/onRewindLastTurn 在 bootstrap 时注册，
+// 远早于 handleUserSubmit 执行——闭包必须能拿到最新值。
+let currentAbortController: AbortController | null = null;
+// 撤回时回填的原文（用户实际发送的 agentText 展开版，不是占位符 historyText）
+let lastSubmittedAgentText: string | null = null;
+
 /**
  * AskUserManager：AI 向用户提问的挂起-应答状态机。
  * 物理本质：服务员把问题递给顾客（贴消息区 + 页脚提示）后站等回话。
@@ -362,6 +369,14 @@ function handleToggleOverlay(handle: BootstrapHandle | null): void {
  * ink-store 迁移点：input/cursorPos 已由 inputStore 管理（submit 时清空），故删除旧
  * input=''/cursorPos=0/syncInput；layout.* → tuiHandle.statusStore。
  */
+/**
+ * ESC 中断当前 LLM 流。幂等：无任务运行(ac 为 null)或已 aborted 时空操作。
+ * 由 React 层的 useInputHandler 通过 BootstrapOptions.onAbortStream 调用。
+ */
+function handleAbortStream(): void {
+  currentAbortController?.abort();
+}
+
 async function handleUserSubmit(rawText: string): Promise<void> {
   // 历史存占位符版本（省磁盘），agent/解析/回显用展开版本（需完整上下文）。
   // sessionStore 仍存展开版本（resume 后占位符 ID 跨 session 失效，需完整文本）。
@@ -534,6 +549,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     ? allToolDefs.filter(t => !WRITE_TOOLS.includes(t.name))
     : allToolDefs;
   const ac = new AbortController();
+  currentAbortController = ac;
+  lastSubmittedAgentText = userInput;
 
   // agent 循环（与旧实现 verbatim，仅 layout.* → tuiHandle.statusStore）
   let assistantText = '';
@@ -641,12 +658,20 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       );
     }
   } catch (err) {
-    // formatErrorForDisplay 只取 message（不含堆栈），超长截断——
-    // 避免把整个 Error.stack 刷屏到终端（之前的 [system] [Error] Error [ERR_UNHANDLED_ERROR]... 问题）
-    tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
+    // 中断判断：用 ac.signal.aborted，不用 err.name/instanceof Error。
+    // 实测：ac.abort('user-cancel') 抛出的 err 是字符串(不是 Error)，err.name 是 undefined。
+    // 只有 ac.signal.aborted 在三种 abort 形态下都为 true。
+    if (ac.signal.aborted) {
+      // 用户主动中断：静默退出，不打印 [Error]
+    } else {
+      // formatErrorForDisplay 只取 message（不含堆栈），超长截断——
+      // 避免把整个 Error.stack 刷屏到终端（之前的 [system] [Error] Error [ERR_UNHANDLED_ERROR]... 问题）
+      tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
+    }
   } finally {
     tuiHandle?.stopSpinner();
     isProcessing = false;
+    currentAbortController = null;
     if (thinkingContent) {
       const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
       pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
