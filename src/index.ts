@@ -452,10 +452,9 @@ async function handleRewindLastTurn(): Promise<void> {
 
   // 7. 打印撤回标记(inline 模式视觉层降级)
   // inline 模式下终端无法擦除已输出到 scrollback 的行——messagesStore 已正确删除,
-  // 但屏幕上原消息物理残留。打印一条醒目标记,让用户明确知道撤回已生效,
-  // 并把"作废的旧消息"与"新对话"在视觉上隔开。
-  // (alt-screen 模式下 Ink diff 引擎会自动擦除,此标记无害但冗余)
-  printLine('── 上一条消息已撤回(上方旧文本仅 scrollback 残留,数据层已删除)──');
+  // 但屏幕上原消息物理残留。打印简短标记让用户知道撤回已生效,把"作废的旧消息"
+  // 与"新对话"在视觉上隔开。(alt-screen 模式下 Ink diff 引擎会自动擦除,此标记冗余)
+  printLine('── 上一条消息已撤回 ──');
 }
 
 async function handleUserSubmit(rawText: string): Promise<void> {
@@ -759,6 +758,11 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     tuiHandle?.stopSpinner();
     isProcessing = false;
     currentAbortController = null;
+    // lastSubmittedAgentText 在 turn 结束时清空。
+    // 硬撤回分支(本函数之外)在用过后会单独置 null;正常完成 / soft-interrupt /
+    // 异常退出都不会用它,但为防止边缘时序下读到上一轮的陈旧值,统一在此清。
+    // (新 turn 的 handleUserSubmit 会重新赋值)
+    lastSubmittedAgentText = null;
     if (thinkingContent) {
       const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
       pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
