@@ -794,6 +794,8 @@ if (cliOpts.list) {
     onExit: () => { cleanupOnExit(); process.exit(0); },
     onTab: (text) => { handleTab(text, tuiHandle, configStore, permissionChecker); },
     onToggleOverlay: () => { handleToggleOverlay(tuiHandle); },
+    onAbortStream: () => { void handleAbortStream(); },
+    onRewindLastTurn: () => { void handleRewindLastTurn(); },
   });
   // pipeline 由 bootstrap 内构造，赋值到外层 let pipeline（agent loop 使用）
   pipeline = tuiHandle.pipeline;
