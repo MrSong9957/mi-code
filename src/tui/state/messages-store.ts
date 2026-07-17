@@ -39,6 +39,8 @@ export interface MessagesState {
   finalizeStreaming: (lines: FormattedLine[]) => void;
   /** 清空所有消息 */
   clear: () => void;
+  /** 硬撤回:删除末条 user 消息及其后所有消息(幂等:无 user 时空操作)。 */
+  rewindLastUserTurn: () => void;
 }
 
 export function createMessagesStore(): MessagesStore {
@@ -146,5 +148,16 @@ export function createMessagesStore(): MessagesStore {
     }),
 
     clear: () => set({ messages: [], _idCounter: 0 }),
+
+    rewindLastUserTurn: () => set((s) => {
+      const msgs = s.messages;
+      // 从末尾向前找最后一条 user
+      let userIdx = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i]!.role === 'user') { userIdx = i; break; }
+      }
+      if (userIdx === -1) return s; // 幂等:无 user
+      return { messages: msgs.slice(0, userIdx) };
+    }),
   }));
 }
