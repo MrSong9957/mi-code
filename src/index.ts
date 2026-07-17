@@ -98,15 +98,15 @@ function currentSmallModel(): string {
  * 未识别的 provider 回退 anthropic。
  * compactClient(小模型)也走此工厂。
  */
-function createStreamClient(provider: string, apiKey: string, model: string): StreamingLLMClient {
+function createStreamClient(provider: string, apiKey: string, model: string, baseUrl?: string): StreamingLLMClient {
   switch (provider) {
     case 'openai':
-      return new OpenAIStreamClient({ apiKey, model });
+      return new OpenAIStreamClient({ apiKey, model, baseUrl });
     case 'google':
       return new GoogleStreamClient({ apiKey, model });
     case 'anthropic':
     default:
-      return new AnthropicStreamClient({ apiKey, model });
+      return new AnthropicStreamClient({ apiKey, model, baseUrl });
   }
 }
 
@@ -597,8 +597,11 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     return;
   }
 
-  const streamClient = createStreamClient(provider, apiKey, model);
-  const compactClient = createStreamClient(provider, apiKey, currentSmallModel());
+  // baseUrl(可选):用于第三方 Anthropic/OpenAI 兼容服务(如 MiMo)。
+  // 不配置时各 SDK 走官方端点。
+  const baseUrl = configStore.getProvider(provider)?.baseUrl;
+  const streamClient = createStreamClient(provider, apiKey, model, baseUrl);
+  const compactClient = createStreamClient(provider, apiKey, currentSmallModel(), baseUrl);
   const eventBus = new StreamEventBus();
   eventBus.onToolCall(d => {
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });

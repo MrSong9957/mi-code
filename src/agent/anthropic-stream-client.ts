@@ -35,9 +35,11 @@ export class AnthropicStreamClient implements StreamingLLMClient {
     apiKey?: string;
     model?: string;
     idleTimeoutMs?: number;
+    baseUrl?: string;
   }) {
     this.client = new Anthropic({
       apiKey: options.apiKey || process.env.ANTHROPIC_API_KEY,
+      baseURL: options.baseUrl,
     });
     this.model = options.model || 'claude-sonnet-4-20250514';
     this.idleTimeoutMs = options.idleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS;
