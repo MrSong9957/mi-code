@@ -377,6 +377,73 @@ function handleAbortStream(): void {
   currentAbortController?.abort();
 }
 
+/**
+ * ESC 双击撤回末条 user turn。
+ * 时序:先读当前 messages 判断 hasMeaningful(abort 前流式块还在),
+ *       再中断流并等 finally 完成,最后操作 store + 同步 sessionMessages + 回填输入框。
+ *
+ * 语义:
+ *  - 硬撤回(无有意义 assistant 内容):删末条 user 及其后 + 同步 sessionMessages + 换 sessionId + 回填
+ *  - 软中断(有有意义内容):仅 finalize 流式为 [interrupted],不删、不回填、不换 sessionId
+ */
+async function handleRewindLastTurn(): Promise<void> {
+  const handle = tuiHandle;
+  if (!handle) return;
+
+  // 1. 先读当前 messages(必须在 abort 之前——abort 后流式块可能被清理)
+  const msgs = handle.messagesStore.getState().messages;
+  let userIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i]!.role === 'user') { userIdx = i; break; }
+  }
+  if (userIdx === -1) return; // 幂等:无 user 可撤回
+
+  // 判断 user 之后是否有"有意义的 assistant 内容"
+  // (finalized 的 lines 有非空 content,或流式的 streamingText trim 后非空)
+  const hasMeaningful = msgs.slice(userIdx + 1).some((m) => {
+    if (m.role !== 'assistant') return false;
+    if (!m.finalized) return (m.streamingText ?? '').trim().length > 0;
+    return m.lines.some((l) => (l.content ?? '').trim().length > 0);
+  });
+
+  // 2. 若仍在跑,先中断并等流真正停止(isProcessing 翻 false)
+  if (currentAbortController && !currentAbortController.signal.aborted) {
+    currentAbortController.abort();
+    // 轮询等 finally 完成,2s 超时兜底防止死锁
+    for (let i = 0; i < 100 && isProcessing; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
+  // 3. 操作 store
+  if (hasMeaningful) {
+    // 软中断:仅 finalize 流式为 [interrupted]
+    handle.messagesStore.getState().finalizeStreamingAsInterrupted();
+    return; // 不删 user、不回填、不换 sessionId
+  }
+
+  // 硬撤回:删末条 user 及其后
+  handle.messagesStore.getState().rewindLastUserTurn();
+
+  // 4. 同步 sessionMessages(关注点分离:store 外做)
+  let uIdx = -1;
+  for (let i = sessionMessages.length - 1; i >= 0; i--) {
+    if (sessionMessages[i]!.role === 'user') { uIdx = i; break; }
+  }
+  if (uIdx !== -1) {
+    sessionMessages = sessionMessages.slice(0, uIdx);
+  }
+
+  // 5. 换 sessionId(旧 jsonl 保留,resume 时新会话不带撤回的消息)
+  sessionId = randomUUID();
+
+  // 6. 回填输入框(用户实际发送的 agentText 展开版)
+  if (lastSubmittedAgentText !== null) {
+    handle.inputStore.getState().setText(lastSubmittedAgentText);
+    lastSubmittedAgentText = null;
+  }
+}
+
 async function handleUserSubmit(rawText: string): Promise<void> {
   // 历史存占位符版本（省磁盘），agent/解析/回显用展开版本（需完整上下文）。
   // sessionStore 仍存展开版本（resume 后占位符 ID 跨 session 失效，需完整文本）。
