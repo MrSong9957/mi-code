@@ -672,7 +672,7 @@ export function normalizeSpinnerContext(
 setContext: (context) => set({ context: normalizeSpinnerContext(context) }),
 ```
 
-移除旧 `activeTeammateCount`/`setActiveTeammateCount`；计时显示数量改由 View 从 `status === 'working'` 推导。
+共享 View 的计时显示数量改由 `context.teammates` 中 `status === 'working'` 的成员推导。旧 `activeTeammateCount`/`setActiveTeammateCount` 暂时只为尚未迁移的 Ink、inline 与 Bootstrap 消费者保留，Task 7 完成全部接线后再统一删除，确保每个中间提交都能通过 TypeScript 检查。
 
 - [ ] **Step 5: 实现共享 View 选择器**
 
