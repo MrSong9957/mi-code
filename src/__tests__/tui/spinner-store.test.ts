@@ -66,6 +66,42 @@ describe('spinner-store', () => {
     });
   });
 
+  it('setContext 将所有可见文本规范化为单物理行', () => {
+    const store = createSpinnerStore();
+
+    store.getState().setContext({
+      variant: 'normal',
+      teammates: [{
+        name: '  alice\r\nbob  ', role: '  coder\nlead  ', status: 'working',
+      }],
+      tasks: [
+        {
+          id: '1', content: '  Ship\r\nnow  ', status: 'in_progress',
+          owner: '  alice\nowner  ', activeForm: '  Shipping\rdetail  ',
+          blockedBy: ['  blocker\r\none  ', '  blocker\ntwo  '],
+        },
+        {
+          id: '2', content: 'Later', status: 'pending',
+          owner: ' \r\n ', activeForm: '\n', blockedBy: [],
+        },
+      ],
+      spinnerTip: '  Tip\r\nhere  ', hasUsedBtw: false,
+      budgetText: '  Budget\nhere  ', nextTaskText: '  Next\rhere  ',
+    });
+
+    expect(store.getState().context).toMatchObject({
+      teammates: [{ name: 'alice bob', role: 'coder lead' }],
+      tasks: [
+        {
+          content: 'Ship now', owner: 'alice owner', activeForm: 'Shipping detail',
+          blockedBy: ['blocker one', 'blocker two'],
+        },
+        { owner: null, activeForm: null },
+      ],
+      spinnerTip: 'Tip here', budgetText: 'Budget here', nextTaskText: 'Next here',
+    });
+  });
+
   it('start(mode)：active=true，time 重置 0，选 verb', () => {
     const s = createSpinnerStore();
     s.getState().start('thinking');

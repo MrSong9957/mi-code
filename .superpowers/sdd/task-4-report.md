@@ -95,3 +95,35 @@ Exit code: `1` after 69.5 seconds. The focused Task 4 suites passed, but the rep
 - The selector is intentionally not wired into renderers in this task; that work belongs to later tasks.
 - No plan contradiction was found. The supplied Task 4 brief explicitly requires retaining the compatibility fields until Task 7.
 - The full suite is not green due to the unrelated failures listed above. They are deliberately not changed because Task 4 forbids modifying inline, Bootstrap, or UI integration paths.
+
+## Review follow-up — 2026-07-19
+
+### RED
+
+Command:
+
+```powershell
+npx.cmd vitest run src/__tests__/tui/spinner-view.test.ts src/__tests__/tui/spinner-store.test.ts --reporter=verbose
+```
+
+Exit code: `1`; 2 test files failed with 2 failed and 39 passed tests.
+
+- The store test showed CR/LF remained in teammate, task, Tip, Budget, and NextTask snapshot fields.
+- The view test showed a teammate auxiliary line containing CR/LF, proving one logical auxiliary item could occupy multiple physical rows.
+- The newly added 1,799,999 ms and pause/resume Tip tests already passed, confirming the existing effective-time clock behavior before the text fix.
+
+### Fix
+
+`normalizeSpinnerContext()` now replaces each CRLF, LF, or CR sequence with one space and trims every visible context string. It applies to teammate name/role; task content/owner/activeForm/blockedBy entries; and Tip/Budget/NextTask. Optional values that become empty are normalized to `null`; task `id` remains untouched. Ordinary internal whitespace is not collapsed.
+
+### GREEN and verification
+
+```powershell
+npx.cmd vitest run src/__tests__/tui/spinner-view.test.ts src/__tests__/tui/spinner-store.test.ts --reporter=verbose
+npx.cmd vitest run src/__tests__/tui/spinner-view.test.ts src/__tests__/tui/spinner-store.test.ts --reporter=dot
+npm.cmd run typecheck
+npx.cmd eslint src/tui/state/spinner-store.ts src/tui/state/spinner-view.ts src/__tests__/tui/spinner-store.test.ts src/__tests__/tui/spinner-view.test.ts
+git diff --check
+```
+
+All commands exited `0`; the focused suite passed 2 files and 41 tests.

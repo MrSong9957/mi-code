@@ -54,20 +54,35 @@ export const EMPTY_SPINNER_CONTEXT: SpinnerContextSnapshot = Object.freeze({
   nextTaskText: null,
 });
 
+function normalizeSpinnerText(text: string): string {
+  return text.replace(/\r\n|[\r\n]/g, ' ').trim();
+}
+
+function normalizeOptionalSpinnerText(text: string | null): string | null {
+  return text === null ? null : normalizeSpinnerText(text) || null;
+}
+
 export function normalizeSpinnerContext(
   context: SpinnerContextSnapshot,
 ): SpinnerContextSnapshot {
   return {
     variant: context.variant,
-    teammates: context.teammates.map(member => ({ ...member })),
+    teammates: context.teammates.map(member => ({
+      ...member,
+      name: normalizeSpinnerText(member.name),
+      role: normalizeSpinnerText(member.role),
+    })),
     tasks: context.tasks.map(task => ({
       ...task,
-      blockedBy: [...task.blockedBy],
+      content: normalizeSpinnerText(task.content),
+      owner: normalizeOptionalSpinnerText(task.owner),
+      activeForm: normalizeOptionalSpinnerText(task.activeForm),
+      blockedBy: task.blockedBy.map(normalizeSpinnerText),
     })),
-    spinnerTip: context.spinnerTip?.trim() || null,
+    spinnerTip: normalizeOptionalSpinnerText(context.spinnerTip),
     hasUsedBtw: context.hasUsedBtw,
-    budgetText: context.budgetText?.trim() || null,
-    nextTaskText: context.nextTaskText?.trim() || null,
+    budgetText: normalizeOptionalSpinnerText(context.budgetText),
+    nextTaskText: normalizeOptionalSpinnerText(context.nextTaskText),
   };
 }
 

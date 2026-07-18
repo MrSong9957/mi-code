@@ -70,8 +70,33 @@ describe('spinner-view', () => {
       .toBe('Tip: Use /btw to ask a quick side question...');
     expect(selectSpinnerTip(30_000, { ...baseContext, hasUsedBtw: true }))
       .toBe('custom tip');
+    expect(selectSpinnerTip(1_799_999, baseContext))
+      .toBe('Tip: Use /btw to ask a quick side question...');
     expect(selectSpinnerTip(1_800_000, { ...baseContext, hasUsedBtw: true }))
       .toBe('Use /clear to start fresh when switching topics...');
+  });
+
+  it('pause 冻结有效 time 和 Tip，resume 后才跨过 30 秒阈值', () => {
+    const store = createSpinnerStore();
+    store.getState().setContext(baseContext);
+    store.getState().start('responding');
+    vi.advanceTimersByTime(29_999);
+    store.getState().tick();
+    expect(store.getState().time).toBe(29_999);
+    expect(selectSpinnerTip(store.getState().time, store.getState().context)).toBe('custom tip');
+
+    store.getState().pause();
+    vi.advanceTimersByTime(10_000);
+    store.getState().tick();
+    expect(store.getState().time).toBe(29_999);
+    expect(selectSpinnerTip(store.getState().time, store.getState().context)).toBe('custom tip');
+
+    store.getState().resume();
+    vi.advanceTimersByTime(1);
+    store.getState().tick();
+    expect(store.getState().time).toBe(30_000);
+    expect(selectSpinnerTip(store.getState().time, store.getState().context))
+      .toBe('Tip: Use /btw to ask a quick side question...');
   });
 
   it('normal 按活动区、Tip、Budget、NextTask 排序', () => {
@@ -88,6 +113,37 @@ describe('spinner-view', () => {
       { kind: 'budget', content: 'Budget: 50%' },
       { kind: 'next-task', content: 'Next: verify' },
     ]);
+  });
+
+  it('normal 的每个可见 content 都是一条物理行且 rowCount 精确', () => {
+    const store = createSpinnerStore();
+    store.getState().setContext({
+      ...baseContext,
+      teammates: [{ name: 'alice\r\nbob', role: 'coder\nlead', status: 'working' }],
+      spinnerTip: 'tip\rhere', budgetText: 'budget\r\nhere', nextTaskText: 'next\nhere',
+    });
+    store.getState().start('responding');
+
+    const teammateView = selectSpinnerView(store.getState());
+    for (const line of teammateView.auxiliaryLines) {
+      expect(line.content).not.toMatch(/[\r\n]/);
+    }
+    expect(teammateView.rowCount).toBe(1 + teammateView.auxiliaryLines.length);
+
+    store.getState().setContext({
+      ...baseContext,
+      tasks: [{
+        id: '1', content: 'Ship\r\nnow', status: 'in_progress', owner: 'alice\nowner',
+        activeForm: 'Shipping\rdetail', blockedBy: ['blocker\r\none', 'blocker\ntwo'],
+      }],
+      spinnerTip: 'tip\rhere', budgetText: 'budget\r\nhere', nextTaskText: 'next\nhere',
+    });
+
+    const taskView = selectSpinnerView(store.getState());
+    for (const line of taskView.auxiliaryLines) {
+      expect(line.content).not.toMatch(/[\r\n]/);
+    }
+    expect(taskView.rowCount).toBe(1 + taskView.auxiliaryLines.length);
   });
 
   it('动画使用 store 的有效 time，并从 working context 成员推导活跃 teammate 数', () => {
