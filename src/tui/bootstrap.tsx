@@ -103,6 +103,16 @@ export interface BootstrapHandle {
   cleanup: () => void;
 }
 
+export function stopSpinnerAndAppendCompletion(
+  spinnerStore: SpinnerStore,
+  messagesStore: ReturnType<typeof createMessagesStore>,
+): void {
+  const completion = spinnerStore.getState().stop();
+  if (completion) {
+    messagesStore.getState().appendTurnDurationMessage(completion.durationMs);
+  }
+}
+
 export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const renderMode = opts.renderMode ?? 'inline';
   const isInline = renderMode === 'inline';
@@ -205,10 +215,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     themeStore,
     startSpinner: (mode) => { spinnerStore.getState().start(mode); },
     stopSpinner: () => {
-      const completion = spinnerStore.getState().stop();
-      if (completion) {
-        messagesStore.getState().appendTurnDurationMessage(completion.durationMs);
-      }
+      stopSpinnerAndAppendCompletion(spinnerStore, messagesStore);
     },
     pauseSpinner: () => { spinnerStore.getState().pause(); },
     resumeSpinner: () => { spinnerStore.getState().resume(); },

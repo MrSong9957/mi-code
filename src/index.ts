@@ -635,7 +635,6 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   eventBus.onLoopEnd(() => {
     activeToolIds.clear();
     tuiHandle?.setSpinnerHasActiveTools(false);
-    tuiHandle?.stopSpinner();
   });
   const allToolDefs = Array.from(toolRegistry.tools.values()).map(t => t.definition);
   const tools = currentMode === 'plan'
@@ -769,6 +768,12 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   } finally {
     activeToolIds.clear();
     tuiHandle?.setSpinnerHasActiveTools(false);
+    if (thinkingActive || thinkingContent) {
+      const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
+      pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
+      thinkingContent = '';
+      thinkingActive = false;
+    }
     tuiHandle?.stopSpinner();
     isProcessing = false;
     currentAbortController = null;
@@ -777,11 +782,6 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     // 异常退出都不会用它,但为防止边缘时序下读到上一轮的陈旧值,统一在此清。
     // (新 turn 的 handleUserSubmit 会重新赋值)
     lastSubmittedAgentText = null;
-    if (thinkingContent) {
-      const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-      pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
-      thinkingContent = '';
-    }
     printLine('');
   }
   historyManager.reset();
