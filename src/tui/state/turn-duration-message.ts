@@ -1,6 +1,13 @@
 import type { FormattedLine } from '../../ui/types.js';
 import type { TuiMessage } from '../types.js';
-import { formatSpinnerDuration } from './spinner-store.js';
+
+export function formatSpinnerDuration(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+}
 
 export const TURN_COMPLETION_VERBS = [
   'Baked', 'Brewed', 'Churned', 'Cogitated',

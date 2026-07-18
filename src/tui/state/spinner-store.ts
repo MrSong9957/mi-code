@@ -1,6 +1,12 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import { sampleVerb, type SpinnerVerbConfig } from './spinner-verbs.js';
-import { TURN_COMPLETION_VERBS, type TurnCompletionVerb } from './turn-duration-message.js';
+import {
+  formatSpinnerDuration,
+  TURN_COMPLETION_VERBS,
+  type TurnCompletionVerb,
+} from './turn-duration-message.js';
+
+export { formatSpinnerDuration };
 
 /** Claude Code 的 6 帧往返序列；time 的单位始终是毫秒。 */
 export const SPINNER_FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✽', '✻', '✶', '✳', '✢', '·'] as const;
@@ -24,14 +30,6 @@ const THINKING_SHIMMER_COLOR: SpinnerRGB = { r: 185, g: 185, b: 185 };
 export function spinnerFrameAt(timeMs: number): typeof SPINNER_FRAMES[number] {
   const safeTime = Math.max(0, timeMs);
   return SPINNER_FRAMES[Math.floor(safeTime / SPINNER_FRAME_MS) % SPINNER_FRAMES.length]!;
-}
-
-export function formatSpinnerDuration(durationMs: number): string {
-  const seconds = Math.max(1, Math.round(durationMs / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 }
 
 export function thinkingStatusText(effort: string | null): string {
