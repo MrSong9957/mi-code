@@ -682,8 +682,10 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   tuiHandle?.setSpinnerLabel('Connecting');
   spinnerStarted = true;
   try {
+    // 不传 maxTurns：对齐 Claude Code，默认无限循环，依赖 LLM 自主 end_turn + 用户 ESC +
+    // budget 软限制退出。需要时可通过 StreamingQueryOptions.maxTurns 显式注入安全网。
     for await (const msg of streamingQuery(streamClient, toolRegistry, userMessageForAgent ?? userInput, {
-      systemPrompt, tools, signal: ac.signal, maxTurns: 10,
+      systemPrompt, tools, signal: ac.signal,
       eventBus, compactClient, permissionChecker,
       initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
       onMessages: (finalMessages) => {

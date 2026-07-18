@@ -21,7 +21,9 @@ describe('Agent Loop', () => {
 
     const result = await agentLoop(state, defaultConfig, client, registry);
 
-    expect(result).toContain('Mock response to: Hello');
+    // 结构化返回：含 reason 和 text。
+    expect(result.reason).toBe('completed');
+    expect(result.text).toContain('Mock response to: Hello');
     expect(state.turn_count).toBe(0);
     expect(state.transition_reason).toBeNull();
   });
@@ -58,7 +60,8 @@ describe('Agent Loop', () => {
 
     const result = await agentLoop(state, defaultConfig, client, registry, callbacks);
 
-    expect(result).toBe('Tool result received, task complete.');
+    expect(result.reason).toBe('completed');
+    expect(result.text).toBe('Tool result received, task complete.');
     expect(state.turn_count).toBe(1);
     expect(state.transition_reason).toBeNull();
     expect(callbacks.onToolCall).toHaveBeenCalledWith('run_bash', { command: 'echo "tool executed"' });
@@ -88,8 +91,77 @@ describe('Agent Loop', () => {
 
     const result = await agentLoop(state, config, client, registry);
 
-    expect(result).toBe('Loop ended: maximum turns reached');
+    // 对齐 Claude Code：返回结构化对象，含 reason 和 turnCount。
+    expect(result.reason).toBe('max_turns');
+    expect(result.turnCount).toBe(3);
     expect(state.turn_count).toBe(3);
+  });
+
+  it('不传 max_turns 时不限轮次（对齐 Claude Code：undefined = 无限）', async () => {
+    const client = new MockLLMClient();
+    const registry = createDefaultRegistry();
+
+    // 模拟：前 20 次都在调工具，第 21 次才收尾。
+    const toolCall: ModelResponse = {
+      content: [{
+        type: 'tool_use', id: 'call_long',
+        name: 'run_bash', input: { command: 'echo "work"' },
+      }],
+      stop_reason: 'tool_use',
+    };
+    const final: ModelResponse = {
+      content: [{ type: 'text', text: '终于完成。' }],
+      stop_reason: 'end_turn',
+    };
+    // 20 次工具调用 + 1 次最终回复。旧 max_turns: 10 会在第 10 次硬切断。
+    client.setResponses([...Array(20).fill(toolCall), final]);
+
+    // 不传 max_turns（默认无限）
+    const config: AgentConfig = {
+      model: 'test-model', system: '...', tools: [],
+    };
+    const state = createLoopState('long task');
+
+    const result = await agentLoop(state, config, client, registry);
+
+    // 应正常完成，不被切断。
+    expect(result.reason).toBe('completed');
+    expect(result.text).toBe('终于完成。');
+    expect(state.turn_count).toBe(20);
+  });
+
+  it('max_turns 超限时保留已生成的 assistant 内容（不返回占位字符串）', async () => {
+    const client = new MockLLMClient();
+    const registry = createDefaultRegistry();
+
+    // 前 2 次：调工具 + 在 text 块里输出部分内容
+    const partialWorkResponse: ModelResponse = {
+      content: [
+        { type: 'text', text: '已经分析了 2 个文件。' },
+        { type: 'tool_use', id: 'c1', name: 'run_bash', input: { command: 'echo x' } },
+      ],
+      stop_reason: 'tool_use',
+    };
+    const toolOnly: ModelResponse = {
+      content: [{
+        type: 'tool_use', id: 'c2', name: 'run_bash', input: { command: 'echo y' },
+      }],
+      stop_reason: 'tool_use',
+    };
+    client.setResponses([partialWorkResponse, toolOnly, toolOnly, toolOnly, toolOnly]);
+
+    const config: AgentConfig = { ...defaultConfig, max_turns: 3 };
+    const state = createLoopState('分析项目');
+
+    const result = await agentLoop(state, config, client, registry);
+
+    expect(result.reason).toBe('max_turns');
+    expect(result.turnCount).toBe(3);
+    // 不应返回占位字符串。
+    expect(result.text).not.toBe('Loop ended: maximum turns reached');
+    // 应保留已生成的部分文本（最后一次 assistant 响应里的 text，供 UI 展示）。
+    // 无 text 块时为空字符串，UI 层自行决定如何提示。
+    expect(typeof result.text).toBe('string');
   });
 
   it('should handle unknown tool gracefully', async () => {

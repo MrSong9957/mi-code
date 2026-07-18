@@ -67,15 +67,29 @@ export function createLoopState(userMessage: string): ExtendedLoopState {
   };
 }
 
+/** 循环终止结果（discriminated union，对齐 Claude Code 的 Terminal 类型）。 */
+export type LoopTerminal =
+  | { reason: 'completed'; text: string }
+  | { reason: 'max_turns'; turnCount: number; text: string }
+  | { reason: 'user_abort'; text: string }
+  | { reason: 'budget_limit'; text: string }
+  | { reason: 'recovery_failed'; text: string };
+
 /**
  * Agent 核心循环
  *
- * 关键逻辑：
- * 1. 调用模型
- * 2. 追加 assistant 回复到历史
- * 3. 如果模型调用了工具，就执行
- * 4. 把工具结果写回消息历史（关键！）
- * 5. 下一轮继续
+ * 关键逻辑（对齐 Claude Code）：
+ *   while true:                                    ← 默认无限循环
+ *     0. 用户 ESC / budget / maxTurns guard（仅显式传入时） → 退出
+ *     1. 调用模型
+ *     2. 追加 assistant 回复到历史
+ *     3. 如果模型未调工具 → return { reason: 'completed', text }
+ *     4. 执行工具
+ *     5. 把工具结果写回消息历史
+ *     6. 继续循环
+ *
+ * 退出权优先级：用户 ESC > budget > 显式 maxTurns > LLM 自主 end_turn > 错误恢复失败。
+ * 不传 max_turns = 无限（依赖 LLM 自主收尾 + ESC + budget）。
  */
 export async function agentLoop(
   state: ExtendedLoopState,
@@ -86,7 +100,7 @@ export async function agentLoop(
   hookRunner?: HookRunner,
   backgroundManager?: BackgroundManager,
   toolUseContext?: ToolUseContext,
-): Promise<string> {
+): Promise<LoopTerminal> {
   const maxTurns = config.max_turns;
   const budgetLimit = config.budget_limit;
 
@@ -94,18 +108,33 @@ export async function agentLoop(
   const recovery = createRecoveryState(config.model, config.max_output_tokens ?? 8000);
   const inbox = new FailureInbox();
 
-  while (state.turn_count < maxTurns) {
+  // 对齐 Claude Code：默认无限循环。
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
     // Abort 信号检查
     if (toolUseContext?.abortSignal?.aborted) {
       callbacks.onLoopEnd?.('user_abort');
-      return 'Loop aborted by user';
+      return { reason: 'user_abort', text: 'Loop aborted by user' };
     }
 
     // Budget 检查
     if (budgetLimit && (toolUseContext?.costSoFar ?? 0) >= budgetLimit) {
       callbacks.onLoopEnd?.('budget_limit');
-      return `Loop ended: budget limit ($${budgetLimit}) reached`;
+      return { reason: 'budget_limit', text: `Loop ended: budget limit ($${budgetLimit}) reached` };
     }
+
+    // maxTurns 安全网（仅在显式传入时启用；undefined = 无限）
+    if (maxTurns !== undefined && state.turn_count >= maxTurns) {
+      callbacks.onLoopEnd?.('max_turns');
+      return {
+        reason: 'max_turns',
+        turnCount: state.turn_count,
+        text: extractTextFromContent(state.messages.at(-1)?.role === 'assistant'
+          ? (state.messages.at(-1)!.content as ContentBlock[])
+          : []),
+      };
+    }
+
     callbacks.onTurnStart?.(state.turn_count + 1);
 
     // 0. 排空后台任务通知（聚合格式），注入消息历史
@@ -200,7 +229,9 @@ export async function agentLoop(
       // 安全退出拦截：后台还有 running 任务 → 等待完成
       if (backgroundManager) {
         const running = backgroundManager.getRunningTaskIds();
-        if (running.length > 0 && state.turn_count < maxTurns - 1) {
+        // 无 maxTurns 时（默认无限）一直等待；有 maxTurns 时保留 maxTurns-1 的安全余量。
+        const canAwait = maxTurns === undefined || state.turn_count < maxTurns - 1;
+        if (running.length > 0 && canAwait) {
           const aggregated = backgroundManager.drainNotificationsAggregated();
           const hint = aggregated
             ? aggregated
@@ -212,7 +243,7 @@ export async function agentLoop(
       }
       state.transition_reason = null;
       callbacks.onLoopEnd?.(response.stop_reason);
-      return extractTextFromContent(response.content);
+      return { reason: 'completed', text: extractTextFromContent(response.content) };
     }
 
     // 4. 执行工具（并发分区：只读并行，写串行）
@@ -283,7 +314,7 @@ export async function agentLoop(
     // 关键：不把 IDLE_REQUESTED 写回 messages（否则下一轮 LLM 收到无意义反馈会重复生成）。
     if (idleRequested) {
       callbacks.onLoopEnd?.('idle');
-      return extractTextFromContent(response.content);
+      return { reason: 'completed', text: extractTextFromContent(response.content) };
     }
 
     // 5. 把工具结果写回消息历史（关键！）
@@ -294,9 +325,14 @@ export async function agentLoop(
     state.transition_reason = 'tool_result';
   }
 
-  // 达到最大轮数
+  // 兜底：while(true) 已在循环开头用 maxTurns guard 拦截，理论上不会落到这里。
+  // 防御性记录并返回——避免任何遗漏路径导致死循环。
   callbacks.onLoopEnd?.('max_turns');
-  return 'Loop ended: maximum turns reached';
+  return {
+    reason: 'max_turns',
+    turnCount: state.turn_count,
+    text: '',
+  };
 }
 
 /** 从内容块中提取文本 */
