@@ -8,15 +8,15 @@
 // 光标定位（Bug 1 修复）：用 Ink useCursor 把终端光标定位到输入框 `❯ ` 之后 + cursor 偏移处。
 
 import React from 'react';
-import { Box, Text, useCursor } from 'ink';
+import { Box, useCursor } from 'ink';
 import { StatusBar } from './StatusBar.js';
 import { SelectionText } from './SelectionText.js';
-import { Spinner } from './Spinner.js';
+import { SpinnerWithVerb } from './Spinner.js';
 import { SuggestionBar } from './SuggestionBar.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
 import { MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
 import type { StatusBarData } from '../types.js';
-import type { SpinnerStore } from '../state/spinner-store.js';
+import type { SpinnerView } from '../state/spinner-view.js';
 import type { CompletionStore } from '../state/completion-store.js';
 import type { SelectionStore } from '../state/selection-store.js';
 
@@ -33,13 +33,13 @@ export interface FooterProps {
   inputRowY: number;
   /** 输入框视口顶部行号（0-based）。光标/行渲染都相对此偏移。默认 0=无滚动。 */
   viewportTop: number;
-  spinnerStore: SpinnerStore;
+  spinnerView: SpinnerView;
   completionStore: CompletionStore;
   /** 选区 store（由 App 注入；SelectionText 自订阅） */
   selectionStore?: SelectionStore;
 }
 
-export function Footer({ input, cursor, status, cols, inputRowY, viewportTop, spinnerStore, completionStore, selectionStore }: FooterProps): React.ReactElement {
+export function Footer({ input, cursor, status, cols, inputRowY, viewportTop, spinnerView, completionStore, selectionStore }: FooterProps): React.ReactElement {
   const { setCursorPosition } = useCursor();
   const pos = cursorScreenPos(input, cursor, PROMPT);
   // 视口化：光标 y 减去 viewportTop 得到视口内行号，保证光标落在可见区。
@@ -62,7 +62,7 @@ export function Footer({ input, cursor, status, cols, inputRowY, viewportTop, sp
 
   return (
     <Box flexShrink={0} flexDirection="column">
-      <Spinner store={spinnerStore} />
+      <SpinnerWithVerb view={spinnerView} />
       <SuggestionBar store={completionStore} />
       <SelectionText
         content={border}

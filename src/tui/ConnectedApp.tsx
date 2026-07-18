@@ -17,6 +17,7 @@ import { useInput, useStdin, usePaste } from 'ink';
 import { App } from './App.js';
 import { useInputHandler } from './input/use-input-handler.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
+import { useSpinnerClock } from './hooks/useSpinnerClock.js';
 import { useRenderMode } from './state/render-mode.js';
 import { DropdownProvider } from './state/dropdown-context.js';
 import { InlineApp } from './inline/InlineApp.js';
@@ -34,6 +35,7 @@ import type { InputStore } from './state/input-store.js';
 import type { StatusStore } from './state/status-store.js';
 import type { LogoStore } from './state/logo-store.js';
 import type { SpinnerStore } from './state/spinner-store.js';
+import { selectSpinnerView } from './state/spinner-view.js';
 import type { CompletionStore } from './state/completion-store.js';
 import type { SelectStore } from './state/select-store.js';
 import type { OverlayStore } from './state/overlay-store.js';
@@ -82,6 +84,7 @@ export function ConnectedApp({
   const [scrollTop, setScrollTop] = useState(0);
   const [scrolledAway, setScrolledAway] = useState(false);
   const { rows, cols } = useTerminalSize();
+  useSpinnerClock(spinnerStore);
 
   // 渲染模式检测（须在 completion 订阅之前——后者据 isInline 短路）
   const { mode } = useRenderMode();
@@ -97,7 +100,8 @@ export function ConnectedApp({
   const logo = useStore(logoStore, useShallow((s) => ({
     version: s.version, dir: s.dir,
   })));
-  const spinnerActive = useStore(spinnerStore, (s) => s.active);
+  const spinnerRowCount = useStore(spinnerStore, state => selectSpinnerView(state).rowCount);
+  const spinnerActive = spinnerRowCount > 0;
   // completionStore 订阅：inline 模式下用常量短路，避免每次候选变化触发 ConnectedApp 重渲染
   // （inline 模式的下拉渲染在 InlineApp 内部直接读 completionStore，不经此处）。
   // useStore 用 Object.is 比较 selector 输出，常量 false/[] 永远不变 → 零重渲染。
@@ -114,12 +118,12 @@ export function ConnectedApp({
   // 输入框视口固定为 MAX_VISIBLE_INPUT_LINES 行，不再随输入行数增长——历史区大小稳定。
   const inputViewportExtraLines = MAX_VISIBLE_INPUT_LINES - 1;
   const suggestionRows = completionVisible ? Math.min(completionCandidates.length, 8) : 0;
-  const footerRows = FOOTER_BASE_ROWS + (spinnerActive ? 1 : 0) + suggestionRows + inputViewportExtraLines;
+  const footerRows = FOOTER_BASE_ROWS + spinnerRowCount + suggestionRows + inputViewportExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
   const maxScroll = Math.max(0, flatLineCount - visibleRows);
   const effectiveScrollTop = scrolledAway ? scrollTop : maxScroll;
   const scrollboxRenderedRows = Math.min(flatLineCount, visibleRows);
-  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + suggestionRows + 1;
+  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + spinnerRowCount + suggestionRows + 1;
 
   // 统一行文本映射
   const rowTextMap: RowTextMap = useMemo(() => buildRowTextMap({

@@ -18,7 +18,7 @@
 // - messages / input / cursor / status / logo：由 zustand store（Phase 4）或测试直接注入
 // - cols / rows：终端尺寸，生产由 useTerminalSize hook 提供，测试可控注入
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box } from 'ink';
 import { ScrollBox } from './components/ScrollBox.js';
 import { LogoBox } from './components/LogoBox.js';
@@ -32,6 +32,7 @@ import type { TuiMessage, StatusBarData, LogoData } from './types.js';
 import type { FlatLine } from './selection/flatten-messages.js';
 import type { SelectionStore } from './state/selection-store.js';
 import type { SpinnerStore } from './state/spinner-store.js';
+import { selectSpinnerView } from './state/spinner-view.js';
 import type { CompletionStore } from './state/completion-store.js';
 import type { OverlayStore } from './state/overlay-store.js';
 
@@ -63,7 +64,8 @@ export interface AppProps {
 export function App({ messages, status, logo, selectionStore, input, cursor, spinnerStore, completionStore, overlayStore, scrollTop, flatLines, cols = 80, rows = 24 }: AppProps): React.ReactElement {
   const overlayVisible = useStore(overlayStore, (s) => s.visible);
   // 订阅 spinner 是否激活——影响 Footer 占用行数
-  const spinnerActive = useStore(spinnerStore, (s) => s.active);
+  const spinnerState = useStore(spinnerStore);
+  const spinnerView = useMemo(() => selectSpinnerView(spinnerState), [spinnerState]);
 
   // 覆盖层激活：替换整个布局
   if (overlayVisible) {
@@ -74,11 +76,11 @@ export function App({ messages, status, logo, selectionStore, input, cursor, spi
   // 输入框视口固定为 MAX_VISIBLE_INPUT_LINES 行，不再随输入行数增长——历史区大小稳定。
   // 注意：下拉菜单已分离到 DropdownOverlay，不再占用 footer 行数
   const inputViewportExtraLines = MAX_VISIBLE_INPUT_LINES - 1;
-  const footerRows = FOOTER_ROWS + (spinnerActive ? 1 : 0) + inputViewportExtraLines;
+  const footerRows = FOOTER_ROWS + spinnerView.rowCount + inputViewportExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
   // inputRowY 按行算（flatLines.length 是行数，修根因 2b）
   const scrollboxRenderedRows = Math.min(flatLines.length, visibleRows);
-  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + 1;
+  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + spinnerView.rowCount + 1;
   // 输入框视口：光标居中滚动，超 MAX_VISIBLE_INPUT_LINES 时 viewportTop 跟随光标。
   const totalInputLines = input.split('\n').length;
   const cursorLine = cursorScreenPos(input, cursor, '❯ ').y;
@@ -88,7 +90,7 @@ export function App({ messages, status, logo, selectionStore, input, cursor, spi
       <LogoBox logo={logo} selectionStore={selectionStore} />
       <ScrollBox messages={messages} flatLines={flatLines} visibleRows={visibleRows} scrollTop={scrollTop} selectionStore={selectionStore} />
       <DropdownOverlay />
-      <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} viewportTop={vp.viewportTop} spinnerStore={spinnerStore} completionStore={completionStore} selectionStore={selectionStore} />
+      <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} viewportTop={vp.viewportTop} spinnerView={spinnerView} completionStore={completionStore} selectionStore={selectionStore} />
     </Box>
   );
 }
