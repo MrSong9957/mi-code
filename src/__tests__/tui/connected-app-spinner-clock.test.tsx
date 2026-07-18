@@ -13,7 +13,10 @@ import {
   type RenderMode,
 } from '../../tui/state/render-mode.js';
 import { createSelectStore } from '../../tui/state/select-store.js';
-import { createSpinnerStore } from '../../tui/state/spinner-store.js';
+import {
+  createSpinnerStore,
+  TICK_MS,
+} from '../../tui/state/spinner-store.js';
 import { createStatusStore } from '../../tui/state/status-store.js';
 
 function createMockStdout(): NodeJS.WriteStream {
@@ -25,6 +28,7 @@ function createMockStdout(): NodeJS.WriteStream {
 function renderConnected(mode: RenderMode, withInlineRenderer: boolean) {
   const spinnerStore = createSpinnerStore();
   spinnerStore.getState().start('responding');
+  const tickSpy = vi.spyOn(spinnerStore.getState(), 'tick');
   const inlineRenderer = withInlineRenderer
     ? new InlineRenderer(createMockStdout())
     : undefined;
@@ -48,7 +52,7 @@ function renderConnected(mode: RenderMode, withInlineRenderer: boolean) {
     </RenderModeProvider>,
   );
 
-  return { spinnerStore, view };
+  return { tickSpy, view };
 }
 
 describe('ConnectedApp spinner clock wiring', () => {
@@ -66,15 +70,16 @@ describe('ConnectedApp spinner clock wiring', () => {
     ['inline without renderer', 'inline', false],
     ['alt-screen', 'alt-screen', false],
   ] as const)('%s has exactly one clock owner', (_, mode, withInlineRenderer) => {
-    const { spinnerStore, view } = renderConnected(mode, withInlineRenderer);
+    const { tickSpy, view } = renderConnected(mode, withInlineRenderer);
 
     vi.advanceTimersByTime(150);
-    const elapsed = spinnerStore.getState().time;
+    const callsBeforeUnmount = tickSpy.mock.calls.length;
 
     view.unmount();
     vi.advanceTimersByTime(150);
+    const callsAfterUnmount = tickSpy.mock.calls.length;
 
-    expect(elapsed).toBe(150);
-    expect(spinnerStore.getState().time).toBe(elapsed);
+    expect(callsBeforeUnmount).toBe(150 / TICK_MS);
+    expect(callsAfterUnmount).toBe(callsBeforeUnmount);
   });
 });
