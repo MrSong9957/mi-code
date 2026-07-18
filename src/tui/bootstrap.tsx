@@ -24,7 +24,6 @@ import { createStatusStore } from './state/status-store.js';
 import { createLogoStore } from './state/logo-store.js';
 import { createSpinnerStore, type SpinnerMode, type SpinnerStore } from './state/spinner-store.js';
 import type { SpinnerVerbConfig } from './state/spinner-verbs.js';
-import { createTurnDurationMessage } from './state/turn-duration-message.js';
 import { createCompletionStore, type CompletionStore } from './state/completion-store.js';
 import { createSelectStore, type SelectStore } from './state/select-store.js';
 import { createOverlayStore, type OverlayStore } from './state/overlay-store.js';
@@ -102,21 +101,6 @@ export interface BootstrapHandle {
   printStyled: (text: string, role: 'system' | 'error' | 'input', style?: UIMessageStyle) => void;
   /** 卸载 Ink + 退 alt screen（进程退出前调用） */
   cleanup: () => void;
-}
-
-export function appendSpinnerCompletionMessage(
-  messagesStore: ReturnType<typeof createMessagesStore>,
-  completion: { durationMs: number },
-): void {
-  const messages = messagesStore.getState().messages;
-  const lastMessage = messages[messages.length - 1];
-  const lastLine = lastMessage?.lines[lastMessage.lines.length - 1];
-  const message = createTurnDurationMessage({
-    uuid: 'spinner-completion',
-    durationMs: completion.durationMs,
-    prependBlankLine: messages.length > 0 && lastLine?.content !== '',
-  });
-  for (const line of message.lines) messagesStore.getState().appendLine('system', line);
 }
 
 export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
@@ -223,7 +207,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     stopSpinner: () => {
       const completion = spinnerStore.getState().stop();
       if (completion) {
-        appendSpinnerCompletionMessage(messagesStore, completion);
+        messagesStore.getState().appendTurnDurationMessage(completion.durationMs);
       }
     },
     pauseSpinner: () => { spinnerStore.getState().pause(); },

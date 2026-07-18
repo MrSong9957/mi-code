@@ -1,7 +1,7 @@
 // src/__tests__/tui/messages-store.test.ts
 // messages-store：TuiMessage 列表管理（追加/流式累加/清空）
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import type { FormattedLine } from '../../ui/types.js';
 
@@ -169,5 +169,41 @@ describe('messages-store', () => {
     const m = store.getState().messages[0]!;
     expect(m.finalized).toBe(true);
     expect(m.lines.some((l) => l.content === '[interrupted]')).toBe(true);
+  });
+
+  it('appendTurnDurationMessage 始终创建独立消息且只补一个前导空行', () => {
+    const store = createMessagesStore();
+    store.getState().appendLine('system', LINE('thought for 1s (ctrl+o to expand)'));
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    try {
+      store.getState().appendTurnDurationMessage(9_000);
+
+      const messages = store.getState().messages;
+      expect(messages).toHaveLength(2);
+      expect(messages[1]).toMatchObject({ kind: 'turn-duration', verb: 'Cooked' });
+      expect(messages[1]!.lines.map(line => line.content)).toEqual([
+        '', '✻ Cooked for 9s',
+      ]);
+
+      store.getState().appendLine('system', LINE('next'));
+      expect(store.getState().messages).toHaveLength(3);
+      expect(store.getState().messages[1]!.lines).toHaveLength(2);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('末行已经为空时不重复添加完成消息前导空行', () => {
+    const store = createMessagesStore();
+    store.getState().appendMessage('assistant', [LINE('● answer'), LINE('')]);
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    try {
+      store.getState().appendTurnDurationMessage(1_000);
+      expect(store.getState().messages.at(-1)!.lines[0]!.content).toBe('✻ Baked for 1s');
+    } finally {
+      random.mockRestore();
+    }
   });
 });

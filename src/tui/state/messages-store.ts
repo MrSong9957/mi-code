@@ -13,6 +13,7 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { FormattedLine } from '../../ui/types.js';
 import type { TuiMessage } from '../types.js';
+import { createTurnDurationMessage } from './turn-duration-message.js';
 
 export type MessageRole = TuiMessage['role'];
 export type MessagesStore = StoreApi<MessagesState>;
@@ -25,6 +26,8 @@ export interface MessagesState {
   appendMessage: (role: MessageRole, lines: FormattedLine[]) => void;
   /** 追加一行到末条消息（同 role）；不同 role 或空时新建 */
   appendLine: (role: MessageRole, line: FormattedLine) => void;
+  /** 追加一条独立的固化完成时长消息 */
+  appendTurnDurationMessage: (durationMs: number) => void;
   /** 开一条流式 assistant（finalized=false, streamingText=initialText） */
   startStreaming: (initialText: string) => void;
   /** 开一条流式 thinking（role='thinking', 灰色 dim） */
@@ -64,7 +67,7 @@ export function createMessagesStore(): MessagesStore {
     appendLine: (role, line) => set((s) => {
       const last = s.messages[s.messages.length - 1];
       // 同 role 且末条已固化（非流式中）→ 续接
-      if (last && last.role === role && last.finalized) {
+      if (last && last.role === role && last.finalized && last.kind === undefined) {
         const updated = { ...last, lines: [...last.lines, line] };
         return { messages: [...s.messages.slice(0, -1), updated] };
       }
@@ -79,6 +82,18 @@ export function createMessagesStore(): MessagesStore {
           finalized: true,
         }],
       };
+    }),
+
+    appendTurnDurationMessage: (durationMs) => set((s) => {
+      const lastLine = [...s.messages].reverse()
+        .find(message => message.lines.length > 0)?.lines.at(-1);
+      const id = s._idCounter + 1;
+      const message = createTurnDurationMessage({
+        uuid: `msg-${id}`,
+        durationMs,
+        prependBlankLine: Boolean(lastLine && lastLine.content !== ''),
+      });
+      return { _idCounter: id, messages: [...s.messages, message] };
     }),
 
     startStreaming: (initialText) => set((s) => {
