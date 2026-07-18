@@ -94,7 +94,7 @@ describe('SpinnerLine (inline mode)', () => {
     expect(result).not.toContain('\x1b[38;2;255;90;90mWorking');
   });
 
-  it('cycles dots animation through 1-3 dots', () => {
+  it('verb 后固定追加省略号 …（Claude Code 样式，不再用 dots cycle）', () => {
     const make = (time: number) => buildSpinnerLine({
       time,
       mode: 'responding',
@@ -109,14 +109,13 @@ describe('SpinnerLine (inline mode)', () => {
         muted: 'rgb(110,110,120)',
       },
     });
-    const r0 = make(0);
-    expect(r0).toContain('.');
-
-    const r300 = make(300);
-    expect(r300).toContain('..');
-
-    const r600 = make(600);
-    expect(r600).toContain('...');
+    // U+2026 省略号，固定不变（不随 time 累加变化）。
+    expect(make(0)).toContain('…');
+    expect(make(300)).toContain('…');
+    expect(make(600)).toContain('…');
+    // 不再有旧的 1-3 点循环。
+    expect(make(0)).not.toMatch(/\.{3}/);
+    expect(make(600)).not.toMatch(/\.{3}/);
   });
 
   it('falls back to verb when label is empty', () => {
@@ -156,7 +155,7 @@ describe('SpinnerLine (inline mode)', () => {
     expect(result).not.toContain('Running');
   });
 
-  it('tool-use 对整段文本使用呼吸灯颜色并保留尾随空格', () => {
+  it('tool-use 对整段文本使用呼吸灯颜色，末尾追加 …（Claude Code 样式，不再保留空格）', () => {
     const result = buildSpinnerLine({
       time: 500,
       mode: 'tool-use',
@@ -171,7 +170,10 @@ describe('SpinnerLine (inline mode)', () => {
         muted: 'rgb(110,110,120)',
       },
     });
-    expect(result).toContain('\x1b[38;2;170;230;255mRunning ');
+    // 呼吸灯颜色（shimmer 色）覆盖整段 displayText，末尾 …。
+    expect(result).toContain('\x1b[38;2;170;230;255mRunning…');
+    // 不再保留尾随空格。
+    expect(result).not.toContain('Running… ');
   });
 
   it('计时器始终显示（无论 verbose 或 teammate 数，默认开）', () => {
@@ -195,7 +197,7 @@ describe('SpinnerLine (inline mode)', () => {
     expect(buildSpinnerLine({ ...common, verbose: false, activeTeammateCount: 1 })).toContain('5s');
   });
 
-  it('计时显示条件成立且 totalTokens > 0 时显示汇总 token', () => {
+  it('totalTokens > 0 时显示 Claude Code 样式 metrics 段 (5s · ↓ 15 tokens)', () => {
     const result = buildSpinnerLine({
       time: 5_000,
       mode: 'responding',
@@ -214,7 +216,8 @@ describe('SpinnerLine (inline mode)', () => {
         muted: 'rgb(110,110,120)',
       },
     });
-    expect(result).toContain('5s ↓ 15');
+    // Claude Code 样式：括号包裹 + U+00B7 中点分隔 + tokens 单位词。
+    expect(result).toContain('(5s · ↓ 15 tokens)');
   });
 
   it('thinking 显示 effort 并使用 3 秒延迟后的灰色呼吸', () => {

@@ -27,7 +27,7 @@ export function GlimmerMessage({
 
   if (flashOpacity !== undefined) {
     const flashColor = interpolateShimmerColor(visibleBaseColor, visibleShimmerColor, flashOpacity);
-    return <Text color={flashColor}>{message} </Text>;
+    return <Text color={flashColor}>{message}</Text>;
   }
 
   const { before, shimmer, after } = computeShimmerSegments(message, glimmerIndex);
@@ -37,7 +37,6 @@ export function GlimmerMessage({
       {before && <Text color={visibleBaseColor}>{before}</Text>}
       {shimmer && <Text color={visibleShimmerColor}>{shimmer}</Text>}
       {after && <Text color={visibleBaseColor}>{after}</Text>}
-      <Text color={visibleBaseColor}> </Text>
     </Text>
   );
 }

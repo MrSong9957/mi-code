@@ -3,12 +3,10 @@ import { Box, Text } from 'ink';
 import { useStore } from 'zustand/react';
 import {
   TICK_MS,
-  formatSpinnerDuration,
-  shouldShowSpinnerTimer,
   thinkingStatusText,
   thoughtStatusText,
-  totalSpinnerTokens,
 } from '../state/spinner-store.js';
+import { formatSpinnerMetrics } from '../state/spinner-metrics.js';
 import type {
   SpinnerAnimationView,
   SpinnerAuxiliaryLine,
@@ -23,7 +21,6 @@ import {
 } from '../inline/shimmer.js';
 import { GlimmerMessage } from './GlimmerMessage.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
-import { DotsCycle } from './DotsCycle.js';
 import { SpinnerGlyph } from './SpinnerGlyph.js';
 import type { SpinnerStore } from '../state/spinner-store.js';
 
@@ -36,7 +33,7 @@ export interface SpinnerProps {
 
 export function SpinnerAnimationRow({ animation }: {
   animation: SpinnerAnimationView;
-}): React.ReactElement {
+  }): React.ReactElement {
   const theme = useTheme();
   const displayText = animation.label || animation.verb;
   const messageWidth = measureShimmerMessage(displayText);
@@ -46,23 +43,22 @@ export function SpinnerAnimationRow({ animation }: {
     stalled: animation.stalled,
     direction: animation.mode === 'requesting' ? 'left-to-right' : 'right-to-left',
   });
-  const showMetrics = shouldShowSpinnerTimer(
+
+  // Claude Code 样式：verb 后固定 …；thinking 或 thinking summary 时显示状态括号，
+  // 否则追加 metrics 段（时长 + token，括号包裹）。
+  const isThinking = animation.mode === 'thinking' && animation.thinkStartTime !== null;
+  const isThinkingSummary = animation.thinkingSummaryDurationMs !== null;
+  const thinkingText = isThinking
+    ? thinkingStatusText(animation.thinkingEffort)
+    : isThinkingSummary
+      ? thoughtStatusText(animation.thinkingSummaryDurationMs!)
+      : null;
+  const metrics = formatSpinnerMetrics(
     animation.time,
-    animation.verbose,
-    animation.activeTeammateCount,
-  );
-  const totalTokens = totalSpinnerTokens(
     animation.displayedTokens,
     animation.teammateTokens,
+    animation.mode,
   );
-  const tokens = totalTokens > 0
-    ? ` ${animation.mode === 'requesting' ? '↑' : '↓'} ${totalTokens}`
-    : '';
-  const thinkingText = animation.mode === 'thinking'
-    ? thinkingStatusText(animation.thinkingEffort)
-    : animation.thinkingSummaryDurationMs !== null
-      ? thoughtStatusText(animation.thinkingSummaryDurationMs)
-      : null;
 
   return (
     <Text>
@@ -73,7 +69,7 @@ export function SpinnerAnimationRow({ animation }: {
         reducedMotion={animation.reducedMotion}
       />
       <GlimmerMessage
-        message={displayText}
+        message={`${displayText}…`}
         glimmerIndex={glimmerIndex}
         baseColor={theme.spinnerActive}
         shimmerColor={theme.spinnerShimmer}
@@ -85,15 +81,10 @@ export function SpinnerAnimationRow({ animation }: {
       {thinkingText
         ? <ThinkingIndicator
             storeTime={animation.time}
-            thinkStartTime={animation.mode === 'thinking'
-              ? animation.thinkStartTime
-              : null}
+            thinkStartTime={isThinking ? animation.thinkStartTime : null}
             text={thinkingText}
           />
-        : <DotsCycle time={animation.time} color={theme.textMuted} />}
-      {showMetrics
-        ? <Text color={theme.textMuted}>{`  ${formatSpinnerDuration(animation.time)}${tokens}`}</Text>
-        : null}
+        : <Text color={theme.textMuted}>{` ${metrics}`}</Text>}
     </Text>
   );
 }

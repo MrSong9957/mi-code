@@ -7,15 +7,13 @@ import {
   toolUseFlashColor,
 } from './shimmer.js';
 import {
-  formatSpinnerDuration,
-  shouldShowSpinnerTimer,
   thinkingColorAt,
   thinkingStatusText,
   thoughtStatusText,
-  totalSpinnerTokens,
   TICK_MS,
   type SpinnerMode,
 } from '../state/spinner-store.js';
+import { formatSpinnerMetrics } from '../state/spinner-metrics.js';
 import {
   spinnerGlyphColor,
   spinnerGlyphColorAt,
@@ -107,43 +105,36 @@ export function buildSpinnerLine(opts: SpinnerLineOpts): string {
 
   let line = `${glyphColor}${glyphText}${RESET}`;
   if (opts.mode === 'tool-use' && !opts.stalled) {
+    // tool-use：整体呼吸灯覆盖 displayText，加 …（与 responding 等一致）。
     line += `${toAnsiColor(toolUseFlashColor(
       opts.time,
       baseColorValue,
       shimmerColorValue,
-    ))}${displayText} ${RESET}`;
+    ))}${displayText}…${RESET}`;
   } else {
+    // 其他模式：shimmer 分段 + 省略号（对齐 Claude Code 的 "Verb…"）。
     line += `${baseColor}${before}${RESET}`;
     line += `${shimmerColor}${shimmer}${RESET}`;
-    line += `${baseColor}${after} ${RESET}`;
+    line += `${baseColor}${after}…${RESET}`;
   }
 
-  // Dots, active thinking, or the temporary post-thinking summary.
-  if (opts.mode === 'thinking' && opts.thinkStartTime !== null) {
-    const color = thinkingColorAt(opts.time, opts.thinkStartTime);
-    line += `${toAnsiColor(`rgb(${color.r},${color.g},${color.b})`)}(${thinkingStatusText(opts.thinkingEffort ?? null)})${RESET}`;
-  } else if (opts.thinkingSummaryDurationMs !== null && opts.thinkingSummaryDurationMs !== undefined) {
+  // 状态括号段：thinking 摘要 / thinking 实时 / 否则不显示。
+  // 注意：thinking 阶段不显示 metrics（Claude Code 行为：思考时只显示 "thinking" 状态）。
+  if (opts.thinkingSummaryDurationMs !== null && opts.thinkingSummaryDurationMs !== undefined) {
     const color = thinkingColorAt(opts.time, null);
-    line += `${toAnsiColor(`rgb(${color.r},${color.g},${color.b})`)}(${thoughtStatusText(opts.thinkingSummaryDurationMs)})${RESET}`;
+    line += ` ${toAnsiColor(`rgb(${color.r},${color.g},${color.b})`)}(${thoughtStatusText(opts.thinkingSummaryDurationMs)})${RESET}`;
+  } else if (opts.mode === 'thinking' && opts.thinkStartTime !== null) {
+    const color = thinkingColorAt(opts.time, opts.thinkStartTime);
+    line += ` ${toAnsiColor(`rgb(${color.r},${color.g},${color.b})`)}(${thinkingStatusText(opts.thinkingEffort ?? null)})${RESET}`;
   } else {
-    const dotFrame = Math.floor(opts.time / 300) % 3;
-    const dots = '.'.repeat(dotFrame + 1).padEnd(3);
-    line += `${toAnsiColor(opts.theme.muted)}${dots}${RESET}`;
-  }
-
-  if (shouldShowSpinnerTimer(
-    opts.time,
-    opts.verbose ?? false,
-    opts.activeTeammateCount ?? 0,
-  )) {
-    const totalTokens = totalSpinnerTokens(
+    // 非 thinking 状态：追加 Claude Code 样式的 metrics 段（时长 + token）。
+    const metrics = formatSpinnerMetrics(
+      opts.time,
       opts.displayedTokens ?? 0,
       opts.teammateTokens ?? 0,
+      opts.mode,
     );
-    const tokens = totalTokens > 0
-      ? ` ${opts.mode === 'requesting' ? '↑' : '↓'} ${totalTokens}`
-      : '';
-    line += `${toAnsiColor(opts.theme.muted)}  ${formatSpinnerDuration(opts.time)}${tokens}${RESET}`;
+    line += `${toAnsiColor(opts.theme.muted)} ${metrics}${RESET}`;
   }
 
   return line;

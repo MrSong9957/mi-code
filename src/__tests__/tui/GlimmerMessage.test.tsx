@@ -24,7 +24,7 @@ describe('GlimmerMessage', () => {
     const frame = lastFrame() ?? '';
     // Strip ANSI codes to verify text content
     const stripped = stripAnsi(frame);
-    expect(stripped).toBe('Generating ');
+    expect(stripped).toBe('Generating');
     // baseColor ANSI code should appear for before/after segments
     expect(frame).toContain('\x1b[38;2;100;200;240m');
     // shimmerColor ANSI code should appear for the shimmer segment
@@ -45,7 +45,7 @@ describe('GlimmerMessage', () => {
     const frame = lastFrame() ?? '';
     // Strip ANSI codes to verify text content
     const stripped = stripAnsi(frame);
-    expect(stripped).toBe('HelloWorld ');
+    expect(stripped).toBe('HelloWorld');
     // shimmerColor applied to the mid-string shimmer segment
     expect(frame).toContain('\x1b[38;2;170;230;255m');
     // baseColor applied to before and after segments
@@ -76,7 +76,7 @@ describe('GlimmerMessage', () => {
       })
     );
     const frame = lastFrame() ?? '';
-    expect(stripAnsi(frame)).toBe('Running tool ');
+    expect(stripAnsi(frame)).toBe('Running tool');
     expect(frame).toContain('\x1b[38;2;170;230;255m');
     expect(frame).not.toContain('\x1b[38;2;100;200;240m');
   });

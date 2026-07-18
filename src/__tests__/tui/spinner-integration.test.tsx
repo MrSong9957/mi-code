@@ -19,7 +19,7 @@ describe('Spinner integration', () => {
   it('full animation cycle: generating → thinking → stop', () => {
     const store = createSpinnerStore();
 
-    // Phase 1: responding with shimmer + dots + always-on timer
+    // Phase 1: responding with shimmer + 省略号 + always-on metrics
     store.getState().start('responding');
     const { lastFrame, rerender } = render(React.createElement(Spinner, { store }));
     vi.advanceTimersByTime(1000);
@@ -27,9 +27,11 @@ describe('Spinner integration', () => {
     const genFrame = stripAnsi(lastFrame() ?? '');
     // Shimmer symbols present
     expect(genFrame).toMatch(/[·✢✳✶✻✽]/);
-    // Dots present in responding mode (padded to 3 chars), 后跟始终显示的计时器
-    expect(genFrame).toMatch(/\.{1,3}/);
-    expect(genFrame).toMatch(/\d+s/);
+    // Claude Code 样式：verb 后固定省略号 …，不再用 1-3 点 dots cycle。
+    expect(genFrame).toContain('…');
+    expect(genFrame).not.toMatch(/\.{3}/);
+    // 末尾 metrics 段（始终显示，括号包裹）。
+    expect(genFrame).toMatch(/\(\d+s\)/);
 
     // Phase 2: switch to thinking via setMode
     store.getState().setMode('thinking');
