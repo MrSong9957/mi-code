@@ -7,7 +7,7 @@
 // - SPINNER_FRAMES 换 Claude Code 序列 ['·','✢','✳','✶','✻','✽'] + 反向 = 12 帧
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createSpinnerStore, SPINNER_FRAMES, TICK_MS } from '../../tui/state/spinner-store.js';
+import { createSpinnerStore, formatSpinnerDuration, SPINNER_FRAMES, TICK_MS } from '../../tui/state/spinner-store.js';
 import { SPINNER_VERBS } from '../../tui/state/spinner-verbs.js';
 
 describe('spinner-store', () => {
@@ -19,7 +19,7 @@ describe('spinner-store', () => {
     const st = s.getState();
     expect(st.active).toBe(false);
     expect(st.time).toBe(0);
-    expect(st.mode).toBe('generating');
+    expect(st.mode).toBe('responding');
     expect(st.verb).toBe('');
     expect(st.label).toBe('');
     expect(st.stalled).toBe(false);
@@ -37,34 +37,37 @@ describe('spinner-store', () => {
     expect(st.lastTokenAt).toBe(0);
   });
 
-  it('start(generating)：thinkStartTime=null（非 thinking 模式）', () => {
+  it('start(responding)：thinkStartTime=null（非 thinking 模式）', () => {
     const s = createSpinnerStore();
-    s.getState().start('generating');
+    s.getState().start('responding');
     expect(s.getState().thinkStartTime).toBeNull();
   });
 
-  it('tick：time 每次 +TICK_MS', () => {
+  it('tick：时间由同一个单调时钟派生', () => {
     const s = createSpinnerStore();
-    s.getState().start('generating');
+    s.getState().start('responding');
+    vi.advanceTimersByTime(TICK_MS);
     s.getState().tick();
     expect(s.getState().time).toBe(TICK_MS);
+    vi.advanceTimersByTime(TICK_MS);
     s.getState().tick();
     expect(s.getState().time).toBe(TICK_MS * 2);
   });
 
-  it('setMode：运行中切换模式（thinking→generating 清 thinkStartTime）', () => {
+  it('setMode：运行中切换模式（thinking→responding 清 thinkStartTime）', () => {
     const s = createSpinnerStore();
     s.getState().start('thinking');
     expect(s.getState().thinkStartTime).not.toBeNull();
-    s.getState().setMode('generating');
-    expect(s.getState().mode).toBe('generating');
+    s.getState().setMode('responding');
+    expect(s.getState().mode).toBe('responding');
     expect(s.getState().thinkStartTime).toBeNull();
     expect(s.getState().active).toBe(true);
   });
 
   it('setMode：切到 thinking 时记录当前 tick 值作为 thinkStartTime', () => {
     const s = createSpinnerStore();
-    s.getState().start('generating');
+    s.getState().start('responding');
+    vi.advanceTimersByTime(100);
     s.getState().tick(); // time=50
     s.getState().tick(); // time=100
     s.getState().setMode('thinking');
@@ -74,7 +77,7 @@ describe('spinner-store', () => {
 
   it('setLabel：工具模式覆盖显示文字', () => {
     const s = createSpinnerStore();
-    s.getState().start('generating');
+    s.getState().start('responding');
     s.getState().setLabel('Running bash');
     expect(s.getState().label).toBe('Running bash');
     expect(s.getState().active).toBe(true);
@@ -82,7 +85,7 @@ describe('spinner-store', () => {
 
   it('stop：active=false，清 label/verb', () => {
     const s = createSpinnerStore();
-    s.getState().start('generating');
+    s.getState().start('responding');
     s.getState().stop();
     expect(s.getState().active).toBe(false);
     expect(s.getState().label).toBe('');
@@ -91,7 +94,7 @@ describe('spinner-store', () => {
 
   it('onToken：刷新 lastTokenAt，清 stalled', () => {
     const s = createSpinnerStore();
-    s.getState().start('generating');
+    s.getState().start('responding');
     vi.setSystemTime(4000);
     s.getState().tick();
     expect(s.getState().stalled).toBe(true);
@@ -103,7 +106,7 @@ describe('spinner-store', () => {
 
   it('stall 阈值=3000ms：2999ms 不 stall，3001ms stall', () => {
     const s = createSpinnerStore();
-    s.getState().start('generating');
+    s.getState().start('responding');
     vi.setSystemTime(2999);
     s.getState().tick();
     expect(s.getState().stalled).toBe(false);
@@ -114,13 +117,26 @@ describe('spinner-store', () => {
 
   it('stop 后 tick 不再推进 time（防御）', () => {
     const s = createSpinnerStore();
-    s.getState().start('generating');
+    s.getState().start('responding');
     s.getState().tick();
     s.getState().stop();
     // stop 重置 time=0；之后 tick 应 no-op（time 停在 0，不推进）
     expect(s.getState().time).toBe(0);
     s.getState().tick();
     expect(s.getState().time).toBe(0);
+  });
+
+  it('流式字符数平滑为 token，并在结束时生成静态完成记录', () => {
+    const s = createSpinnerStore();
+    s.getState().start('responding');
+    s.getState().onToken(400); // 粗估 100 tokens
+    vi.advanceTimersByTime(TICK_MS);
+    s.getState().tick();
+    expect(s.getState().displayedTokens).toBe(15);
+    vi.advanceTimersByTime(1_950);
+    const completion = s.getState().stop();
+    expect(completion?.durationMs).toBe(2_000);
+    expect(formatSpinnerDuration(completion?.durationMs ?? 0)).toBe('2s');
   });
 });
 

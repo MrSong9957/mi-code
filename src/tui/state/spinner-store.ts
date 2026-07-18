@@ -1,93 +1,94 @@
-// src/tui/state/spinner-store.ts
-// Spinner 数据 store（zustand vanilla）
-//
-// 改造后（对标 Claude Code 四套动画）：
-// - 单时间戳 time（tick +TICK_MS），各动画在渲染层用 floor(time/period) 派生帧
-//   （符号 120ms、点 300ms、shimmer 200ms、thinking sine 2s 周期）
-// - mode（thinking/generating/tool）决定配色，verb（随机 -ing 动词）决定文字
-// - label 用于工具模式覆盖显示文字（如 "Running Bash"）
-// - SPINNER_FRAMES 换 Claude Code 序列 ['·','✢','✳','✶','✻','✽'] + 反向
-
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import { sampleVerb } from './spinner-verbs.js';
 
-/** Claude Code 符号序列：6 帧 + 反向 = 12 帧（一轮 1440ms @ 120ms/帧） */
+/** Claude Code 的 6 帧往返序列；time 的单位始终是毫秒。 */
 export const SPINNER_FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✽', '✻', '✶', '✳', '✢', '·'] as const;
-
-/** tick 步进（ms）。50ms 高频，各动画按 floor(time/period) 派生（对标 useAnimationFrame(50)） */
 export const TICK_MS = 50;
+const STALL_MS = 3_000;
+const STALL_RAMP_MS = 2_000;
+const TURN_COMPLETION_VERBS = ['Baked', 'Brewed', 'Churned', 'Cogitated', 'Cooked', 'Crunched', 'Sautéed', 'Worked'] as const;
 
-/** 无 token 多久判 stall（ms） */
-const STALL_MS = 3000;
+/** 与流生命周期对应的五种视觉状态。 */
+export type SpinnerMode = 'requesting' | 'responding' | 'thinking' | 'tool-use' | 'tool-input';
+export interface SpinnerCompletion { verb: string; durationMs: number; }
 
-export type SpinnerMode = 'thinking' | 'generating' | 'tool';
+export function formatSpinnerDuration(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+}
 
 export interface SpinnerState {
   active: boolean;
-  /** 动画累计时间（ms），tick 时 +TICK_MS。start 时重置 0 */
+  /** 从同一个动画时钟派生帧、shimmer、thinking 与计时。 */
   time: number;
-  /** 当前模式（决定配色：thinking 灰系呼吸 / generating 主题色 / tool 主题色） */
   mode: SpinnerMode;
-  /** 随机动词（start 时选定，整个 turn 不变） */
   verb: string;
-  /** 工具模式覆盖文字（如 "Running Bash"）；空则用 verb */
   label: string;
-  /** thinking 开始的 tick 值（time 单位）；非 thinking 模式为 null。
-   *  渲染层用 (time - thinkStartTime) 算 sine 呼吸（前 3s opacity=0，对标 THINKING_DELAY_MS） */
   thinkStartTime: number | null;
   stalled: boolean;
-  /** 最近一次收到 token 的时间戳（Date.now()） */
+  stalledIntensity: number;
   lastTokenAt: number;
+  responseLength: number;
+  displayedTokens: number;
+  startedAt: number;
   start: (mode: SpinnerMode) => void;
-  stop: () => void;
+  stop: () => SpinnerCompletion | null;
   setMode: (mode: SpinnerMode) => void;
-  /** 工具模式覆盖显示文字（如 "Running Bash"）；空字符串清回 verb */
   setLabel: (label: string) => void;
-  /** 推进动画时钟（TICK_MS 一次）；inactive 时 no-op；顺带判 stall */
   tick: () => void;
-  /** 收到 token：刷新 lastTokenAt，清 stalled */
-  onToken: () => void;
+  /** 流式增量到达；长度用于 token 粗估与停滞检测。 */
+  onToken: (length?: number) => void;
 }
 
 export type SpinnerStore = StoreApi<SpinnerState>;
 
 export function createSpinnerStore(): SpinnerStore {
-  return createStore<SpinnerState>((set) => ({
-    active: false,
-    time: 0,
-    mode: 'generating',
-    verb: '',
-    label: '',
-    thinkStartTime: null,
-    stalled: false,
-    lastTokenAt: 0,
+  return createStore<SpinnerState>((set, get) => ({
+    active: false, time: 0, mode: 'responding', verb: '', label: '',
+    thinkStartTime: null, stalled: false, stalledIntensity: 0,
+    lastTokenAt: 0, responseLength: 0, displayedTokens: 0, startedAt: 0,
 
-    start: (mode) => set({
-      active: true,
-      time: 0,
-      mode,
-      verb: sampleVerb(),
-      label: '',
-      thinkStartTime: mode === 'thinking' ? 0 : null,
-      stalled: false,
-      lastTokenAt: Date.now(),
-    }),
-    stop: () => set({
-      active: false, time: 0, verb: '', label: '',
-      thinkStartTime: null, stalled: false,
-    }),
+    start: (mode) => {
+      const now = Date.now();
+      set({ active: true, time: 0, mode, verb: sampleVerb(), label: '',
+        thinkStartTime: mode === 'thinking' ? 0 : null,
+        stalled: false, stalledIntensity: 0, lastTokenAt: now,
+        responseLength: 0, displayedTokens: 0, startedAt: now });
+    },
+    stop: () => {
+      const current = get();
+      if (!current.active) return null;
+      const durationMs = Math.max(0, Date.now() - current.startedAt);
+      const verb = TURN_COMPLETION_VERBS[Math.floor(Math.random() * TURN_COMPLETION_VERBS.length)]!;
+      set({ active: false, time: 0, verb: '', label: '', thinkStartTime: null,
+        stalled: false, stalledIntensity: 0, responseLength: 0, displayedTokens: 0 });
+      return { verb, durationMs };
+    },
     setMode: (mode) => set((s) => ({
       mode,
       thinkStartTime: mode === 'thinking' ? s.time : null,
-      // 切到非 tool 模式清 label（回到 verb 显示）
-      label: mode === 'tool' ? s.label : '',
+      label: mode === 'tool-use' || mode === 'tool-input' ? s.label : '',
     })),
     setLabel: (label) => set({ label }),
     tick: () => set((s) => {
       if (!s.active) return s;
-      const stalled = Date.now() - s.lastTokenAt > STALL_MS;
-      return { time: s.time + TICK_MS, stalled };
+      const now = Date.now();
+      const time = Math.max(0, now - s.startedAt);
+      const quietMs = now - s.lastTokenAt;
+      const targetIntensity = quietMs <= STALL_MS ? 0 : Math.min(1, (quietMs - STALL_MS) / STALL_RAMP_MS);
+      const stalledIntensity = s.stalledIntensity + (targetIntensity - s.stalledIntensity) * 0.1;
+      const targetTokens = Math.round(s.responseLength / 4);
+      const difference = targetTokens - s.displayedTokens;
+      const displayedTokens = difference <= 0 ? s.displayedTokens
+        : s.displayedTokens + (difference < 70 ? Math.min(3, difference) : difference < 200 ? Math.ceil(difference * 0.15) : 50);
+      return { time, stalled: quietMs > STALL_MS, stalledIntensity, displayedTokens };
     }),
-    onToken: () => set({ lastTokenAt: Date.now(), stalled: false }),
+    onToken: (length = 0) => set((s) => ({
+      lastTokenAt: Date.now(), stalled: false,
+      responseLength: s.responseLength + Math.max(0, length),
+    })),
   }));
 }

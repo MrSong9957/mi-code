@@ -3,7 +3,6 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { BlockPipeline } from '../../ui/block-pipeline.js';
-import type { Block } from '../../ui/types.js';
 
 /** mock 的 Renderer：记录所有 printMessage / appendStreamingMarkdown 调用 */
 function mockRenderer() {
@@ -59,14 +58,14 @@ describe('BlockPipeline', () => {
       expect(prints.length).toBe(0); // 不产生任何输出
     });
 
-    it('thinking_end → printMessage("  Thought for Ns...", dim)，需先 thinking_start', () => {
+    it('thinking_end → printMessage("  thought for Ns...", dim)，需先 thinking_start', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
       p.emit({ kind: 'thinking_end', durationSec: 5, filesRead: 2 });
-      const summary = prints.find(p => p.text.includes('Thought for'));
+      const summary = prints.find(p => p.text.includes('thought for'));
       expect(summary).toBeDefined();
-      expect(summary!.text).toBe('  Thought for 5s, read 2 files (ctrl+o to expand)');
+      expect(summary!.text).toBe('  thought for 5s, read 2 files (ctrl+o to expand)');
       expect(summary!.style).toMatchObject({ dim: true });
     });
 
@@ -78,7 +77,7 @@ describe('BlockPipeline', () => {
     });
 
     it('assistant_text → appendStreamingMarkdown(text, isFinal, opts)', () => {
-      const { renderer, streamMarks } = mockRenderer();
+      const { renderer } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'assistant_text', text: '你好', isFinal: false });
       // 第三个参数是格式 opts（含 indent/firstLinePrefix）
@@ -212,8 +211,8 @@ describe('BlockPipeline', () => {
       p.emit({ kind: 'thinking_start' });
       p.emit({ kind: 'thinking_delta', content: '完整思考内容' });
       p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
-      // 折叠态（主屏）：应含 Thought for 摘要
-      expect(prints.some(p => p.text.includes('Thought for'))).toBe(true);
+      // 折叠态（主屏）：应含 thought for 摘要
+      expect(prints.some(p => p.text.includes('thought for'))).toBe(true);
     });
 
     it('getLastExpandableFullLines 返回 thinking 完整内容（覆盖层渲染用）', () => {

@@ -105,7 +105,7 @@ function spinnerDots(time: number): string {
 interface SpinnerSnapshot {
   active: boolean;
   time: number;
-  mode: 'thinking' | 'generating' | 'tool';
+  mode: 'requesting' | 'responding' | 'thinking' | 'tool-use' | 'tool-input';
   verb: string;
   label: string;
   thinkStartTime: number | null;
@@ -134,7 +134,7 @@ function buildSpinnerLine(snap: SpinnerSnapshot): string {
 
   // shimmer 高亮段位置（右→左扫）
   const glimmerIndex = computeGlimmerIndex(snap.time, msgWidth, {
-    speed: 200, cyclePad: 10, stalled: snap.stalled,
+    speed: snap.mode === 'requesting' ? 50 : 200, cyclePad: 10, stalled: snap.stalled,
   });
   const { before, shimmer, after } = computeShimmerSegments(message, glimmerIndex);
 
@@ -148,7 +148,7 @@ function buildSpinnerLine(snap: SpinnerSnapshot): string {
 
   if (snap.mode === 'thinking' && snap.thinkStartTime !== null) {
     // thinking 模式：灰系 sine 呼吸（前 3s opacity=0 静态灰）
-    const elapsed = snap.time;
+    const elapsed = snap.time - snap.thinkStartTime;
     const opacity = elapsed < THINKING_DELAY_MS
       ? 0
       : (Math.sin((elapsed - THINKING_DELAY_MS) * Math.PI / 1000) + 1) / 2;

@@ -28,14 +28,13 @@ describe('BlockPipeline → store 端到端', () => {
     expect(last.lines.some(l => l.content.includes('❯') && l.content.includes('你好'))).toBe(true);
   });
 
-  it('thinking_start + thinking_end → store 含 thought for 摘要（不再有 ● Thinking… 占位行）', () => {
+  it('thinking_start + thinking_end → store 含 ● Thinking… 标题和 thought for 摘要', () => {
     const { pipeline, store } = setup();
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_delta', content: '思考内容' });
     pipeline.emit({ kind: 'thinking_end', durationSec: 5, filesRead: 2 });
     const allLines = store.getState().messages.flatMap(m => m.lines.map(l => l.content));
-    // thinking_start 不再 print 占位行（对标 Claude Code：thinking 在 spinner 行显示）
-    expect(allLines.some(t => t.includes('Thinking'))).toBe(false);
+    expect(allLines.some(t => t === '● Thinking…')).toBe(true);
     expect(allLines.some(t => t.includes('thought for 5s'))).toBe(true);
   });
 

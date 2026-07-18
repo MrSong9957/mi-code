@@ -23,6 +23,7 @@ import { createInputStore } from './state/input-store.js';
 import { createStatusStore } from './state/status-store.js';
 import { createLogoStore } from './state/logo-store.js';
 import { createSpinnerStore, type SpinnerStore } from './state/spinner-store.js';
+import { formatSpinnerDuration, type SpinnerMode } from './state/spinner-store.js';
 import { createCompletionStore, type CompletionStore } from './state/completion-store.js';
 import { createSelectStore, type SelectStore } from './state/select-store.js';
 import { createOverlayStore, type OverlayStore } from './state/overlay-store.js';
@@ -74,19 +75,36 @@ export interface BootstrapHandle {
   overlayStore: OverlayStore;
   themeStore: ThemeStore;
   /** spinner 控制（对标 Claude Code 四套动画：mode 决定配色，verb 决定文字） */
-  startSpinner: (mode: 'thinking' | 'generating' | 'tool') => void;
+  startSpinner: (mode: SpinnerMode) => void;
   stopSpinner: () => void;
-  /** 切换 spinner 模式（thinking/generating/tool，决定配色） */
-  setSpinnerMode: (mode: 'thinking' | 'generating' | 'tool') => void;
+  /** 切换 spinner 模式，影响 shimmer 方向与状态提示。 */
+  setSpinnerMode: (mode: SpinnerMode) => void;
   /** 工具模式覆盖显示文字（如 "Running Bash"）；空串清回 verb */
   setSpinnerLabel: (label: string) => void;
-  spinnerOnToken: () => void;
+  spinnerOnToken: (length?: number) => void;
   /** 把一行系统消息固化进 store（替代旧 printLine） */
   printLine: (text: string) => void;
   /** 带样式/角色的消息（替代旧 printStyled） */
   printStyled: (text: string, role: 'system' | 'error' | 'input', style?: UIMessageStyle) => void;
   /** 卸载 Ink + 退 alt screen（进程退出前调用） */
   cleanup: () => void;
+}
+
+export function appendSpinnerCompletionMessage(
+  messagesStore: ReturnType<typeof createMessagesStore>,
+  completion: { verb: string; durationMs: number },
+): void {
+  const messages = messagesStore.getState().messages;
+  const lastMessage = messages[messages.length - 1];
+  const lastLine = lastMessage?.lines[lastMessage.lines.length - 1];
+  if (messages.length > 0 && lastLine?.content !== '') {
+    messagesStore.getState().appendLine('system', { content: '', style: {}, indent: 0 });
+  }
+  messagesStore.getState().appendLine('system', {
+    content: `✻ ${completion.verb} for ${formatSpinnerDuration(completion.durationMs)}`,
+    style: { dim: true },
+    indent: 0,
+  });
 }
 
 export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
@@ -188,10 +206,15 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     overlayStore,
     themeStore,
     startSpinner: (mode) => { spinnerStore.getState().start(mode); },
-    stopSpinner: () => { spinnerStore.getState().stop(); },
+    stopSpinner: () => {
+      const completion = spinnerStore.getState().stop();
+      if (completion) {
+        appendSpinnerCompletionMessage(messagesStore, completion);
+      }
+    },
     setSpinnerMode: (mode) => { spinnerStore.getState().setMode(mode); },
     setSpinnerLabel: (label: string) => { spinnerStore.getState().setLabel(label); },
-    spinnerOnToken: () => { spinnerStore.getState().onToken(); },
+    spinnerOnToken: (length) => { spinnerStore.getState().onToken(length); },
     printLine, printStyled, cleanup,
   };
 }

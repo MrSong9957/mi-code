@@ -6,16 +6,15 @@
 
 import { describe, it, expect } from 'vitest';
 import { BlockPipeline, type PipelineRenderer } from '../../ui/block-pipeline.js';
-import type { FormattedLine, UIMessageStyle } from '../../ui/types.js';
 
 /** mock renderer：捕获所有调用，验证 pipeline 行为 */
 function createMockRenderer(): PipelineRenderer & { calls: string[] } {
   const calls: string[] = [];
   const renderer: PipelineRenderer = {
-    printMessage(text, role?, style?, raw?) {
+    printMessage(text, role?, _style?, _raw?) {
       calls.push(`printMessage(${JSON.stringify(text.slice(0, 40))}, ${role ?? '?'})`);
     },
-    appendStreamingMarkdown(text, isFinal, opts?) {
+    appendStreamingMarkdown(text, isFinal, _opts?) {
       calls.push(`appendStreamingMarkdown(${JSON.stringify(text.slice(0, 30))}, final=${isFinal})`);
     },
     appendStreamingThinking(text) {
@@ -59,8 +58,8 @@ describe('BlockPipeline thinking 流式渲染', () => {
 
     pipeline.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
 
-    // 关键：thinking_end 后应打印摘要（含 Thought for）
-    const summaryCall = renderer.calls.find(c => c.includes('Thought for'));
+    // 关键：thinking_end 后应打印摘要（含 thought for）
+    const summaryCall = renderer.calls.find(c => c.includes('thought for'));
     expect(summaryCall).toBeDefined();
     // 关键：应调用 eraseStreamingThinking（擦除流式草稿，折叠为摘要）
     const eraseCall = renderer.calls.find(c => c.includes('eraseStreamingThinking'));
@@ -95,7 +94,7 @@ describe('BlockPipeline thinking 流式渲染', () => {
     pipeline.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
 
     // 摘要行的 printMessage 调用，role 不应是 'assistant'（否则续接）
-    const summaryCall = renderer.calls.find(c => c.includes('Thought for'));
+    const summaryCall = renderer.calls.find(c => c.includes('thought for'));
     expect(summaryCall).toBeDefined();
     // 关键：role 不是 assistant（强制新建消息，让 InlineApp 识别为新渲染项）
     expect(summaryCall).not.toMatch(/assistant/);

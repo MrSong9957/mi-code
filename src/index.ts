@@ -621,7 +621,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const eventBus = new StreamEventBus();
   eventBus.onToolCall(d => {
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
-    tuiHandle?.setSpinnerMode('tool');
+    tuiHandle?.setSpinnerMode('tool-use');
     tuiHandle?.setSpinnerLabel(`Running ${d.name}`);
   });
   eventBus.onToolResult(d => {
@@ -647,7 +647,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   // 兼顾"用户有即时反馈"和"状态准确"。
   let spinnerStarted = false;
   let gotAnyResponse = false; // 是否收到过任何 assistant 内容(用于空响应检测)
-  tuiHandle?.startSpinner('thinking');
+  tuiHandle?.startSpinner('requesting');
   tuiHandle?.setSpinnerLabel('Connecting');
   spinnerStarted = true;
   try {
@@ -668,6 +668,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       // 第一个 event 到达 → 清除 "Connecting" label,恢复到 spinner 默认 verb
       if (spinnerStarted) {
         tuiHandle?.setSpinnerLabel('');
+        tuiHandle?.setSpinnerMode('responding');
         spinnerStarted = false;
       }
 
@@ -678,6 +679,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
           pipeline.emit({ kind: 'thinking_start' });
           thinkingStart = Date.now();
           thinkingActive = true;
+          tuiHandle?.setSpinnerMode('thinking');
         }
       } else if ('type' in msg && msg.type === 'content_block_stop') {
         const cstop = msg as { type: 'content_block_stop'; index: number };
@@ -686,11 +688,11 @@ async function handleUserSubmit(rawText: string): Promise<void> {
           pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
           thinkingContent = '';
           thinkingActive = false;
-          tuiHandle?.setSpinnerMode('generating');
+          tuiHandle?.setSpinnerMode('responding');
         }
       } else if ('type' in msg && msg.type === 'content_block_delta') {
         const delta = msg as { type: 'content_block_delta'; deltaType: string; content: string };
-        if (delta.content) tuiHandle?.spinnerOnToken();
+        if (delta.content) tuiHandle?.spinnerOnToken(delta.content.length);
         if (delta.deltaType === 'text' && delta.content) {
           gotAnyResponse = true;
           if (assistantText === '' && thinkingContent) {
@@ -698,7 +700,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
             pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
             thinkingContent = '';
             thinkingActive = false;
-            tuiHandle?.setSpinnerMode('generating');
+            tuiHandle?.setSpinnerMode('responding');
           }
           assistantText += delta.content;
           pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: false });

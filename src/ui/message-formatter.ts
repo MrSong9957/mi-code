@@ -13,7 +13,7 @@
 // 3. tool_call 从 toolInput（真实参数对象）提取显示文本；
 //    tool_result 按工具类型分派（edit/write 显示行数、bash 显示输出摘要）。
 
-import type { UIMessageType, UIMessageMeta, FormattedLine, UIMessageStyle } from './types.js';
+import type { UIMessageType, UIMessageMeta, FormattedLine } from './types.js';
 import {
   BLOCK_STYLES,
   formatToolCallDisplay,
@@ -32,6 +32,9 @@ export class MessageFormatter {
    */
   static format(type: UIMessageType, meta: UIMessageMeta = {}, content?: string): FormattedLine[] {
     switch (type) {
+      case 'thinking':
+        return [{ content: `● ${content ?? 'Thinking…'}`, style: BLOCK_STYLES.magenta, indent: 0 }];
+
       case 'thinking_content':
         // thinking 折叠模式下不再实时显示内容，仅保留分支以防外部调用
         return [{ content: content ?? '', style: BLOCK_STYLES.dim, indent: 2 }];

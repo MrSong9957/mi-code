@@ -15,7 +15,7 @@ interface SpinnerTheme {
 
 interface SpinnerLineOpts {
   time: number;
-  mode: 'thinking' | 'generating' | 'tool';
+  mode: 'requesting' | 'responding' | 'thinking' | 'tool-use' | 'tool-input';
   verb: string;
   label: string;
   stalled: boolean;

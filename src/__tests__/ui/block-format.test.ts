@@ -131,19 +131,19 @@ describe('block-format', () => {
   // ─────────────── formatThinkingSummary ───────────────
   describe('formatThinkingSummary', () => {
     it('带 duration + filesRead', () => {
-      expect(formatThinkingSummary(17, 2)).toBe('Thought for 17s, read 2 files (ctrl+o to expand)');
+      expect(formatThinkingSummary(17, 2)).toBe('thought for 17s, read 2 files (ctrl+o to expand)');
     });
 
     it('单数 file', () => {
-      expect(formatThinkingSummary(5, 1)).toBe('Thought for 5s, read 1 file (ctrl+o to expand)');
+      expect(formatThinkingSummary(5, 1)).toBe('thought for 5s, read 1 file (ctrl+o to expand)');
     });
 
     it('无 filesRead', () => {
-      expect(formatThinkingSummary(5, 0)).toBe('Thought for 5s (ctrl+o to expand)');
+      expect(formatThinkingSummary(5, 0)).toBe('thought for 5s (ctrl+o to expand)');
     });
 
     it('duration 为 0 也正常输出', () => {
-      expect(formatThinkingSummary(0, 0)).toBe('Thought for 0s (ctrl+o to expand)');
+      expect(formatThinkingSummary(0, 0)).toBe('thought for 1s (ctrl+o to expand)');
     });
   });
 

@@ -18,6 +18,7 @@ import { computeGlimmerIndex } from '../inline/shimmer.js';
 import { GlimmerMessage } from './GlimmerMessage.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
 import { DotsCycle } from './DotsCycle.js';
+import { formatSpinnerDuration } from '../state/spinner-store.js';
 
 const TICK_MS = 50;
 const SHIMMER_SPEED = 200;
@@ -35,7 +36,9 @@ export function Spinner({ store }: SpinnerProps): React.ReactElement | null {
   const verb = useStore(store, (s) => s.verb);
   const label = useStore(store, (s) => s.label);
   const stalled = useStore(store, (s) => s.stalled);
+  const stalledIntensity = useStore(store, (s) => s.stalledIntensity);
   const thinkStartTime = useStore(store, (s) => s.thinkStartTime);
+  const displayedTokens = useStore(store, (s) => s.displayedTokens);
 
   useEffect(() => {
     if (!active) return;
@@ -50,12 +53,14 @@ export function Spinner({ store }: SpinnerProps): React.ReactElement | null {
 
   const messageWidth = displayText.length;
   const glimmerIndex = computeGlimmerIndex(time, messageWidth, {
-    speed: SHIMMER_SPEED,
+    speed: mode === 'requesting' ? 50 : SHIMMER_SPEED,
     cyclePad: SHIMMER_PAD,
     stalled,
   });
 
-  const glyphColor = stalled ? t.spinnerStalled : t.spinnerActive;
+  const glyphColor = stalledIntensity > 0.01 ? t.spinnerStalled : t.spinnerActive;
+  const showMetrics = time >= 30_000;
+  const tokens = displayedTokens > 0 ? ` ${mode === 'requesting' ? '↑' : '↓'} ${displayedTokens}` : '';
 
   return (
     <>
@@ -63,7 +68,7 @@ export function Spinner({ store }: SpinnerProps): React.ReactElement | null {
       <GlimmerMessage
         message={displayText}
         glimmerIndex={glimmerIndex}
-        baseColor={stalled ? t.spinnerStalled : t.spinnerActive}
+        baseColor={glyphColor}
         shimmerColor={t.spinnerShimmer}
       />
       {mode === 'thinking' && (
@@ -74,6 +79,7 @@ export function Spinner({ store }: SpinnerProps): React.ReactElement | null {
         />
       )}
       {mode !== 'thinking' && <DotsCycle time={time} color={t.textMuted} />}
+      {showMetrics && <Text color={t.textMuted}>{`  ${formatSpinnerDuration(time)}${tokens}`}</Text>}
     </>
   );
 }
