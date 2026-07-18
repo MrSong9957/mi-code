@@ -23,6 +23,7 @@ import { stripImagesForPersistence } from './agent/image-utils.js';
 import type { ContentBlock } from './agent/types.js';
 import { BlockPipeline } from './ui/block-pipeline.js';
 import { bootstrap, type BootstrapHandle } from './tui/bootstrap.js';
+import { finalizeTurnLifecycle, handleTurnLoopEnd } from './tui/turn-lifecycle.js';
 import { writeResumeHint } from './cli/resume-hint.js';
 import { ConfigStore, SUPPORTED_PROVIDERS } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
@@ -620,6 +621,19 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const compactClient = createStreamClient(provider, apiKey, currentSmallModel(), baseUrl);
   const eventBus = new StreamEventBus();
   const activeToolIds = new Set<string>();
+  const turnLifecycle = {
+    activeToolIds,
+    setSpinnerHasActiveTools: (hasActiveTools: boolean) => {
+      tuiHandle?.setSpinnerHasActiveTools(hasActiveTools);
+    },
+    emitThinkingEnd: (durationSec: number) => {
+      pipeline.emit({ kind: 'thinking_end', durationSec, filesRead: 0 });
+    },
+    stopSpinner: () => {
+      tuiHandle?.stopSpinner();
+    },
+    now: Date.now,
+  };
   eventBus.onToolCall(d => {
     activeToolIds.add(d.toolUseId);
     tuiHandle?.setSpinnerHasActiveTools(true);
@@ -633,8 +647,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId });
   });
   eventBus.onLoopEnd(() => {
-    activeToolIds.clear();
-    tuiHandle?.setSpinnerHasActiveTools(false);
+    handleTurnLoopEnd(turnLifecycle);
   });
   const allToolDefs = Array.from(toolRegistry.tools.values()).map(t => t.definition);
   const tools = currentMode === 'plan'
@@ -766,15 +779,13 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
     }
   } finally {
-    activeToolIds.clear();
-    tuiHandle?.setSpinnerHasActiveTools(false);
-    if (thinkingActive || thinkingContent) {
-      const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-      pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
-      thinkingContent = '';
-      thinkingActive = false;
-    }
-    tuiHandle?.stopSpinner();
+    const finalizedThinking = finalizeTurnLifecycle(turnLifecycle, {
+      thinkingActive,
+      thinkingContent,
+      thinkingStart,
+    });
+    thinkingActive = finalizedThinking.thinkingActive;
+    thinkingContent = finalizedThinking.thinkingContent;
     isProcessing = false;
     currentAbortController = null;
     // lastSubmittedAgentText 在 turn 结束时清空。
