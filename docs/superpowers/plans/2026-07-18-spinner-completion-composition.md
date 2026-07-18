@@ -940,7 +940,7 @@ export function useSpinnerClock(store: SpinnerStore): void {
 }
 ```
 
-在 `ConnectedApp` 所有 early return 之前调用 `useSpinnerClock(spinnerStore)`；从 `Spinner.tsx` 删除 `useEffect` 和 `TICK_MS` interval。
+在 `ConnectedApp` 所有 early return 之前调用 clock hook；Task 6 删除 InlineApp 旧 interval 前，暂用 `useSpinnerClock(spinnerStore, mode !== 'inline')` 保证每种模式只有一个 owner。从 `Spinner.tsx` 删除 `useEffect` 和 `TICK_MS` interval。
 
 - [ ] **Step 5: 拆分 Ink 组件边界**
 
@@ -1287,7 +1287,7 @@ const footerLayout = layoutFooter({
 });
 ```
 
-删除 InlineApp 的 `setInterval()` effect；时钟只由 `ConnectedApp/useSpinnerClock` 推进。
+删除 InlineApp 的 `setInterval()` effect；同时把 ConnectedApp 的过渡调用 `useSpinnerClock(spinnerStore, mode !== 'inline')` 收敛为 `useSpinnerClock(spinnerStore)`，让所有模式只由 ConnectedApp 推进。增加 inline/alt-screen 接线测试，防止重复 owner 或零 owner。
 
 - [ ] **Step 7: 运行 inline 单元与光标回归并确认 GREEN**
 
