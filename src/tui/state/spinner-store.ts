@@ -1,5 +1,6 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import { sampleVerb, type SpinnerVerbConfig } from './spinner-verbs.js';
+import { TURN_COMPLETION_VERBS, type TurnCompletionVerb } from './turn-duration-message.js';
 
 /** Claude Code 的 6 帧往返序列；time 的单位始终是毫秒。 */
 export const SPINNER_FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✽', '✻', '✶', '✳', '✢', '·'] as const;
@@ -10,11 +11,9 @@ const STALL_RAMP_MS = 2_000;
 export const THINKING_GLOW_DELAY_MS = 3_000;
 export const THINKING_GLOW_PERIOD_MS = 2_000;
 export const THINKING_SUMMARY_MIN_VISIBLE_MS = 2_000;
-export const TURN_COMPLETION_VERBS = ['Baked', 'Brewed', 'Churned', 'Cogitated', 'Cooked', 'Crunched', 'Sautéed', 'Worked'] as const;
 
 /** 与流生命周期对应的五种视觉状态。 */
 export type SpinnerMode = 'requesting' | 'responding' | 'thinking' | 'tool-use' | 'tool-input';
-export interface SpinnerCompletion { verb: string; durationMs: number; }
 export interface ThinkingSummary { durationMs: number; visibleUntil: number; }
 export interface SpinnerRGB { r: number; g: number; b: number; }
 
@@ -129,7 +128,7 @@ export interface SpinnerState {
   verbose: boolean;
   activeTeammateCount: number;
   start: (mode: SpinnerMode) => void;
-  stop: () => SpinnerCompletion | null;
+  stop: () => { verb: TurnCompletionVerb; durationMs: number } | null;
   pause: () => void;
   resume: () => void;
   setMode: (mode: SpinnerMode) => void;

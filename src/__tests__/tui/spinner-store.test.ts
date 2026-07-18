@@ -20,8 +20,8 @@ import {
   thinkingColorAt,
   thinkingStatusText,
   totalSpinnerTokens,
-  TURN_COMPLETION_VERBS,
 } from '../../tui/state/spinner-store.js';
+import { TURN_COMPLETION_VERBS } from '../../tui/state/turn-duration-message.js';
 import { SPINNER_VERBS } from '../../tui/state/spinner-verbs.js';
 
 describe('spinner-store', () => {
