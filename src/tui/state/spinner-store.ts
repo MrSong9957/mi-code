@@ -17,6 +17,60 @@ export interface SpinnerCompletion { durationMs: number; }
 export interface ThinkingSummary { durationMs: number; visibleUntil: number; }
 export interface SpinnerRGB { r: number; g: number; b: number; }
 
+export type SpinnerVariant = 'normal' | 'brief';
+
+export interface SpinnerTeammate {
+  name: string;
+  role: string;
+  status: 'idle' | 'working' | 'shutdown';
+}
+
+export interface SpinnerTask {
+  id: string;
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  owner: string | null;
+  activeForm: string | null;
+  blockedBy: readonly string[];
+}
+
+export interface SpinnerContextSnapshot {
+  variant: SpinnerVariant;
+  teammates: readonly SpinnerTeammate[];
+  tasks: readonly SpinnerTask[];
+  spinnerTip: string | null;
+  hasUsedBtw: boolean;
+  budgetText: string | null;
+  nextTaskText: string | null;
+}
+
+export const EMPTY_SPINNER_CONTEXT: SpinnerContextSnapshot = Object.freeze({
+  variant: 'normal',
+  teammates: Object.freeze([]),
+  tasks: Object.freeze([]),
+  spinnerTip: null,
+  hasUsedBtw: false,
+  budgetText: null,
+  nextTaskText: null,
+});
+
+export function normalizeSpinnerContext(
+  context: SpinnerContextSnapshot,
+): SpinnerContextSnapshot {
+  return {
+    variant: context.variant,
+    teammates: context.teammates.map(member => ({ ...member })),
+    tasks: context.tasks.map(task => ({
+      ...task,
+      blockedBy: [...task.blockedBy],
+    })),
+    spinnerTip: context.spinnerTip?.trim() || null,
+    hasUsedBtw: context.hasUsedBtw,
+    budgetText: context.budgetText?.trim() || null,
+    nextTaskText: context.nextTaskText?.trim() || null,
+  };
+}
+
 const THINKING_BASE_COLOR: SpinnerRGB = { r: 153, g: 153, b: 153 };
 const THINKING_SHIMMER_COLOR: SpinnerRGB = { r: 185, g: 185, b: 185 };
 
@@ -126,6 +180,7 @@ export interface SpinnerState {
   totalPausedMs: number;
   pauseStartTime: number | null;
   verbose: boolean;
+  context: SpinnerContextSnapshot;
   activeTeammateCount: number;
   start: (mode: SpinnerMode) => void;
   stop: () => SpinnerCompletion | null;
@@ -137,6 +192,7 @@ export interface SpinnerState {
   setLabel: (label: string) => void;
   setReducedMotion: (enabled: boolean) => void;
   setVerbose: (enabled: boolean) => void;
+  setContext: (context: SpinnerContextSnapshot) => void;
   setActiveTeammateCount: (count: number) => void;
   setTeammateTokens: (tokens: number) => void;
   tick: () => void;
@@ -154,7 +210,7 @@ export function createSpinnerStore(verbConfig?: SpinnerVerbConfig): SpinnerStore
     reducedMotion: false,
     lastTokenAt: 0, responseLength: 0, displayedTokens: 0, teammateTokens: 0,
     loadingStartTime: 0, totalPausedMs: 0, pauseStartTime: null,
-    verbose: false, activeTeammateCount: 0,
+    verbose: false, context: normalizeSpinnerContext(EMPTY_SPINNER_CONTEXT), activeTeammateCount: 0,
 
     start: (mode) => {
       const now = Date.now();
@@ -236,6 +292,7 @@ export function createSpinnerStore(verbConfig?: SpinnerVerbConfig): SpinnerStore
     setLabel: (label) => set({ label }),
     setReducedMotion: (enabled) => set({ reducedMotion: enabled }),
     setVerbose: (enabled) => set({ verbose: enabled }),
+    setContext: (context) => set({ context: normalizeSpinnerContext(context) }),
     setActiveTeammateCount: (count) => set({
       activeTeammateCount: Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0,
     }),

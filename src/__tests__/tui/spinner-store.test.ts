@@ -39,6 +39,33 @@ describe('spinner-store', () => {
     expect(st.stalled).toBe(false);
   });
 
+  it('setContext 原子复制数组并把空白可选文本规范化为 null', () => {
+    const teammates = [{ name: 'alice', role: 'coder', status: 'working' as const }];
+    const tasks = [{
+      id: '1', content: 'Ship', status: 'pending' as const,
+      owner: null, activeForm: null, blockedBy: [] as string[],
+    }];
+    const store = createSpinnerStore();
+
+    store.getState().setContext({
+      variant: 'normal', teammates, tasks, spinnerTip: '  custom tip  ',
+      hasUsedBtw: false, budgetText: '   ', nextTaskText: null,
+    });
+    teammates[0]!.name = 'mutated';
+    tasks[0]!.blockedBy.push('x');
+
+    expect(store.getState().context).toEqual({
+      variant: 'normal',
+      teammates: [{ name: 'alice', role: 'coder', status: 'working' }],
+      tasks: [{
+        id: '1', content: 'Ship', status: 'pending',
+        owner: null, activeForm: null, blockedBy: [],
+      }],
+      spinnerTip: 'custom tip', hasUsedBtw: false,
+      budgetText: null, nextTaskText: null,
+    });
+  });
+
   it('start(mode)：active=true，time 重置 0，选 verb', () => {
     const s = createSpinnerStore();
     s.getState().start('thinking');
