@@ -40,7 +40,7 @@
 - [ ] AUTO-0006: AskUserQuestion
   > 实现 Agent 主动向用户提问的交互机制
 
-- [ ] AUTO-0009: Claude Code Spinner 对齐（总任务）
+- [x] AUTO-0009: Claude Code Spinner 对齐（总任务）
   > 依据源码探索结果，拆分 Spinner 的数据模型、动画、生命周期和测试任务；本次仅建单，不执行。
 
 - [x] AUTO-0010: 梳理 Spinner 状态与数据模型
@@ -83,23 +83,23 @@
   > 监听 responseLength 增长并重置 lastTokenTime；无 token 且无活跃工具超过 3 秒判定 stalled；3-5 秒将 stalledIntensity 线性提升到 1，并平滑追赶；驱动符号和文字渐变到错误红。
   > 依赖：AUTO-0011
 
-- [ ] AUTO-0020: 实现 Spinner Tip 与时间阈值
+- [x] AUTO-0020: 实现 Spinner Tip 与时间阈值
   > 超过 30 秒且用户未使用 /btw 时显示 quick side question 提示；超过 30 分钟显示 /clear 提示；其余时间使用 spinnerTip prop；避免每帧重复计算粗粒度阈值。
   > 依赖：AUTO-0016
 
-- [ ] AUTO-0021: 完成 Spinner 到静态完成消息的转换
+- [x] AUTO-0021: 完成 Spinner 到静态完成消息的转换
   > Spinner 卸载时生成 SystemTurnDurationMessage，输出 `✻ <verb> for <duration>`；插入 messages 列表并参与滚动；确保 Thinking 摘要与完成消息的空行和 dim 样式正确。
   > 依赖：AUTO-0013、AUTO-0016、AUTO-0018
 
-- [ ] AUTO-0022: 对齐 Spinner 入口与组件依赖关系
+- [x] AUTO-0022: 对齐 Spinner 入口与组件依赖关系
   > 整理 SpinnerWithVerb、BriefSpinner、SpinnerWithVerbInner、SpinnerAnimationRow、TeammateSpinnerTree/TaskListV2、Tip/Budget/NextTask 的分支和数据流，确认 normal/brief 模式边界。
   > 依赖：AUTO-0010、AUTO-0011
 
-- [ ] AUTO-0023: 补齐 Spinner 单元与集成测试
+- [x] AUTO-0023: 补齐 Spinner 单元与集成测试
   > 覆盖模式切换、帧序列、reducedMotion、字素 shimmer、计时暂停、token 平滑、thinking、stalled、Tip 阈值、完成消息转换和端到端消息顺序。
   > 依赖：AUTO-0012、AUTO-0015、AUTO-0017、AUTO-0019、AUTO-0020、AUTO-0021
 
-- [ ] AUTO-0024: 完成 Spinner 对齐后的验证与文档
+- [x] AUTO-0024: 完成 Spinner 对齐后的验证与文档
   > 运行相关测试、类型检查和 lint；记录实际输出与源码探索结论的差异；更新必要的架构说明。仅在验证通过后关闭 AUTO-0009。
   > 依赖：AUTO-0023
 
@@ -127,3 +127,5 @@
 | 2026-07-18 | AUTO-0017 | @agent | 完成字符数 token 粗估、50ms 三档平滑追赶、teammate token 汇总及按模式显示箭头；聚焦测试、类型检查和目标 lint 通过 |
 | 2026-07-18 | AUTO-0018 | @agent | 完成 thinking effort、重复模式防重置、退出耗时摘要 2 秒生命周期，以及 3 秒延迟/2 秒周期灰色呼吸；thinking 相关回归、类型检查和目标 lint 通过 |
 | 2026-07-18 | AUTO-0019 | @agent | 完成 responseLength 增长检测、活跃工具抑制、3-5 秒 stalledIntensity 平滑追赶，以及 Glyph/Glimmer 固定错误红渐变；聚焦与流式工具链回归、类型检查通过 |
+| 2026-07-19 | AUTO-0020、AUTO-0021、AUTO-0022 | @agent | 完成共享 `selectSpinnerView()` 统一 normal/brief、Tip 阈值、活动区与 rowCount；完成消息工厂 `createTurnDurationMessage()` 固化随机动词与 dim 样式；BootstrapHandle 暴露 `setSpinnerContext`、finally 唯一 stop 接通 Thinking→空行→dim 完成消息顺序；Ink/inline 共享 View 与 `useSpinnerClock` 统一时钟；Task 1-7 全部 GREEN |
+| 2026-07-19 | AUTO-0023、AUTO-0024、AUTO-0009 | @agent | 修复 9 个 inline footer 回归文件（cursor-drift/logo/physical-line-footer/commit-footer-erase/dropdown-shrink/input-wrap/overwrite-wrap/decawm-wordwrap/truncate-status）的「无 spinner 2 预留位」旧假设，统一为动态 `reserveRows = 1 + spinnerLines.length`；新增完成消息进入 flatten / scrollback 回归测试；L1/L2 重点集合 49 文件 430 测试全过、`tsc --noEmit` exit 0；全量 `npm test` 仅余 StatusBar 多色高亮导致的 2 条既有无关失败（设计文档明确豁免）；总任务 AUTO-0009 关闭 |
