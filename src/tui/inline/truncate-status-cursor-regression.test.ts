@@ -6,7 +6,7 @@
 //   旧版（截断策略）：renderFooter 用 sliceAnsi 把 statusText 截到 cols，物理行恒=1。
 //   新版（wordWrap 策略）：DECAWM OFF 后 statusText 用 wrapLine 折行，超宽内容
 //   不被丢弃而是折成多行显示。物理行 = wrapLine 后的行数（完全可控）。
-//   footerHeight = 2(预留位) + 1(input) + 1(border) + statusWrapLines。
+//   footerHeight = 1(间隔位) + 1(input) + 1(border) + statusWrapLines。
 //
 // 本测试验证：超宽 statusText 渲染后 footerHeight 按 wrapLine 行数记账，
 // 且跨帧稳定（追加→覆写不漂移）。期望值用 wrapLine 算（单一真理源）。
@@ -18,12 +18,12 @@ import { wrapLine, getUsableWidth } from '../state/wrap-line.js';
 
 const PROMPT = '❯ ';
 
-/** 算期望 footerHeight = 2(预留位) + 1(顶部border) + inputWrapLines + 1(底部border) + statusWrapLines。
+/** 算期望 footerHeight = 1(间隔位) + 1(顶部border) + inputWrapLines + 1(底部border) + statusWrapLines。
  *  本测试都用空输入（wrapLine('❯ ', usable)=1 行）。 */
 function expectedFooterHeight(statusText: string, usableWidth: number): number {
   const inputPhys = wrapLine(PROMPT + '', usableWidth).length;
   const statusPhys = wrapLine(statusText, usableWidth).length;
-  return 2 + 1 + inputPhys + 1 + statusPhys;
+  return 1 + 1 + inputPhys + 1 + statusPhys;
 }
 
 function createMockStdout() {
@@ -57,13 +57,13 @@ describe('超宽 statusText 截断回归', () => {
     expect(renderer.getFooterHeight()).toBe(expectedFooterHeight(statusText, usableWidth));
   });
 
-  it('短 statusText（不超宽）：footerHeight=6（不受影响）', () => {
+  it('短 statusText（不超宽）：footerHeight=5（不受影响）', () => {
     expect.hasAssertions();
     const shortStatus = 'short status';
     expect(stringWidth(shortStatus)).toBeLessThanOrEqual(cols);
 
     renderer.renderFooter('', 0, shortStatus, cols, [], 0, 0);
-    expect(renderer.getFooterHeight()).toBe(6);
+    expect(renderer.getFooterHeight()).toBe(5);
   });
 
   it('超宽 statusText：追加→覆写 footerHeight 稳定（不随帧增长）', () => {
@@ -123,9 +123,9 @@ describe('超宽 statusText 截断回归', () => {
     const usableWidth = getUsableWidth(cols);
     // 变异 8 教训：footerHeight 正确但 upFromBottom 算错时，光标仍漂移。
     // 此测试直接断言 cursorUp 值，确保光标定位公式也正确。
-    // 空输入：光标在输入框行（块内物理行3），newHeight=expectedFooterHeight，
-    // cursorPhysLine0 = 3（空输入 wrapLine=1 行，layout row=0，跳过 2 行预留位后 = 3），
-    // upFromBottom = newHeight - 3。
+    // 空输入：光标在输入框行（块内物理行2），newHeight=expectedFooterHeight，
+    // cursorPhysLine0 = 2（空输入 wrapLine=1 行，layout row=0，跳过 1 行间隔位 + 1 顶部border 后 = 2），
+    // upFromBottom = newHeight - 2。
     const statusText = '\x1b[36m' + 'X'.repeat(120) + '\x1b[0m';
     expect(stringWidth(statusText)).toBeGreaterThan(cols);
 
@@ -140,7 +140,7 @@ describe('超宽 statusText 截断回归', () => {
     // 最后一个 cursorUp 是光标定位（前面的 cursorUp 是覆写模式上移到块顶）
     // 空输入首次渲染是追加模式，只有一个 cursorUp（光标定位）
     const newHeight = expectedFooterHeight(statusText, usableWidth);
-    const cursorPhysLine0 = 3; // 空输入 layout row=0 → 跳过 2 行预留位后 = 3
+    const cursorPhysLine0 = 2; // 空输入 layout row=0 → 跳过 1 行间隔位 + 1 顶部border 后 = 2
     const expectedUp = newHeight - cursorPhysLine0;
     expect(ups[ups.length - 1]).toBe(expectedUp);
   });

@@ -6,7 +6,10 @@
 // 本测试覆盖 footer 布局（border/input wrap/suggestion/status/光标参数）。
 
 import { describe, it, expect } from 'vitest';
-import { layoutFooter, type FooterInput } from './layout.js';
+import stripAnsi from 'strip-ansi';
+import { layoutFooter, layoutFrame, type FooterInput } from './layout.js';
+import { InlineRenderState } from './render-state.js';
+import { createTurnDurationMessage } from '../../tui/state/turn-duration-message.js';
 import type { SuggestionItem } from '../../commands/suggestion-data.js';
 
 /** 便捷:命令名字符串 → SuggestionItem */
@@ -179,6 +182,58 @@ describe('layoutFooter — 纯函数布局计算', () => {
       expect(input.cursor).toBe(inputCopy.cursor);
       expect(input.suggestions).toEqual(inputCopy.suggestions);
       expect(input.cols).toBe(inputCopy.cols);
+    });
+  });
+
+  describe('turn-duration 完成消息进入 scrollback', () => {
+    it('turn-duration 首帧进入 newLines，下一帧账本阻止重复追加', () => {
+      // 完成消息是 finalized 的 TuiMessage 子类型，layoutFrame 应当：
+      // 1. 首帧把消息所有行（含前导空行 + dim 完成行）追加到 newLines；
+      // 2. 第二帧账本已记录该 uuid 的行数，newLines 为空（避免重复追加）。
+      const state = new InlineRenderState();
+      const message = createTurnDurationMessage({
+        uuid: 'duration-1', durationMs: 9_000,
+        prependBlankLine: true, random: () => 0.5,
+      });
+      const input = {
+        messages: [message],
+        streamingMsg: null,
+        footer: makeFooterInput(),
+        cols: 80,
+        state,
+      };
+
+      const first = layoutFrame(input);
+      const second = layoutFrame(input);
+
+      // 首帧：前导空行 + dim 完成行（stripAnsi 去掉 dim SGR 后剩纯文本）
+      expect(first.newLines.map(stripAnsi)).toEqual(['', '✻ Cooked for 9s']);
+      // 第二帧：账本已记录 duration-1 → 全部行已渲染，newLines 为空。
+      expect(second.newLines).toEqual([]);
+    });
+
+    it('turn-duration 与普通消息混排时按顺序追加', () => {
+      const state = new InlineRenderState();
+      const userMsg = {
+        uuid: 'u-1', role: 'user', finalized: true,
+        lines: [{ content: 'hello', style: {}, indent: 0 }],
+      };
+      const durationMsg = createTurnDurationMessage({
+        uuid: 'duration-1', durationMs: 5_000,
+        prependBlankLine: true, random: () => 0,
+      });
+      const input = {
+        messages: [userMsg, durationMsg],
+        streamingMsg: null,
+        footer: makeFooterInput(),
+        cols: 80,
+        state,
+      };
+
+      const result = layoutFrame(input);
+      expect(result.newLines.map(stripAnsi)).toEqual([
+        'hello', '', '✻ Baked for 5s',
+      ]);
     });
   });
 });

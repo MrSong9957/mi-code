@@ -110,6 +110,8 @@ describe('DECAWM OFF + wordWrap 回归', () => {
       sim.row = 4; // 块顶 = logo3 + hook1
 
       // 帧1：空输入（追加模式，跳过 constructor 的 DECAWM 序列）
+      // 无 spinner 时 footer = 间隔(1) + border + 输入框 + border + status = 5 行
+      // 块顶(4) + 间隔(1) + border(1) + 输入行(0) = 行6（0-based）
       renderer.renderFooter('', 0, 'status', cols, [], 0, 0);
       // 跳过 constructor 的 \x1b[?7l（mock.written[0]）
       const writes1 = mock.written[0] === '\x1b[?7l' ? mock.written.slice(1) : mock.written;
@@ -118,7 +120,7 @@ describe('DECAWM OFF + wordWrap 回归', () => {
       }
       mock.written.length = 0;
       const rowAfterAppend = sim.row;
-      expect(rowAfterAppend).toBe(7);
+      expect(rowAfterAppend).toBe(6);
 
       // 帧2：78个a（❯ +78a=80列 > 79 usableWidth，wordWrap 折行）
       renderer.renderFooter('a'.repeat(78), 78, 'status', cols, [], 0, 0);
@@ -323,11 +325,11 @@ describe('resize 跟随：cols 变化时 border 不堆叠', () => {
     expect(countBorders(mock.output)).toBe(2);
   });
 
-  it('resize 后 footerHeight 不漂移（与帧1 一致，6 行）', () => {
+  it('resize 后 footerHeight 不漂移（与帧1 一致，5 行）', () => {
     expect.hasAssertions();
     renderer.renderFooter('', 0, 'status', 180, [], 0, 0);
     const h1 = renderer.getFooterHeight();
-    expect(h1).toBe(6); // 预留位(2) + 顶部border + 输入框 + 底部border + status
+    expect(h1).toBe(5); // 间隔(1) + 顶部border + 输入框 + 底部border + status
 
     renderer.renderFooter('', 0, 'status', 120, [], 0, 0);
     expect(renderer.getFooterHeight()).toBe(h1);

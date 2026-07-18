@@ -3,6 +3,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { flattenMessages } from '../../../tui/selection/flatten-messages.js';
+import { createTurnDurationMessage } from '../../../tui/state/turn-duration-message.js';
 import type { TuiMessage } from '../../../tui/types.js';
 
 function makeMsg(uuid: string, lines: string[], finalized = true): TuiMessage {
@@ -61,5 +62,20 @@ describe('flattenMessages', () => {
       : [];
     expect(r[0]?.line.indent).toBe(2);
     expect(r[0]?.line.style.fg).toBe('brand');
+  });
+
+  it('turn-duration 消息按普通固化行进入滚动列表', () => {
+    // 完成消息是 finalized 的 TuiMessage 子类型，flatten 应作为普通固化行展开，
+    // 保留前导空行 + dim 主行，不调用任何专用渲染分支。
+    const message = createTurnDurationMessage({
+      uuid: 'duration-1', durationMs: 9_000,
+      prependBlankLine: true, random: () => 0.5,
+    });
+    const flat = flattenMessages([message]);
+    expect(flat.map(line => line.line.content)).toEqual(['', '✻ Cooked for 9s']);
+    expect(flat.map(line => line.line.style)).toEqual([
+      {}, { dim: true },
+    ]);
+    expect(flat.every(line => line.messageUuid === 'duration-1')).toBe(true);
   });
 });

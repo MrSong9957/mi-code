@@ -14,8 +14,8 @@
 //   footerHeight = lines.length，光标定位用 layoutInputCursor（wordWrap 后的 row/col）。
 //
 // 不变量：
-//   1. 跨帧光标绝对位置 = 块顶 + 3(2行预留位) + layoutInputCursor.row（与输入物理行一致，不漂移）
-//   2. 输出中 border 数量恒为 1（footer 现只有底部 border，顶部 border 被预留位替代），不堆叠
+//   1. 跨帧光标绝对位置 = 块顶 + 2(1行间隔位 + 顶部border) + layoutInputCursor.row（与输入物理行一致，不漂移）
+//   2. 输出中 border 数量恒为 2（footer 有间隔行下方的顶部border 和底部border），不堆叠
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import stringWidth from 'string-width';
@@ -26,13 +26,13 @@ import { layoutInputCursor } from '../state/layout-cursor.js';
 const PROMPT = '❯ ';
 
 /**
- * 算空输入光标行的基准：块顶(4) + 2行预留位 + layoutInputCursor.row。
+ * 算空输入光标行的基准：块顶 + 2(1行间隔位 + 顶部border) + layoutInputCursor.row。
  * 输入超宽时 wordWrap 产生多个物理行，光标跟着移到对应物理行。
  */
 function expectedCursorRow(blockTop: number, input: string, cursorPos: number, usableWidth: number): number {
   // 单行输入；多行需逐行累加（本测试只覆盖单行）
   const layout = layoutInputCursor(input, cursorPos, PROMPT, usableWidth);
-  return blockTop + 3 + layout.row;
+  return blockTop + 2 + layout.row;
 }
 
 class PreciseCursorSimulator {

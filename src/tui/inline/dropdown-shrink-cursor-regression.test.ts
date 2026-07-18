@@ -64,20 +64,20 @@ describe('下拉菜单高度收缩时光标不漂移', () => {
     const tracker = new CursorTracker();
     tracker.reset(0);
 
-    // 首帧：8 候选，追加模式，footerHeight 0 → 13（含 2 行预留位）
+    // 首帧：8 候选，追加模式，footerHeight 0 → 12（含 1 行间隔位）
     renderer.renderFooter('/', 1, 'S', 80, EIGHT_CANDIDATES, 0);
     for (const s of mock.written) tracker.apply(s);
     const rowAfterFirst = tracker.row;
-    // 首帧后光标在输入框行（行3：2 行预留位 + 输入行）
-    expect(rowAfterFirst).toBe(3);
+    // 首帧后光标在输入框行（行2：1 行间隔位 + 输入行）
+    expect(rowAfterFirst).toBe(2);
     mock.written.length = 0;
 
-    // 第二帧：0 候选（收缩 13 → 6）
+    // 第二帧：0 候选（收缩 12 → 5）
     renderer.renderFooter('/w', 2, 'S', 80, [], 0);
     for (const s of mock.written) tracker.apply(s);
 
-    // 光标必须回到输入框行（行3），不能漂移
-    expect(tracker.row).toBe(3);
+    // 光标必须回到输入框行（行2），不能漂移
+    expect(tracker.row).toBe(2);
   });
 
   it('连续 8候选→0候选→8候选 三次循环：累计漂移为 0', () => {
@@ -88,7 +88,7 @@ describe('下拉菜单高度收缩时光标不漂移', () => {
     renderer.renderFooter('/', 1, 'S', 80, EIGHT_CANDIDATES, 0);
     for (const s of mock.written) tracker.apply(s);
     const baselineRow = tracker.row;
-    expect(baselineRow).toBe(3);
+    expect(baselineRow).toBe(2);
     mock.written.length = 0;
 
     // 三次开-关循环
@@ -114,50 +114,50 @@ describe('下拉菜单高度收缩时光标不漂移', () => {
     const tracker = new CursorTracker();
     tracker.reset(0);
 
-    // 首帧：无下拉，追加模式，footerHeight 0 → 6（含 2 行预留位）
+    // 首帧：无下拉，追加模式，footerHeight 0 → 5（含 1 行间隔位）
     renderer.renderFooter('', 0, 'S', 80, [], 0);
     for (const s of mock.written) tracker.apply(s);
     const rowAfterFirst = tracker.row;
-    expect(rowAfterFirst).toBe(3);
+    expect(rowAfterFirst).toBe(2);
     mock.written.length = 0;
 
-    // 第二帧：8 候选（扩张 6 → 13）
+    // 第二帧：8 候选（扩张 5 → 12）
     renderer.renderFooter('/', 1, 'S', 80, EIGHT_CANDIDATES, 0);
     for (const s of mock.written) tracker.apply(s);
 
     // 扩张场景光标也必须回到输入框行
-    expect(tracker.row).toBe(3);
+    expect(tracker.row).toBe(2);
   });
 
   it('候选数 18→3→18 剧烈跳变：光标始终回到输入框行（不漂移）', () => {
     // 场景：用户输入 /c（2条）→ Backspace 到 /（18条）→ 再输入。
-    // footerHeight 在 13↔8 间跳变（18 候选可见窗口限制为 8），考验覆写状态机在非零中间值的稳定性。
+    // footerHeight 在 12↔7 间跳变（18 候选可见窗口限制为 8），考验覆写状态机在非零中间值的稳定性。
     const tracker = new CursorTracker();
     tracker.reset(0);
     const eighteen = ['cmd0','cmd1','cmd2','cmd3','cmd4','cmd5','cmd6','cmd7','cmd8','cmd9','cmd10','cmd11','cmd12','cmd13','cmd14','cmd15','cmd16','cmd17'];
     const three = ['cmdA', 'cmdB', 'cmdC'];
 
-    // 首帧：18 候选（可见8条，footerHeight 0 → 13）
+    // 首帧：18 候选（可见8条，footerHeight 0 → 12）
     renderer.renderFooter('/', 1, 'S', 80, eighteen, 0);
     for (const s of mock.written) tracker.apply(s);
-    expect(tracker.row, '18候选后').toBe(3);
+    expect(tracker.row, '18候选后').toBe(2);
     mock.written.length = 0;
 
-    // 第二帧：缩到 3 候选（footerHeight 13 → 8）
+    // 第二帧：缩到 3 候选（footerHeight 12 → 7）
     renderer.renderFooter('/c', 2, 'S', 80, three, 0);
     for (const s of mock.written) tracker.apply(s);
-    expect(tracker.row, '缩到3候选后').toBe(3);
+    expect(tracker.row, '缩到3候选后').toBe(2);
     mock.written.length = 0;
 
-    // 第三帧：扩回 18 候选（footerHeight 8 → 13）
+    // 第三帧：扩回 18 候选（footerHeight 7 → 12）
     renderer.renderFooter('/', 1, 'S', 80, eighteen, 5);
     for (const s of mock.written) tracker.apply(s);
-    expect(tracker.row, '扩回18候选后').toBe(3);
+    expect(tracker.row, '扩回18候选后').toBe(2);
     mock.written.length = 0;
 
     // 第四帧：再次缩到 3 候选
     renderer.renderFooter('/c', 2, 'S', 80, three, 2);
     for (const s of mock.written) tracker.apply(s);
-    expect(tracker.row, '再次缩到3候选后').toBe(3);
+    expect(tracker.row, '再次缩到3候选后').toBe(2);
   });
 });

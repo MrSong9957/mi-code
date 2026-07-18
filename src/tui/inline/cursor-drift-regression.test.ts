@@ -79,10 +79,11 @@ describe('光标漂移回归测试', () => {
     for (const s of writes1) tracker.apply(s);
     const rowAfterFirst = tracker.row;
     // 首次渲染后光标应稳定停在输入框行附近（不漂移）。
-    // 新 footer 结构：行0=预留0, 行1=预留1, 行2=input, 行3=border, 行4=status。
-    // 追加 5 行后光标在第 5 行（status 行 + \n），writeFooter 上移
-    // upFromBottom = writtenLineCount(5) - cursorToTop(3) = 2 → 第 3 行。
-    expect(rowAfterFirst).toBe(3);
+    // 新 footer 结构：行0=间隔行, 行1=input, 行2=border, 行3=status。
+    // 追加 4 行后光标在第 4 行（status 行 + \n），writeFooter 上移
+    // upFromBottom = writtenLineCount(4) - cursorToTop(2) = 2 → 第 2 行。
+    // 无 spinner 时 reserveRows = 1（仅一个间隔空行）。
+    expect(rowAfterFirst).toBe(2);
 
     // 第二次渲染（覆写模式）—— 光标应回到同一位置
     renderer.renderFooter('a', 1, 'STATUS');

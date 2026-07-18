@@ -33,16 +33,16 @@ function createMockStdout() {
  *
  * 当前模型（DECAWM OFF + 应用层 wordWrap）：
  * - usableWidth = cols - 1（留 1 安全列）。
- * - footer 顶部有 2 行预留位（空行 + spinner 位）+ 顶部 border。
+ * - footer 顶部有 1 行间隔位 + 顶部 border（无 spinner 时 reserveRows=1）。
  * - 每个输入行用 wrapLine(prefix + content, usableWidth) 折行（不截断）。
- * - footerHeight = 预留位(2) + 顶部border + 折行后输入行 + 底部border + 折行后 status。
+ * - footerHeight = 间隔行(1) + 顶部border + 折行后输入行 + 底部border + 折行后 status。
  *
- * 用 wrapLine 现场算预期 footerHeight，不硬编码（长输入会折成多行，footerHeight > 5）。
+ * 用 wrapLine 现场算预期 footerHeight，不硬编码（长输入会折成多行，footerHeight > 4）。
  */
 function expectedFooterHeight(input: string, statusText: string, cols: number): number {
   const usableWidth = getUsableWidth(cols);
   const inputLines = input.split('\n');
-  const lines: string[] = ['', '', '─'.repeat(usableWidth)]; // 预留位(2) + 顶部 border
+  const lines: string[] = ['', '─'.repeat(usableWidth)]; // 间隔行(1) + 顶部 border
   for (let i = 0; i < inputLines.length; i++) {
     const prefix = i === 0 ? PROMPT : CONTINUATION_INDENT;
     lines.push(...wrapLine(prefix + inputLines[i]!, usableWidth));
@@ -205,7 +205,7 @@ describe('commitFooter 擦除行为', () => {
 
   it('commitFooter 后 footerHeight 归零（后续 renderFooter 走追加模式）', () => {
     renderer.renderFooter('hello', 5, 'STATUS');
-    expect(renderer.state.footerHeight).toBe(6);
+    expect(renderer.state.footerHeight).toBe(5);
 
     renderer.commitFooter();
     expect(renderer.state.footerHeight).toBe(0);
@@ -230,7 +230,7 @@ describe('commitFooter 擦除行为', () => {
     expect.hasAssertions();
     // DECAWM OFF + 应用层 wordWrap：超宽内容换行显示（不截断）。
     // usableWidth=79，'❯ ' + 200a 共 202 列 → wrapLine 折成 4 行（displayWidth [1,79,79,42]）。
-    // footerHeight = 预留位(2) + 4 + 1(border) + 1(status) = 8。
+    // footerHeight = 间隔(1) + 4 + 1(border) + 1(status) = 7。
     const text = 'a'.repeat(200);
     renderer.renderFooter(text, 200, 'STATUS', 80);
     expect(renderer.getFooterHeight()).toBe(expectedFooterHeight(text, 'STATUS', 80));
@@ -253,7 +253,7 @@ describe('commitFooter 擦除行为', () => {
     mock.write = (s: string) => { term.write(s); return orig(s); };
 
     // DECAWM OFF + 应用层 wordWrap：50 个汉字（100 列）→ wrapLine 折成 3 行（[1,78,22]）。
-    // footerHeight = 预留位(2) + 3 + 1(border) + 1(status) = 7。
+    // footerHeight = 间隔(1) + 3 + 1(border) + 1(status) = 6。
     renderer.renderFooter('中'.repeat(50), 50, 'STATUS', 80);
     const fh = renderer.getFooterHeight();
     expect(fh).toBe(expectedFooterHeight('中'.repeat(50), 'STATUS', 80));
