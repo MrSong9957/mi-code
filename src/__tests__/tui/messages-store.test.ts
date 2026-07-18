@@ -2,7 +2,8 @@
 // messages-store：TuiMessage 列表管理（追加/流式累加/清空）
 
 import { describe, it, expect, vi } from 'vitest';
-import { createMessagesStore } from '../../tui/state/messages-store.js';
+import { createMessagesStore, isAppendableMessage } from '../../tui/state/messages-store.js';
+import { createTurnDurationMessage } from '../../tui/state/turn-duration-message.js';
 import type { FormattedLine } from '../../ui/types.js';
 
 const LINE = (content: string, fg?: string): FormattedLine => ({ content, style: fg ? { fg } : {}, indent: 0 });
@@ -205,5 +206,37 @@ describe('messages-store', () => {
     } finally {
       random.mockRestore();
     }
+  });
+});
+
+describe('isAppendableMessage', () => {
+  // 防御边界：appendLine 的续接判定依赖此 type guard。
+  // turn-duration 消息写入后即使 appendLine('system', ...) 同 role 也不能合并，
+  // 否则完成消息 "✻ Cooked for 9s" 后续会被污染。
+  // 未来若新增第二种专用 kind，必须在此 guard 显式排除。
+  it('普通消息（无 kind）允许续接', () => {
+    const plain = {
+      uuid: 'm1', role: 'system' as const,
+      lines: [LINE('x')], finalized: true,
+    };
+    expect(isAppendableMessage(plain)).toBe(true);
+  });
+
+  it('turn-duration 完成消息禁止续接', () => {
+    const duration = createTurnDurationMessage({
+      uuid: 'm-td', durationMs: 5_000,
+      prependBlankLine: false, random: () => 0,
+    });
+    expect(isAppendableMessage(duration)).toBe(false);
+  });
+
+  it('流式消息（finalized=false）虽然 isAppendableMessage 返回 true，但 appendLine 自身还有 finalized 守卫', () => {
+    // 即便 type guard 通过，appendLine 仍要求 last.finalized === true 才续接，
+    // 所以流式中的 assistant 不会被 appendLine 误并。
+    const streaming = {
+      uuid: 'm-stream', role: 'assistant' as const,
+      lines: [], finalized: false, streamingText: 'partial',
+    };
+    expect(isAppendableMessage(streaming)).toBe(true); // kind 无定义
   });
 });
