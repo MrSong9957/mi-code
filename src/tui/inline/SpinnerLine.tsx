@@ -1,10 +1,28 @@
 // Inline mode spinner line builder (ANSI string output)
-import { computeGlimmerIndex, computeShimmerSegments } from './shimmer.js';
-import { SPINNER_FRAMES, TICK_MS } from '../state/spinner-store.js';
+import {
+  computeGlimmerIndex,
+  computeShimmerSegments,
+  measureShimmerMessage,
+  toolUseFlashColor,
+} from './shimmer.js';
+import {
+  formatSpinnerDuration,
+  shouldShowSpinnerTimer,
+  thinkingColorAt,
+  thinkingStatusText,
+  thoughtStatusText,
+  totalSpinnerTokens,
+  TICK_MS,
+  type SpinnerMode,
+} from '../state/spinner-store.js';
+import {
+  spinnerGlyphColor,
+  spinnerGlyphColorAt,
+  spinnerGlyphTextAt,
+} from '../state/spinner-glyph.js';
 
 const SHIMMER_SPEED = 200;
 const SHIMMER_PAD = 10;
-const THINKING_GLOW_PERIOD_S = 2;
 
 interface SpinnerTheme {
   active: string;
@@ -15,10 +33,18 @@ interface SpinnerTheme {
 
 interface SpinnerLineOpts {
   time: number;
-  mode: 'requesting' | 'responding' | 'thinking' | 'tool-use' | 'tool-input';
+  mode: SpinnerMode;
   verb: string;
   label: string;
   stalled: boolean;
+  stalledIntensity?: number;
+  reducedMotion?: boolean;
+  verbose?: boolean;
+  activeTeammateCount?: number;
+  displayedTokens?: number;
+  teammateTokens?: number;
+  thinkingEffort?: string | null;
+  thinkingSummaryDurationMs?: number | null;
   thinkStartTime: number | null;
   theme: SpinnerTheme;
 }
@@ -29,61 +55,80 @@ function parseRGB(color: string): { r: number; g: number; b: number } {
   return { r: +match[1], g: +match[2], b: +match[3] };
 }
 
-function interpolateColor(
-  c1: { r: number; g: number; b: number },
-  c2: { r: number; g: number; b: number },
-  t: number,
-): string {
-  const r = Math.round(c1.r + (c2.r - c1.r) * t);
-  const g = Math.round(c1.g + (c2.g - c1.g) * t);
-  const b = Math.round(c1.b + (c2.b - c1.b) * t);
-  return `\x1b[38;2;${r};${g};${b}m`;
-}
-
 function toAnsiColor(rgb: string): string {
   const { r, g, b } = parseRGB(rgb);
   return `\x1b[38;2;${r};${g};${b}m`;
 }
 
 const THINKING_INACTIVE = { r: 153, g: 153, b: 153 };
-const THINKING_INACTIVE_SHIMMER = { r: 185, g: 185, b: 185 };
-const THINKING_DELAY_TICKS = Math.ceil(3000 / TICK_MS);
 const RESET = '\x1b[0m';
 
 export function buildSpinnerLine(opts: SpinnerLineOpts): string {
-  const frame = SPINNER_FRAMES[Math.floor(opts.time / 120) % SPINNER_FRAMES.length];
+  const reducedMotion = opts.reducedMotion ?? false;
+  const glyphText = spinnerGlyphTextAt(opts.time, reducedMotion);
   const displayText = opts.label || opts.verb;
 
   // Shimmer
-  const glimmerIndex = computeGlimmerIndex(opts.time, displayText.length, {
-    speed: SHIMMER_SPEED,
+  const glimmerIndex = computeGlimmerIndex(opts.time, measureShimmerMessage(displayText), {
+    speed: opts.mode === 'requesting' ? TICK_MS : SHIMMER_SPEED,
     cyclePad: SHIMMER_PAD,
     stalled: opts.stalled,
+    direction: opts.mode === 'requesting' ? 'left-to-right' : 'right-to-left',
   });
   const { before, shimmer, after } = computeShimmerSegments(displayText, glimmerIndex);
 
   // Colors from theme
-  const baseColor = opts.stalled ? toAnsiColor(opts.theme.stalled) : toAnsiColor(opts.theme.active);
-  const shimmerColor = toAnsiColor(opts.theme.shimmer);
+  const stalledIntensity = opts.stalledIntensity ?? (opts.stalled ? 1 : 0);
+  const baseColorValue = spinnerGlyphColor(opts.theme.active, stalledIntensity);
+  const shimmerColorValue = spinnerGlyphColor(opts.theme.shimmer, stalledIntensity);
+  const baseColor = toAnsiColor(baseColorValue);
+  const shimmerColor = toAnsiColor(shimmerColorValue);
+  const glyphColor = toAnsiColor(spinnerGlyphColorAt(
+    opts.theme.active,
+    stalledIntensity,
+    reducedMotion,
+    opts.time,
+  ));
 
-  let line = `${baseColor}${frame} ${RESET}`;
-  line += `${baseColor}${before}${RESET}`;
-  line += `${shimmerColor}${shimmer}${RESET}`;
-  line += `${baseColor}${after}${RESET}`;
+  let line = `${glyphColor}${glyphText}${RESET}`;
+  if (opts.mode === 'tool-use' && !opts.stalled) {
+    line += `${toAnsiColor(toolUseFlashColor(
+      opts.time,
+      baseColorValue,
+      shimmerColorValue,
+    ))}${displayText} ${RESET}`;
+  } else {
+    line += `${baseColor}${before}${RESET}`;
+    line += `${shimmerColor}${shimmer}${RESET}`;
+    line += `${baseColor}${after} ${RESET}`;
+  }
 
-  // Dots or thinking
+  // Dots, active thinking, or the temporary post-thinking summary.
   if (opts.mode === 'thinking' && opts.thinkStartTime !== null) {
-    const elapsed = opts.time - opts.thinkStartTime;
-    const elapsedSec = Math.max(0, elapsed - THINKING_DELAY_TICKS) * (TICK_MS / 1000);
-    const opacity = elapsed < THINKING_DELAY_TICKS
-      ? 0
-      : (Math.sin(elapsedSec * Math.PI * 2 / THINKING_GLOW_PERIOD_S) + 1) / 2;
-    const thinkColor = interpolateColor(THINKING_INACTIVE, THINKING_INACTIVE_SHIMMER, opacity);
-    line += ` ${thinkColor}(thinking)${RESET}`;
+    const color = thinkingColorAt(opts.time, opts.thinkStartTime);
+    line += `${toAnsiColor(`rgb(${color.r},${color.g},${color.b})`)}(${thinkingStatusText(opts.thinkingEffort ?? null)})${RESET}`;
+  } else if (opts.thinkingSummaryDurationMs !== null && opts.thinkingSummaryDurationMs !== undefined) {
+    const color = thinkingColorAt(opts.time, null);
+    line += `${toAnsiColor(`rgb(${color.r},${color.g},${color.b})`)}(${thoughtStatusText(opts.thinkingSummaryDurationMs)})${RESET}`;
   } else {
     const dotFrame = Math.floor(opts.time / 300) % 3;
     const dots = '.'.repeat(dotFrame + 1).padEnd(3);
     line += `${toAnsiColor(opts.theme.muted)}${dots}${RESET}`;
+  }
+
+  if (shouldShowSpinnerTimer(
+    opts.time,
+    opts.verbose ?? false,
+    opts.activeTeammateCount ?? 0,
+  )) {
+    const totalTokens = totalSpinnerTokens(
+      opts.displayedTokens ?? 0,
+      opts.teammateTokens ?? 0,
+    );
+    const tokens = totalTokens > 0
+      ? ` ${opts.mode === 'requesting' ? '↑' : '↓'} ${totalTokens}`
+      : '';
+    line += `${toAnsiColor(opts.theme.muted)}  ${formatSpinnerDuration(opts.time)}${tokens}${RESET}`;
   }
 
   return line;

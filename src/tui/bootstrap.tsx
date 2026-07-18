@@ -23,6 +23,7 @@ import { createInputStore } from './state/input-store.js';
 import { createStatusStore } from './state/status-store.js';
 import { createLogoStore } from './state/logo-store.js';
 import { createSpinnerStore, type SpinnerStore } from './state/spinner-store.js';
+import type { SpinnerVerbConfig } from './state/spinner-verbs.js';
 import { formatSpinnerDuration, type SpinnerMode } from './state/spinner-store.js';
 import { createCompletionStore, type CompletionStore } from './state/completion-store.js';
 import { createSelectStore, type SelectStore } from './state/select-store.js';
@@ -61,6 +62,12 @@ export interface BootstrapOptions {
   renderMode?: RenderMode;
   /** 主题名（dark/light），默认 dark */
   themeName?: ThemeName;
+  /** Spinner 动词配置（append/replace），默认使用内置词库 */
+  spinnerVerbs?: SpinnerVerbConfig;
+  /** 始终显示 Spinner 计时器。 */
+  spinnerVerbose?: boolean;
+  /** Thinking 状态的 effort 后缀，例如 hard。 */
+  spinnerThinkingEffort?: string;
 }
 
 export interface BootstrapHandle {
@@ -77,10 +84,17 @@ export interface BootstrapHandle {
   /** spinner 控制（对标 Claude Code 四套动画：mode 决定配色，verb 决定文字） */
   startSpinner: (mode: SpinnerMode) => void;
   stopSpinner: () => void;
+  pauseSpinner: () => void;
+  resumeSpinner: () => void;
   /** 切换 spinner 模式，影响 shimmer 方向与状态提示。 */
   setSpinnerMode: (mode: SpinnerMode) => void;
   /** 工具模式覆盖显示文字（如 "Running Bash"）；空串清回 verb */
   setSpinnerLabel: (label: string) => void;
+  setSpinnerThinkingEffort: (effort: string | null) => void;
+  setSpinnerHasActiveTools: (hasActiveTools: boolean) => void;
+  setSpinnerVerbose: (enabled: boolean) => void;
+  setSpinnerActiveTeammates: (count: number) => void;
+  setSpinnerTeammateTokens: (tokens: number) => void;
   spinnerOnToken: (length?: number) => void;
   /** 把一行系统消息固化进 store（替代旧 printLine） */
   printLine: (text: string) => void;
@@ -115,7 +129,9 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
   const statusStore = createStatusStore(opts.status);
   const logoStore = createLogoStore(opts.logo);
-  const spinnerStore = createSpinnerStore();
+  const spinnerStore = createSpinnerStore(opts.spinnerVerbs);
+  spinnerStore.getState().setVerbose(opts.spinnerVerbose ?? false);
+  spinnerStore.getState().setThinkingEffort(opts.spinnerThinkingEffort ?? null);
   const completionStore = createCompletionStore();
   const selectStore = createSelectStore();
   const overlayStore = createOverlayStore();
@@ -212,8 +228,23 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
         appendSpinnerCompletionMessage(messagesStore, completion);
       }
     },
+    pauseSpinner: () => { spinnerStore.getState().pause(); },
+    resumeSpinner: () => { spinnerStore.getState().resume(); },
     setSpinnerMode: (mode) => { spinnerStore.getState().setMode(mode); },
     setSpinnerLabel: (label: string) => { spinnerStore.getState().setLabel(label); },
+    setSpinnerThinkingEffort: (effort: string | null) => {
+      spinnerStore.getState().setThinkingEffort(effort);
+    },
+    setSpinnerHasActiveTools: (hasActiveTools: boolean) => {
+      spinnerStore.getState().setHasActiveTools(hasActiveTools);
+    },
+    setSpinnerVerbose: (enabled: boolean) => { spinnerStore.getState().setVerbose(enabled); },
+    setSpinnerActiveTeammates: (count: number) => {
+      spinnerStore.getState().setActiveTeammateCount(count);
+    },
+    setSpinnerTeammateTokens: (tokens: number) => {
+      spinnerStore.getState().setTeammateTokens(tokens);
+    },
     spinnerOnToken: (length) => { spinnerStore.getState().onToken(length); },
     printLine, printStyled, cleanup,
   };

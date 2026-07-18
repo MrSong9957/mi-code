@@ -1,7 +1,7 @@
-// thinking 流式 + 折叠测试（RED 阶段）
+// thinking 隐藏 + 折叠测试
 //
-// 验证 BlockPipeline 的 thinking 行为从"隐藏"改为"流式 + 折叠"：
-// 1. thinking_delta → 调用 renderer.appendStreamingThinking（流式渲染灰色思考过程）
+// 验证 BlockPipeline 的 thinking 默认折叠行为：
+// 1. thinking_delta → 只在 pipeline 内缓存，不写默认可见区
 // 2. thinking_end → 注册 expandable 块 + 打印摘要 + eraseStreamingThinking（折叠）
 
 import { describe, it, expect } from 'vitest';
@@ -30,8 +30,8 @@ function createMockRenderer(): PipelineRenderer & { calls: string[] } {
   return Object.assign(renderer, { calls });
 }
 
-describe('BlockPipeline thinking 流式渲染', () => {
-  it('thinking_delta 调用 appendStreamingThinking（流式输出思考过程）', () => {
+describe('BlockPipeline thinking 折叠渲染', () => {
+  it('thinking_delta 不调用 appendStreamingThinking', () => {
     const renderer = createMockRenderer();
     const pipeline = new BlockPipeline(renderer);
 
@@ -41,11 +41,9 @@ describe('BlockPipeline thinking 流式渲染', () => {
     pipeline.emit({ kind: 'thinking_delta', content: '我在想' });
     pipeline.emit({ kind: 'thinking_delta', content: '我在想这个问题' });
 
-    // 关键：thinking_delta 应触发 appendStreamingThinking
+    // 原始推理不能进入默认可见消息区。
     const thinkingCalls = renderer.calls.filter(c => c.startsWith('appendStreamingThinking'));
-    expect(thinkingCalls.length).toBeGreaterThanOrEqual(2);
-    // 最后一次含完整累积文本
-    expect(thinkingCalls[thinkingCalls.length - 1]).toContain('我在想这个问题');
+    expect(thinkingCalls).toEqual([]);
   });
 
   it('thinking_end 打印摘要行 + eraseStreamingThinking（折叠）', () => {

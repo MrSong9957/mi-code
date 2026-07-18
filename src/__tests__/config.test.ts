@@ -50,6 +50,20 @@ describe('ConfigStore', () => {
     expect(store.getModel()).toBe('claude-3-opus');
   });
 
+  it('should load spinner verb append/replace configuration', () => {
+    const configDir = join(tempDir, '.micode-spinner');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({
+      spinnerVerbs: { mode: 'replace', verbs: ['Customizing'] },
+    }));
+
+    const store = new ConfigStore(configDir);
+    expect(store.getSpinnerVerbsConfig()).toEqual({
+      mode: 'replace',
+      verbs: ['Customizing'],
+    });
+  });
+
   it('should set and get API key', () => {
     const store = new ConfigStore(tempDir);
     store.setApiKey('openai', 'sk-test-123');

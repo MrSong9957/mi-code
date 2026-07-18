@@ -619,15 +619,22 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const streamClient = createStreamClient(provider, apiKey, model, baseUrl);
   const compactClient = createStreamClient(provider, apiKey, currentSmallModel(), baseUrl);
   const eventBus = new StreamEventBus();
+  const activeToolIds = new Set<string>();
   eventBus.onToolCall(d => {
+    activeToolIds.add(d.toolUseId);
+    tuiHandle?.setSpinnerHasActiveTools(true);
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
     tuiHandle?.setSpinnerMode('tool-use');
     tuiHandle?.setSpinnerLabel(`Running ${d.name}`);
   });
   eventBus.onToolResult(d => {
+    activeToolIds.delete(d.toolUseId);
+    tuiHandle?.setSpinnerHasActiveTools(activeToolIds.size > 0);
     pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId });
   });
   eventBus.onLoopEnd(() => {
+    activeToolIds.clear();
+    tuiHandle?.setSpinnerHasActiveTools(false);
     tuiHandle?.stopSpinner();
   });
   const allToolDefs = Array.from(toolRegistry.tools.values()).map(t => t.definition);
@@ -647,6 +654,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   // 兼顾"用户有即时反馈"和"状态准确"。
   let spinnerStarted = false;
   let gotAnyResponse = false; // 是否收到过任何 assistant 内容(用于空响应检测)
+  tuiHandle?.setSpinnerActiveTeammates(
+    teammateManager.list().filter(member => member.status === 'working').length,
+  );
   tuiHandle?.startSpinner('requesting');
   tuiHandle?.setSpinnerLabel('Connecting');
   spinnerStarted = true;
@@ -757,6 +767,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
     }
   } finally {
+    activeToolIds.clear();
+    tuiHandle?.setSpinnerHasActiveTools(false);
     tuiHandle?.stopSpinner();
     isProcessing = false;
     currentAbortController = null;
@@ -816,6 +828,7 @@ if (cliOpts.list) {
     },
     renderMode: 'inline',
     themeName: cliOpts.theme ?? configStore.getTheme(),
+    spinnerVerbs: configStore.getSpinnerVerbsConfig(),
     onSubmit: (text) => { void handleUserSubmit(text); },
     onExit: () => { cleanupOnExit(); process.exit(0); },
     onTab: (text) => { handleTab(text, tuiHandle, configStore, permissionChecker); },

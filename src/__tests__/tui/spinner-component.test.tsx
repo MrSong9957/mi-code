@@ -9,7 +9,6 @@ import { createSpinnerStore } from '../../tui/state/spinner-store.js';
 import { SPINNER_VERBS } from '../../tui/state/spinner-verbs.js';
 
 // 新符号序列（Claude Code 风格）
-const SPINNER_SYMBOLS = ['·', '✢', '✳', '✶', '✻', '✽'];
 const SYMBOL_RE = /[·✢✳✶✻✽]/;
 
 describe('Spinner 组件', () => {
@@ -36,7 +35,7 @@ describe('Spinner 组件', () => {
 
   it('setInterval 推进 time（不抛错）', () => {
     const store = createSpinnerStore();
-    store.getState().start('generating');
+    store.getState().start('responding');
     const { unmount } = render(React.createElement(Spinner, { store }));
     // 推进 150ms = 3 个 tick（50ms）
     vi.advanceTimersByTime(150);
@@ -47,7 +46,7 @@ describe('Spinner 组件', () => {
 
   it('stop 后不再渲染符号', () => {
     const store = createSpinnerStore();
-    store.getState().start('generating');
+    store.getState().start('responding');
     const { lastFrame, rerender } = render(React.createElement(Spinner, { store }));
     store.getState().stop();
     rerender(React.createElement(Spinner, { store }));
@@ -57,11 +56,53 @@ describe('Spinner 组件', () => {
 
   it('工具模式：显示 label 而非 verb', () => {
     const store = createSpinnerStore();
-    store.getState().start('generating');
-    store.getState().setMode('tool');
+    store.getState().start('responding');
+    store.getState().setMode('tool-use');
     store.getState().setLabel('Running bash');
     const { lastFrame } = render(React.createElement(Spinner, { store }));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Running bash');
+  });
+
+  it('verbose 模式未满 30 秒也显示计时器', () => {
+    const store = createSpinnerStore();
+    store.getState().start('responding');
+    store.getState().setVerbose(true);
+    const { lastFrame } = render(React.createElement(Spinner, { store }));
+    expect(lastFrame()).toContain('1s');
+  });
+
+  it('有活跃 teammate 时未满 30 秒也显示计时器', () => {
+    const store = createSpinnerStore();
+    store.getState().start('responding');
+    store.getState().setActiveTeammateCount(1);
+    const { lastFrame } = render(React.createElement(Spinner, { store }));
+    expect(lastFrame()).toContain('1s');
+  });
+
+  it('显示 leader 与 teammate token 总和，并按模式显示箭头', () => {
+    const store = createSpinnerStore();
+    store.getState().start('requesting');
+    store.getState().setVerbose(true);
+    store.getState().onToken(800);
+    store.getState().setTeammateTokens(30);
+    store.getState().tick();
+    const { lastFrame } = render(React.createElement(Spinner, { store }));
+    expect(lastFrame()).toContain('↑ 80');
+  });
+
+  it('thinking 显示 effort，退出后显示临时耗时摘要', () => {
+    vi.setSystemTime(0);
+    const store = createSpinnerStore();
+    store.getState().setThinkingEffort('hard');
+    store.getState().start('thinking');
+    const { lastFrame, rerender } = render(React.createElement(Spinner, { store }));
+    expect(lastFrame()).toContain('(thinking hard)');
+
+    vi.setSystemTime(1_500);
+    store.getState().tick();
+    store.getState().setMode('responding');
+    rerender(React.createElement(Spinner, { store }));
+    expect(lastFrame()).toContain('(thought for 2s)');
   });
 });

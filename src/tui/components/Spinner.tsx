@@ -12,15 +12,26 @@
 import React, { useEffect } from 'react';
 import { Text } from 'ink';
 import { useStore } from 'zustand/react';
-import { SPINNER_FRAMES, type SpinnerStore } from '../state/spinner-store.js';
+import {
+  shouldShowSpinnerTimer,
+  thinkingStatusText,
+  thoughtStatusText,
+  totalSpinnerTokens,
+  TICK_MS,
+  type SpinnerStore,
+} from '../state/spinner-store.js';
 import { useTheme } from '../state/theme-context.js';
-import { computeGlimmerIndex } from '../inline/shimmer.js';
+import {
+  computeGlimmerIndex,
+  measureShimmerMessage,
+  toolUseFlashOpacity,
+} from '../inline/shimmer.js';
 import { GlimmerMessage } from './GlimmerMessage.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
 import { DotsCycle } from './DotsCycle.js';
 import { formatSpinnerDuration } from '../state/spinner-store.js';
+import { SpinnerGlyph } from './SpinnerGlyph.js';
 
-const TICK_MS = 50;
 const SHIMMER_SPEED = 200;
 const SHIMMER_PAD = 10;
 
@@ -37,8 +48,14 @@ export function Spinner({ store }: SpinnerProps): React.ReactElement | null {
   const label = useStore(store, (s) => s.label);
   const stalled = useStore(store, (s) => s.stalled);
   const stalledIntensity = useStore(store, (s) => s.stalledIntensity);
+  const reducedMotion = useStore(store, (s) => s.reducedMotion);
   const thinkStartTime = useStore(store, (s) => s.thinkStartTime);
+  const thinkingEffort = useStore(store, (s) => s.thinkingEffort);
+  const thinkingSummary = useStore(store, (s) => s.thinkingSummary);
   const displayedTokens = useStore(store, (s) => s.displayedTokens);
+  const verbose = useStore(store, (s) => s.verbose);
+  const activeTeammateCount = useStore(store, (s) => s.activeTeammateCount);
+  const teammateTokens = useStore(store, (s) => s.teammateTokens);
 
   useEffect(() => {
     if (!active) return;
@@ -48,37 +65,49 @@ export function Spinner({ store }: SpinnerProps): React.ReactElement | null {
 
   if (!active) return null;
 
-  const frame = SPINNER_FRAMES[Math.floor(time / 120) % SPINNER_FRAMES.length];
   const displayText = label || verb;
 
-  const messageWidth = displayText.length;
+  const messageWidth = measureShimmerMessage(displayText);
   const glimmerIndex = computeGlimmerIndex(time, messageWidth, {
-    speed: mode === 'requesting' ? 50 : SHIMMER_SPEED,
+    speed: mode === 'requesting' ? TICK_MS : SHIMMER_SPEED,
     cyclePad: SHIMMER_PAD,
     stalled,
+    direction: mode === 'requesting' ? 'left-to-right' : 'right-to-left',
   });
 
-  const glyphColor = stalledIntensity > 0.01 ? t.spinnerStalled : t.spinnerActive;
-  const showMetrics = time >= 30_000;
-  const tokens = displayedTokens > 0 ? ` ${mode === 'requesting' ? '↑' : '↓'} ${displayedTokens}` : '';
+  const showMetrics = shouldShowSpinnerTimer(time, verbose, activeTeammateCount);
+  const totalTokens = totalSpinnerTokens(displayedTokens, teammateTokens);
+  const tokens = totalTokens > 0 ? ` ${mode === 'requesting' ? '↑' : '↓'} ${totalTokens}` : '';
+  const thinkingText = mode === 'thinking'
+    ? thinkingStatusText(thinkingEffort)
+    : thinkingSummary
+      ? thoughtStatusText(thinkingSummary.durationMs)
+      : null;
 
   return (
     <>
-      <Text color={glyphColor} bold>{frame} </Text>
+      <SpinnerGlyph
+        time={time}
+        activeColor={t.spinnerActive}
+        stalledIntensity={stalledIntensity}
+        reducedMotion={reducedMotion}
+      />
       <GlimmerMessage
         message={displayText}
         glimmerIndex={glimmerIndex}
-        baseColor={glyphColor}
+        baseColor={t.spinnerActive}
         shimmerColor={t.spinnerShimmer}
+        flashOpacity={mode === 'tool-use' && !stalled ? toolUseFlashOpacity(time) : undefined}
+        stalledIntensity={stalledIntensity}
       />
-      {mode === 'thinking' && (
+      {thinkingText && (
         <ThinkingIndicator
           storeTime={time}
-          thinkStartTime={thinkStartTime}
-          text="thinking"
+          thinkStartTime={mode === 'thinking' ? thinkStartTime : null}
+          text={thinkingText}
         />
       )}
-      {mode !== 'thinking' && <DotsCycle time={time} color={t.textMuted} />}
+      {!thinkingText && <DotsCycle time={time} color={t.textMuted} />}
       {showMetrics && <Text color={t.textMuted}>{`  ${formatSpinnerDuration(time)}${tokens}`}</Text>}
     </>
   );
