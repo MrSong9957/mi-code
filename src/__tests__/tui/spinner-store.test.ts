@@ -408,8 +408,10 @@ describe('spinner-store', () => {
     expect(s.getState().stop()?.durationMs).toBe(5_000);
   });
 
-  it('计时器在 verbose、活跃 teammate 或满 30 秒时显示', () => {
-    expect(shouldShowSpinnerTimer(29_999, false, 0)).toBe(false);
+  it('计时器默认始终显示（verbose/teammate 任一为真或任何时长）', () => {
+    // 默认 true：用户期望从一开始就看到耗时与 token 计数。
+    expect(shouldShowSpinnerTimer(0, false, 0)).toBe(true);
+    expect(shouldShowSpinnerTimer(29_999, false, 0)).toBe(true);
     expect(shouldShowSpinnerTimer(30_000, false, 0)).toBe(true);
     expect(shouldShowSpinnerTimer(0, true, 0)).toBe(true);
     expect(shouldShowSpinnerTimer(0, false, 1)).toBe(true);

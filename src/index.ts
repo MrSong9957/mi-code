@@ -647,7 +647,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     tuiHandle?.setSpinnerHasActiveTools(true);
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
     tuiHandle?.setSpinnerMode('tool-use');
-    tuiHandle?.setSpinnerLabel(`Running ${d.name}`);
+    // 不再 setLabel('Running xxx')：避免一次 turn 内多次工具调用时 spinner 文字反复切换闪烁。
+    // 工具调用信息已通过 tool_call block 进入消息流（pipeline.emit），用户在正文区可见。
+    // spinner 保持显示 verb（Working/Cogitated…），仅靠 mode='tool-use' 的 shimmer/呼吸灯表达活跃。
   });
   eventBus.onToolResult(d => {
     activeToolIds.delete(d.toolUseId);

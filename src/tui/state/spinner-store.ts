@@ -139,11 +139,16 @@ export function spinnerElapsedTime(
 }
 
 export function shouldShowSpinnerTimer(
-  elapsedTimeMs: number,
+  _elapsedTimeMs: number,
   verbose: boolean,
   activeTeammateCount: number,
 ): boolean {
-  return verbose || activeTeammateCount > 0 || elapsedTimeMs >= 30_000;
+  // 始终显示：用户从一开始就需要看到耗时与 token 计数。
+  // verbose/teammateCount 仍保留参数以兼容现有调用点，语义已是无条件 true。
+  void _elapsedTimeMs;
+  void verbose;
+  void activeTeammateCount;
+  return true;
 }
 
 export function estimateSpinnerTokens(responseLength: number): number {

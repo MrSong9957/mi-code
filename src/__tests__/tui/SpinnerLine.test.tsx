@@ -174,7 +174,7 @@ describe('SpinnerLine (inline mode)', () => {
     expect(result).toContain('\x1b[38;2;170;230;255mRunning ');
   });
 
-  it('verbose 或活跃 teammate 时显示未满 30 秒的计时器', () => {
+  it('计时器始终显示（无论 verbose 或 teammate 数，默认开）', () => {
     const common = {
       time: 5_000,
       mode: 'responding' as const,
@@ -189,7 +189,8 @@ describe('SpinnerLine (inline mode)', () => {
         muted: 'rgb(110,110,120)',
       },
     };
-    expect(buildSpinnerLine({ ...common, verbose: false, activeTeammateCount: 0 })).not.toContain('5s');
+    // 默认始终显示计时（用户期望从一开始就看到耗时）。
+    expect(buildSpinnerLine({ ...common, verbose: false, activeTeammateCount: 0 })).toContain('5s');
     expect(buildSpinnerLine({ ...common, verbose: true, activeTeammateCount: 0 })).toContain('5s');
     expect(buildSpinnerLine({ ...common, verbose: false, activeTeammateCount: 1 })).toContain('5s');
   });

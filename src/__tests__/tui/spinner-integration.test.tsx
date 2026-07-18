@@ -19,7 +19,7 @@ describe('Spinner integration', () => {
   it('full animation cycle: generating → thinking → stop', () => {
     const store = createSpinnerStore();
 
-    // Phase 1: responding with shimmer + dots
+    // Phase 1: responding with shimmer + dots + always-on timer
     store.getState().start('responding');
     const { lastFrame, rerender } = render(React.createElement(Spinner, { store }));
     vi.advanceTimersByTime(1000);
@@ -27,8 +27,9 @@ describe('Spinner integration', () => {
     const genFrame = stripAnsi(lastFrame() ?? '');
     // Shimmer symbols present
     expect(genFrame).toMatch(/[·✢✳✶✻✽]/);
-    // Dots present in generating mode (padded to 3 chars)
-    expect(genFrame).toMatch(/\.{1,3}\s*$/);
+    // Dots present in responding mode (padded to 3 chars), 后跟始终显示的计时器
+    expect(genFrame).toMatch(/\.{1,3}/);
+    expect(genFrame).toMatch(/\d+s/);
 
     // Phase 2: switch to thinking via setMode
     store.getState().setMode('thinking');
