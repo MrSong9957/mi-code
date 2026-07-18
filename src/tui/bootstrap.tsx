@@ -22,7 +22,12 @@ import { createMessagesStore } from './state/messages-store.js';
 import { createInputStore } from './state/input-store.js';
 import { createStatusStore } from './state/status-store.js';
 import { createLogoStore } from './state/logo-store.js';
-import { createSpinnerStore, type SpinnerMode, type SpinnerStore } from './state/spinner-store.js';
+import {
+  createSpinnerStore,
+  type SpinnerContextSnapshot,
+  type SpinnerMode,
+  type SpinnerStore,
+} from './state/spinner-store.js';
 import type { SpinnerVerbConfig } from './state/spinner-verbs.js';
 import { createCompletionStore, type CompletionStore } from './state/completion-store.js';
 import { createSelectStore, type SelectStore } from './state/select-store.js';
@@ -67,6 +72,7 @@ export interface BootstrapOptions {
   spinnerVerbose?: boolean;
   /** Thinking 状态的 effort 后缀，例如 hard。 */
   spinnerThinkingEffort?: string;
+  spinnerContext?: SpinnerContextSnapshot;
 }
 
 export interface BootstrapHandle {
@@ -92,7 +98,7 @@ export interface BootstrapHandle {
   setSpinnerThinkingEffort: (effort: string | null) => void;
   setSpinnerHasActiveTools: (hasActiveTools: boolean) => void;
   setSpinnerVerbose: (enabled: boolean) => void;
-  setSpinnerActiveTeammates: (count: number) => void;
+  setSpinnerContext: (snapshot: SpinnerContextSnapshot) => void;
   setSpinnerTeammateTokens: (tokens: number) => void;
   spinnerOnToken: (length?: number) => void;
   /** 把一行系统消息固化进 store（替代旧 printLine） */
@@ -121,7 +127,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
   const statusStore = createStatusStore(opts.status);
   const logoStore = createLogoStore(opts.logo);
-  const spinnerStore = createSpinnerStore(opts.spinnerVerbs);
+  const spinnerStore = createSpinnerStore(opts.spinnerVerbs, opts.spinnerContext);
   spinnerStore.getState().setVerbose(opts.spinnerVerbose ?? false);
   spinnerStore.getState().setThinkingEffort(opts.spinnerThinkingEffort ?? null);
   const completionStore = createCompletionStore();
@@ -228,8 +234,8 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
       spinnerStore.getState().setHasActiveTools(hasActiveTools);
     },
     setSpinnerVerbose: (enabled: boolean) => { spinnerStore.getState().setVerbose(enabled); },
-    setSpinnerActiveTeammates: (count: number) => {
-      spinnerStore.getState().setActiveTeammateCount(count);
+    setSpinnerContext: (snapshot: SpinnerContextSnapshot) => {
+      spinnerStore.getState().setContext(snapshot);
     },
     setSpinnerTeammateTokens: (tokens: number) => {
       spinnerStore.getState().setTeammateTokens(tokens);

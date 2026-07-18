@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   createSpinnerStore,
   advanceSpinnerTokenCounter,
+  EMPTY_SPINNER_CONTEXT,
   estimateSpinnerTokens,
   formatSpinnerDuration,
   SPINNER_FRAMES,
@@ -37,6 +38,24 @@ describe('spinner-store', () => {
     expect(st.verb).toBe('');
     expect(st.label).toBe('');
     expect(st.stalled).toBe(false);
+  });
+
+  it('接受初始 context，并与后续原子替换使用相同的复制边界', () => {
+    const initial = {
+      ...EMPTY_SPINNER_CONTEXT,
+      variant: 'brief' as const,
+      teammates: [{ name: 'alice', role: 'coder', status: 'working' as const }],
+    };
+    const store = createSpinnerStore(undefined, initial);
+
+    initial.teammates[0]!.name = 'mutated';
+    expect(store.getState().context).toMatchObject({
+      variant: 'brief',
+      teammates: [{ name: 'alice', role: 'coder', status: 'working' }],
+    });
+
+    store.getState().setContext({ ...initial, variant: 'normal' });
+    expect(store.getState().context.variant).toBe('normal');
   });
 
   it('setContext 原子复制数组并把空白可选文本规范化为 null', () => {

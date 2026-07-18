@@ -23,6 +23,8 @@ import { stripImagesForPersistence } from './agent/image-utils.js';
 import type { ContentBlock } from './agent/types.js';
 import { BlockPipeline } from './ui/block-pipeline.js';
 import { bootstrap, type BootstrapHandle } from './tui/bootstrap.js';
+import { readSpinnerContext } from './tui/spinner-context.js';
+import { EMPTY_SPINNER_CONTEXT } from './tui/state/spinner-store.js';
 import { finalizeTurnLifecycle, handleTurnLoopEnd } from './tui/turn-lifecycle.js';
 import { writeResumeHint } from './cli/resume-hint.js';
 import { ConfigStore, SUPPORTED_PROVIDERS } from './config/index.js';
@@ -214,6 +216,12 @@ toolRegistry.register(memList.definition, memList.executor);
  * 用前向声明 tuiHandle（bootstrap 后赋值）+ 延迟绑定函数。pipeline 同理（bootstrap 内构造）。
  */
 let tuiHandle: BootstrapHandle | null = null;
+
+function refreshSpinnerContext(): void {
+  if (!tuiHandle) return;
+  const fallback = tuiHandle.spinnerStore.getState().context;
+  tuiHandle.setSpinnerContext(readSpinnerContext(teammateManager, todoManager, fallback));
+}
 
 /** 统一输出管道（bootstrap 内构造，所有 agent 逻辑 emit Block 到此）。
  *  声明为 let，bootstrap 后赋值；agent loop 使用前必已赋值。 */
@@ -645,6 +653,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     activeToolIds.delete(d.toolUseId);
     tuiHandle?.setSpinnerHasActiveTools(activeToolIds.size > 0);
     pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId });
+    refreshSpinnerContext();
   });
   eventBus.onLoopEnd(() => {
     handleTurnLoopEnd(turnLifecycle);
@@ -666,9 +675,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   // 兼顾"用户有即时反馈"和"状态准确"。
   let spinnerStarted = false;
   let gotAnyResponse = false; // 是否收到过任何 assistant 内容(用于空响应检测)
-  tuiHandle?.setSpinnerActiveTeammates(
-    teammateManager.list().filter(member => member.status === 'working').length,
-  );
+  refreshSpinnerContext();
   tuiHandle?.startSpinner('requesting');
   tuiHandle?.setSpinnerLabel('Connecting');
   spinnerStarted = true;
@@ -840,6 +847,7 @@ if (cliOpts.list) {
     renderMode: 'inline',
     themeName: cliOpts.theme ?? configStore.getTheme(),
     spinnerVerbs: configStore.getSpinnerVerbsConfig(),
+    spinnerContext: readSpinnerContext(teammateManager, todoManager, EMPTY_SPINNER_CONTEXT),
     onSubmit: (text) => { void handleUserSubmit(text); },
     onExit: () => { cleanupOnExit(); process.exit(0); },
     onTab: (text) => { handleTab(text, tuiHandle, configStore, permissionChecker); },

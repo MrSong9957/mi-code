@@ -156,7 +156,6 @@ describe('spinner-view', () => {
         { name: 'carol', role: 'coder', status: 'working' },
       ],
     });
-    store.getState().setActiveTeammateCount(99);
     store.getState().start('responding');
     vi.advanceTimersByTime(50);
     store.getState().tick();

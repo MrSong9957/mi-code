@@ -196,7 +196,6 @@ export interface SpinnerState {
   pauseStartTime: number | null;
   verbose: boolean;
   context: SpinnerContextSnapshot;
-  activeTeammateCount: number;
   start: (mode: SpinnerMode) => void;
   stop: () => SpinnerCompletion | null;
   pause: () => void;
@@ -208,7 +207,6 @@ export interface SpinnerState {
   setReducedMotion: (enabled: boolean) => void;
   setVerbose: (enabled: boolean) => void;
   setContext: (context: SpinnerContextSnapshot) => void;
-  setActiveTeammateCount: (count: number) => void;
   setTeammateTokens: (tokens: number) => void;
   tick: () => void;
   /** 流式增量到达；长度用于 token 粗估与停滞检测。 */
@@ -217,7 +215,10 @@ export interface SpinnerState {
 
 export type SpinnerStore = StoreApi<SpinnerState>;
 
-export function createSpinnerStore(verbConfig?: SpinnerVerbConfig): SpinnerStore {
+export function createSpinnerStore(
+  verbConfig?: SpinnerVerbConfig,
+  initialContext: SpinnerContextSnapshot = EMPTY_SPINNER_CONTEXT,
+): SpinnerStore {
   return createStore<SpinnerState>((set, get) => ({
     active: false, time: 0, mode: 'responding', verb: '', label: '',
     thinkStartTime: null, thinkingEffort: null, thinkingSummary: null,
@@ -225,7 +226,7 @@ export function createSpinnerStore(verbConfig?: SpinnerVerbConfig): SpinnerStore
     reducedMotion: false,
     lastTokenAt: 0, responseLength: 0, displayedTokens: 0, teammateTokens: 0,
     loadingStartTime: 0, totalPausedMs: 0, pauseStartTime: null,
-    verbose: false, context: normalizeSpinnerContext(EMPTY_SPINNER_CONTEXT), activeTeammateCount: 0,
+    verbose: false, context: normalizeSpinnerContext(initialContext),
 
     start: (mode) => {
       const now = Date.now();
@@ -308,9 +309,6 @@ export function createSpinnerStore(verbConfig?: SpinnerVerbConfig): SpinnerStore
     setReducedMotion: (enabled) => set({ reducedMotion: enabled }),
     setVerbose: (enabled) => set({ verbose: enabled }),
     setContext: (context) => set({ context: normalizeSpinnerContext(context) }),
-    setActiveTeammateCount: (count) => set({
-      activeTeammateCount: Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0,
-    }),
     setTeammateTokens: (tokens) => set({
       teammateTokens: Number.isFinite(tokens) ? Math.max(0, Math.floor(tokens)) : 0,
     }),
