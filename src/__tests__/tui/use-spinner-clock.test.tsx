@@ -4,8 +4,11 @@ import React from 'react';
 import { useSpinnerClock } from '../../tui/hooks/useSpinnerClock.js';
 import { createSpinnerStore, type SpinnerStore } from '../../tui/state/spinner-store.js';
 
-function ClockHarness({ store }: { store: SpinnerStore }): React.ReactElement {
-  useSpinnerClock(store);
+function ClockHarness({ store, enabled = true }: {
+  store: SpinnerStore;
+  enabled?: boolean;
+}): React.ReactElement {
+  useSpinnerClock(store, enabled);
   return <></>;
 }
 
@@ -55,6 +58,33 @@ describe('useSpinnerClock', () => {
 
     vi.advanceTimersByTime(150);
     expect(store.getState().time).toBe(100);
+    view.unmount();
+  });
+
+  it('does not own an interval when disabled, even while active', () => {
+    const store = createSpinnerStore();
+    store.getState().start('responding');
+    const view = render(<ClockHarness store={store} enabled={false} />);
+
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(150);
+    expect(store.getState().time).toBe(0);
+    view.unmount();
+  });
+
+  it('transfers interval ownership as enabled changes', () => {
+    const store = createSpinnerStore();
+    store.getState().start('responding');
+    const view = render(<ClockHarness store={store} enabled={false} />);
+
+    view.rerender(<ClockHarness store={store} enabled />);
+    vi.advanceTimersByTime(150);
+    expect(store.getState().time).toBe(150);
+
+    view.rerender(<ClockHarness store={store} enabled={false} />);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(150);
+    expect(store.getState().time).toBe(150);
     view.unmount();
   });
 });

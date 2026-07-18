@@ -84,10 +84,10 @@ export function ConnectedApp({
   const [scrollTop, setScrollTop] = useState(0);
   const [scrolledAway, setScrolledAway] = useState(false);
   const { rows, cols } = useTerminalSize();
-  useSpinnerClock(spinnerStore);
 
   // 渲染模式检测（须在 completion 订阅之前——后者据 isInline 短路）
   const { mode } = useRenderMode();
+  useSpinnerClock(spinnerStore, mode !== 'inline');
   const isInline = mode === 'inline';
 
   // 订阅所有 store

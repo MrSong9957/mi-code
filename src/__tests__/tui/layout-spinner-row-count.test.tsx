@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
+import stripAnsi from 'strip-ansi';
 import { App } from '../../tui/App.js';
 import { createCompletionStore } from '../../tui/state/completion-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import { createSelectionStore } from '../../tui/state/selection-store.js';
 import { createSpinnerStore } from '../../tui/state/spinner-store.js';
-
-const stripAnsi = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, '');
 
 describe('spinner layout reservation', () => {
   it('uses SpinnerView.rowCount to reserve every auxiliary row before the input', () => {
