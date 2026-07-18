@@ -39,9 +39,8 @@ export interface FooterInput {
   suggestions: SuggestionItem[];
   dropdownIndex: number;
   viewportTop: number;
-  /** spinner 行 ANSI（显示在 footer border 上方的预留位）。
-   *  null/undefined = 无 spinner（预留位留空）。始终保留 2 行（间距 + spinner 位）。 */
-  spinnerLine?: string | null;
+  /** spinner ANSI 行（显示在 footer border 上方，数组为空时只保留间隔行）。 */
+  spinnerLines?: readonly string[];
   /** Select 界面(交互式选择器)。可见时替换整个 footer(标题+列表+提示)。 */
   selectView?: SelectView | null;
 }
@@ -103,7 +102,7 @@ export interface LayoutResult {
  * 无 stdout.write，无副作用。
  */
 export function layoutFooter(fi: FooterInput): FooterLayout {
-  const { input, cursor: cursorPos, status, cols, rows, suggestions, dropdownIndex, viewportTop, spinnerLine, selectView } = fi;
+  const { input, cursor: cursorPos, status, cols, rows, suggestions, dropdownIndex, viewportTop, spinnerLines, selectView } = fi;
 
   // ── Select 模式:替换整个 footer(标题 + 列表 + 提示) ──
   // 不渲染预留位/border/输入框/status。footerHeight 自动管理,退出时 cursorUp 覆写自动擦除。
@@ -195,8 +194,9 @@ export function layoutFooter(fi: FooterInput): FooterLayout {
   // - 终端原生滚动让菜单保持视野内
   //
   // 无下拉菜单时:正常渲染 border + 状态行
-  // 预留位:spinner 可见时 2 行(1 间距 + 1 spinner),不可见时 1 行(仅间距)
-  const lines: string[] = spinnerLine ? ['', spinnerLine, border] : ['', border];
+  // Spinner 区统一由一份数组计数：1 行间距 + 实际 Spinner 行。
+  const visibleSpinnerLines = spinnerLines ?? [];
+  const lines: string[] = ['', ...visibleSpinnerLines, border];
   const wrappedInputCounts: number[] = [];
   for (let i = 0; i < visibleInputLines.length; i++) {
     const absLine = viewportTop + i;
@@ -216,8 +216,7 @@ export function layoutFooter(fi: FooterInput): FooterLayout {
   }
 
   // 光标物理行/列计算（纯函数，结果供 Renderer 写 cursorUp/CHA）
-  // 预留位行数:spinner 可见时 2 行,不可见时 1 行
-  const reserveRows = spinnerLine ? 2 : 1;
+  const reserveRows = 1 + visibleSpinnerLines.length;
   let cursorPhysLine0 = reserveRows + 1; // 跳过预留位 + 顶部 border
   let cursorColInPhysLine = 0;
   for (let i = 0; i < visibleInputLines.length; i++) {

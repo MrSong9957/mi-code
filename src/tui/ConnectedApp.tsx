@@ -87,7 +87,7 @@ export function ConnectedApp({
 
   // 渲染模式检测（须在 completion 订阅之前——后者据 isInline 短路）
   const { mode } = useRenderMode();
-  useSpinnerClock(spinnerStore, mode !== 'inline');
+  useSpinnerClock(spinnerStore);
   const isInline = mode === 'inline';
 
   // 订阅所有 store

@@ -24,6 +24,23 @@ function makeFooterInput(overrides: Partial<FooterInput> = {}): FooterInput {
 
 describe('layoutFooter — 纯函数布局计算', () => {
   describe('基本结构', () => {
+    it('spinnerLines 动态占用间隔行加实际行数', () => {
+      const layout = layoutFooter(makeFooterInput({
+        spinnerLines: ['main', 'tip', 'next'],
+      }));
+
+      expect(layout.lines.slice(0, 4)).toEqual(['', 'main', 'tip', 'next']);
+      expect(layout.cursorToTop).toBe(5);
+      expect(layout.height).toBe(8);
+    });
+
+    it('无 spinnerLines 时只保留现有单个间隔行', () => {
+      const layout = layoutFooter(makeFooterInput({ spinnerLines: [] }));
+
+      expect(layout.lines[0]).toBe('');
+      expect(layout.cursorToTop).toBe(2);
+    });
+
     it('空输入：footer = 预留位(1) + 顶部border + 输入行(❯) + 底部border + status（5 行）', () => {
       const layout = layoutFooter(makeFooterInput());
       expect(layout.height).toBe(5);

@@ -1,11 +1,25 @@
 import { describe, it, expect } from 'vitest';
-import { buildSpinnerLine } from '../../tui/inline/SpinnerLine.js';
+import stringWidth from 'string-width';
+import stripAnsi from 'strip-ansi';
+import {
+  buildSpinnerLine,
+  buildSpinnerLines,
+} from '../../tui/inline/SpinnerLine.js';
+import { createSpinnerStore } from '../../tui/state/spinner-store.js';
+import { selectSpinnerView } from '../../tui/state/spinner-view.js';
+
+const THEME = {
+  active: 'rgb(100, 200, 240)',
+  shimmer: 'rgb(170,230,255)',
+  stalled: 'rgb(255,90,90)',
+  muted: 'rgb(110,110,120)',
+};
 
 describe('SpinnerLine (inline mode)', () => {
   it('builds ANSI string with shimmer segments', () => {
     const result = buildSpinnerLine({
       time: 1000,
-      mode: 'generating',
+      mode: 'responding',
       verb: 'Crafting',
       label: '',
       stalled: false,
@@ -19,6 +33,7 @@ describe('SpinnerLine (inline mode)', () => {
     });
     expect(result).toContain('Crafting');
     expect(result).toContain('\x1b[');
+    expect(result).toContain('38;2;100;200;240m');
   });
 
   it('shows thinking indicator in thinking mode', () => {
@@ -43,7 +58,7 @@ describe('SpinnerLine (inline mode)', () => {
   it('stalledIntensity 默认满强度时使用固定错误红', () => {
     const result = buildSpinnerLine({
       time: 1000,
-      mode: 'generating',
+      mode: 'responding',
       verb: 'Crafting',
       label: '',
       stalled: true,
@@ -82,7 +97,7 @@ describe('SpinnerLine (inline mode)', () => {
   it('cycles dots animation through 1-3 dots', () => {
     const make = (time: number) => buildSpinnerLine({
       time,
-      mode: 'generating',
+      mode: 'responding',
       verb: 'Working',
       label: '',
       stalled: false,
@@ -107,7 +122,7 @@ describe('SpinnerLine (inline mode)', () => {
   it('falls back to verb when label is empty', () => {
     const result = buildSpinnerLine({
       time: 100,
-      mode: 'tool',
+      mode: 'tool-use',
       verb: 'Running',
       label: '',
       stalled: false,
@@ -125,7 +140,7 @@ describe('SpinnerLine (inline mode)', () => {
   it('prefers label over verb when both are present', () => {
     const result = buildSpinnerLine({
       time: 100,
-      mode: 'tool',
+      mode: 'tool-use',
       verb: 'Running',
       label: 'Bash',
       stalled: false,
@@ -238,5 +253,59 @@ describe('SpinnerLine (inline mode)', () => {
       },
     });
     expect(result).toContain('(thought for 2s)');
+  });
+
+  it('normal 输出主行和按顺序 dim 的辅助行，brief 只输出主行', () => {
+    const store = createSpinnerStore();
+    store.getState().setContext({
+      variant: 'normal', teammates: [], tasks: [],
+      spinnerTip: 'tip', hasUsedBtw: true,
+      budgetText: 'budget', nextTaskText: 'next',
+    });
+    store.getState().start('responding');
+
+    const normal = buildSpinnerLines(
+      selectSpinnerView(store.getState()),
+      80,
+      THEME,
+    );
+
+    expect(normal).toHaveLength(4);
+    expect(stripAnsi(normal[1]!)).toBe('tip');
+    expect(stripAnsi(normal[2]!)).toBe('budget');
+    expect(stripAnsi(normal[3]!)).toBe('next');
+    expect(normal.slice(1).every(line => line.includes('\x1b[2m'))).toBe(true);
+
+    store.getState().setContext({
+      ...store.getState().context,
+      variant: 'brief',
+    });
+    expect(buildSpinnerLines(
+      selectSpinnerView(store.getState()),
+      80,
+      THEME,
+    )).toHaveLength(1);
+  });
+
+  it('inactive 不输出，所有 inline Spinner 行截断到 usable width', () => {
+    const store = createSpinnerStore();
+    expect(buildSpinnerLines(selectSpinnerView(store.getState()), 20, THEME))
+      .toEqual([]);
+
+    store.getState().setContext({
+      variant: 'normal', teammates: [], tasks: [],
+      spinnerTip: 'x'.repeat(100), hasUsedBtw: true,
+      budgetText: null, nextTaskText: null,
+    });
+    store.getState().start('responding');
+
+    const lines = buildSpinnerLines(
+      selectSpinnerView(store.getState()),
+      20,
+      THEME,
+    );
+
+    expect(lines).toHaveLength(2);
+    expect(lines.every(line => stringWidth(stripAnsi(line)) <= 19)).toBe(true);
   });
 });

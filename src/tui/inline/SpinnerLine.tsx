@@ -1,4 +1,5 @@
 // Inline mode spinner line builder (ANSI string output)
+import sliceAnsi from 'slice-ansi';
 import {
   computeGlimmerIndex,
   computeShimmerSegments,
@@ -20,6 +21,9 @@ import {
   spinnerGlyphColorAt,
   spinnerGlyphTextAt,
 } from '../state/spinner-glyph.js';
+import type { SpinnerView } from '../state/spinner-view.js';
+import { getUsableWidth } from '../state/wrap-line.js';
+import { getTheme, type Theme } from '../../utils/theme.js';
 
 const SHIMMER_SPEED = 200;
 const SHIMMER_PAD = 10;
@@ -31,7 +35,7 @@ interface SpinnerTheme {
   muted: string;
 }
 
-interface SpinnerLineOpts {
+export interface SpinnerLineOpts {
   time: number;
   mode: SpinnerMode;
   verb: string;
@@ -50,7 +54,9 @@ interface SpinnerLineOpts {
 }
 
 function parseRGB(color: string): { r: number; g: number; b: number } {
-  const match = color.match(/rgb\((\d+),(\d+),(\d+)\)/);
+  const match = color.match(
+    /rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/,
+  );
   if (!match) return THINKING_INACTIVE;
   return { r: +match[1], g: +match[2], b: +match[3] };
 }
@@ -62,6 +68,15 @@ function toAnsiColor(rgb: string): string {
 
 const THINKING_INACTIVE = { r: 153, g: 153, b: 153 };
 const RESET = '\x1b[0m';
+
+function spinnerThemeFrom(theme: Theme): SpinnerTheme {
+  return {
+    active: theme.spinnerActive,
+    shimmer: theme.spinnerShimmer,
+    stalled: theme.spinnerStalled,
+    muted: theme.textMuted,
+  };
+}
 
 export function buildSpinnerLine(opts: SpinnerLineOpts): string {
   const reducedMotion = opts.reducedMotion ?? false;
@@ -132,4 +147,21 @@ export function buildSpinnerLine(opts: SpinnerLineOpts): string {
   }
 
   return line;
+}
+
+export function buildSpinnerLines(
+  view: SpinnerView,
+  cols: number,
+  theme: SpinnerTheme = spinnerThemeFrom(getTheme()),
+): string[] {
+  if (!view.active || !view.animation) return [];
+
+  const usableWidth = getUsableWidth(cols);
+  const main = buildSpinnerLine({ ...view.animation, theme });
+  const muted = toAnsiColor(theme.muted);
+  const auxiliary = view.auxiliaryLines.map(line =>
+    `${muted}\x1b[2m${sliceAnsi(line.content, 0, usableWidth)}${RESET}`,
+  );
+
+  return [main, ...auxiliary].map(line => sliceAnsi(line, 0, usableWidth));
 }

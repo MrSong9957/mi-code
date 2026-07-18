@@ -9,40 +9,20 @@
 // logo 首次渲染和 resize 清屏通过 frame.prefix 折叠进 commit 的单次 write。
 // commit() 是唯一 stdout 出口——无直接 stdout.write 调用。
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { InlineRenderer } from './InlineRenderer.js';
 import { colorizeLogo, colorizeStatus, RESET } from './colors.js';
-import { sgr } from './ansi-utils.js';
-import {
-  formatSpinnerDuration,
-  shouldShowSpinnerTimer,
-  thinkingColorAt,
-  thinkingStatusText,
-  thoughtStatusText,
-  totalSpinnerTokens,
-  TICK_MS,
-} from '../state/spinner-store.js';
-import {
-  parseSpinnerColor,
-  spinnerGlyphColor,
-  spinnerGlyphColorAt,
-  spinnerGlyphTextAt,
-} from '../state/spinner-glyph.js';
 import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
 import { layoutFooter } from './layout.js';
-import {
-  computeGlimmerIndex,
-  computeShimmerSegments,
-  measureShimmerMessage,
-  toolUseFlashColor,
-} from './shimmer.js';
+import { buildSpinnerLines } from './SpinnerLine.js';
 import { computeSpinnerVisible } from './spinner-visibility.js';
 import { displayWidth } from './text-layout.js';
 import { getTheme } from '../../utils/theme.js';
 import { resolveSGR as themeSGR } from '../../utils/theme-resolve.js';
+import { selectSpinnerView } from '../state/spinner-view.js';
 import { renderFinalizedLine, wrapStreamingTextTrimmed, wrapThinkingTextTrimmed } from './text-layout.js';
 import { useThrottledStreamingText } from './use-throttled-streaming-text.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../types.js';
@@ -85,136 +65,12 @@ function buildLogoAnsi(logo: LogoData): string[] {
   ];
 }
 
-// ─────────────── Spinner 动画（对标 Claude Code 四套动画） ───────────────
-//
-// 四套动画由单时间戳 time 派生：
-//   符号旋转（120ms/帧）、点循环（300ms/帧）、shimmer（200ms/步）、thinking sine（2s 周期）
-
-/** RGB → SGR TrueColor 前景序列 */
-function rgbSGR(r: number, g: number, b: number): string {
-  return sgr(`38;2;${r};${g};${b}`);
-}
-
 function stripAnsi(value: string): string {
   return value.split('\x1b[').map((part, index) => {
     if (index === 0) return part;
     const terminator = part.indexOf('m');
     return terminator >= 0 ? part.slice(terminator + 1) : part;
   }).join('');
-}
-
-/** spinner 文字：verb + 动态省略号点（. → .. → ...，300ms/帧） */
-function spinnerDots(time: number): string {
-  const dotFrame = Math.floor(time / 300) % 3;
-  return '.'.repeat(dotFrame + 1).padEnd(3);
-}
-
-/** spinner 渲染所需的运行时状态快照 */
-interface SpinnerSnapshot {
-  active: boolean;
-  time: number;
-  mode: 'requesting' | 'responding' | 'thinking' | 'tool-use' | 'tool-input';
-  verb: string;
-  label: string;
-  thinkStartTime: number | null;
-  thinkingEffort: string | null;
-  thinkingSummaryDurationMs: number | null;
-  stalled: boolean;
-  stalledIntensity: number;
-  reducedMotion: boolean;
-  verbose: boolean;
-  activeTeammateCount: number;
-  displayedTokens: number;
-  teammateTokens: number;
-}
-
-/**
- * 构建 spinner 行的 ANSI 字符串（对标 Claude Code SpinnerGlyph + SpinnerAnimationRow + GlimmerMessage）。
- *
- * 组成：符号 + ' ' + [shimmer 着色的文字（verb/label + 动态点）]
- * - 符号：SPINNER_FRAMES[floor(time/120)%12]
- * - 文字：工具模式用 label，否则 verb；后接动态点（dim）
- * - 着色：thinking 走灰系 sine 呼吸；其余走 theme spinnerActive + spinnerShimmer 右→左扫
- * - stalled：变红（spinnerStalled），shimmer 停
- */
-function buildSpinnerLine(snap: SpinnerSnapshot): string {
-  const theme = getTheme();
-  const glyphColorValue = spinnerGlyphColorAt(
-    theme.spinnerActive,
-    snap.stalledIntensity,
-    snap.reducedMotion,
-    snap.time,
-  );
-  const glyphRgb = parseSpinnerColor(glyphColorValue);
-  const glyphColor = glyphRgb
-    ? rgbSGR(glyphRgb.r, glyphRgb.g, glyphRgb.b)
-    : themeSGR(theme, 'spinnerActive');
-  const messageColorValue = spinnerGlyphColor(theme.spinnerActive, snap.stalledIntensity);
-  const shimmerColorValue = spinnerGlyphColor(theme.spinnerShimmer, snap.stalledIntensity);
-  const messageRgb = parseSpinnerColor(messageColorValue);
-  const shimmerRgb = parseSpinnerColor(shimmerColorValue);
-  const messageColor = messageRgb
-    ? rgbSGR(messageRgb.r, messageRgb.g, messageRgb.b)
-    : themeSGR(theme, 'spinnerActive');
-  const shimmerColor = shimmerRgb
-    ? rgbSGR(shimmerRgb.r, shimmerRgb.g, shimmerRgb.b)
-    : themeSGR(theme, 'spinnerShimmer');
-  const glyphText = spinnerGlyphTextAt(snap.time, snap.reducedMotion);
-  const showMetrics = shouldShowSpinnerTimer(snap.time, snap.verbose, snap.activeTeammateCount);
-  const totalTokens = totalSpinnerTokens(snap.displayedTokens, snap.teammateTokens);
-  const tokens = totalTokens > 0
-    ? ` ${snap.mode === 'requesting' ? '↑' : '↓'} ${totalTokens}`
-    : '';
-  const metrics = showMetrics
-    ? `${themeSGR(theme, 'textMuted')}  ${formatSpinnerDuration(snap.time)}${tokens}${RESET}`
-    : '';
-  const activeThinking = snap.mode === 'thinking' && snap.thinkStartTime !== null;
-  const statusText = activeThinking
-    ? thinkingStatusText(snap.thinkingEffort)
-    : snap.thinkingSummaryDurationMs !== null
-      ? thoughtStatusText(snap.thinkingSummaryDurationMs)
-      : null;
-  const statusColor = activeThinking
-    ? thinkingColorAt(snap.time, snap.thinkStartTime)
-    : thinkingColorAt(snap.time, null);
-  const status = statusText
-    ? `${rgbSGR(statusColor.r, statusColor.g, statusColor.b)}(${statusText})${RESET}`
-    : '';
-
-  // 显示文字：工具模式用 label，否则随机 verb
-  const text = snap.label || snap.verb;
-  const message = text + (statusText ? '' : spinnerDots(snap.time));
-  const msgWidth = measureShimmerMessage(message);
-
-  // shimmer 高亮段位置（右→左扫）
-  const glimmerIndex = computeGlimmerIndex(snap.time, msgWidth, {
-    speed: snap.mode === 'requesting' ? TICK_MS : 200,
-    cyclePad: 10,
-    stalled: snap.stalled,
-    direction: snap.mode === 'requesting' ? 'left-to-right' : 'right-to-left',
-  });
-  const { before, shimmer, after } = computeShimmerSegments(message, glimmerIndex);
-
-  if (snap.stalled) {
-    // 卡住：停止 shimmer，文字沿 stalledIntensity 平滑趋近错误红。
-    return `${glyphColor}${glyphText}${messageColor}${message} ${RESET}${status}${metrics}`;
-  }
-
-  if (snap.mode === 'tool-use') {
-    const flashColorValue = toolUseFlashColor(
-      snap.time,
-      messageColorValue,
-      shimmerColorValue,
-    );
-    const flashRgb = parseSpinnerColor(flashColorValue);
-    const flashColor = flashRgb
-      ? rgbSGR(flashRgb.r, flashRgb.g, flashRgb.b)
-      : themeSGR(theme, 'spinnerActive');
-    return `${glyphColor}${glyphText}${flashColor}${message} ${RESET}${status}${metrics}`;
-  }
-
-  // 生成中 / 普通模式：theme spinnerActive + spinnerShimmer 右→左扫
-  return `${glyphColor}${glyphText}${messageColor}${before}${shimmerColor}${shimmer}${messageColor}${after} ${RESET}${status}${metrics}`;
 }
 
 /** 组装 Select 界面的 ANSI 行(标题 + 选项列表 + 快捷键提示) */
@@ -282,17 +138,11 @@ export function InlineApp({
   const statusData = useStore(statusStore, useShallow((s) => ({
     mode: s.mode, model: s.model, dir: s.dir, branch: s.branch, contextPct: s.contextPct,
   })));
-  // spinner 完整状态（驱动四套动画：time 派生符号/点/shimmer，mode 决定配色）
-  const spinner = useStore(spinnerStore, useShallow((s) => ({
-    active: s.active, time: s.time, mode: s.mode, verb: s.verb,
-    label: s.label, thinkStartTime: s.thinkStartTime,
-    thinkingEffort: s.thinkingEffort,
-    thinkingSummaryDurationMs: s.thinkingSummary?.durationMs ?? null,
-    stalled: s.stalled,
-    stalledIntensity: s.stalledIntensity, reducedMotion: s.reducedMotion,
-    verbose: s.verbose, activeTeammateCount: s.activeTeammateCount,
-    displayedTokens: s.displayedTokens, teammateTokens: s.teammateTokens,
-  })));
+  const spinnerState = useStore(spinnerStore);
+  const spinnerView = useMemo(
+    () => selectSpinnerView(spinnerState),
+    [spinnerState],
+  );
   // overlay（ctrl+o 备用屏）：visible 时渲染覆盖层，替代正常输出
   const overlay = useStore(overlayStore, useShallow((s) => ({
     visible: s.visible, title: s.title, lines: s.lines,
@@ -325,14 +175,6 @@ export function InlineApp({
       renderer.exitOverlay();
     }
   }, [overlay, renderer]); // cols 不在依赖：resize 不主动重画（ConPTY 兼容性）
-
-  // 驱动 spinner 动画（inline 模式没挂载 Spinner.tsx，需自行 setInterval 推进帧）
-  // 50ms 高频 tick：各动画按 floor(time/period) 派生（符号120ms/点300ms/shimmer200ms/sine2s）
-  useEffect(() => {
-    if (!spinner.active) return;
-    const id = setInterval(() => { spinnerStore.getState().tick(); }, TICK_MS);
-    return () => clearInterval(id);
-  }, [spinner.active, spinnerStore]);
 
   // 末条消息的流式文本（驱动逐字渲染）
   const lastMsg = messages[messages.length - 1];
@@ -460,31 +302,15 @@ export function InlineApp({
     // 关键：assistant 正文固化(finalized)后立即隐藏，不等 stopSpinner——
     // 否则在 finalize→stop 窗口内会闪烁一帧残影。
     const spinnerVisible = computeSpinnerVisible({
-      spinnerActive: spinner.active,
+      spinnerActive: spinnerView.active,
       isStreamingNow,
       streamingText,
       lastRole: last?.role ?? '',
       lastFinalized: last?.finalized ?? false,
     });
-    const spinnerAnsi = spinnerVisible
-      ? buildSpinnerLine({
-          active: spinner.active,
-          time: spinner.time,
-          mode: spinner.mode,
-          verb: spinner.verb,
-          label: spinner.label,
-          thinkStartTime: spinner.thinkStartTime,
-          thinkingEffort: spinner.thinkingEffort,
-          thinkingSummaryDurationMs: spinner.thinkingSummaryDurationMs,
-          stalled: spinner.stalled,
-          stalledIntensity: spinner.stalledIntensity,
-          reducedMotion: spinner.reducedMotion,
-          verbose: spinner.verbose,
-          activeTeammateCount: spinner.activeTeammateCount,
-          displayedTokens: spinner.displayedTokens,
-          teammateTokens: spinner.teammateTokens,
-        })
-      : null;
+    const spinnerLines = spinnerVisible
+      ? buildSpinnerLines(spinnerView, cols)
+      : [];
 
     // 草稿区只含文本（thinking/正文 trimmed），不含 spinner——spinner 在 footer 预留位。
     const streamingLines = draftLines;
@@ -503,7 +329,7 @@ export function InlineApp({
     const footerLayout = layoutFooter({
       input: inputText, cursor, status: statusText, cols, rows,
       suggestions, dropdownIndex, viewportTop: vp.viewportTop,
-      spinnerLine: spinnerAnsi,
+      spinnerLines,
       selectView,
     });
 
@@ -524,7 +350,7 @@ export function InlineApp({
       transitions: { justFinalized, needEraseDraft, forceFooterReset: selectToggled },
     });
   // cols 在依赖数组：resize 时 effect 重跑，footer 用新 cols 布局（border 自适应）。
-  }, [messages, renderer, inputText, cursor, statusData, spinner, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, selectVisible, selectTitle, selectOptions, selectIndex, cols]);
+  }, [messages, renderer, inputText, cursor, statusData, spinnerView, logo, streamingText, overlay.visible, dropdownVisible, dropdownCandidates, dropdownIndex, selectVisible, selectTitle, selectOptions, selectIndex, cols]);
 
   // 返回空元素——所有渲染通过 stdout 副作用完成
   return <></>;
