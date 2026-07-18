@@ -158,6 +158,22 @@ describe('spinner-store', () => {
     expect(s.getState().verb).toBe('');
   });
 
+  it('stop 只返回有效时长，完成动词由消息工厂负责且重复 stop 幂等', () => {
+    const random = vi.spyOn(Math, 'random');
+    try {
+      const store = createSpinnerStore();
+      store.getState().start('responding');
+      const callsAfterStart = random.mock.calls.length;
+      vi.advanceTimersByTime(2_000);
+
+      expect(store.getState().stop()).toEqual({ durationMs: 2_000 });
+      expect(store.getState().stop()).toBeNull();
+      expect(random).toHaveBeenCalledTimes(callsAfterStart);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
   it('onToken：刷新 lastTokenAt，清 stalled', () => {
     const s = createSpinnerStore();
     s.getState().start('responding');

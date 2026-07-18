@@ -1,12 +1,5 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import { sampleVerb, type SpinnerVerbConfig } from './spinner-verbs.js';
-import {
-  formatSpinnerDuration,
-  TURN_COMPLETION_VERBS,
-  type TurnCompletionVerb,
-} from './turn-duration-message.js';
-
-export { formatSpinnerDuration };
 
 /** Claude Code 的 6 帧往返序列；time 的单位始终是毫秒。 */
 export const SPINNER_FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✽', '✻', '✶', '✳', '✢', '·'] as const;
@@ -20,6 +13,7 @@ export const THINKING_SUMMARY_MIN_VISIBLE_MS = 2_000;
 
 /** 与流生命周期对应的五种视觉状态。 */
 export type SpinnerMode = 'requesting' | 'responding' | 'thinking' | 'tool-use' | 'tool-input';
+export interface SpinnerCompletion { durationMs: number; }
 export interface ThinkingSummary { durationMs: number; visibleUntil: number; }
 export interface SpinnerRGB { r: number; g: number; b: number; }
 
@@ -30,6 +24,14 @@ const THINKING_SHIMMER_COLOR: SpinnerRGB = { r: 185, g: 185, b: 185 };
 export function spinnerFrameAt(timeMs: number): typeof SPINNER_FRAMES[number] {
   const safeTime = Math.max(0, timeMs);
   return SPINNER_FRAMES[Math.floor(safeTime / SPINNER_FRAME_MS) % SPINNER_FRAMES.length]!;
+}
+
+export function formatSpinnerDuration(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 }
 
 export function thinkingStatusText(effort: string | null): string {
@@ -126,7 +128,7 @@ export interface SpinnerState {
   verbose: boolean;
   activeTeammateCount: number;
   start: (mode: SpinnerMode) => void;
-  stop: () => { verb: TurnCompletionVerb; durationMs: number } | null;
+  stop: () => SpinnerCompletion | null;
   pause: () => void;
   resume: () => void;
   setMode: (mode: SpinnerMode) => void;
@@ -174,14 +176,13 @@ export function createSpinnerStore(verbConfig?: SpinnerVerbConfig): SpinnerStore
         current.totalPausedMs,
         current.pauseStartTime,
       );
-      const verb = TURN_COMPLETION_VERBS[Math.floor(Math.random() * TURN_COMPLETION_VERBS.length)]!;
       set({ active: false, time: 0, verb: '', label: '', thinkStartTime: null,
         thinkingSummary: null,
         stalled: false, stalledIntensity: 0, hasActiveTools: false,
         responseLength: 0, displayedTokens: 0,
         teammateTokens: 0,
         totalPausedMs: 0, pauseStartTime: null });
-      return { verb, durationMs };
+      return { durationMs };
     },
     pause: () => set((s) => {
       if (!s.active || s.pauseStartTime !== null) return s;

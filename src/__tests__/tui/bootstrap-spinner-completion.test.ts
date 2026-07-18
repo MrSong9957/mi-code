@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { appendSpinnerCompletionMessage } from '../../tui/bootstrap.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { renderFinalizedLine } from '../../tui/inline/text-layout.js';
@@ -12,7 +12,12 @@ describe('appendSpinnerCompletionMessage', () => {
       indent: 0,
     });
 
-    appendSpinnerCompletionMessage(store, { verb: 'Cooked', durationMs: 9_000 });
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      appendSpinnerCompletionMessage(store, { durationMs: 9_000 });
+    } finally {
+      random.mockRestore();
+    }
 
     const lines = store.getState().messages.flatMap(m => m.lines);
     const completionIdx = lines.findIndex(l => l.content === '✻ Cooked for 9s');

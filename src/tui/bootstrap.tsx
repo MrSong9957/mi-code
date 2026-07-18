@@ -22,9 +22,9 @@ import { createMessagesStore } from './state/messages-store.js';
 import { createInputStore } from './state/input-store.js';
 import { createStatusStore } from './state/status-store.js';
 import { createLogoStore } from './state/logo-store.js';
-import { createSpinnerStore, type SpinnerStore } from './state/spinner-store.js';
+import { createSpinnerStore, type SpinnerMode, type SpinnerStore } from './state/spinner-store.js';
 import type { SpinnerVerbConfig } from './state/spinner-verbs.js';
-import { formatSpinnerDuration, type SpinnerMode } from './state/spinner-store.js';
+import { createTurnDurationMessage } from './state/turn-duration-message.js';
 import { createCompletionStore, type CompletionStore } from './state/completion-store.js';
 import { createSelectStore, type SelectStore } from './state/select-store.js';
 import { createOverlayStore, type OverlayStore } from './state/overlay-store.js';
@@ -106,19 +106,17 @@ export interface BootstrapHandle {
 
 export function appendSpinnerCompletionMessage(
   messagesStore: ReturnType<typeof createMessagesStore>,
-  completion: { verb: string; durationMs: number },
+  completion: { durationMs: number },
 ): void {
   const messages = messagesStore.getState().messages;
   const lastMessage = messages[messages.length - 1];
   const lastLine = lastMessage?.lines[lastMessage.lines.length - 1];
-  if (messages.length > 0 && lastLine?.content !== '') {
-    messagesStore.getState().appendLine('system', { content: '', style: {}, indent: 0 });
-  }
-  messagesStore.getState().appendLine('system', {
-    content: `✻ ${completion.verb} for ${formatSpinnerDuration(completion.durationMs)}`,
-    style: { dim: true },
-    indent: 0,
+  const message = createTurnDurationMessage({
+    uuid: 'spinner-completion',
+    durationMs: completion.durationMs,
+    prependBlankLine: messages.length > 0 && lastLine?.content !== '',
   });
+  for (const line of message.lines) messagesStore.getState().appendLine('system', line);
 }
 
 export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
