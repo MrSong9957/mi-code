@@ -390,3 +390,69 @@ describe('<InlineAppV2> Select 选择器接入', () => {
     expect(frame).toContain('sonnet');
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 5a.2 集成:<Overlay>(Ctrl+O)接入 <InlineAppV2>。
+//
+// visible 时用 <Overlay>(复用 alt-screen 组件)替换整棵活动区,
+// 显示可折叠块(thinking/tool_result)的完整内容。close 后恢复原组件树。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<InlineAppV2> Overlay (Ctrl+O) 接入', () => {
+  it('overlayStore.open 后渲染 Overlay 替换整棵树', () => {
+    const stores = createStores();
+    stores.overlayStore.getState().open('Thinking output', [
+      { content: 'full thinking text line 1', style: {}, indent: 0 },
+      { content: 'full thinking text line 2', style: {}, indent: 0 },
+    ]);
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={[]}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Thinking output');
+    expect(frame).toContain('full thinking text line 1');
+    expect(frame).toContain('full thinking text line 2');
+    // Overlay 替换整棵树:footer(border/statusbar)不应出现
+    expect(frame).not.toContain('sonnet');
+  });
+
+  it('overlayStore.close 后恢复 spinner+footer', async () => {
+    const stores = createStores();
+    stores.overlayStore.getState().open('Title', [{ content: 'overlay content', style: {}, indent: 0 }]);
+    const { lastFrame, rerender } = render(
+      <InlineAppV2
+        messages={[]}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    expect(lastFrame()).toContain('Title');
+
+    stores.overlayStore.getState().close();
+    await new Promise((r) => setTimeout(r, 10));
+    rerender(
+      <InlineAppV2
+        messages={[]}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('Title');
+    expect(frame).toContain('sonnet');
+  });
+});

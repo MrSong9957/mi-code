@@ -25,6 +25,7 @@ import { SpinnerMemo } from './spinner-memo.js';
 import { FooterV2 } from './FooterV2.js';
 import { StreamingText } from './StreamingText.js';
 import { SelectOverlayV2 } from './SelectOverlayV2.js';
+import { Overlay } from '../components/Overlay.js';
 import { selectSpinnerView } from '../state/spinner-view.js';
 import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
@@ -87,6 +88,16 @@ export function InlineAppV2({ messages, stores, cols }: InlineAppV2Props): React
   // 订阅 select 是否可见:visible 时用 SelectOverlay 替代 spinner+footer。
   // 用 boolean selector,只在 visible 翻转时触发本组件重渲染。
   const selectVisible = useStore(stores.selectStore, (s) => s.visible);
+
+  // 订阅 overlay 是否可见:visible 时用 <Overlay> 替换整棵活动区(只显示折叠块全文)。
+  // 复用 alt-screen 的 <Overlay> 组件,Props 一致。
+  const overlayVisible = useStore(stores.overlayStore, (s) => s.visible);
+
+  // Overlay 顶层优先:visible 时替代整棵树(包含 <Static>)。
+  // 这是 charier 铁律「禁止手动 CUP」的延伸——用条件渲染而非 saveCursor+eraseScreen。
+  if (overlayVisible) {
+    return <Overlay store={stores.overlayStore} cols={cols} />;
+  }
 
   // 输入框视口:光标居中滚动,超出 MAX_VISIBLE_INPUT_LINES 时 viewportTop 跟随。
   const totalInputLines = inputText.split('\n').length;
