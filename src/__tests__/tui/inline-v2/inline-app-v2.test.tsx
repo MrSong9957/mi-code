@@ -323,3 +323,70 @@ describe('<InlineAppV2> 流式文本接入', () => {
     expect(lastFrame()).toContain('pondering');
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 5a.1 集成:<SelectOverlayV2> 接入 <InlineAppV2>。
+//
+// visible 时替代 spinner+footer;close 后恢复 spinner+footer。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<InlineAppV2> Select 选择器接入', () => {
+  it('selectStore.open 后渲染 Select 替代 spinner+footer', () => {
+    const stores = createStores();
+    stores.selectStore.getState().open('Select model', [
+      { value: 'gpt-4o', label: 'GPT-4o' },
+      { value: 'sonnet', label: 'Sonnet' },
+    ]);
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={[]}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Select model');
+    expect(frame).toContain('GPT-4o');
+    // Select 替代了 footer:footer 的 prompt ❯ 和 statusbar 文本不应出现
+    // (Select 自己有 navigate · Enter 提示,但不含 footer 的 ❯ prompt 或 sonnet model)
+    expect(frame).not.toContain('sonnet');
+  });
+
+  it('selectStore.close 后恢复 spinner+footer', async () => {
+    const stores = createStores();
+    stores.selectStore.getState().open('Pick', [{ value: 'a', label: 'A' }]);
+    const { lastFrame, rerender } = render(
+      <InlineAppV2
+        messages={[]}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    expect(lastFrame()).toContain('Pick');
+
+    stores.selectStore.getState().close();
+    await new Promise((r) => setTimeout(r, 10));
+    rerender(
+      <InlineAppV2
+        messages={[]}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    // 关闭后:不再有 Select 标题,恢复 footer(border 等)
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('Pick');
+    expect(frame).toContain('─');
+    expect(frame).toContain('sonnet');
+  });
+});

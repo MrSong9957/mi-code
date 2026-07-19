@@ -24,6 +24,7 @@ import { MessageLine } from './MessageLine.js';
 import { SpinnerMemo } from './spinner-memo.js';
 import { FooterV2 } from './FooterV2.js';
 import { StreamingText } from './StreamingText.js';
+import { SelectOverlayV2 } from './SelectOverlayV2.js';
 import { selectSpinnerView } from '../state/spinner-view.js';
 import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
@@ -83,6 +84,10 @@ export function InlineAppV2({ messages, stores, cols }: InlineAppV2Props): React
   // 故 spinner tick 不会触发本组件重渲染)
   const spinnerRowCount = useStore(stores.spinnerStore, (s) => selectSpinnerView(s).rowCount);
 
+  // 订阅 select 是否可见:visible 时用 SelectOverlay 替代 spinner+footer。
+  // 用 boolean selector,只在 visible 翻转时触发本组件重渲染。
+  const selectVisible = useStore(stores.selectStore, (s) => s.visible);
+
   // 输入框视口:光标居中滚动,超出 MAX_VISIBLE_INPUT_LINES 时 viewportTop 跟随。
   const totalInputLines = inputText.split('\n').length;
   const cursorLine = cursorScreenPos(inputText, cursor, '❯ ').y;
@@ -111,17 +116,24 @@ export function InlineAppV2({ messages, stores, cols }: InlineAppV2Props): React
           cols={cols}
         />
       )}
-      <SpinnerMemo store={stores.spinnerStore} />
-      <FooterV2
-        input={inputText}
-        cursor={cursor}
-        status={statusData}
-        cols={cols}
-        inputRowY={inputRowY}
-        viewportTop={vp.viewportTop}
-        completionStore={stores.completionStore}
-        selectionStore={stores.selectionStore}
-      />
+      {selectVisible ? (
+        // Select 选择器:替代 spinner+footer 占据活动区(自订阅 selectStore)
+        <SelectOverlayV2 store={stores.selectStore} cols={cols} />
+      ) : (
+        <>
+          <SpinnerMemo store={stores.spinnerStore} />
+          <FooterV2
+            input={inputText}
+            cursor={cursor}
+            status={statusData}
+            cols={cols}
+            inputRowY={inputRowY}
+            viewportTop={vp.viewportTop}
+            completionStore={stores.completionStore}
+            selectionStore={stores.selectionStore}
+          />
+        </>
+      )}
     </Box>
   );
 }
