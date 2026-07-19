@@ -10,7 +10,7 @@
 // 不会传新 props 到 <FooterV2>,React.memo 拦住 → Ink createIncremental 不重写 footer 行。
 
 import React from 'react';
-import { Box, Text, useCursor } from 'ink';
+import { Box, useCursor } from 'ink';
 import { StatusBar } from '../components/StatusBar.js';
 import { SelectionText } from '../components/SelectionText.js';
 import { SuggestionBar } from '../components/SuggestionBar.js';
