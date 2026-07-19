@@ -107,6 +107,8 @@ export interface BootstrapHandle {
   printStyled: (text: string, role: 'system' | 'error' | 'input', style?: UIMessageStyle) => void;
   /** 卸载 Ink + 退 alt screen（进程退出前调用） */
   cleanup: () => void;
+  /** 当前 inline 路径:V0(InlineRenderer)或 V2(Ink reconciler)。alt-screen 模式恒为 false */
+  readonly inlineV2: boolean;
 }
 
 export function stopSpinnerAndAppendCompletion(
@@ -122,6 +124,10 @@ export function stopSpinnerAndAppendCompletion(
 export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const renderMode = opts.renderMode ?? 'inline';
   const isInline = renderMode === 'inline';
+
+  // V2 flag:inline 模式下,V2 走 Ink 原生 + incrementalRendering;V0 走 InlineRenderer
+  // 用户可设 MICODE_INLINE_V2=0 强制走 V0 fallback(过渡期默认 0,阶段 5a 改默认 1)
+  const useInlineV2 = isInline && process.env.MICODE_INLINE_V2 === '1';
 
   const messagesStore = createMessagesStore();
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
@@ -174,6 +180,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     patchConsole: false;
     renderer?: unknown;
     onSetCursorPosition?: (pos: unknown) => void;
+    incrementalRendering?: boolean;
   } = { exitOnCtrlC: false, alternateScreen: !isInline, patchConsole: false };
 
   if (!isInline && USE_DOUBLE_BUFFER) {
@@ -181,7 +188,12 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     renderOptions.onSetCursorPosition = (pos) => { setCursorPos(pos as { x: number; y: number } | undefined); };
   }
 
-  const inlineRenderer = isInline ? new InlineRenderer(process.stdout) : null;
+  // inline V2:不注入 renderer,走 Ink 原生 + incrementalRendering
+  if (useInlineV2) {
+    renderOptions.incrementalRendering = true;
+  }
+  // inline V0(fallback):保留 InlineRenderer
+  const inlineRenderer = (isInline && !useInlineV2) ? new InlineRenderer(process.stdout) : null;
 
   const themeStore = createThemeStore(opts.themeName);
 
@@ -242,5 +254,6 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     },
     spinnerOnToken: (length) => { spinnerStore.getState().onToken(length); },
     printLine, printStyled, cleanup,
+    inlineV2: useInlineV2,
   };
 }
