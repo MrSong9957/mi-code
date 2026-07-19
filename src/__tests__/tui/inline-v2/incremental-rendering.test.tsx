@@ -129,8 +129,11 @@ describe('InlineV2 incrementalRendering POC 回归', () => {
     const stdout = await renderForTickDuration();
 
     const allWrites = stdout.writes.filter((w) => w.bytes > 0);
-    // edge case:完全没有写入(理论上不应该发生,但作为防御)
-    if (allWrites.length === 0) return;
+    // 应该有写入:若没有说明 Ink 完全没渲染,测试不该静默 PASS
+    expect(
+      allWrites.length,
+      '应该至少有一次非空写入(Ink 应该渲染过活动区)',
+    ).toBeGreaterThan(0);
 
     const maxFrame = Math.max(...allWrites.map((w) => w.bytes));
 
@@ -138,7 +141,11 @@ describe('InlineV2 incrementalRendering POC 回归', () => {
     const spinnerFrames = allWrites.filter(
       (w) => w.data.includes('Working') && !w.data.includes('sonnet'),
     );
-    if (spinnerFrames.length === 0) return;
+    // 应该有 spinner tick 帧:若没有说明 spinner 没运行或帧判别逻辑失效
+    expect(
+      spinnerFrames.length,
+      '应该至少有一个 spinner tick 帧(含 Working 且不含 statusbar)',
+    ).toBeGreaterThan(0);
 
     const avgSpinner =
       spinnerFrames.reduce((s, w) => s + w.bytes, 0) / spinnerFrames.length;
