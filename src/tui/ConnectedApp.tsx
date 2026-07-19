@@ -272,7 +272,12 @@ export function ConnectedApp({
     }
   }
 
-  // 鼠标事件处理（仅 alt-screen 模式需要，inline 模式跳过）
+  // 鼠标事件处理（仅 alt-screen 模式需要，inline 模式跳过）。
+  // V2 模式（isInline=true）跳过 SGR 鼠标选区:终端原生选区即可（用户用鼠标拖选，
+  // 操作系统/终端处理高亮和复制）。这里依赖终端 scrollback,
+  // 已固化内容行号会随新消息滚动变化,rowTextMap 无法稳定映射,故 inline 路径
+  // （含 V0 和 V2）整体禁用 SGR 鼠标路由。后续若要在 inline 模式支持应用层选区,
+  // 需要重新设计行号映射方案。
   if (!isInline) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useInput((input: string) => {
