@@ -21,6 +21,7 @@ import { useSpinnerClock } from './hooks/useSpinnerClock.js';
 import { useRenderMode } from './state/render-mode.js';
 import { DropdownProvider } from './state/dropdown-context.js';
 import { InlineApp } from './inline/InlineApp.js';
+import { InlineAppV2 } from './inline-v2/InlineAppV2.js';
 import { createSelectionStore } from './state/selection-store.js';
 import { createMouseParser } from './input/mouse-events.js';
 import { writeClipboard } from './input/clipboard.js';
@@ -325,11 +326,30 @@ export function ConnectedApp({
     );
   }
 
-  // V2 占位分支:inline 模式且无 InlineRenderer(即 MICODE_INLINE_V2=1)。
-  // 阶段 2 会替换为真正的 <InlineAppV2/>(走 Ink reconciler + <Static>),当前抛错占位。
+  // V2 路径:inline 模式且无 InlineRenderer(即 MICODE_INLINE_V2=1)。
+  // 走 Ink reconciler + <Static>(Stage 2 只渲染已固化消息 + 占位 footer,
+  // spinner/streaming 由 Stage 3/4 加入)。
   if (isInline && !_inlineRenderer) {
-    throw new Error(
-      'InlineAppV2 not implemented yet (MICODE_INLINE_V2=1); set MICODE_INLINE_V2=0 to fall back to InlineRenderer',
+    return (
+      <DropdownProvider>
+        <InlineAppV2
+          messages={messages}
+          status={status}
+          logo={logo}
+          stores={{
+            messagesStore,
+            inputStore,
+            statusStore,
+            spinnerStore,
+            completionStore,
+            selectStore,
+            selectionStore,
+            overlayStore,
+          }}
+          cols={cols}
+          rows={rows}
+        />
+      </DropdownProvider>
     );
   }
 
