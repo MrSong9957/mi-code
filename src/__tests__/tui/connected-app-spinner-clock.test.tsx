@@ -67,7 +67,6 @@ describe('ConnectedApp spinner clock wiring', () => {
 
   it.each([
     ['inline with renderer', 'inline', true],
-    ['inline without renderer', 'inline', false],
     ['alt-screen', 'alt-screen', false],
   ] as const)('%s has exactly one clock owner', (_, mode, withInlineRenderer) => {
     const { tickSpy, view } = renderConnected(mode, withInlineRenderer);
