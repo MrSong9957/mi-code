@@ -7,7 +7,7 @@
 //   2. spinner tick 时未变行(footer border / statusbar)不被重写
 //   3. spinner tick 帧字节远小于完整活动区帧(行级 diff 生效)
 //
-// 对照基线:scripts/ink-poc/poc-inline-diff.tsx 手动跑过的结果
+// 对照基线(POC 历史验证数据,scripts/ink-poc/ 已删除,见归档):
 //   - <Static> 3 行 Finalized 消息只写一次(120B)
 //   - 完整活动区 ~412B
 //   - spinner tick 后的帧 ~44-46B
