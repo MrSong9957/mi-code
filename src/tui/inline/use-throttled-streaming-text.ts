@@ -21,9 +21,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-/** cooldown 窗口（ms）。32ms ≈ 30fps，比 Ink 的 16ms（60fps）宽松，
- *  因为本项目用 cursorUp 全行覆写（比 Ink diff 更重），帧率低一点更稳。 */
-export const THROTTLE_MS = 32;
+/** cooldown 窗口（ms）。
+ *  250ms ≈ 4fps：流式文本更新频率。太高会导致"打印机感"，太低会导致
+ *  inline 模式下 effect 重跑过于频繁，终端累积重复输出。
+ *  流式文本已通过 rewriteStreamingLines 做 cursorUp 全行覆写，低帧率可接受。 */
+export const THROTTLE_MS = 250;
 
 /**
  * 对流式文本做 leading + trailing 节流。

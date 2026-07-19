@@ -270,6 +270,10 @@ let lastSubmittedAgentText: string | null = null;
 // hasMeaningful 只检查 [lastSubmitMsgsLen..] 这段——避免历史 turn 残留的 assistant/tool
 // 让当前 turn 的撤回被误判为软中断。
 let lastSubmitMsgsLen = 0;
+// 提交去重：防止鼠标事件等误触发导致同一文本被重复提交
+const SUBMIT_DEDUP_WINDOW_MS = 2000;
+let lastSubmitText = '';
+let lastSubmitAt = 0;
 
 /**
  * AskUserManager：AI 向用户提问的挂起-应答状态机。
@@ -467,6 +471,14 @@ async function handleRewindLastTurn(): Promise<void> {
 }
 
 async function handleUserSubmit(rawText: string): Promise<void> {
+  const now = Date.now();
+  const trimmedForDedup = rawText.trim();
+  const isDup = trimmedForDedup === lastSubmitText && now - lastSubmitAt < SUBMIT_DEDUP_WINDOW_MS;
+
+  if (isDup) return;
+  lastSubmitText = trimmedForDedup;
+  lastSubmitAt = now;
+
   // 历史存占位符版本（省磁盘），agent/解析/回显用展开版本（需完整上下文）。
   // sessionStore 仍存展开版本（resume 后占位符 ID 跨 session 失效，需完整文本）。
   const { historyText: trimmedRaw, agentText: userInput } = splitSubmitTracks(rawText);
@@ -659,6 +671,14 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   });
   eventBus.onLoopEnd(() => {
     handleTurnLoopEnd(turnLifecycle);
+  });
+  eventBus.onError(d => {
+    if (d.recoverable) {
+      // 可恢复错误（如 context_overflow 压缩）：静默处理，不阻断用户
+      return;
+    }
+    // 不可恢复错误：显示给用户
+    tuiHandle?.printStyled(`[Error] ${d.message}`, 'error');
   });
   const allToolDefs = Array.from(toolRegistry.tools.values()).map(t => t.definition);
   const tools = currentMode === 'plan'

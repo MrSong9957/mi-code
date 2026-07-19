@@ -95,6 +95,41 @@ describe('useInputHandler（键事件 → store）', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it('同一文本短时间内重复回车只触发一次 submit（去重）', () => {
+    const onSubmit = vi.fn();
+    const store = createInputStore({ onSubmit });
+    store.getState().insert('hello');
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    stdin.write('\r');
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    // 快速重新输入相同文本并回车——应被去重
+    store.getState().insert('hello');
+    stdin.write('\r');
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('鼠标 SGR 序列不触发 submit（inline 模式防误判）', () => {
+    const onSubmit = vi.fn();
+    const store = createInputStore({ onSubmit });
+    store.getState().insert('hello');
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    // 鼠标释放事件（SGR 格式）：\x1b[<0;col;rowm
+    stdin.write('\x1b[<0;5;10m');
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(store.getState().text).toBe('hello');
+  });
+
+  it('bracketed paste 结束符不触发 submit', () => {
+    const onSubmit = vi.fn();
+    const store = createInputStore({ onSubmit });
+    store.getState().insert('test');
+    const { stdin } = render(React.createElement(InputProbe, { store }));
+    // bracketed paste 结束标记：\x1b[201~（Ink 拆分处理，\x1b 被过滤，其余可能作为字符插入）
+    stdin.write('\x1b[201~');
+    expect(onSubmit).not.toHaveBeenCalled();
+    // 关键：submit 未触发，文本可能含残留字符但不影响功能
+  });
+
   it('Ctrl+C → 调用 onExit 回调（退出），不改 store', () => {
     const onExit = vi.fn();
     const store = createInputStore();

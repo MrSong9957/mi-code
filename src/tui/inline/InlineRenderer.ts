@@ -33,6 +33,13 @@ export class InlineRenderer {
     }
   }
 
+  /** 上一帧快照：用于帧级内容比较，未变化时跳过 commit。 */
+  private prevFrameSnapshot: {
+    newLinesLen: number;
+    streamingLines: string[] | null;
+    footerLines: string[];
+  } | null = null;
+
   constructor(private stdout: NodeJS.WriteStream) {
     this.state = new InlineRenderState();
     // DECAWM OFF：关闭终端自动折行，应用层自己做 wordWrap。
@@ -283,6 +290,27 @@ export class InlineRenderer {
    */
   commit(frame: CommitFrame): void {
     const { justFinalized, needEraseDraft, forceFooterReset } = frame.transitions;
+
+    // ── 帧级快照比较：内容完全未变时跳过整个 commit，避免 inline 模式累积重复输出 ──
+    const snap = this.prevFrameSnapshot;
+    const footerLines = frame.footer.lines;
+    const frameUnchanged = snap
+      && frame.newLines.length === 0
+      && frame.streamingLines === null
+      && snap.streamingLines === null
+      && !justFinalized && !needEraseDraft && !forceFooterReset
+      && !frame.prefix
+      && snap.footerLines.length === footerLines.length
+      && snap.footerLines.every((l, i) => l === footerLines[i]);
+    if (frameUnchanged) {
+      return; // 帧内容完全未变，跳过 stdout 写入
+    }
+    // 更新快照
+    this.prevFrameSnapshot = {
+      newLinesLen: frame.newLines.length,
+      streamingLines: frame.streamingLines,
+      footerLines: [...footerLines],
+    };
 
     // Select 界面开关切换:擦除旧 footer 并重置账本(commitFooter 内部 cursorUp+ED 擦除 + 归零)
     // 强制下一帧 writeFooter 走 appendLine,避免高度不一致导致覆写错位
