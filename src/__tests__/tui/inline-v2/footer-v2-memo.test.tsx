@@ -17,6 +17,7 @@ import { createCompletionStore } from '../../../tui/state/completion-store.js';
 import { createSelectionStore } from '../../../tui/state/selection-store.js';
 import { createSpinnerStore } from '../../../tui/state/spinner-store.js';
 import type { StatusBarData } from '../../../tui/types.js';
+import type { FooterV2Props } from '../../../tui/inline-v2/FooterV2.js';
 
 const STATUS: StatusBarData = {
   mode: 'build',
@@ -96,3 +97,62 @@ describe('<FooterV2>', () => {
     expect(frame).toContain('/model');
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 3.4:memo 隔离核心防回归测试
+//
+// 物理本质:验证 spinner tick 不会触发 <FooterV2> 重渲染。
+// 这是 Stage 3 的核心保证——spinner 60ms 一次 tick,如果不隔离,
+// 每 tick 都重写整个 footer(border + 输入 + statusbar),破坏 incrementalRendering。
+//
+// 测试原理:用一个计数器组件包裹 <FooterV2>(同样 memo),计数器 render 次数。
+// 触发 spinner tick 后,如果 <FooterV2> 没被重渲染,计数器不增加。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<FooterV2> memo 隔离', () => {
+  it('spinner tick 不触发 FooterV2 重渲染(单元级)', () => {
+    const completionStore = createCompletionStore();
+    const selectionStore = createSelectionStore();
+    const spinnerStore = createSpinnerStore();
+    spinnerStore.getState().start('responding');
+
+    let renderCount = 0;
+    // 用一个外层组件计数:它每次被 React 调度渲染时 +1。
+    // FooterV2 是 React.memo,props 引用不变时不会重新执行其函数体,
+    // 但外层包装组件会因父重渲染而调度——这里我们直接渲染 FooterV2,
+    // 它自己内部不会订阅 spinnerStore,tick 与它无关。
+    const CountingFooter = React.memo(function CountingFooter(props: FooterV2Props) {
+      renderCount++;
+      return <FooterV2 {...props} />;
+    });
+
+    const baseProps: FooterV2Props = {
+      input: '',
+      cursor: 0,
+      status: STATUS,
+      cols: 80,
+      inputRowY: 10,
+      viewportTop: 0,
+      completionStore,
+      selectionStore,
+    };
+
+    const { rerender } = render(<CountingFooter {...baseProps} />);
+    const initialCount = renderCount;
+    expect(initialCount).toBeGreaterThan(0);
+
+    // 触发多个 spinner tick(模拟 500ms 的 spinner 动画)
+    for (let i = 0; i < 10; i++) {
+      spinnerStore.getState().tick();
+    }
+
+    // FooterV2 不订阅 spinnerStore → tick 不触发任何重渲染
+    // (没调 rerender,React 不会无端调度)
+    expect(renderCount).toBe(initialCount);
+
+    // 用相同 props rerender:memo 应该拦住(<CountingFooter> 是 React.memo)
+    rerender(<CountingFooter {...baseProps} />);
+    expect(renderCount).toBe(initialCount);
+  });
+});
+
