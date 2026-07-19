@@ -328,7 +328,9 @@ export function ConnectedApp({
   // V2 占位分支:inline 模式且无 InlineRenderer(即 MICODE_INLINE_V2=1)。
   // 阶段 2 会替换为真正的 <InlineAppV2/>(走 Ink reconciler + <Static>),当前抛错占位。
   if (isInline && !_inlineRenderer) {
-    throw new Error('InlineAppV2 not implemented yet (MICODE_INLINE_V2=1)');
+    throw new Error(
+      'InlineAppV2 not implemented yet (MICODE_INLINE_V2=1); set MICODE_INLINE_V2=0 to fall back to InlineRenderer',
+    );
   }
 
   return (

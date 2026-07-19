@@ -1,3 +1,6 @@
+// Stage 2 TODO:实装 <InlineAppV2> 后,补一个 V2 路径的 spinner clock 测试用例
+// (V0 用 'inline with renderer' 用例已覆盖;V2 路径目前会 throw,无法测)。
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';

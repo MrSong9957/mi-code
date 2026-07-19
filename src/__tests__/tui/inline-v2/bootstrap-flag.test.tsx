@@ -6,7 +6,7 @@
 //   - alt-screen 模式           :inlineV2=false(不受 flag 影响)
 //
 // 注意:bootstrap 真实 render Ink 到 process.stdout,每个测试用完必须 cleanup。
-// 通过动态 import 让 env 变化在每次测试中生效(module 顶层 const 读 process.env)。
+// env 在 bootstrap() 函数体内读(非模块顶层),静态 import 也能跑;动态 import 仅为对称/习惯。
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
