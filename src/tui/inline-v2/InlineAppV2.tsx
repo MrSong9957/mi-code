@@ -23,6 +23,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { MessageLine } from './MessageLine.js';
 import { SpinnerMemo } from './spinner-memo.js';
 import { FooterV2 } from './FooterV2.js';
+import { StreamingText } from './StreamingText.js';
 import { selectSpinnerView } from '../state/spinner-view.js';
 import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
@@ -59,6 +60,16 @@ export interface InlineAppV2Props {
 export function InlineAppV2({ messages, stores, cols }: InlineAppV2Props): React.ReactElement {
   const finalized = messages.filter((m) => m.finalized);
 
+  // 订阅末条未固化消息的 streamingText + role(流式 token 到达触发重渲染——必要)。
+  // 找到末条 finalized=false 的消息(流式中草稿)。
+  // 用 useShallow 让 selector 输出引用稳定(浅比较相等时返回同一对象),
+  // 避免每次都返回新对象触发 React "getSnapshot should be cached" 警告。
+  const streaming = useStore(stores.messagesStore, useShallow((s) => {
+    const last = s.messages[s.messages.length - 1];
+    if (!last || last.finalized) return null;
+    return { uuid: last.uuid, streamingText: last.streamingText, role: last.role };
+  }));
+
   // 订阅 input(输入变化触发重渲染,这是必要的)
   const inputText = useStore(stores.inputStore, (s) => s.text);
   const cursor = useStore(stores.inputStore, (s) => s.cursor);
@@ -77,16 +88,29 @@ export function InlineAppV2({ messages, stores, cols }: InlineAppV2Props): React
   const cursorLine = cursorScreenPos(inputText, cursor, '❯ ').y;
   const vp = computeInputViewport(totalInputLines, cursorLine, MAX_VISIBLE_INPUT_LINES);
 
+  // 流式文本占的行数(用于计算 spinner/footer 的 y 偏移)。
+  // 物理行数近似:每行按 cols 折算,首行扣除 ● 前缀。粗估即可(精确行数由 Ink yoga 算)。
+  // 注:streamingText 末尾不完整的行被 wrapStreamingTextTrimmed 隐藏,这里按完整行估算。
+  const streamingRowCount = streaming?.streamingText
+    ? Math.max(1, streaming.streamingText.split('\n').length)
+    : 0;
+
   // inputRowY(活动区内坐标,<Static> 不占活动区):
-  //   spinner 行数(spinnerRowCount,0 或 1+) + 上边框 1 行
-  const inputRowY = spinnerRowCount + 1;
+  //   流式文本行数(streamingRowCount) + spinner 行数(spinnerRowCount,0 或 1+) + 上边框 1 行
+  const inputRowY = streamingRowCount + spinnerRowCount + 1;
 
   return (
     <Box flexDirection="column">
       <Static items={finalized}>
         {(msg) => <MessageLine key={msg.uuid} msg={msg} cols={cols} />}
       </Static>
-      {/* Stage 4 在这里加 <StreamingText>(在 spinner 之前) */}
+      {streaming && (
+        <StreamingText
+          text={streaming.streamingText}
+          role={streaming.role === 'thinking' ? 'thinking' : 'assistant'}
+          cols={cols}
+        />
+      )}
       <SpinnerMemo store={stores.spinnerStore} />
       <FooterV2
         input={inputText}

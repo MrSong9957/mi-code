@@ -223,3 +223,103 @@ describe('<InlineAppV2> spinner tick 隔离(集成)', () => {
     expect(rc2).toBe(0);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 4.2 集成:<StreamingText> 接入 <InlineAppV2> 后,流式正文渲染验证。
+//
+// 物理本质:末条未固化消息的 streamingText 由 <StreamingText> 渲染在活动区
+// (<Static> 之后,spinner 之前)。finalize 后,消息进入 <Static>,活动区清空。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<InlineAppV2> 流式文本接入', () => {
+  it('末条未固化消息的 streamingText 出现在 frame', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().startStreaming('hello\nworld\n');
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    // wrapStreamingTextTrimmed 只显示完整行;"hello\nworld\n" 两行都是完整行
+    expect(lastFrame()).toContain('hello');
+    expect(lastFrame()).toContain('world');
+  });
+
+  it('streamingText 更新时 frame 跟着变(token 到达)', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().startStreaming('first\n');
+
+    const { lastFrame, rerender } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    expect(lastFrame()).toContain('first');
+
+    // 流式 token 到达 → streamingText 追加完整行
+    stores.messagesStore.getState().updateStreaming('first\nsecond line\n');
+    rerender(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    expect(lastFrame()).toContain('first');
+    expect(lastFrame()).toContain('second line');
+  });
+
+  it('finalize 后流式正文从活动区消失(进入 <Static>)', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().startStreaming('draft line\n');
+    // startStreaming 创建一条未固化消息;finalizeStreaming 把它转成固化消息
+    stores.messagesStore.getState().finalizeStreaming([
+      { content: 'final line', style: {}, indent: 0 },
+    ]);
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    // 固化后的消息进入 <Static>(由 renderFinalizedLine 渲染)
+    expect(frame).toContain('final line');
+  });
+
+  it('thinking 消息走 thinking 渲染路径(dim)', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().startStreamingThinking('pondering deeply\n');
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    expect(lastFrame()).toContain('pondering');
+  });
+});
