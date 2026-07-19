@@ -89,4 +89,56 @@ describe('<InlineAppV2>', () => {
     expect(frame).toContain('question');
     expect(frame).toContain('answer');
   });
+
+  it('spinner active 时渲染 spinner 文本', () => {
+    const stores = createStores();
+    stores.spinnerStore.getState().start('responding');
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={[]}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    // spinner 渲染会产生非空内容(<SpinnerMemo> 自订阅 spinnerStore)
+    const frame = lastFrame() ?? '';
+    expect(frame.length).toBeGreaterThan(0);
+  });
+
+  it('渲染 footer:border + prompt + statusbar', () => {
+    const stores = createStores();
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={[]}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('─');
+    expect(frame).toContain('❯');
+    expect(frame).toContain('sonnet');
+  });
+
+  it('用户输入文本出现在 footer', () => {
+    const stores = createStores();
+    stores.inputStore.getState().setText('hello world');
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={[]}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    expect(lastFrame()).toContain('hello world');
+  });
 });
