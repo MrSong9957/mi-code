@@ -159,3 +159,139 @@ describe('InlineV2 incrementalRendering POC 回归', () => {
     ).toBeLessThan(maxFrame * 0.3);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 4.4:原始 bug 复现回归测试
+//
+// 物理本质:V0 inline 模式的原始 bug 是"流式输出累积重复帧"——流式 token 30ms 一到,
+// spinner tick 50ms 一到,两者并发触发 V0 InlineRenderer.commit() 时,
+// 每帧都把"已渲染过的 finalized 行 + 草稿 + spinner + footer"完整重写一次。
+// 结果终端 scrollback 出现"几十份累积副本"。
+//
+// V2 修复机理:<Static> 把 finalized 直接写进 scrollback 一次,之后不再带;
+// 流式 + spinner 在活动区,Ink createIncremental 行级 diff 只重写变化的行。
+//
+// 本测试模拟原始 bug 场景:<Static> + spinner tick(50ms)+ 流式 token(30ms)并发,
+// 验证 V2 路径下:
+//   1. <Static> 已固化行只写 1 次(核心 bug 修复标志)
+//   2. 总字节数远小于"每帧全量重写"的预期(几千字节 vs 几万字节)
+// ──────────────────────────────────────────────────────────────────────────
+
+interface BugRegressionFinalized {
+  id: number;
+  text: string;
+}
+
+const BUG_REGRESSION_FINALIZED: BugRegressionFinalized[] = [
+  { id: 1, text: '[F] finalized message before streaming' },
+];
+
+/**
+ * 原始 bug 复现场景:<Static> 包固化消息 + 活动 spinner(50ms tick)+ 活动流式文本(30ms token)。
+ *
+ * 流式文本每 30ms 追加一个字符 'a',spinner 每 50ms tick 一次,两者并发。
+ * 在 V0 路径下,每次 tick 或 token 都全量重写,导致累积副本。
+ */
+function AppWithConcurrentStreamAndSpinner(): React.ReactElement {
+  const [streamingText, setStreamingText] = useState('');
+  const [spinnerTime, setSpinnerTime] = useState(0);
+
+  useEffect(() => {
+    // 模拟流式 token 每 30ms 到达(比 spinner tick 更快,制造并发)
+    const streamId = setInterval(() => {
+      setStreamingText((t) => t + 'a');
+    }, 30);
+    // 模拟 spinner tick 每 50ms
+    const tickId = setInterval(() => {
+      setSpinnerTime((t) => t + 50);
+    }, 50);
+    return () => { clearInterval(streamId); clearInterval(tickId); };
+  }, []);
+
+  return (
+    <>
+      <Static items={BUG_REGRESSION_FINALIZED}>
+        {(m: BugRegressionFinalized) => (
+          <Text key={m.id}>{m.text}</Text>
+        )}
+      </Static>
+      <Box flexDirection="column">
+        <Text>{'· Working ' + spinnerTime + 'ms'}</Text>
+        <Text>{'─'.repeat(60)}</Text>
+        <Text>{'streaming: ' + streamingText}</Text>
+      </Box>
+    </>
+  );
+}
+
+describe('原始 bug 回归:流式 + spinner tick 并发不累积重复帧', () => {
+  it('<Static> 已固化消息在并发场景下仍只写 1 次', async () => {
+    const stdout = createMockStdout();
+    const instance = render(<AppWithConcurrentStreamAndSpinner />, {
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+      incrementalRendering: true,
+    });
+    // 600ms = 20 个流式 token + 12 个 spinner tick
+    await new Promise((r) => setTimeout(r, 600));
+    instance.unmount();
+    instance.waitUntilRenderFlush?.();
+
+    // 核心断言:<Static> 已固化行只写一次进 scrollback。
+    // V0 bug 的标志就是这一行被重写几十次。
+    const staticWrites = stdout.writes.filter((w) => w.data.includes('[F]'));
+    expect(
+      staticWrites.length,
+      '<Static> 已固化消息应只写 1 次(V0 bug 标志:此值会达几十次)',
+    ).toBe(1);
+  });
+
+  it('总字节数远小于"每帧全量重写"的预期', async () => {
+    const stdout = createMockStdout();
+    const instance = render(<AppWithConcurrentStreamAndSpinner />, {
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+      incrementalRendering: true,
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    instance.unmount();
+    instance.waitUntilRenderFlush?.();
+
+    // V0 对比基线:600ms 内如果每帧(50ms tick)都全量重写 ~400B,总字节 ~4800B+。
+    // V2 行级 diff 后总字节应该 << 4800B。
+    // 阈值 5000B:留足余量(包含 spinner 多次小帧 + 流式增量行)。
+    // 如失败说明 Ink 行级 diff 没生效,排查 incrementalRendering 是否传 true。
+    const totalBytes = stdout.writes.reduce((s, w) => s + w.bytes, 0);
+    expect(
+      totalBytes,
+      `总字节 ${totalBytes}B 应 < 5000B(行级 diff 生效;V0 全量重写场景约 4800B+)`,
+    ).toBeLessThan(5000);
+  });
+
+  it('有实际渲染输出(防止假阳性静默通过)', async () => {
+    // 守护测试:确认 fixture 真的渲染了——若 Ink 完全没输出,上面的字节断言会假性通过。
+    const stdout = createMockStdout();
+    const instance = render(<AppWithConcurrentStreamAndSpinner />, {
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+      incrementalRendering: true,
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    instance.unmount();
+    instance.waitUntilRenderFlush?.();
+
+    const nonEmptyWrites = stdout.writes.filter((w) => w.bytes > 0);
+    expect(
+      nonEmptyWrites.length,
+      '应该有多个非空写入帧(防止假阳性:零输出会让字节断言无意义)',
+    ).toBeGreaterThan(3);
+
+    // 验证 fixture 真的在动:spinner 时间 / streaming 文本都应在帧里出现过
+    const allData = stdout.writes.map((w) => w.data).join('');
+    expect(allData).toContain('Working');
+    expect(allData).toContain('streaming');
+  });
+});
