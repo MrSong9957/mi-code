@@ -410,14 +410,18 @@ describe('<InlineAppV2> Select 选择器接入', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// Task 5a.2 集成:<Overlay>(Ctrl+O)接入 <InlineAppV2>。
+// Task 5a.2 集成:<OverlayHost>(Ctrl+O)接入 <InlineAppV2>。
 //
-// visible 时用 <Overlay>(复用 alt-screen 组件)替换整棵活动区,
-// 显示可折叠块(thinking/tool_result)的完整内容。close 后恢复原组件树。
+// visible 时 <OverlayHost> 进终端备用屏直接写 stdout(不走 Ink 渲染),
+// 主屏 Ink 渲染空白活动区(被备用屏遮住)。
+// close 后退备用屏,主屏恢复 footer/spinner/streaming。
+//
+// 注:OverlayHost 的 alt-screen 行为由 overlay-host.test.tsx 单独覆盖。
+// 这里只验证 <InlineAppV2> 在 overlayVisible 时正确隐藏活动区、close 后恢复。
 // ──────────────────────────────────────────────────────────────────────────
 
 describe('<InlineAppV2> Overlay (Ctrl+O) 接入', () => {
-  it('overlayStore.open 后渲染 Overlay 替换整棵树', () => {
+  it('overlayStore.open 后活动区被隐藏(Ink 主屏不渲染 footer)', () => {
     const stores = createStores();
     stores.overlayStore.getState().open('Thinking output', [
       { content: 'full thinking text line 1', style: {}, indent: 0 },
@@ -435,11 +439,9 @@ describe('<InlineAppV2> Overlay (Ctrl+O) 接入', () => {
       />,
     );
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('Thinking output');
-    expect(frame).toContain('full thinking text line 1');
-    expect(frame).toContain('full thinking text line 2');
-    // Overlay 替换整棵树:footer(border/statusbar)不应出现
+    // Overlay 走 alt-screen,主屏 Ink 不渲染活动区 → footer 不出现
     expect(frame).not.toContain('sonnet');
+    expect(frame).not.toContain('❯');
   });
 
   it('overlayStore.close 后恢复 spinner+footer', async () => {
@@ -455,7 +457,8 @@ describe('<InlineAppV2> Overlay (Ctrl+O) 接入', () => {
         rows={24}
       />,
     );
-    expect(lastFrame()).toContain('Title');
+    // Overlay visible 时主屏不含 footer
+    expect(lastFrame() ?? '').not.toContain('sonnet');
 
     stores.overlayStore.getState().close();
     await new Promise((r) => setTimeout(r, 10));

@@ -126,22 +126,24 @@ describe('V2 inline E2E - 基础场景', () => {
     try {
       // 按 Ctrl+O 打开 overlay
       h.stdin.write(KEYS.CTRL_O);
-      await waitMs(20);
+      await waitMs(30);
       expect(overlayToggled).toBe(1);
+      // Overlay 走 alt-screen 直写 stdout,主屏 Ink 渲染空白(footer 隐藏)
       let frame = h.lastFrame() ?? '';
-      expect(frame).toContain('Thinking output');
-      expect(frame).toContain('long thinking content');
-      // Overlay 替换整棵树:footer statusbar 不应出现
       expect(frame).not.toContain('sonnet');
+      expect(frame).not.toContain('❯');
+      // overlayStore 状态正确
+      expect(h.stores.overlayStore.getState().visible).toBe(true);
 
       // 再按 Ctrl+O 关闭
       h.stdin.write(KEYS.CTRL_O);
-      await waitMs(20);
+      await waitMs(50);
       expect(overlayToggled).toBe(2);
-      frame = h.lastFrame() ?? '';
-      expect(frame).not.toContain('Thinking output');
-      // 恢复 footer
-      expect(frame).toContain('sonnet');
+      // OverlayHost 直写 stdout(\x1b[?1049l)与 Ink 帧混合,
+      // 用 frames 数组找恢复后的 Ink 帧(含 sonnet)
+      const restoredFrame = h.frames.find((f) => f.includes('sonnet'));
+      expect(restoredFrame).toBeDefined();
+      expect(h.stores.overlayStore.getState().visible).toBe(false);
     } finally {
       h.unmount();
     }

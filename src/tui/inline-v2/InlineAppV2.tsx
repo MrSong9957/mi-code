@@ -28,7 +28,7 @@ import { SpinnerMemo } from './spinner-memo.js';
 import { FooterV2 } from './FooterV2.js';
 import { StreamingText } from './StreamingText.js';
 import { SelectOverlayV2 } from './SelectOverlayV2.js';
-import { Overlay } from '../components/Overlay.js';
+import { OverlayHost } from './OverlayHost.js';
 import { selectSpinnerView } from '../state/spinner-view.js';
 import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
@@ -164,11 +164,12 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
           ? <LogoLineV2 key={item.id} logo={item.logo} />
           : <MessageLine key={item.id} msg={item.msg} cols={cols} />}
       </Static>
-      {overlayVisible ? (
-        // Overlay 可见时,替换活动区(spinner+footer 隐藏,只显示折叠块全文)。
-        // 作为 <Box> 子节点而非根元素切换,保持 <Static> identity 稳定(见上面注释)。
-        <Overlay store={stores.overlayStore} cols={cols} />
-      ) : (
+      {/* OverlayHost:visible 时进终端备用屏直接写 stdout(不走 Ink 渲染),
+          避免覆盖 footer 或盖不住 scrollback。返回 null,无可见 React 元素。 */}
+      <OverlayHost store={stores.overlayStore} cols={cols} />
+      {!overlayVisible && (
+        // Overlay 未可见时才渲染活动区(spinner/streaming/select/footer)。
+        // Overlay 可见时活动区被备用屏遮住,无需渲染(节省 Ink diff 开销)。
         <>
           {streaming && (
             <StreamingText

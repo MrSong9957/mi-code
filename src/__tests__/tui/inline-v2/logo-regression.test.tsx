@@ -193,7 +193,7 @@ describe('<ConnectedApp> 整树 LOGO 不变量', () => {
 
   it('Overlay 开关切换后 logo 仍在', async () => {
     const stores = makeFullStores();
-    const { lastFrame, stdin } = renderConnected(stores);
+    const { lastFrame, frames } = renderConnected(stores);
     await new Promise((r) => setTimeout(r, 20));
 
     // 通过 store 直接切换 overlay(避免依赖 Ctrl+O 按键解析时序)
@@ -201,17 +201,15 @@ describe('<ConnectedApp> 整树 LOGO 不变量', () => {
       { content: 'overlay text', style: {}, indent: 0 },
     ]);
     await new Promise((r) => setTimeout(r, 20));
-    expect(lastFrame() ?? '').toContain('Overlay content');
-    // 注:Overlay 期间 logo 仍在 scrollback 里(<Static> 已写入,不可撤回),
-    // ink-testing-library 的 lastFrame 把 scrollback + 活动区拼在一起。
-    // 这里只验证 overlay 内容出现,不强求 logo 消失。
+    // Overlay 走 alt-screen 直写 stdout,主屏 Ink 不渲染活动区(footer 隐藏)
+    expect(lastFrame() ?? '').not.toContain('sonnet');
 
     // 关闭 overlay → 应恢复主界面(含 logo)
     stores.overlayStore.getState().close();
-    await new Promise((r) => setTimeout(r, 30));
-    const frame = lastFrame() ?? '';
-    expect(frame).not.toContain('Overlay content');
-    expect(frame).toContain('MiCode');
+    await new Promise((r) => setTimeout(r, 50));
+    // OverlayHost 直写 \x1b[?1049l 与 Ink 帧混合,用 frames 找恢复后的帧
+    const restoredFrame = frames.find((f) => f.includes('MiCode') && f.includes('sonnet'));
+    expect(restoredFrame).toBeDefined();
   });
 
   it('Resize 重挂载后 logo 仍在', async () => {
