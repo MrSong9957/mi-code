@@ -145,6 +145,18 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
     ...finalized.map((msg): StaticItem => ({ kind: 'message', id: msg.uuid, msg })),
   ];
 
+  // 防御性断言:logo 必须在 staticItems 首位。
+  // 背景:LOGO 曾间歇性消失,根因可能是重构时把 logo item 漏掉或顺序错。
+  // 开发环境立刻抛错(NODE_ENV !== 'production'),生产环境跳过避免开销。
+  if (process.env.NODE_ENV !== 'production') {
+    if (staticItems.length === 0 || staticItems[0]!.kind !== 'logo') {
+      throw new Error(
+        'InlineAppV2 不变量破坏:logo 必须是 <Static> items 的首项,实际首项: '
+        + (staticItems[0]?.kind ?? '空数组'),
+      );
+    }
+  }
+
   return (
     <Box flexDirection="column">
       <Static items={staticItems}>
