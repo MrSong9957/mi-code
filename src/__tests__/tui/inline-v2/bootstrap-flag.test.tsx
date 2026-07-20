@@ -1,37 +1,57 @@
 // src/__tests__/tui/inline-v2/bootstrap-flag.test.tsx
 //
-// 验证 MICODE_INLINE_V2 flag 切换 bootstrap 的 inline 路径:
-//   - 未设 / MICODE_INLINE_V2=1:inlineV2=true, 走 V2 (Ink reconciler,默认)
-//   - MICODE_INLINE_V2=0        :inlineV2=false,走 V0 (InlineRenderer,回滚)
-//   - alt-screen 模式           :inlineV2=false(不受 flag 影响)
+// bootstrap inline 模式验证。
+//
+// Stage 5b 后:V0(InlineRenderer)已删除,inline 模式恒走 V2(Ink reconciler)。
+// MICODE_INLINE_V2 flag 不再生效(保留为 no-op,向后兼容)。
+// alt-screen 模式不受影响。
 //
 // 注意:bootstrap 真实 render Ink 到 process.stdout,每个测试用完必须 cleanup。
-// env 在 bootstrap() 函数体内读(非模块顶层),静态 import 也能跑;动态 import 仅为对称/习惯。
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
-describe('bootstrap MICODE_INLINE_V2 flag', () => {
-  let origEnv: string | undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let writeSpy: any;
+describe('bootstrap inline/alt-screen 模式', () => {
+  let writeSpy: ReturnType<typeof vi.spyOn>;
   let originalColumns: number;
 
   beforeEach(() => {
-    origEnv = process.env.MICODE_INLINE_V2;
-    // Stub stdout 避免污染真实终端(Ink 渲染写入大量字节)
     writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     originalColumns = process.stdout.columns;
     Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
   });
 
   afterEach(() => {
-    if (origEnv === undefined) delete process.env.MICODE_INLINE_V2;
-    else process.env.MICODE_INLINE_V2 = origEnv;
     writeSpy.mockRestore();
     Object.defineProperty(process.stdout, 'columns', { value: originalColumns, configurable: true });
   });
 
-  it('MICODE_INLINE_V2=0 时 inlineV2=false(走 V0)', async () => {
+  it('inline 模式启动不崩(Ink reconciler + <Static>)', async () => {
+    const { bootstrap } = await import('../../../tui/bootstrap.js');
+    const handle = bootstrap({
+      logo: { version: '0', dir: '/tmp' },
+      status: { mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main' },
+      onSubmit: () => {},
+      onExit: () => {},
+      renderMode: 'inline',
+    });
+    // 不崩 + cleanup 不崩 = pass
+    expect(() => handle.cleanup()).not.toThrow();
+  });
+
+  it('alt-screen 模式启动不崩', async () => {
+    const { bootstrap } = await import('../../../tui/bootstrap.js');
+    const handle = bootstrap({
+      logo: { version: '0', dir: '/tmp' },
+      status: { mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main' },
+      onSubmit: () => {},
+      onExit: () => {},
+      renderMode: 'alt-screen',
+    });
+    expect(() => handle.cleanup()).not.toThrow();
+  });
+
+  it('MICODE_INLINE_V2 env 不再生效(V0 已删,inline 恒走 V2)', async () => {
+    // 设成任何值都不应该影响行为(向后兼容 no-op)
     process.env.MICODE_INLINE_V2 = '0';
     const { bootstrap } = await import('../../../tui/bootstrap.js');
     const handle = bootstrap({
@@ -41,50 +61,8 @@ describe('bootstrap MICODE_INLINE_V2 flag', () => {
       onExit: () => {},
       renderMode: 'inline',
     });
-    expect(handle.inlineV2).toBe(false);
-    handle.cleanup();
-  });
-
-  it('MICODE_INLINE_V2=1 时 inlineV2=true(走 V2)', async () => {
-    process.env.MICODE_INLINE_V2 = '1';
-    // 动态 import 让 env 变化生效
-    const { bootstrap } = await import('../../../tui/bootstrap.js');
-    const handle = bootstrap({
-      logo: { version: '0', dir: '/tmp' },
-      status: { mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main' },
-      onSubmit: () => {},
-      onExit: () => {},
-      renderMode: 'inline',
-    });
-    expect(handle.inlineV2).toBe(true);
-    handle.cleanup();
-  });
-
-  it('alt-screen 模式 inlineV2=false(不受 flag 影响)', async () => {
-    process.env.MICODE_INLINE_V2 = '1';
-    const { bootstrap } = await import('../../../tui/bootstrap.js');
-    const handle = bootstrap({
-      logo: { version: '0', dir: '/tmp' },
-      status: { mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main' },
-      onSubmit: () => {},
-      onExit: () => {},
-      renderMode: 'alt-screen',
-    });
-    expect(handle.inlineV2).toBe(false);
-    handle.cleanup();
-  });
-
-  it('未设 MICODE_INLINE_V2 时 inlineV2=true(默认 V2)', async () => {
+    // 不崩即可(V2 路径,忽略 env)
+    expect(() => handle.cleanup()).not.toThrow();
     delete process.env.MICODE_INLINE_V2;
-    const { bootstrap } = await import('../../../tui/bootstrap.js');
-    const handle = bootstrap({
-      logo: { version: '0', dir: '/tmp' },
-      status: { mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main' },
-      onSubmit: () => {},
-      onExit: () => {},
-      renderMode: 'inline',
-    });
-    expect(handle.inlineV2).toBe(true);
-    handle.cleanup();
   });
 });

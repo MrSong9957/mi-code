@@ -125,8 +125,6 @@ export function createE2EHarness(opts: E2EHarnessOptions = {}): E2EHarness {
           onToggleOverlay: opts.onToggleOverlay,
           onAbortStream: opts.onAbortStream,
           onRewindLastTurn: opts.onRewindLastTurn,
-          // V2 路径:inline 模式且无 InlineRenderer
-          inlineRenderer: undefined,
         }),
       ),
     }),

@@ -37,7 +37,6 @@ import { RenderModeProvider, type RenderMode } from './state/render-mode.js';
 import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
 import { USE_DOUBLE_BUFFER, createCustomRenderer, setCursorPos } from '../render/index.js';
-import { InlineRenderer } from './inline/InlineRenderer.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
 import type { ThemeName } from '../utils/theme.js';
@@ -107,8 +106,6 @@ export interface BootstrapHandle {
   printStyled: (text: string, role: 'system' | 'error' | 'input', style?: UIMessageStyle) => void;
   /** 卸载 Ink + 退 alt screen（进程退出前调用） */
   cleanup: () => void;
-  /** 当前 inline 路径:V0(InlineRenderer)或 V2(Ink reconciler)。alt-screen 模式恒为 false */
-  readonly inlineV2: boolean;
 }
 
 export function stopSpinnerAndAppendCompletion(
@@ -125,10 +122,9 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const renderMode = opts.renderMode ?? 'inline';
   const isInline = renderMode === 'inline';
 
-  // V2 flag:inline 模式下,V2 走 Ink 原生 + incrementalRendering;V0 走 InlineRenderer
-  // 默认 V2(Stage 5a.6 完成,所有场景验证通过)。
-  // 用户遇问题可设 MICODE_INLINE_V2=0 回滚 V0 fallback(Stage 5b 删除 V0 前保留)。
-  const useInlineV2 = isInline && process.env.MICODE_INLINE_V2 !== '0';
+  // inline 模式恒走 V2(Ink reconciler + <Static> + incrementalRendering)。
+  // V0(InlineRenderer 手动渲染)已在 Stage 5b 删除。
+  const useInlineV2 = isInline;
 
   const messagesStore = createMessagesStore();
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
@@ -189,12 +185,10 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     renderOptions.onSetCursorPosition = (pos) => { setCursorPos(pos as { x: number; y: number } | undefined); };
   }
 
-  // inline V2:不注入 renderer,走 Ink 原生 + incrementalRendering
+  // inline 模式:走 Ink 原生 + incrementalRendering(无 InlineRenderer)
   if (useInlineV2) {
     renderOptions.incrementalRendering = true;
   }
-  // inline V0(fallback):保留 InlineRenderer
-  const inlineRenderer = (isInline && !useInlineV2) ? new InlineRenderer(process.stdout) : null;
 
   const themeStore = createThemeStore(opts.themeName);
 
@@ -205,7 +199,6 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
           messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore,
           onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
           onAbortStream: opts.onAbortStream, onRewindLastTurn: opts.onRewindLastTurn,
-          inlineRenderer: inlineRenderer ?? undefined,
         }),
       ),
     }),
@@ -214,7 +207,6 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
 
   const cleanup = (): void => {
     try {
-      inlineRenderer?.destroy(); // 恢复 DECAWM ON + 光标可见
       inkInstance?.unmount();
     } catch {
       // unmount 可能已调用，忽略
@@ -255,6 +247,5 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     },
     spinnerOnToken: (length) => { spinnerStore.getState().onToken(length); },
     printLine, printStyled, cleanup,
-    inlineV2: useInlineV2,
   };
 }

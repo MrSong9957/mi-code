@@ -1,13 +1,13 @@
-// V0/V2 路径对比:spinner clock wiring。
-// V0(inline + InlineRenderer)和 V2(inline 无 InlineRenderer,走 Ink reconciler)
-// 都应该恰好有一个 spinner clock owner(useSpinnerClock)。
-// Stage 5a 后 V2 已实装,本测试覆盖 V0 + V2 + alt-screen 三种模式。
+// ConnectedApp spinner clock wiring:V2 inline 和 alt-screen 两种模式。
+//
+// V0(InlineRenderer 路径)已在 Stage 5b 删除。
+// V2(inline 无 InlineRenderer,走 Ink reconciler)和 alt-screen 都应该恰好有
+// 一个 spinner clock owner(useSpinnerClock)。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { ConnectedApp } from '../../tui/ConnectedApp.js';
-import { InlineRenderer } from '../../tui/inline/InlineRenderer.js';
 import { createCompletionStore } from '../../tui/state/completion-store.js';
 import { createInputStore } from '../../tui/state/input-store.js';
 import { createLogoStore } from '../../tui/state/logo-store.js';
@@ -24,19 +24,10 @@ import {
 } from '../../tui/state/spinner-store.js';
 import { createStatusStore } from '../../tui/state/status-store.js';
 
-function createMockStdout(): NodeJS.WriteStream {
-  return {
-    write: () => true,
-  } as unknown as NodeJS.WriteStream;
-}
-
-function renderConnected(mode: RenderMode, withInlineRenderer: boolean) {
+function renderConnected(mode: RenderMode) {
   const spinnerStore = createSpinnerStore();
   spinnerStore.getState().start('responding');
   const tickSpy = vi.spyOn(spinnerStore.getState(), 'tick');
-  const inlineRenderer = withInlineRenderer
-    ? new InlineRenderer(createMockStdout())
-    : undefined;
 
   const view = render(
     <RenderModeProvider initialMode={mode}>
@@ -52,7 +43,6 @@ function renderConnected(mode: RenderMode, withInlineRenderer: boolean) {
         selectStore={createSelectStore()}
         overlayStore={createOverlayStore()}
         onExit={() => {}}
-        inlineRenderer={inlineRenderer}
       />
     </RenderModeProvider>,
   );
@@ -71,11 +61,10 @@ describe('ConnectedApp spinner clock wiring', () => {
   });
 
   it.each([
-    ['V0 inline with renderer', 'inline', true],
-    ['V2 inline (no renderer)', 'inline', false],
-    ['alt-screen', 'alt-screen', false],
-  ] as const)('%s has exactly one clock owner', (_, mode, withInlineRenderer) => {
-    const { tickSpy, view } = renderConnected(mode, withInlineRenderer);
+    ['V2 inline', 'inline'],
+    ['alt-screen', 'alt-screen'],
+  ] as const)('%s has exactly one clock owner', (_, mode) => {
+    const { tickSpy, view } = renderConnected(mode);
 
     vi.advanceTimersByTime(150);
     const callsBeforeUnmount = tickSpy.mock.calls.length;

@@ -20,7 +20,6 @@ import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { useSpinnerClock } from './hooks/useSpinnerClock.js';
 import { useRenderMode } from './state/render-mode.js';
 import { DropdownProvider } from './state/dropdown-context.js';
-import { InlineApp } from './inline/InlineApp.js';
 import { InlineAppV2 } from './inline-v2/InlineAppV2.js';
 import { createSelectionStore } from './state/selection-store.js';
 import { createMouseParser } from './input/mouse-events.js';
@@ -72,12 +71,10 @@ export interface ConnectedAppProps {
   onAbortStream?: () => void;
   /** ESC 双击撤回末条 user turn */
   onRewindLastTurn?: () => void;
-  /** inline 模式渲染器（alt-screen 模式为 undefined） */
-  inlineRenderer?: import('./inline/InlineRenderer.js').InlineRenderer;
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, onExit, onTab, onToggleOverlay, onAbortStream, onRewindLastTurn, inlineRenderer: _inlineRenderer,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, onExit, onTab, onToggleOverlay, onAbortStream, onRewindLastTurn,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store（拖拽写入，所有区域订阅高亮）
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -103,15 +100,15 @@ export function ConnectedApp({
   useEffect(() => {
     if (prevColsRef.current !== cols) {
       prevColsRef.current = cols;
-      // 只在 V2 路径(inline 模式 + 无 InlineRenderer)清屏
-      if (isInline && !_inlineRenderer) {
-        // 清屏 + 清 scrollback + 光标归位(对齐 V0 InlineApp.tsx:211)
+      // 只在 inline 模式清屏(V2 路径)
+      if (isInline) {
+        // 清屏 + 清 scrollback + 光标归位
         process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
         // 触发 <InlineAppV2> 重挂载 → <Static> 重写所有内容
         setV2ResizeKey((k) => k + 1);
       }
     }
-  }, [cols, isInline, _inlineRenderer]);
+  }, [cols, isInline]);
 
   // 订阅所有 store
   const messages = useStore(messagesStore, (s) => s.messages);
@@ -330,33 +327,8 @@ export function ConnectedApp({
 
   // ── early return 只影响 JSX 输出，不影响 hooks ──
 
-  if (isInline && _inlineRenderer) {
-    return (
-      <DropdownProvider>
-        <InlineApp
-          messages={messages}
-          status={status}
-          logo={logo}
-          renderer={_inlineRenderer}
-          messagesStore={messagesStore}
-          inputStore={inputStore}
-          statusStore={statusStore}
-          spinnerStore={spinnerStore}
-          completionStore={completionStore}
-          selectStore={selectStore}
-          selectionStore={selectionStore}
-          overlayStore={overlayStore}
-          cols={cols}
-          rows={rows}
-        />
-      </DropdownProvider>
-    );
-  }
-
-  // V2 路径:inline 模式且无 InlineRenderer(即 MICODE_INLINE_V2=1)。
-  // 走 Ink reconciler + <Static>(Stage 2 只渲染已固化消息 + 占位 footer,
-  // spinner/streaming 由 Stage 3/4 加入)。
-  if (isInline && !_inlineRenderer) {
+  // inline 模式恒走 V2(Ink reconciler + <Static>)。V0(InlineRenderer)已在 Stage 5b 删除。
+  if (isInline) {
     return (
       <DropdownProvider>
         <InlineAppV2
