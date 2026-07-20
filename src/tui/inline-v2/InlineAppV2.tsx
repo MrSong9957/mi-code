@@ -170,7 +170,8 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
       {/* 活动区始终渲染,即使 overlayVisible。
           原因:overlayVisible 时活动区被备用屏遮住(用户看不见),但 Ink 的 lastOutput
           仍含完整 footer。退出备用屏后,主屏的 footer 物理上一直在,无需 Ink 重绘。
-          如果切换时隐藏活动区,Ink 的 lastOutput 会变成空白,退出备用屏后 footer 不恢复。 */}
+          如果切换时隐藏活动区,Ink 的 lastOutput 会变成空白,退出备用屏后 footer 不恢复。
+          契约由 overlay-footer-recovery.test.tsx 的"关键契约"测试守护。 */}
       <>
         {streaming && (
           <StreamingText
