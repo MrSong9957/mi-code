@@ -310,3 +310,19 @@ describe('图片转换 helper — buildGeminiInlineData', () => {
     expect(() => buildGeminiInlineData(makeImageBlock({ data: '' }))).toThrowError(/图片数据缺失/);
   });
 });
+
+// ─────────────── 三家 client 统一防御（helper 层覆盖） ───────────────
+
+describe('图片转换 helper — 三家 client 共享防御', () => {
+  // OpenAI / Google / Anthropic 三家都通过 ensureImageData 防御，
+  // 因此在 helper 层验证一次即可，client 层不重复。
+  it('无论经过哪个 builder，空 data 都抛中文错误', () => {
+    const block = makeImageBlock({ data: '', cachePath: '/x.png' });
+    // 直接调用 helper
+    expect(() => ensureImageData(block)).toThrowError(/AUTO-0028/);
+    // 经 OpenAI builder 透传
+    expect(() => buildOpenAIImagePart(block)).toThrowError(/AUTO-0028/);
+    // 经 Gemini builder 透传
+    expect(() => buildGeminiInlineData(block)).toThrowError(/AUTO-0028/);
+  });
+});
