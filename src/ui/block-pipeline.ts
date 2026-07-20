@@ -163,7 +163,7 @@ export class BlockPipeline {
             : summaryLines; // 无思考内容时 full = summary
           this.expandable.add({ id, kind: 'thinking', summaryLines, fullLines });
           // 摘要用 'thinking_summary' role（非 assistant），强制 messages-store 新建消息，
-          // 避免 appendLine 续接到已固化的 ● Thinking… 消息导致 InlineApp 跳过渲染。
+          // 避免 appendLine 续接到已固化的 ● Thinking… 消息导致渲染层跳过渲染。
           this.print(summaryLines, 'thinking_summary');
         }
         this.thinkingBuffer = '';

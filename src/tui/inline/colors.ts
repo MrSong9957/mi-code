@@ -87,7 +87,7 @@ export function colorizeStatus(fields: StatusFields, themeName?: ThemeName): str
 //
 // 物理本质：消息行的「语义→色码翻译器」。
 // FormattedLine.style 用抽象 token（brand/success/error/dim），
-// 本组函数把这些 token 翻译成终端 SGR 序列，让 InlineApp 能给每行正文上色。
+// 本组函数把这些 token 翻译成终端 SGR 序列，让渲染层给每行正文上色。
 //
 // 映射表与 src/tui/types.ts:styleToInkProps 完全一致（单一事实源）：
 //   brand   → theme.brand —— ● 标题、assistant 前缀
