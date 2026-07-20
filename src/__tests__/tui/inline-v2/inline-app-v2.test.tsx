@@ -35,6 +35,24 @@ function createStores(): InlineAppV2Stores {
 }
 
 describe('<InlineAppV2>', () => {
+  it('渲染 LOGO(MiCode + version + dir)', () => {
+    const stores = createStores();
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={[]}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '1.2.3', dir: '/tmp/proj' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('MiCode');
+    expect(frame).toContain('v1.2.3');
+    expect(frame).toContain('/tmp/proj');
+  });
+
   it('渲染已固化消息', () => {
     const stores = createStores();
     stores.messagesStore.getState().appendMessage('assistant', [

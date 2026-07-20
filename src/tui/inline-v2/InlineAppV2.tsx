@@ -13,11 +13,14 @@
 // - <SpinnerMemo> 自己订阅整个 spinnerStore,tick 爆炸范围限制在它内部。
 //
 // <Static> 已固化消息由 Ink 直接写入 scrollback(永久区),不占活动区 y 坐标。
-// 活动区(spinner + footer)从 y=0 开始(spinner 占 rowCount 行 + footer 上边框 1 行
-// → inputRowY = spinnerRowCount + 1)。
+// 活动区(spinner + footer)从 y=0 开始。
+//
+// LOGO 渲染:logo 作为 <Static> 的首项(特殊 item),与已固化消息一起只写一次进 scrollback。
+// 这样 logo 不会被 spinner tick 反复重画(避免 logo 重复出现),且 resize 时通过
+// 父组件 ConnectedApp 重挂载本组件(key={resizeKey})让 <Static> 重写 logo + 所有消息。
 
 import React from 'react';
-import { Box, Static } from 'ink';
+import { Box, Static, Text } from 'ink';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { MessageLine } from './MessageLine.js';
@@ -39,6 +42,23 @@ import type { SelectStore } from '../state/select-store.js';
 import type { SelectionStore } from '../state/selection-store.js';
 import type { OverlayStore } from '../state/overlay-store.js';
 
+/** LOGO 在 <Static> items 数组里的特殊 id(避免与消息 uuid 冲突) */
+export const LOGO_STATIC_ID = '__logo__';
+
+/** LogoLineV2:渲染 logo 3 行(与 V0 buildLogoAnsi 同款文本,但走 React 元素)。 */
+function LogoLineV2({ logo }: { logo: LogoData }): React.ReactElement {
+  return (
+    <Text>
+      <Text color="magenta">{` ▐▛███▜▌   MiCode v${logo.version}`}</Text>
+      {'\n'}
+      <Text color="magenta">{'▝▜█████▛▘  TypeScript CLI · Node.js Runtime'}</Text>
+      {'\n'}
+      <Text color="magenta">{`  ▘▘ ▝▝    ${logo.dir}`}</Text>
+      {'\n'}
+    </Text>
+  );
+}
+
 export interface InlineAppV2Stores {
   messagesStore: MessagesStore;
   inputStore: InputStore;
@@ -59,7 +79,7 @@ export interface InlineAppV2Props {
   rows: number;
 }
 
-export function InlineAppV2({ messages, stores, cols }: InlineAppV2Props): React.ReactElement {
+export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props): React.ReactElement {
   const finalized = messages.filter((m) => m.finalized);
 
   // 订阅末条未固化消息的 streamingText + role(流式 token 到达触发重渲染——必要)。
@@ -94,7 +114,7 @@ export function InlineAppV2({ messages, stores, cols }: InlineAppV2Props): React
   const overlayVisible = useStore(stores.overlayStore, (s) => s.visible);
 
   // Overlay 顶层优先:visible 时替代整棵树(包含 <Static>)。
-  // 这是 charier 铁律「禁止手动 CUP」的延伸——用条件渲染而非 saveCursor+eraseScreen。
+  // 这是 charter 铁律「禁止手动 CUP」的延伸——用条件渲染而非 saveCursor+eraseScreen。
   if (overlayVisible) {
     return <Overlay store={stores.overlayStore} cols={cols} />;
   }
@@ -115,10 +135,22 @@ export function InlineAppV2({ messages, stores, cols }: InlineAppV2Props): React
   //   流式文本行数(streamingRowCount) + spinner 行数(spinnerRowCount,0 或 1+) + 上边框 1 行
   const inputRowY = streamingRowCount + spinnerRowCount + 1;
 
+  // <Static> items:logo 作为首项(只写一次进 scrollback)+ 已固化消息。
+  // 用 discriminator 字段区分 logo item 和 message item。
+  type StaticItem =
+    | { kind: 'logo'; id: typeof LOGO_STATIC_ID; logo: LogoData }
+    | { kind: 'message'; id: string; msg: TuiMessage };
+  const staticItems: StaticItem[] = [
+    { kind: 'logo', id: LOGO_STATIC_ID, logo },
+    ...finalized.map((msg): StaticItem => ({ kind: 'message', id: msg.uuid, msg })),
+  ];
+
   return (
     <Box flexDirection="column">
-      <Static items={finalized}>
-        {(msg) => <MessageLine key={msg.uuid} msg={msg} cols={cols} />}
+      <Static items={staticItems}>
+        {(item) => item.kind === 'logo'
+          ? <LogoLineV2 key={item.id} logo={item.logo} />
+          : <MessageLine key={item.id} msg={item.msg} cols={cols} />}
       </Static>
       {streaming && (
         <StreamingText
