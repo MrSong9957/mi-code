@@ -151,9 +151,9 @@ export interface OpenAIImagePart {
 }
 
 /** Google Gemini API 的 inlineData part 结构。*/
-export interface GeminiInlineData {
+export type GeminiInlineData = {
   inlineData: { mimeType: ImageMediaType; data: string };
-}
+};
 
 /** 合法的 mediaType 集合（与 types.ts ImageMediaType 一致）。*/
 const SUPPORTED_MEDIA_TYPES: ReadonlySet<ImageMediaType> = new Set([

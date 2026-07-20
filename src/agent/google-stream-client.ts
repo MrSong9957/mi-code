@@ -219,7 +219,7 @@ export class GoogleStreamClient implements StreamingLLMClient {
             },
           });
         } else if (block.type === 'image') {
-          parts.push(buildGeminiInlineData(block) as unknown as Record<string, unknown>);
+          parts.push(buildGeminiInlineData(block));
         }
       }
       if (parts.length > 0) {
