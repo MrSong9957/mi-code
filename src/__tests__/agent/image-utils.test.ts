@@ -13,6 +13,7 @@ import {
   encodeImageBlock,
   saveImageCache,
   stripImagesForPersistence,
+  ensureImageData,
   MAX_IMAGE_BYTES,
 } from '../../agent/image-utils.js';
 import type { ImageBlock, Message } from '../../agent/types.js';
@@ -217,5 +218,48 @@ describe('stripImagesForPersistence', () => {
     };
     const stripped = stripImagesForPersistence(msg);
     expect(stripped).toEqual(msg);
+  });
+});
+
+// ─────────────── 图片转换 helper ───────────────
+
+function makeImageBlock(overrides: Partial<ImageBlock> = {}): ImageBlock {
+  return {
+    type: 'image',
+    mediaType: 'image/png',
+    data: 'AAA',
+    ...overrides,
+  };
+}
+
+describe('图片转换 helper — ensureImageData', () => {
+  it('正常 data 返回原值', () => {
+    const block = makeImageBlock({ data: 'AAA' });
+    expect(ensureImageData(block)).toBe('AAA');
+  });
+
+  it('非法 mediaType 抛中文错误', () => {
+    const block = makeImageBlock({ mediaType: 'image/svg+xml' as any });
+    expect(() => ensureImageData(block)).toThrowError(/不支持的图片类型/);
+    expect(() => ensureImageData(block)).toThrowError(/image\/svg\+xml/);
+    expect(() => ensureImageData(block)).toThrowError(/image\/png/);
+  });
+
+  it('空 data 有 cachePath 抛中文错误(含 cachePath 与 AUTO-0028)', () => {
+    const block = makeImageBlock({ data: '', cachePath: '/tmp/x.png' });
+    expect(() => ensureImageData(block)).toThrowError(/图片数据缺失/);
+    expect(() => ensureImageData(block)).toThrowError(/AUTO-0028/);
+    expect(() => ensureImageData(block)).toThrowError(/\/tmp\/x\.png/);
+  });
+
+  it('空 data 无 cachePath 抛中文错误(含「未记录」)', () => {
+    const block = makeImageBlock({ data: '' });
+    expect(() => ensureImageData(block)).toThrowError(/未记录/);
+  });
+
+  it('先校验 mediaType 再校验 data(非法 mediaType 即使 data 空也优先报 mediaType 错误)', () => {
+    const block = makeImageBlock({ mediaType: 'image/tiff' as any, data: '' });
+    expect(() => ensureImageData(block)).toThrowError(/不支持的图片类型/);
+    expect(() => ensureImageData(block)).not.toThrowError(/图片数据缺失/);
   });
 });
