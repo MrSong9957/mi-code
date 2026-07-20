@@ -23,6 +23,7 @@ import type {
   Usage,
   StreamingLLMClient,
 } from './types.js';
+import { buildGeminiInlineData } from './image-utils.js';
 
 /** Gemini 流式 chunk 的最小子集(只用到的字段) */
 interface GeminiChunk {
@@ -217,8 +218,9 @@ export class GoogleStreamClient implements StreamingLLMClient {
               response: { output: block.content },
             },
           });
+        } else if (block.type === 'image') {
+          parts.push(buildGeminiInlineData(block) as unknown as Record<string, unknown>);
         }
-        // image block:MVP 跳过
       }
       if (parts.length > 0) {
         result.push({ role: geminiRole, parts });
