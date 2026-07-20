@@ -1,5 +1,7 @@
-// Stage 2 TODO:实装 <InlineAppV2> 后,补一个 V2 路径的 spinner clock 测试用例
-// (V0 用 'inline with renderer' 用例已覆盖;V2 路径目前会 throw,无法测)。
+// V0/V2 路径对比:spinner clock wiring。
+// V0(inline + InlineRenderer)和 V2(inline 无 InlineRenderer,走 Ink reconciler)
+// 都应该恰好有一个 spinner clock owner(useSpinnerClock)。
+// Stage 5a 后 V2 已实装,本测试覆盖 V0 + V2 + alt-screen 三种模式。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
@@ -69,7 +71,8 @@ describe('ConnectedApp spinner clock wiring', () => {
   });
 
   it.each([
-    ['inline with renderer', 'inline', true],
+    ['V0 inline with renderer', 'inline', true],
+    ['V2 inline (no renderer)', 'inline', false],
     ['alt-screen', 'alt-screen', false],
   ] as const)('%s has exactly one clock owner', (_, mode, withInlineRenderer) => {
     const { tickSpy, view } = renderConnected(mode, withInlineRenderer);
