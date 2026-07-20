@@ -126,8 +126,9 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const isInline = renderMode === 'inline';
 
   // V2 flag:inline 模式下,V2 走 Ink 原生 + incrementalRendering;V0 走 InlineRenderer
-  // 用户可设 MICODE_INLINE_V2=0 强制走 V0 fallback(过渡期默认 0,阶段 5a 改默认 1)
-  const useInlineV2 = isInline && process.env.MICODE_INLINE_V2 === '1';
+  // 默认 V2(Stage 5a.6 完成,所有场景验证通过)。
+  // 用户遇问题可设 MICODE_INLINE_V2=0 回滚 V0 fallback(Stage 5b 删除 V0 前保留)。
+  const useInlineV2 = isInline && process.env.MICODE_INLINE_V2 !== '0';
 
   const messagesStore = createMessagesStore();
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });

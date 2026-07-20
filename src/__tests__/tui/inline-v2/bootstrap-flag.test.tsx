@@ -1,8 +1,8 @@
 // src/__tests__/tui/inline-v2/bootstrap-flag.test.tsx
 //
 // 验证 MICODE_INLINE_V2 flag 切换 bootstrap 的 inline 路径:
-//   - MICODE_INLINE_V2=0 (默认):inlineV2=false,走 V0 (InlineRenderer)
-//   - MICODE_INLINE_V2=1        :inlineV2=true, 走 V2 (Ink reconciler)
+//   - 未设 / MICODE_INLINE_V2=1:inlineV2=true, 走 V2 (Ink reconciler,默认)
+//   - MICODE_INLINE_V2=0        :inlineV2=false,走 V0 (InlineRenderer,回滚)
 //   - alt-screen 模式           :inlineV2=false(不受 flag 影响)
 //
 // 注意:bootstrap 真实 render Ink 到 process.stdout,每个测试用完必须 cleanup。
@@ -74,7 +74,7 @@ describe('bootstrap MICODE_INLINE_V2 flag', () => {
     handle.cleanup();
   });
 
-  it('未设 MICODE_INLINE_V2 时 inlineV2=false(默认 V0)', async () => {
+  it('未设 MICODE_INLINE_V2 时 inlineV2=true(默认 V2)', async () => {
     delete process.env.MICODE_INLINE_V2;
     const { bootstrap } = await import('../../../tui/bootstrap.js');
     const handle = bootstrap({
@@ -84,7 +84,7 @@ describe('bootstrap MICODE_INLINE_V2 flag', () => {
       onExit: () => {},
       renderMode: 'inline',
     });
-    expect(handle.inlineV2).toBe(false);
+    expect(handle.inlineV2).toBe(true);
     handle.cleanup();
   });
 });
