@@ -25,6 +25,7 @@ import type {
   Usage,
   StreamingLLMClient,
 } from './types.js';
+import { buildOpenAIImagePart, type OpenAIImagePart } from './image-utils.js';
 
 /** OpenAI ChatCompletionChunk 的最小子集(只用到的字段) */
 interface OAIChunk {
@@ -223,6 +224,7 @@ export class OpenAIStreamClient implements StreamingLLMClient {
       // 数组 content:需要按 OpenAI 格式拆分
       const textParts: string[] = [];
       const toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = [];
+      const imageParts: OpenAIImagePart[] = [];
 
       for (const block of m.content) {
         if (block.type === 'text') {
@@ -240,8 +242,9 @@ export class OpenAIStreamClient implements StreamingLLMClient {
             tool_call_id: block.tool_use_id,
             content: block.content,
           });
+        } else if (block.type === 'image') {
+          imageParts.push(buildOpenAIImagePart(block));
         }
-        // image block:MVP 跳过
       }
 
       // 组装当前消息
@@ -250,10 +253,20 @@ export class OpenAIStreamClient implements StreamingLLMClient {
         if (textParts.length > 0) msg.content = textParts.join('');
         if (toolCalls.length > 0) msg.tool_calls = toolCalls;
         result.push(msg);
+      } else if (textParts.length > 0 && imageParts.length > 0) {
+        // 文本 + 图片:content 升级为数组
+        result.push({
+          role: m.role,
+          content: [{ type: 'text', text: textParts.join('') }, ...imageParts],
+        });
+      } else if (imageParts.length > 0) {
+        // 只有图片(无文本):必须新增此分支,否则纯图片消息会被跳过
+        result.push({ role: m.role, content: imageParts });
       } else if (textParts.length > 0) {
-        // user 消息含 text(非 tool_result)
+        // 只有文本:保持原样(字符串 content)
         result.push({ role: m.role, content: textParts.join('') });
       }
+      // textParts 与 imageParts 都为空:跳过(与现有行为一致)
     }
     return result;
   }
