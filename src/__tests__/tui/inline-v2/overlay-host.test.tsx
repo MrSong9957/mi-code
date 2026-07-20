@@ -133,7 +133,7 @@ describe('<OverlayHost>', () => {
     expect(all).not.toContain('\x1b[?1049l');
   });
 
-  it('长行按 cols 截断', async () => {
+  it('长行按 cols wrap 成多行(完整保留内容,不截断)', async () => {
     const store = createOverlayStore();
     const longContent = 'a'.repeat(200);
     store.getState().open('T', [{ content: longContent, style: {}, indent: 0 }]);
@@ -146,10 +146,42 @@ describe('<OverlayHost>', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     const all = stdout.writes.map((w) => w.data).join('');
-    // cols=40,每行最多 40 个 'a'(无缩进)
-    const aLine = all.split('\n').find((l) => l.startsWith('a'));
-    expect(aLine).toBeDefined();
-    expect(aLine!.length).toBeLessThanOrEqual(40);
+    // wrap 后每行最多 40 个 'a'(无缩进)
+    const aLines = all.split('\n').filter((l) => /^a+$/.test(l));
+    expect(aLines.length).toBeGreaterThan(1);  // 至少 2 行
+    for (const line of aLines) {
+      expect(line.length).toBeLessThanOrEqual(40);
+    }
+    // 总字符数应该完整保留(200 个 a,wrap 不丢内容)
+    const totalA = aLines.reduce((s, l) => s + l.length, 0);
+    expect(totalA).toBe(200);
+
+    instance.unmount();
+    instance.waitUntilRenderFlush?.();
+  });
+
+  it('CJK 长行正确 wrap(每汉字 2 列)', async () => {
+    const store = createOverlayStore();
+    // 20 个"你好" = 40 字符 = 80 列,cols=40 一行放 10 个"你好"
+    const longContent = '你好'.repeat(20);
+    store.getState().open('T', [{ content: longContent, style: {}, indent: 0 }]);
+    const stdout = createMockStdout();
+    const instance = render(<OverlayHost store={store} cols={40} />, {
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    const all = stdout.writes.map((w) => w.data).join('');
+    // 不应丢字符:总共应该有 40 个 "你好"(80 列 / 2 = 40 字符,每个 1 字符)
+    const lines = all.split('\n').filter((l) => l.includes('你好'));
+    const totalChars = lines.reduce(
+      (s, l) => s + [...l].filter((c) => c === '你' || c === '好').length, 0,
+    );
+    expect(totalChars).toBe(40);
+    // 至少 2 行
+    expect(lines.length).toBeGreaterThanOrEqual(2);
 
     instance.unmount();
     instance.waitUntilRenderFlush?.();

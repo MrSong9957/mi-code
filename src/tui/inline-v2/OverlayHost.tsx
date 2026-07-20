@@ -52,19 +52,39 @@ function formatOverlayLine(line: { content: string; indent?: number }): string {
 }
 
 /**
- * 按显示宽度截断行(CJK 全角=2 列),与 alt-screen <Overlay> 同款逻辑。
+ * 按显示宽度折行(CJK 全角=2 列,贪婪字符级,不拆 CJK)。
+ * 与 truncateByWidth 不同:wrap 完整保留内容,超宽部分换到下一行。
+ *
+ * 注:之前的 truncateByWidth 直接丢弃超宽内容,导致 thinking 长文本被截断丢失。
+ * 这里改成 wrap,完整显示思考内容(支持上下滚动看全部)。
+ *
+ * @param text 单行文本(不含 \n)
+ * @param cols 终端列宽
+ * @param indentNum 首行已有缩进(后续折行用同缩进对齐)
+ * @returns 折行后的多行字符串(用 \n 连接,不含末尾 \n)
  */
-function truncateByWidth(text: string, cols: number, indentNum: number): string {
-  const maxDisplayWidth = Math.max(0, cols - indentNum);
+function wrapByWidth(text: string, cols: number, indentNum: number): string {
+  const budget = Math.max(1, cols - indentNum);
+  const indent = ' '.repeat(indentNum);
+  const lines: string[] = [];
+  let current = '';
   let used = 0;
-  let truncated = '';
   for (const ch of text) {
     const w = stringWidth(ch);
-    if (used + w > maxDisplayWidth) break;
-    truncated += ch;
-    used += w;
+    if (used + w > budget && current !== '') {
+      // 当前行放不下:推出当前行,开始新行(带缩进)
+      lines.push(current);
+      current = indent + ch;
+      used = stringWidth(indent) + w;
+    } else {
+      current += ch;
+      used += w;
+    }
   }
-  return truncated;
+  if (current !== '' || lines.length === 0) {
+    lines.push(current);
+  }
+  return lines.join('\n');
 }
 
 export function OverlayHost({ store, cols }: OverlayHostProps): null {
@@ -83,12 +103,12 @@ export function OverlayHost({ store, cols }: OverlayHostProps): null {
       stream.write(BOLD + title + RESET + '\n');
       // 分隔线(限制 60 列,与 alt-screen Overlay 一致)
       stream.write('━'.repeat(Math.min(cols, 60)) + '\n');
-      // 内容行
+      // 内容行(支持超宽 wrap 成多行,完整保留内容)
       for (const line of lines) {
         const indentNum = line.indent ?? 0;
         const text = formatOverlayLine(line);
-        const truncated = truncateByWidth(text, cols, indentNum);
-        stream.write(truncated + '\n');
+        const wrapped = wrapByWidth(text, cols, indentNum);
+        stream.write(wrapped + '\n');
       }
       // 返回提示
       stream.write('\n');
