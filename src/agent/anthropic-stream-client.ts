@@ -17,6 +17,7 @@ import type {
   Usage,
   StreamingLLMClient,
 } from './types.js';
+import { ensureImageData } from './image-utils.js';
 
 /** 默认空闲超时（毫秒） */
 const DEFAULT_IDLE_TIMEOUT_MS = 90_000;
@@ -260,7 +261,7 @@ export class AnthropicStreamClient implements StreamingLLMClient {
               source: {
                 type: 'base64' as const,
                 media_type: block.mediaType,
-                data: block.data,
+                data: ensureImageData(block),
               },
             };
             return block;

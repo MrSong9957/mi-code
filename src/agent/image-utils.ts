@@ -139,3 +139,66 @@ export function stripImagesForPersistence(msg: Message): Message {
   });
   return { ...msg, content: stripped };
 }
+
+// ─────────────── 图片转换 helper（三家 client 共用） ───────────────
+
+/** OpenAI vision API 的 image_url part 结构。*/
+export interface OpenAIImagePart {
+  type: 'image_url';
+  image_url: { url: string }; // data URL (data:<media>;base64,<data>)
+  // 可选字段 detail?: 'low' | 'high' | 'auto' 控制解析精度与 token 消耗，
+  // 默认 'auto'。当前不设置，保留扩展空间。
+}
+
+/** Google Gemini API 的 inlineData part 结构。*/
+export type GeminiInlineData = {
+  inlineData: { mimeType: ImageMediaType; data: string };
+};
+
+/** 合法的 mediaType 集合（与 types.ts ImageMediaType 一致）。*/
+const SUPPORTED_MEDIA_TYPES: ReadonlySet<ImageMediaType> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+
+/**
+ * 返回可用的 base64 data。
+ * 先校验 mediaType 合法性（防御 cast 绕过类型），再校验 data 非空。
+ * 空 data 时抛中文错误——AUTO-0028 会把此路径改为「从 cachePath 回填」。
+ */
+export function ensureImageData(block: ImageBlock): string {
+  if (!SUPPORTED_MEDIA_TYPES.has(block.mediaType)) {
+    throw new Error(
+      `不支持的图片类型：${block.mediaType}\n` +
+        `支持的类型：image/png、image/jpeg、image/gif、image/webp`,
+    );
+  }
+  if (!block.data) {
+    throw new Error(
+      `图片数据缺失，无法发送。\n` +
+        `原因：会话恢复后图片未从缓存回填（等待 AUTO-0028 实现）。\n` +
+        `缓存路径：${block.cachePath ?? '(未记录)'}\n` +
+        `建议：重新发送 /image 命令附加图片。`,
+    );
+  }
+  return block.data;
+}
+
+/** 构造 OpenAI vision image_url part（含 data URL 前缀）。*/
+export function buildOpenAIImagePart(block: ImageBlock): OpenAIImagePart {
+  const data = ensureImageData(block);
+  return {
+    type: 'image_url',
+    image_url: { url: `data:${block.mediaType};base64,${data}` },
+  };
+}
+
+/** 构造 Gemini inlineData part（纯 base64，无前缀）。*/
+export function buildGeminiInlineData(block: ImageBlock): GeminiInlineData {
+  const data = ensureImageData(block);
+  return {
+    inlineData: { mimeType: block.mediaType, data },
+  };
+}

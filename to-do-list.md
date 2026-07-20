@@ -35,10 +35,6 @@
   > AUTO-0006 当前作答 UX 为纯文本输入（输数字 / 自由文本回车）。复用 AUTO-0007 下拉菜单，实现 ↑/↓ 高亮 + Enter 选择预设 options 的交互。
   > 依赖：AUTO-0006、AUTO-0007
 
-- [ ] AUTO-0026: OpenAI / Google provider 发送图片
-  > 当前 `src/agent/openai-stream-client.ts:244` 与 `src/agent/google-stream-client.ts:221` 均为 `// image block:MVP 跳过`，直接丢弃 ImageBlock。补齐 `convertMessages` 对 ImageBlock → provider vision 格式的映射（OpenAI vision / Google inlineData）。
-  > 依赖：AUTO-0001
-
 - [ ] AUTO-0027: 支持拖拽 / 直接粘贴图片
   > 当前 `src/tui/input/paste-handler.ts:8` 有 TODO：图片占位符 `[Image #N]` 需走单独 content block，但「当前零基础设施」。仅支持 `/image` 命令，不支持 Ctrl+V 粘贴和 drag-and-drop。
   > 依赖：AUTO-0001
@@ -48,6 +44,10 @@
   > 依赖：AUTO-0001
 
 ## 已完成
+
+- [x] AUTO-0026: OpenAI / Google provider 发送图片
+  > 补齐 OpenAI 与 Google 两家 stream client 的图片输入支持，对齐已实现的 Anthropic provider。
+  > 完成：抽取 3 个共享 helper 到 `image-utils.ts`（`ensureImageData` mediaType+空 data 校验、`buildOpenAIImagePart` 拼 data URL、`buildGeminiInlineData` 纯 base64）；三家 client 统一接入空 data 防御（含 Anthropic 补漏）；修复 OpenAI client 原 `else if (textParts.length > 0)` 导致纯图片消息被完全丢弃的 bug，组装改为四分支；新增 helper 单测 14 条 + OpenAI/Google mock SDK 集成测试 4 条。49 个 agent 测试全过、tsc exit 0、grep `// image block:MVP 跳过` 零命中。
 
 - [x] AUTO-0002: 斜杠命令体系
   > 实现 /command 交互方式，支持如 /help、/clear 等快捷指令
@@ -155,3 +155,4 @@
 | 2026-07-21 | AUTO-0002、0003、0004、0006 | @agent | 派子代理核实代码现状后批量标记完成：AUTO-0002 斜杠命令体系（18 条命令 + 解析/分发/补全 UI 全链路）；AUTO-0003 ESC 中断链路（三家 provider signal + spinner 停止闭环 + e2e 测试）；AUTO-0004 已被 AUTO-0009~0024 整体覆盖；AUTO-0006 AskUserQuestion（工具入口 + 挂起-应答状态机 + plan 角色白名单 + 单测）。 |
 | 2026-07-21 | AUTO-0001、AUTO-0025~0028 | @agent | 核实 AUTO-0001 现状后拆分子任务：AUTO-0026（OpenAI/Google provider 发图，当前 MVP 跳过）、AUTO-0027（拖拽/粘贴捕获，paste-handler 有 TODO）、AUTO-0028（resume 会话恢复回填，cachePath 只写不读）；AUTO-0006 新建子任务 AUTO-0025（接入下拉选择菜单）。 |
 | 2026-07-21 | - | @agent | 顺手按文件顶部「核心规则」归位：AUTO-0009~0024 已是 `[x]` 但原堆在「待办」分区，现一并移入「已完成」。 |
+| 2026-07-21 | AUTO-0026 | @agent | 完成 OpenAI/Google provider 图片输入支持（feat/openai-google-image-support 分支，6 个 TDD commit）：3 个共享 helper + 类型、三家统一空 data 防御、OpenAI 纯图片丢弃 bug 修复；49 个 agent 测试全过、tsc exit 0；经 brainstorming→writing-plans→subagent-driven 全流程 + 三轮 code review。 |

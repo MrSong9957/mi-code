@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { GoogleStreamClient } from '../../agent/google-stream-client.js';
-import type { StreamEvent, AssistantMessage, Message, ToolDefinition } from '../../agent/types.js';
+import type { StreamEvent, AssistantMessage, Message, ToolDefinition, ImageBlock } from '../../agent/types.js';
 
 // ── Mock GoogleGenAI ──
 // GoogleStreamClient 构造时注入 mock client,stream() 调 client.models.generateContentStream
@@ -26,9 +26,12 @@ interface MockChunk {
 }
 
 function makeMockClient(chunks: MockChunk[]) {
-  return {
+  // 捕获每次调用 generateContentStream 传入的 contents,供图片用例断言 inlineData part
+  const captured: Array<{ contents: unknown }> = [];
+  const client = {
     models: {
-      generateContentStream: async (_params: unknown): Promise<AsyncIterable<MockChunk>> => {
+      generateContentStream: async (params: { contents?: unknown } | unknown): Promise<AsyncIterable<MockChunk>> => {
+        captured.push({ contents: (params as { contents?: unknown }).contents });
         return {
           [Symbol.asyncIterator]() {
             let i = 0;
@@ -43,6 +46,8 @@ function makeMockClient(chunks: MockChunk[]) {
       },
     },
   };
+  // 把 captured 挂到返回值上,现有 `client as any` 注入不受影响
+  return Object.assign(client, { captured });
 }
 
 const TOOLS: ToolDefinition[] = [
@@ -170,5 +175,41 @@ describe('GoogleStreamClient — 文本+工具混合', () => {
     const allBlocks = assistantMsgs.flatMap(m => m.content);
     expect(allBlocks.some(b => b.type === 'text')).toBe(true);
     expect(allBlocks.some(b => b.type === 'tool_use')).toBe(true);
+  });
+});
+
+// ─────────────── 图片输入 ───────────────
+
+describe('GoogleStreamClient — 图片输入', () => {
+  it('ImageBlock → inlineData part（纯 base64）', async () => {
+    // 最小合法响应:3 chunk(role/content/finish)
+    const chunks: MockChunk[] = [
+      { candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: undefined }] },
+      { candidates: [{ finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } },
+    ];
+    const mockWrapper = makeMockClient(chunks);
+    const streamClient = new GoogleStreamClient(
+      { apiKey: 'test', model: 'gemini-2.5-flash' },
+      mockWrapper as any,
+    );
+
+    const imageBlock: ImageBlock = { type: 'image', mediaType: 'image/png', data: 'AAA' };
+    const messages: Message[] = [
+      { role: 'user', content: [imageBlock, { type: 'text', text: 'describe' }] },
+    ];
+
+    await collect(streamClient.stream(messages, TOOLS, OPTIONS));
+
+    // 断言传给 SDK 的 contents 里 user parts 含 inlineData
+    expect(mockWrapper.captured.length).toBeGreaterThanOrEqual(1);
+    const captured = mockWrapper.captured[0]!.contents as Array<{ role: string; parts: any[] }>;
+    const userMsg = captured.find(c => c.role === 'user');
+    expect(userMsg).toBeDefined();
+    const inlineDataPart = userMsg!.parts.find((p: any) => p.inlineData);
+    expect(inlineDataPart).toBeDefined();
+    expect(inlineDataPart.inlineData.mimeType).toBe('image/png');
+    expect(inlineDataPart.inlineData.data).toBe('AAA'); // 纯 base64,无 data URL 前缀
+    // text part 也保留
+    expect(userMsg!.parts.some((p: any) => p.text === 'describe')).toBe(true);
   });
 });
