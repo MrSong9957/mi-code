@@ -167,37 +167,37 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
       {/* OverlayHost:visible 时进终端备用屏直接写 stdout(不走 Ink 渲染),
           避免覆盖 footer 或盖不住 scrollback。返回 null,无可见 React 元素。 */}
       <OverlayHost store={stores.overlayStore} cols={cols} />
-      {!overlayVisible && (
-        // Overlay 未可见时才渲染活动区(spinner/streaming/select/footer)。
-        // Overlay 可见时活动区被备用屏遮住,无需渲染(节省 Ink diff 开销)。
-        <>
-          {streaming && (
-            <StreamingText
-              text={streaming.streamingText}
-              role={streaming.role === 'thinking' ? 'thinking' : 'assistant'}
+      {/* 活动区始终渲染,即使 overlayVisible。
+          原因:overlayVisible 时活动区被备用屏遮住(用户看不见),但 Ink 的 lastOutput
+          仍含完整 footer。退出备用屏后,主屏的 footer 物理上一直在,无需 Ink 重绘。
+          如果切换时隐藏活动区,Ink 的 lastOutput 会变成空白,退出备用屏后 footer 不恢复。 */}
+      <>
+        {streaming && (
+          <StreamingText
+            text={streaming.streamingText}
+            role={streaming.role === 'thinking' ? 'thinking' : 'assistant'}
+            cols={cols}
+          />
+        )}
+        {selectVisible ? (
+          // Select 选择器:替代 spinner+footer 占据活动区(自订阅 selectStore)
+          <SelectOverlayV2 store={stores.selectStore} cols={cols} />
+        ) : (
+          <>
+            <SpinnerMemo store={stores.spinnerStore} />
+            <FooterV2
+              input={inputText}
+              cursor={cursor}
+              status={statusData}
               cols={cols}
+              inputRowY={inputRowY}
+              viewportTop={vp.viewportTop}
+              completionStore={stores.completionStore}
+              selectionStore={stores.selectionStore}
             />
-          )}
-          {selectVisible ? (
-            // Select 选择器:替代 spinner+footer 占据活动区(自订阅 selectStore)
-            <SelectOverlayV2 store={stores.selectStore} cols={cols} />
-          ) : (
-            <>
-              <SpinnerMemo store={stores.spinnerStore} />
-              <FooterV2
-                input={inputText}
-                cursor={cursor}
-                status={statusData}
-                cols={cols}
-                inputRowY={inputRowY}
-                viewportTop={vp.viewportTop}
-                completionStore={stores.completionStore}
-                selectionStore={stores.selectionStore}
-              />
-            </>
-          )}
-        </>
-      )}
+          </>
+        )}
+      </>
     </Box>
   );
 }

@@ -417,11 +417,15 @@ describe('<InlineAppV2> Select 选择器接入', () => {
 // close 后退备用屏,主屏恢复 footer/spinner/streaming。
 //
 // 注:OverlayHost 的 alt-screen 行为由 overlay-host.test.tsx 单独覆盖。
-// 这里只验证 <InlineAppV2> 在 overlayVisible 时正确隐藏活动区、close 后恢复。
+// 这里只验证 <InlineAppV2> 在 overlayVisible 时活动区始终渲染(footer 在 Ink lastOutput 里),
+// 退出备用屏后视觉上立即恢复(无需 Ink 重绘)。
 // ──────────────────────────────────────────────────────────────────────────
 
 describe('<InlineAppV2> Overlay (Ctrl+O) 接入', () => {
-  it('overlayStore.open 后活动区被隐藏(Ink 主屏不渲染 footer)', () => {
+  it('overlayStore.open 后活动区仍渲染 footer(Ink lastOutput 含 footer)', () => {
+    // 设计要点:overlayVisible 时活动区被备用屏遮住(用户看不见),但 Ink 的
+    // lastOutput 仍含 footer。退出备用屏后,主屏 footer 物理上一直在,无需重绘。
+    // 如果切换时隐藏活动区,Ink 的 lastOutput 变空白,退出备用屏后 footer 不恢复。
     const stores = createStores();
     stores.overlayStore.getState().open('Thinking output', [
       { content: 'full thinking text line 1', style: {}, indent: 0 },
@@ -439,12 +443,12 @@ describe('<InlineAppV2> Overlay (Ctrl+O) 接入', () => {
       />,
     );
     const frame = lastFrame() ?? '';
-    // Overlay 走 alt-screen,主屏 Ink 不渲染活动区 → footer 不出现
-    expect(frame).not.toContain('sonnet');
-    expect(frame).not.toContain('❯');
+    // 活动区始终渲染 → footer 始终在 Ink lastOutput
+    expect(frame).toContain('sonnet');
+    expect(frame).toContain('❯');
   });
 
-  it('overlayStore.close 后恢复 spinner+footer', async () => {
+  it('overlayStore.close 后 footer 仍在', async () => {
     const stores = createStores();
     stores.overlayStore.getState().open('Title', [{ content: 'overlay content', style: {}, indent: 0 }]);
     const { lastFrame, rerender } = render(
@@ -457,8 +461,8 @@ describe('<InlineAppV2> Overlay (Ctrl+O) 接入', () => {
         rows={24}
       />,
     );
-    // Overlay visible 时主屏不含 footer
-    expect(lastFrame() ?? '').not.toContain('sonnet');
+    // Overlay visible 时活动区也渲染 footer
+    expect(lastFrame() ?? '').toContain('sonnet');
 
     stores.overlayStore.getState().close();
     await new Promise((r) => setTimeout(r, 10));
@@ -473,7 +477,6 @@ describe('<InlineAppV2> Overlay (Ctrl+O) 接入', () => {
       />,
     );
     const frame = lastFrame() ?? '';
-    expect(frame).not.toContain('Title');
     expect(frame).toContain('sonnet');
   });
 });

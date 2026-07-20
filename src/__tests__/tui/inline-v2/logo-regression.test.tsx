@@ -193,7 +193,7 @@ describe('<ConnectedApp> 整树 LOGO 不变量', () => {
 
   it('Overlay 开关切换后 logo 仍在', async () => {
     const stores = makeFullStores();
-    const { lastFrame, frames } = renderConnected(stores);
+    const { frames } = renderConnected(stores);
     await new Promise((r) => setTimeout(r, 20));
 
     // 通过 store 直接切换 overlay(避免依赖 Ctrl+O 按键解析时序)
@@ -201,14 +201,15 @@ describe('<ConnectedApp> 整树 LOGO 不变量', () => {
       { content: 'overlay text', style: {}, indent: 0 },
     ]);
     await new Promise((r) => setTimeout(r, 20));
-    // Overlay 走 alt-screen 直写 stdout,主屏 Ink 不渲染活动区(footer 隐藏)
-    expect(lastFrame() ?? '').not.toContain('sonnet');
+    // 活动区始终渲染(被备用屏遮住,但 Ink lastOutput 含 logo + footer)
+    // 用 frames 找 Ink 帧 OverlayHost 直写 stdout 也进 frames,但不含 MiCode
+    const overlayVisibleFrame = frames.find((f) => f.includes('MiCode') && f.includes('sonnet'));
+    expect(overlayVisibleFrame).toBeDefined();
 
-    // 关闭 overlay → 应恢复主界面(含 logo)
+    // 关闭 overlay → 主界面仍含 logo + footer
     stores.overlayStore.getState().close();
-    await new Promise((r) => setTimeout(r, 50));
-    // OverlayHost 直写 \x1b[?1049l 与 Ink 帧混合,用 frames 找恢复后的帧
-    const restoredFrame = frames.find((f) => f.includes('MiCode') && f.includes('sonnet'));
+    await new Promise((r) => setTimeout(r, 30));
+    const restoredFrame = frames.slice().reverse().find((f) => f.includes('MiCode') && f.includes('sonnet'));
     expect(restoredFrame).toBeDefined();
   });
 

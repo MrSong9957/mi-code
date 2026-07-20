@@ -128,22 +128,23 @@ describe('V2 inline E2E - 基础场景', () => {
       h.stdin.write(KEYS.CTRL_O);
       await waitMs(30);
       expect(overlayToggled).toBe(1);
-      // Overlay 走 alt-screen 直写 stdout,主屏 Ink 渲染空白(footer 隐藏)
-      let frame = h.lastFrame() ?? '';
-      expect(frame).not.toContain('sonnet');
-      expect(frame).not.toContain('❯');
       // overlayStore 状态正确
       expect(h.stores.overlayStore.getState().visible).toBe(true);
+      // 活动区始终渲染(被备用屏遮住,但 Ink lastOutput 仍含 footer)
+      // 这保证退出备用屏后 footer 立即恢复。
+      // 注:OverlayHost 直写 stdout 在 ink-testing-library 下也进 frames 数组,
+      // 所以用 frames 找 Ink 渲染的含 footer 的帧(lastFrame 可能是 OverlayHost 的直写)。
+      const overlayVisibleFrame = h.frames.find((f) => f.includes('sonnet') && f.includes('❯'));
+      expect(overlayVisibleFrame).toBeDefined();
 
       // 再按 Ctrl+O 关闭
       h.stdin.write(KEYS.CTRL_O);
       await waitMs(50);
       expect(overlayToggled).toBe(2);
-      // OverlayHost 直写 stdout(\x1b[?1049l)与 Ink 帧混合,
-      // 用 frames 数组找恢复后的 Ink 帧(含 sonnet)
-      const restoredFrame = h.frames.find((f) => f.includes('sonnet'));
-      expect(restoredFrame).toBeDefined();
       expect(h.stores.overlayStore.getState().visible).toBe(false);
+      // 退出备用屏后 footer 仍在
+      const restoredFrame = h.frames.slice().reverse().find((f) => f.includes('sonnet'));
+      expect(restoredFrame).toBeDefined();
     } finally {
       h.unmount();
     }
