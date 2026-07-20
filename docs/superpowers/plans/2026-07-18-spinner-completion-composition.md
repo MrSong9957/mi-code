@@ -672,7 +672,7 @@ export function normalizeSpinnerContext(
 setContext: (context) => set({ context: normalizeSpinnerContext(context) }),
 ```
 
-移除旧 `activeTeammateCount`/`setActiveTeammateCount`；计时显示数量改由 View 从 `status === 'working'` 推导。
+共享 View 的计时显示数量改由 `context.teammates` 中 `status === 'working'` 的成员推导。旧 `activeTeammateCount`/`setActiveTeammateCount` 暂时只为尚未迁移的 Ink、inline 与 Bootstrap 消费者保留，Task 7 完成全部接线后再统一删除，确保每个中间提交都能通过 TypeScript 检查。
 
 - [ ] **Step 5: 实现共享 View 选择器**
 
@@ -940,7 +940,7 @@ export function useSpinnerClock(store: SpinnerStore): void {
 }
 ```
 
-在 `ConnectedApp` 所有 early return 之前调用 `useSpinnerClock(spinnerStore)`；从 `Spinner.tsx` 删除 `useEffect` 和 `TICK_MS` interval。
+在 `ConnectedApp` 所有 early return 之前调用 clock hook；Task 6 删除 InlineApp 旧 interval 前，暂用 `useSpinnerClock(spinnerStore, mode !== 'inline')` 保证每种模式只有一个 owner。从 `Spinner.tsx` 删除 `useEffect` 和 `TICK_MS` interval。
 
 - [ ] **Step 5: 拆分 Ink 组件边界**
 
@@ -1287,7 +1287,7 @@ const footerLayout = layoutFooter({
 });
 ```
 
-删除 InlineApp 的 `setInterval()` effect；时钟只由 `ConnectedApp/useSpinnerClock` 推进。
+删除 InlineApp 的 `setInterval()` effect；同时把 ConnectedApp 的过渡调用 `useSpinnerClock(spinnerStore, mode !== 'inline')` 收敛为 `useSpinnerClock(spinnerStore)`，让所有模式只由 ConnectedApp 推进。增加 inline/alt-screen 接线测试，防止重复 owner 或零 owner。
 
 - [ ] **Step 7: 运行 inline 单元与光标回归并确认 GREEN**
 

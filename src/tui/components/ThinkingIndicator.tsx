@@ -1,5 +1,6 @@
 import React from 'react';
 import { Text } from 'ink';
+import { thinkingColorAt } from '../state/spinner-store.js';
 
 export interface RGB {
   r: number;
@@ -19,16 +20,10 @@ export function toRGBColor(c: RGB): string {
   return `rgb(${c.r},${c.g},${c.b})`;
 }
 
-const THINKING_INACTIVE: RGB = { r: 153, g: 153, b: 153 };
-const THINKING_INACTIVE_SHIMMER: RGB = { r: 185, g: 185, b: 185 };
-const THINKING_GLOW_PERIOD_S = 2;
-const THINKING_DELAY_TICKS = 60;  // 3000ms / 50ms = 60 ticks
-const TICK_TO_SECONDS = 0.05;  // 50ms per tick
-
 export interface ThinkingIndicatorProps {
-  /** Spinner store time (50ms tick), used for sine wave calculation */
+  /** Spinner store 的毫秒级统一时钟。 */
   storeTime: number;
-  /** Timestamp (storeTime ticks) when thinking started, null if not thinking */
+  /** thinking 开始时的 storeTime；null 时使用静态基础灰。 */
   thinkStartTime: number | null;
   /** Text to display (e.g. "thinking") */
   text: string;
@@ -44,13 +39,7 @@ export function ThinkingIndicator({
 }: ThinkingIndicatorProps): React.ReactElement | null {
   if (!text) return null;
 
-  const elapsed = thinkStartTime !== null ? storeTime - thinkStartTime : 0;
-  const elapsedSec = Math.max(0, elapsed - THINKING_DELAY_TICKS) * TICK_TO_SECONDS;
-  const thinkingOpacity = elapsed < THINKING_DELAY_TICKS
-    ? 0
-    : (Math.sin(elapsedSec * Math.PI * 2 / THINKING_GLOW_PERIOD_S) + 1) / 2;
-
-  const color = toRGBColor(interpolateColor(THINKING_INACTIVE, THINKING_INACTIVE_SHIMMER, thinkingOpacity));
+  const color = toRGBColor(thinkingColorAt(storeTime, thinkStartTime));
 
   if (showParens) {
     return (

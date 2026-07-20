@@ -9,7 +9,14 @@
 // 关键：按"显示宽度"切分（CJK 算 2 列），不按字符索引，避免切到全角字符中间。
 
 import { describe, it, expect } from 'vitest';
-import { computeGlimmerIndex, computeShimmerSegments } from './shimmer.js';
+import {
+  computeGlimmerIndex,
+  computeShimmerSegments,
+  getGraphemeSegments,
+  measureShimmerMessage,
+  toolUseFlashColor,
+  toolUseFlashOpacity,
+} from './shimmer.js';
 
 describe('computeGlimmerIndex：高亮段起始列（右→左扫描）', () => {
   const width = 10;  // 假设 message 显示宽度 10 列
@@ -49,6 +56,14 @@ describe('computeGlimmerIndex：高亮段起始列（右→左扫描）', () => 
     // 扫到最左：pos 接近 cycleLength 时 glimmerIndex 接近 width+10-cycleLength = 0
     // pos=20 → glimmerIndex = 10+10-20 = 0；pos=29 → 10+10-29 = -9
     expect(computeGlimmerIndex(200 * 29, width, opts)).toBe(-9);
+  });
+
+  it('requesting 从左到右，其余模式默认从右到左', () => {
+    const common = { speed: 1, cyclePad: 2, stalled: false };
+    expect(computeGlimmerIndex(0, width, { ...common, direction: 'left-to-right' })).toBe(-2);
+    expect(computeGlimmerIndex(1, width, { ...common, direction: 'left-to-right' })).toBe(-1);
+    expect(computeGlimmerIndex(0, width, common)).toBe(12);
+    expect(computeGlimmerIndex(1, width, common)).toBe(11);
   });
 });
 
@@ -132,5 +147,39 @@ describe('computeShimmerSegments：按显示宽度切三段', () => {
       const { before, shimmer, after } = computeShimmerSegments(msg, gi);
       expect(before + shimmer + after).toBe(msg);
     }
+  });
+
+  it('按字素簇处理 ZWJ emoji，不会把家庭 emoji 拆进不同颜色段', () => {
+    const family = '👨‍👩‍👧‍👦';
+    const { before, shimmer, after } = computeShimmerSegments(`A${family}B`, 1);
+    expect(before).toBe('');
+    expect(shimmer).toBe(`A${family}`);
+    expect(after).toBe('B');
+  });
+
+  it('预计算每个字素簇的显示宽度', () => {
+    expect(getGraphemeSegments('Aé👨‍👩‍👧‍👦中')).toEqual([
+      { text: 'A', width: 1 },
+      { text: 'é', width: 1 },
+      { text: '👨‍👩‍👧‍👦', width: 2 },
+      { text: '中', width: 2 },
+    ]);
+    expect(measureShimmerMessage('Aé👨‍👩‍👧‍👦中')).toBe(6);
+  });
+});
+
+describe('tool-use 整体呼吸灯', () => {
+  it('按两秒周期计算正弦 opacity', () => {
+    expect(toolUseFlashOpacity(0)).toBeCloseTo(0.5);
+    expect(toolUseFlashOpacity(500)).toBeCloseTo(1);
+    expect(toolUseFlashOpacity(1_500)).toBeCloseTo(0);
+    expect(toolUseFlashOpacity(2_000)).toBeCloseTo(0.5);
+  });
+
+  it('在 messageColor 与 shimmerColor 之间插值整段颜色', () => {
+    const messageColor = 'rgb(100,200,240)';
+    const shimmerColor = 'rgb(170,230,255)';
+    expect(toolUseFlashColor(500, messageColor, shimmerColor)).toBe(shimmerColor);
+    expect(toolUseFlashColor(1_500, messageColor, shimmerColor)).toBe(messageColor);
   });
 });

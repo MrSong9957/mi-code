@@ -22,8 +22,13 @@ import { createMessagesStore } from './state/messages-store.js';
 import { createInputStore } from './state/input-store.js';
 import { createStatusStore } from './state/status-store.js';
 import { createLogoStore } from './state/logo-store.js';
-import { createSpinnerStore, type SpinnerStore } from './state/spinner-store.js';
-import { formatSpinnerDuration, type SpinnerMode } from './state/spinner-store.js';
+import {
+  createSpinnerStore,
+  type SpinnerContextSnapshot,
+  type SpinnerMode,
+  type SpinnerStore,
+} from './state/spinner-store.js';
+import type { SpinnerVerbConfig } from './state/spinner-verbs.js';
 import { createCompletionStore, type CompletionStore } from './state/completion-store.js';
 import { createSelectStore, type SelectStore } from './state/select-store.js';
 import { createOverlayStore, type OverlayStore } from './state/overlay-store.js';
@@ -32,7 +37,6 @@ import { RenderModeProvider, type RenderMode } from './state/render-mode.js';
 import { ConnectedApp } from './ConnectedApp.js';
 import { exitAltScreen } from './hooks/useAltScreen.js';
 import { USE_DOUBLE_BUFFER, createCustomRenderer, setCursorPos } from '../render/index.js';
-import { InlineRenderer } from './inline/InlineRenderer.js';
 import type { FormattedLine, UIMessageStyle } from '../ui/types.js';
 import type { LogoData as TuiLogoData } from './types.js';
 import type { ThemeName } from '../utils/theme.js';
@@ -61,6 +65,13 @@ export interface BootstrapOptions {
   renderMode?: RenderMode;
   /** 主题名（dark/light），默认 dark */
   themeName?: ThemeName;
+  /** Spinner 动词配置（append/replace），默认使用内置词库 */
+  spinnerVerbs?: SpinnerVerbConfig;
+  /** 始终显示 Spinner 计时器。 */
+  spinnerVerbose?: boolean;
+  /** Thinking 状态的 effort 后缀，例如 hard。 */
+  spinnerThinkingEffort?: string;
+  spinnerContext?: SpinnerContextSnapshot;
 }
 
 export interface BootstrapHandle {
@@ -77,10 +88,17 @@ export interface BootstrapHandle {
   /** spinner 控制（对标 Claude Code 四套动画：mode 决定配色，verb 决定文字） */
   startSpinner: (mode: SpinnerMode) => void;
   stopSpinner: () => void;
+  pauseSpinner: () => void;
+  resumeSpinner: () => void;
   /** 切换 spinner 模式，影响 shimmer 方向与状态提示。 */
   setSpinnerMode: (mode: SpinnerMode) => void;
   /** 工具模式覆盖显示文字（如 "Running Bash"）；空串清回 verb */
   setSpinnerLabel: (label: string) => void;
+  setSpinnerThinkingEffort: (effort: string | null) => void;
+  setSpinnerHasActiveTools: (hasActiveTools: boolean) => void;
+  setSpinnerVerbose: (enabled: boolean) => void;
+  setSpinnerContext: (snapshot: SpinnerContextSnapshot) => void;
+  setSpinnerTeammateTokens: (tokens: number) => void;
   spinnerOnToken: (length?: number) => void;
   /** 把一行系统消息固化进 store（替代旧 printLine） */
   printLine: (text: string) => void;
@@ -90,32 +108,31 @@ export interface BootstrapHandle {
   cleanup: () => void;
 }
 
-export function appendSpinnerCompletionMessage(
+export function stopSpinnerAndAppendCompletion(
+  spinnerStore: SpinnerStore,
   messagesStore: ReturnType<typeof createMessagesStore>,
-  completion: { verb: string; durationMs: number },
 ): void {
-  const messages = messagesStore.getState().messages;
-  const lastMessage = messages[messages.length - 1];
-  const lastLine = lastMessage?.lines[lastMessage.lines.length - 1];
-  if (messages.length > 0 && lastLine?.content !== '') {
-    messagesStore.getState().appendLine('system', { content: '', style: {}, indent: 0 });
+  const completion = spinnerStore.getState().stop();
+  if (completion) {
+    messagesStore.getState().appendTurnDurationMessage(completion.durationMs);
   }
-  messagesStore.getState().appendLine('system', {
-    content: `✻ ${completion.verb} for ${formatSpinnerDuration(completion.durationMs)}`,
-    style: { dim: true },
-    indent: 0,
-  });
 }
 
 export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const renderMode = opts.renderMode ?? 'inline';
   const isInline = renderMode === 'inline';
 
+  // inline 模式恒走 V2(Ink reconciler + <Static> + incrementalRendering)。
+  // V0(InlineRenderer 手动渲染)已在 Stage 5b 删除。
+  const useInlineV2 = isInline;
+
   const messagesStore = createMessagesStore();
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
   const statusStore = createStatusStore(opts.status);
   const logoStore = createLogoStore(opts.logo);
-  const spinnerStore = createSpinnerStore();
+  const spinnerStore = createSpinnerStore(opts.spinnerVerbs, opts.spinnerContext);
+  spinnerStore.getState().setVerbose(opts.spinnerVerbose ?? false);
+  spinnerStore.getState().setThinkingEffort(opts.spinnerThinkingEffort ?? null);
   const completionStore = createCompletionStore();
   const selectStore = createSelectStore();
   const overlayStore = createOverlayStore();
@@ -160,6 +177,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     patchConsole: false;
     renderer?: unknown;
     onSetCursorPosition?: (pos: unknown) => void;
+    incrementalRendering?: boolean;
   } = { exitOnCtrlC: false, alternateScreen: !isInline, patchConsole: false };
 
   if (!isInline && USE_DOUBLE_BUFFER) {
@@ -167,7 +185,10 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     renderOptions.onSetCursorPosition = (pos) => { setCursorPos(pos as { x: number; y: number } | undefined); };
   }
 
-  const inlineRenderer = isInline ? new InlineRenderer(process.stdout) : null;
+  // inline 模式:走 Ink 原生 + incrementalRendering(无 InlineRenderer)
+  if (useInlineV2) {
+    renderOptions.incrementalRendering = true;
+  }
 
   const themeStore = createThemeStore(opts.themeName);
 
@@ -178,7 +199,6 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
           messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore,
           onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
           onAbortStream: opts.onAbortStream, onRewindLastTurn: opts.onRewindLastTurn,
-          inlineRenderer: inlineRenderer ?? undefined,
         }),
       ),
     }),
@@ -187,7 +207,6 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
 
   const cleanup = (): void => {
     try {
-      inlineRenderer?.destroy(); // 恢复 DECAWM ON + 光标可见
       inkInstance?.unmount();
     } catch {
       // unmount 可能已调用，忽略
@@ -207,13 +226,25 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     themeStore,
     startSpinner: (mode) => { spinnerStore.getState().start(mode); },
     stopSpinner: () => {
-      const completion = spinnerStore.getState().stop();
-      if (completion) {
-        appendSpinnerCompletionMessage(messagesStore, completion);
-      }
+      stopSpinnerAndAppendCompletion(spinnerStore, messagesStore);
     },
+    pauseSpinner: () => { spinnerStore.getState().pause(); },
+    resumeSpinner: () => { spinnerStore.getState().resume(); },
     setSpinnerMode: (mode) => { spinnerStore.getState().setMode(mode); },
     setSpinnerLabel: (label: string) => { spinnerStore.getState().setLabel(label); },
+    setSpinnerThinkingEffort: (effort: string | null) => {
+      spinnerStore.getState().setThinkingEffort(effort);
+    },
+    setSpinnerHasActiveTools: (hasActiveTools: boolean) => {
+      spinnerStore.getState().setHasActiveTools(hasActiveTools);
+    },
+    setSpinnerVerbose: (enabled: boolean) => { spinnerStore.getState().setVerbose(enabled); },
+    setSpinnerContext: (snapshot: SpinnerContextSnapshot) => {
+      spinnerStore.getState().setContext(snapshot);
+    },
+    setSpinnerTeammateTokens: (tokens: number) => {
+      spinnerStore.getState().setTeammateTokens(tokens);
+    },
     spinnerOnToken: (length) => { spinnerStore.getState().onToken(length); },
     printLine, printStyled, cleanup,
   };

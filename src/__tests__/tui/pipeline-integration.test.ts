@@ -38,6 +38,24 @@ describe('BlockPipeline → store 端到端', () => {
     expect(allLines.some(t => t.includes('thought for 5s'))).toBe(true);
   });
 
+  it('thinking_delta 只缓存供展开，不把原始推理写入可见消息', () => {
+    const { pipeline, store } = setup();
+    const privateReasoning = '内部推理不应直接铺满终端';
+
+    pipeline.emit({ kind: 'thinking_start' });
+    pipeline.emit({ kind: 'thinking_delta', content: privateReasoning });
+
+    const visibleText = store.getState().messages.map(message => [
+      ...message.lines.map(line => line.content),
+      message.streamingText ?? '',
+    ].join('\n')).join('\n');
+    expect(visibleText).not.toContain(privateReasoning);
+
+    pipeline.emit({ kind: 'thinking_end', durationSec: 2, filesRead: 0 });
+    const expanded = pipeline.getLastExpandableFullLines();
+    expect(expanded?.lines.map(line => line.content).join('\n')).toContain(privateReasoning);
+  });
+
   it('assistant_text 流式 → store 末条 assistant streamingText 累加，isFinal 固化', () => {
     const { pipeline, store } = setup();
     // 先建一个前置块（让 assistant 不被当作首块强制加空行逻辑干扰）

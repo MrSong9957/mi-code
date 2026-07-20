@@ -29,12 +29,13 @@ describe('Spinner upgraded animations', () => {
     expect(frame).toContain('thinking');
   });
 
-  it('shows dots cycle in non-thinking modes', () => {
+  it('verb 后追加省略号 …（Claude Code 样式，替代 dots cycle）', () => {
     const store = createSpinnerStore();
-    store.getState().start('generating');
+    store.getState().start('responding');
     const { lastFrame } = render(React.createElement(Spinner, { store }));
     const frame = lastFrame() ?? '';
-    expect(frame).toMatch(/\./);
+    // U+2026 省略号，固定不变（不随 time 变化）。
+    expect(frame).toContain('…');
   });
 
   it('stalled state triggers after stall threshold', () => {

@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import type { MiCodeConfig, ProviderConfig, PermissionMode, PermissionRuleConfig, ThemeName } from './schema.js';
+import type { MiCodeConfig, ProviderConfig, PermissionMode, PermissionRuleConfig, ThemeName, SpinnerVerbConfig } from './schema.js';
 import { DEFAULT_CONFIG, DEFAULT_MODELS } from './schema.js';
 
 export class ConfigStore {
@@ -60,6 +60,13 @@ export class ConfigStore {
         if (saved.theme) {
           const VALID_THEMES: ThemeName[] = ['dark', 'light'];
           config.theme = VALID_THEMES.includes(saved.theme) ? saved.theme : 'dark';
+        }
+        if (saved.spinnerVerbs && Array.isArray(saved.spinnerVerbs.verbs)) {
+          const mode = saved.spinnerVerbs.mode === 'replace' ? 'replace' : 'append';
+          config.spinnerVerbs = {
+            mode,
+            verbs: saved.spinnerVerbs.verbs.filter((v): v is string => typeof v === 'string'),
+          };
         }
       } catch {
         // 配置文件损坏，使用默认
@@ -177,6 +184,11 @@ export class ConfigStore {
   setTheme(theme: ThemeName): void {
     this.config.theme = theme;
     this.save();
+  }
+
+  /** 获取 Spinner 动词配置副本，供渲染层在 turn 启动时抽样。 */
+  getSpinnerVerbsConfig(): SpinnerVerbConfig {
+    return { mode: this.config.spinnerVerbs.mode, verbs: [...this.config.spinnerVerbs.verbs] };
   }
 
   /** 获取权限模式 */

@@ -23,6 +23,9 @@ import { stripImagesForPersistence } from './agent/image-utils.js';
 import type { ContentBlock } from './agent/types.js';
 import { BlockPipeline } from './ui/block-pipeline.js';
 import { bootstrap, type BootstrapHandle } from './tui/bootstrap.js';
+import { readSpinnerContext } from './tui/spinner-context.js';
+import { EMPTY_SPINNER_CONTEXT } from './tui/state/spinner-store.js';
+import { finalizeTurnLifecycle, handleTurnLoopEnd } from './tui/turn-lifecycle.js';
 import { writeResumeHint } from './cli/resume-hint.js';
 import { ConfigStore, SUPPORTED_PROVIDERS } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
@@ -214,6 +217,12 @@ toolRegistry.register(memList.definition, memList.executor);
  */
 let tuiHandle: BootstrapHandle | null = null;
 
+function refreshSpinnerContext(): void {
+  if (!tuiHandle) return;
+  const fallback = tuiHandle.spinnerStore.getState().context;
+  tuiHandle.setSpinnerContext(readSpinnerContext(teammateManager, todoManager, fallback));
+}
+
 /** 统一输出管道（bootstrap 内构造，所有 agent 逻辑 emit Block 到此）。
  *  声明为 let，bootstrap 后赋值；agent loop 使用前必已赋值。 */
 let pipeline = new BlockPipeline({
@@ -261,6 +270,10 @@ let lastSubmittedAgentText: string | null = null;
 // hasMeaningful 只检查 [lastSubmitMsgsLen..] 这段——避免历史 turn 残留的 assistant/tool
 // 让当前 turn 的撤回被误判为软中断。
 let lastSubmitMsgsLen = 0;
+// 提交去重：防止鼠标事件等误触发导致同一文本被重复提交
+const SUBMIT_DEDUP_WINDOW_MS = 2000;
+let lastSubmitText = '';
+let lastSubmitAt = 0;
 
 /**
  * AskUserManager：AI 向用户提问的挂起-应答状态机。
@@ -458,6 +471,14 @@ async function handleRewindLastTurn(): Promise<void> {
 }
 
 async function handleUserSubmit(rawText: string): Promise<void> {
+  const now = Date.now();
+  const trimmedForDedup = rawText.trim();
+  const isDup = trimmedForDedup === lastSubmitText && now - lastSubmitAt < SUBMIT_DEDUP_WINDOW_MS;
+
+  if (isDup) return;
+  lastSubmitText = trimmedForDedup;
+  lastSubmitAt = now;
+
   // 历史存占位符版本（省磁盘），agent/解析/回显用展开版本（需完整上下文）。
   // sessionStore 仍存展开版本（resume 后占位符 ID 跨 session 失效，需完整文本）。
   const { historyText: trimmedRaw, agentText: userInput } = splitSubmitTracks(rawText);
@@ -619,16 +640,45 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const streamClient = createStreamClient(provider, apiKey, model, baseUrl);
   const compactClient = createStreamClient(provider, apiKey, currentSmallModel(), baseUrl);
   const eventBus = new StreamEventBus();
+  const activeToolIds = new Set<string>();
+  const turnLifecycle = {
+    activeToolIds,
+    setSpinnerHasActiveTools: (hasActiveTools: boolean) => {
+      tuiHandle?.setSpinnerHasActiveTools(hasActiveTools);
+    },
+    emitThinkingEnd: (durationSec: number) => {
+      pipeline.emit({ kind: 'thinking_end', durationSec, filesRead: 0 });
+    },
+    stopSpinner: () => {
+      tuiHandle?.stopSpinner();
+    },
+    now: Date.now,
+  };
   eventBus.onToolCall(d => {
+    activeToolIds.add(d.toolUseId);
+    tuiHandle?.setSpinnerHasActiveTools(true);
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
     tuiHandle?.setSpinnerMode('tool-use');
-    tuiHandle?.setSpinnerLabel(`Running ${d.name}`);
+    // 不再 setLabel('Running xxx')：避免一次 turn 内多次工具调用时 spinner 文字反复切换闪烁。
+    // 工具调用信息已通过 tool_call block 进入消息流（pipeline.emit），用户在正文区可见。
+    // spinner 保持显示 verb（Working/Cogitated…），仅靠 mode='tool-use' 的 shimmer/呼吸灯表达活跃。
   });
   eventBus.onToolResult(d => {
+    activeToolIds.delete(d.toolUseId);
+    tuiHandle?.setSpinnerHasActiveTools(activeToolIds.size > 0);
     pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId });
+    refreshSpinnerContext();
   });
   eventBus.onLoopEnd(() => {
-    tuiHandle?.stopSpinner();
+    handleTurnLoopEnd(turnLifecycle);
+  });
+  eventBus.onError(d => {
+    if (d.recoverable) {
+      // 可恢复错误（如 context_overflow 压缩）：静默处理，不阻断用户
+      return;
+    }
+    // 不可恢复错误：显示给用户
+    tuiHandle?.printStyled(`[Error] ${d.message}`, 'error');
   });
   const allToolDefs = Array.from(toolRegistry.tools.values()).map(t => t.definition);
   const tools = currentMode === 'plan'
@@ -647,12 +697,15 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   // 兼顾"用户有即时反馈"和"状态准确"。
   let spinnerStarted = false;
   let gotAnyResponse = false; // 是否收到过任何 assistant 内容(用于空响应检测)
+  refreshSpinnerContext();
   tuiHandle?.startSpinner('requesting');
   tuiHandle?.setSpinnerLabel('Connecting');
   spinnerStarted = true;
   try {
+    // 不传 maxTurns：对齐 Claude Code，默认无限循环，依赖 LLM 自主 end_turn + 用户 ESC +
+    // budget 软限制退出。需要时可通过 StreamingQueryOptions.maxTurns 显式注入安全网。
     for await (const msg of streamingQuery(streamClient, toolRegistry, userMessageForAgent ?? userInput, {
-      systemPrompt, tools, signal: ac.signal, maxTurns: 10,
+      systemPrompt, tools, signal: ac.signal,
       eventBus, compactClient, permissionChecker,
       initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
       onMessages: (finalMessages) => {
@@ -757,7 +810,13 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
     }
   } finally {
-    tuiHandle?.stopSpinner();
+    const finalizedThinking = finalizeTurnLifecycle(turnLifecycle, {
+      thinkingActive,
+      thinkingContent,
+      thinkingStart,
+    });
+    thinkingActive = finalizedThinking.thinkingActive;
+    thinkingContent = finalizedThinking.thinkingContent;
     isProcessing = false;
     currentAbortController = null;
     // lastSubmittedAgentText 在 turn 结束时清空。
@@ -765,11 +824,6 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     // 异常退出都不会用它,但为防止边缘时序下读到上一轮的陈旧值,统一在此清。
     // (新 turn 的 handleUserSubmit 会重新赋值)
     lastSubmittedAgentText = null;
-    if (thinkingContent) {
-      const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-      pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
-      thinkingContent = '';
-    }
     printLine('');
   }
   historyManager.reset();
@@ -816,6 +870,8 @@ if (cliOpts.list) {
     },
     renderMode: 'inline',
     themeName: cliOpts.theme ?? configStore.getTheme(),
+    spinnerVerbs: configStore.getSpinnerVerbsConfig(),
+    spinnerContext: readSpinnerContext(teammateManager, todoManager, EMPTY_SPINNER_CONTEXT),
     onSubmit: (text) => { void handleUserSubmit(text); },
     onExit: () => { cleanupOnExit(); process.exit(0); },
     onTab: (text) => { handleTab(text, tuiHandle, configStore, permissionChecker); },

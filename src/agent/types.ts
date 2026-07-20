@@ -92,7 +92,12 @@ export interface AgentConfig {
   model: string;
   system: string;
   tools: ToolDefinition[];
-  max_turns: number;
+  /**
+   * 最大 agentic 轮次上限（可选，对齐 Claude Code）。
+   * undefined = 无限循环，依赖 LLM 自主 end_turn + 用户 ESC + budget 软限制退出。
+   * 显式传入时作为安全网，达到上限后返回 max_turns 终止原因。
+   */
+  max_turns?: number;
   /** 最大输出 token 数（默认 8000，超限时自动升级到 64000） */
   max_output_tokens?: number;
   /** 预算限制（美元），超限退出 */

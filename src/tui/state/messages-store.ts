@@ -13,9 +13,25 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { FormattedLine } from '../../ui/types.js';
 import type { TuiMessage } from '../types.js';
+import { createTurnDurationMessage } from './turn-duration-message.js';
 
 export type MessageRole = TuiMessage['role'];
 export type MessagesStore = StoreApi<MessagesState>;
+
+/**
+ * 判断消息是否允许被 appendLine 续接（同 role 追加新行）。
+ *
+ * 专用固化消息（如 turn-duration 完成消息）一旦写入就锁定行数，
+ * 不应被后续 appendLine 合并——否则会让 "✻ Cooked for 9s" 之后的内容
+ * 沉默地挤进完成消息。
+ *
+ * 当前实现里只有 turn-duration 一种专用 kind；未来若新增其他专用 kind
+ * （例如 'error'、'system-banner'），必须在此 type guard 里显式排除，
+ * 否则 TS narrowing 不会自动报错——这是「显式优于隐式」的防御边界。
+ */
+export function isAppendableMessage(message: TuiMessage): boolean {
+  return message.kind === undefined;
+}
 
 export interface MessagesState {
   messages: TuiMessage[];
@@ -25,6 +41,8 @@ export interface MessagesState {
   appendMessage: (role: MessageRole, lines: FormattedLine[]) => void;
   /** 追加一行到末条消息（同 role）；不同 role 或空时新建 */
   appendLine: (role: MessageRole, line: FormattedLine) => void;
+  /** 追加一条独立的固化完成时长消息 */
+  appendTurnDurationMessage: (durationMs: number) => void;
   /** 开一条流式 assistant（finalized=false, streamingText=initialText） */
   startStreaming: (initialText: string) => void;
   /** 开一条流式 thinking（role='thinking', 灰色 dim） */
@@ -63,8 +81,8 @@ export function createMessagesStore(): MessagesStore {
 
     appendLine: (role, line) => set((s) => {
       const last = s.messages[s.messages.length - 1];
-      // 同 role 且末条已固化（非流式中）→ 续接
-      if (last && last.role === role && last.finalized) {
+      // 同 role 且末条已固化且非专用消息（非流式中）→ 续接
+      if (last && last.role === role && last.finalized && isAppendableMessage(last)) {
         const updated = { ...last, lines: [...last.lines, line] };
         return { messages: [...s.messages.slice(0, -1), updated] };
       }
@@ -79,6 +97,18 @@ export function createMessagesStore(): MessagesStore {
           finalized: true,
         }],
       };
+    }),
+
+    appendTurnDurationMessage: (durationMs) => set((s) => {
+      const lastLine = [...s.messages].reverse()
+        .find(message => message.lines.length > 0)?.lines.at(-1);
+      const id = s._idCounter + 1;
+      const message = createTurnDurationMessage({
+        uuid: `msg-${id}`,
+        durationMs,
+        prependBlankLine: Boolean(lastLine && lastLine.content !== ''),
+      });
+      return { _idCounter: id, messages: [...s.messages, message] };
     }),
 
     startStreaming: (initialText) => set((s) => {

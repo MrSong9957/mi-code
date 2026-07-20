@@ -1,26 +1,29 @@
-// src/tui/components/Spinner.tsx
-// Spinner 渲染组件（AltScreen 模式）：订阅 spinner-store，active 时 setInterval 推进时钟
-//
-// 物理本质：footer 顶部的「加载指示灯」。active 时转符号 + verb/label；
-// 3s 无 token → stalled（变红）。inactive 时不占行（Yoga 重排）。
-//
-// 集成动画组件：
-// - GlimmerMessage：shimmer 光效扫过 verb 文字
-// - ThinkingIndicator：thinking 模式下 3s 延迟后显示 (thinking) 呼吸
-// - DotsCycle：非 thinking 模式下尾部显示 .  ..  ... 循环
-
-import React, { useEffect } from 'react';
-import { Text } from 'ink';
+import React, { useMemo } from 'react';
+import { Box, Text } from 'ink';
 import { useStore } from 'zustand/react';
-import { SPINNER_FRAMES, type SpinnerStore } from '../state/spinner-store.js';
+import {
+  TICK_MS,
+  thinkingStatusText,
+  thoughtStatusText,
+} from '../state/spinner-store.js';
+import { formatSpinnerMetrics } from '../state/spinner-metrics.js';
+import type {
+  SpinnerAnimationView,
+  SpinnerAuxiliaryLine,
+  SpinnerView,
+} from '../state/spinner-view.js';
+import { selectSpinnerView } from '../state/spinner-view.js';
 import { useTheme } from '../state/theme-context.js';
-import { computeGlimmerIndex } from '../inline/shimmer.js';
+import {
+  computeGlimmerIndex,
+  measureShimmerMessage,
+  toolUseFlashOpacity,
+} from '../inline/shimmer.js';
 import { GlimmerMessage } from './GlimmerMessage.js';
 import { ThinkingIndicator } from './ThinkingIndicator.js';
-import { DotsCycle } from './DotsCycle.js';
-import { formatSpinnerDuration } from '../state/spinner-store.js';
+import { SpinnerGlyph } from './SpinnerGlyph.js';
+import type { SpinnerStore } from '../state/spinner-store.js';
 
-const TICK_MS = 50;
 const SHIMMER_SPEED = 200;
 const SHIMMER_PAD = 10;
 
@@ -28,58 +31,141 @@ export interface SpinnerProps {
   store: SpinnerStore;
 }
 
-export function Spinner({ store }: SpinnerProps): React.ReactElement | null {
-  const t = useTheme();
-  const active = useStore(store, (s) => s.active);
-  const time = useStore(store, (s) => s.time);
-  const mode = useStore(store, (s) => s.mode);
-  const verb = useStore(store, (s) => s.verb);
-  const label = useStore(store, (s) => s.label);
-  const stalled = useStore(store, (s) => s.stalled);
-  const stalledIntensity = useStore(store, (s) => s.stalledIntensity);
-  const thinkStartTime = useStore(store, (s) => s.thinkStartTime);
-  const displayedTokens = useStore(store, (s) => s.displayedTokens);
-
-  useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => { store.getState().tick(); }, TICK_MS);
-    return () => { clearInterval(id); };
-  }, [active, store]);
-
-  if (!active) return null;
-
-  const frame = SPINNER_FRAMES[Math.floor(time / 120) % SPINNER_FRAMES.length];
-  const displayText = label || verb;
-
-  const messageWidth = displayText.length;
-  const glimmerIndex = computeGlimmerIndex(time, messageWidth, {
-    speed: mode === 'requesting' ? 50 : SHIMMER_SPEED,
+export function SpinnerAnimationRow({ animation }: {
+  animation: SpinnerAnimationView;
+  }): React.ReactElement {
+  const theme = useTheme();
+  const displayText = animation.label || animation.verb;
+  const messageWidth = measureShimmerMessage(displayText);
+  const glimmerIndex = computeGlimmerIndex(animation.time, messageWidth, {
+    speed: animation.mode === 'requesting' ? TICK_MS : SHIMMER_SPEED,
     cyclePad: SHIMMER_PAD,
-    stalled,
+    stalled: animation.stalled,
+    direction: animation.mode === 'requesting' ? 'left-to-right' : 'right-to-left',
   });
 
-  const glyphColor = stalledIntensity > 0.01 ? t.spinnerStalled : t.spinnerActive;
-  const showMetrics = time >= 30_000;
-  const tokens = displayedTokens > 0 ? ` ${mode === 'requesting' ? '↑' : '↓'} ${displayedTokens}` : '';
+  // Claude Code 样式：verb 后固定 …；thinking 或 thinking summary 时显示状态括号，
+  // 否则追加 metrics 段（时长 + token，括号包裹）。
+  const isThinking = animation.mode === 'thinking' && animation.thinkStartTime !== null;
+  const isThinkingSummary = animation.thinkingSummaryDurationMs !== null;
+  const thinkingText = isThinking
+    ? thinkingStatusText(animation.thinkingEffort)
+    : isThinkingSummary
+      ? thoughtStatusText(animation.thinkingSummaryDurationMs!)
+      : null;
+  const metrics = formatSpinnerMetrics(
+    animation.time,
+    animation.displayedTokens,
+    animation.teammateTokens,
+    animation.mode,
+  );
 
   return (
-    <>
-      <Text color={glyphColor} bold>{frame} </Text>
-      <GlimmerMessage
-        message={displayText}
-        glimmerIndex={glimmerIndex}
-        baseColor={glyphColor}
-        shimmerColor={t.spinnerShimmer}
+    <Text>
+      <SpinnerGlyph
+        time={animation.time}
+        activeColor={theme.spinnerActive}
+        stalledIntensity={animation.stalledIntensity}
+        reducedMotion={animation.reducedMotion}
       />
-      {mode === 'thinking' && (
-        <ThinkingIndicator
-          storeTime={time}
-          thinkStartTime={thinkStartTime}
-          text="thinking"
-        />
-      )}
-      {mode !== 'thinking' && <DotsCycle time={time} color={t.textMuted} />}
-      {showMetrics && <Text color={t.textMuted}>{`  ${formatSpinnerDuration(time)}${tokens}`}</Text>}
-    </>
+      <GlimmerMessage
+        message={`${displayText}…`}
+        glimmerIndex={glimmerIndex}
+        baseColor={theme.spinnerActive}
+        shimmerColor={theme.spinnerShimmer}
+        flashOpacity={animation.mode === 'tool-use' && !animation.stalled
+          ? toolUseFlashOpacity(animation.time)
+          : undefined}
+        stalledIntensity={animation.stalledIntensity}
+      />
+      {thinkingText
+        ? <ThinkingIndicator
+            storeTime={animation.time}
+            thinkStartTime={isThinking ? animation.thinkStartTime : null}
+            text={thinkingText}
+          />
+        : <Text color={theme.textMuted}>{` ${metrics}`}</Text>}
+    </Text>
   );
+}
+
+export function BriefSpinner({ animation }: {
+  animation: SpinnerAnimationView;
+}): React.ReactElement {
+  return <SpinnerAnimationRow animation={animation} />;
+}
+
+function MutedLine({ line }: {
+  line: SpinnerAuxiliaryLine;
+}): React.ReactElement {
+  const theme = useTheme();
+  return <Text color={theme.textMuted} dimColor>{line.content}</Text>;
+}
+
+export function TeammateSpinnerTree({ lines }: {
+  lines: readonly SpinnerAuxiliaryLine[];
+}): React.ReactElement {
+  return <>{lines.map((line, index) =>
+    <MutedLine key={`teammate-${index}`} line={line} />)}</>;
+}
+
+export function TaskListV2({ lines }: {
+  lines: readonly SpinnerAuxiliaryLine[];
+}): React.ReactElement {
+  return <>{lines.map((line, index) =>
+    <MutedLine key={`task-${index}`} line={line} />)}</>;
+}
+
+export function Tip({ line }: {
+  line: SpinnerAuxiliaryLine | undefined;
+}): React.ReactElement | null {
+  return line ? <MutedLine line={line} /> : null;
+}
+
+export function Budget({ line }: {
+  line: SpinnerAuxiliaryLine | undefined;
+}): React.ReactElement | null {
+  return line ? <MutedLine line={line} /> : null;
+}
+
+export function NextTask({ line }: {
+  line: SpinnerAuxiliaryLine | undefined;
+}): React.ReactElement | null {
+  return line ? <MutedLine line={line} /> : null;
+}
+
+export function SpinnerWithVerbInner({ view }: {
+  view: SpinnerView;
+}): React.ReactElement {
+  const teammates = view.auxiliaryLines.filter(line => line.kind === 'teammate');
+  const tasks = view.auxiliaryLines.filter(line => line.kind === 'task');
+  const tip = view.auxiliaryLines.find(line => line.kind === 'tip');
+  const budget = view.auxiliaryLines.find(line => line.kind === 'budget');
+  const nextTask = view.auxiliaryLines.find(line => line.kind === 'next-task');
+
+  return (
+    <Box flexDirection="column">
+      <SpinnerAnimationRow animation={view.animation!} />
+      <TeammateSpinnerTree lines={teammates} />
+      <TaskListV2 lines={tasks} />
+      <Tip line={tip} />
+      <Budget line={budget} />
+      <NextTask line={nextTask} />
+    </Box>
+  );
+}
+
+export function SpinnerWithVerb({ view }: {
+  view: SpinnerView;
+}): React.ReactElement | null {
+  if (!view.active || !view.animation) return null;
+  return view.variant === 'brief'
+    ? <BriefSpinner animation={view.animation} />
+    : <SpinnerWithVerbInner view={view} />;
+}
+
+export function Spinner({ store }: SpinnerProps): React.ReactElement | null {
+  const state = useStore(store);
+  const view = useMemo(() => selectSpinnerView(state), [state]);
+  return <SpinnerWithVerb view={view} />;
 }

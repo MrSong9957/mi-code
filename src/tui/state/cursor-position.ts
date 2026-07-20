@@ -11,7 +11,7 @@
 //   3. 当前行「光标之前」的文本用 stringWidth 量显示宽度
 //   4. x = promptWidth + 行内显示宽度（续行也有 prompt 宽度的缩进对齐）
 //
-// 注意：续行的缩进由 Footer/InlineRenderer 渲染负责（不写入 input 文本），
+// 注意：续行的缩进由 Footer/FooterV2 渲染负责（不写入 input 文本），
 // 续行前缀 CONTINUATION_INDENT（与 promptWidth 等宽），故所有行 x 都加 promptWidth。
 
 import stringWidth from 'string-width';

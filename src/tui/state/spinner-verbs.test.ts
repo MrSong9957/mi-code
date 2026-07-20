@@ -4,11 +4,17 @@
 // 本项目精选词库（不追求全量 204，保证词感和 -ing 形式）。
 
 import { describe, it, expect } from 'vitest';
-import { SPINNER_VERBS, sampleVerb, getSpinnerVerbs } from './spinner-verbs.js';
+import {
+  SPINNER_VERBS,
+  sampleVerb,
+  getSpinnerVerbs,
+  type SpinnerVerbConfig,
+} from './spinner-verbs.js';
 
 describe('SPINNER_VERBS 词库', () => {
-  it('非空且有足够多的词（至少 20）', () => {
-    expect(SPINNER_VERBS.length).toBeGreaterThanOrEqual(20);
+  it('包含 Claude Code 规模的词库（至少 200 个）', () => {
+    expect(SPINNER_VERBS.length).toBeGreaterThanOrEqual(200);
+    expect(SPINNER_VERBS).toContain('Crystallizing');
   });
 
   it('全部是 -ing 形式（现在进行时）', () => {
@@ -43,14 +49,27 @@ describe('sampleVerb：均匀随机选词', () => {
     // 100 次抽样至少命中 5 个不同词（词库 ≥20，概率上必然）
     expect(samples.size).toBeGreaterThanOrEqual(5);
   });
+
+  it('支持自定义词库并在一个 turn 内从配置词库抽样', () => {
+    const config: SpinnerVerbConfig = { mode: 'replace', verbs: ['Customizing'] };
+    expect(sampleVerb(config)).toBe('Customizing');
+    expect(getSpinnerVerbs(config)).toEqual(['Customizing']);
+  });
 });
 
-describe('getSpinnerVerbs：词库访问（预留 settings 覆盖钩子）', () => {
+describe('getSpinnerVerbs：词库访问与配置覆盖', () => {
   it('默认返回内置词库的副本', () => {
     const verbs = getSpinnerVerbs();
     expect(verbs).toEqual([...SPINNER_VERBS]);
     // 副本：修改不影响原库
     verbs.push('Hacking');
     expect(SPINNER_VERBS).not.toContain('Hacking');
+  });
+
+  it('append 模式追加用户词并去重', () => {
+    const config: SpinnerVerbConfig = { mode: 'append', verbs: ['Customizing', SPINNER_VERBS[0]!] };
+    const verbs = getSpinnerVerbs(config);
+    expect(verbs).toContain('Customizing');
+    expect(verbs.filter(v => v === SPINNER_VERBS[0]).length).toBe(1);
   });
 });

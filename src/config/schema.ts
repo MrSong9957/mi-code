@@ -29,6 +29,12 @@ export interface PermissionConfig {
   rules: PermissionRuleConfig[];
 }
 
+/** Spinner 动词配置：默认追加内置词库，也可完全替换。 */
+export interface SpinnerVerbConfig {
+  mode: 'append' | 'replace';
+  verbs: string[];
+}
+
 /** 主题名（与 utils/theme.ts ThemeName 同步） */
 export type ThemeName = 'dark' | 'light';
 
@@ -38,6 +44,7 @@ export interface MiCodeConfig {
   defaultProvider: string;
   permissions: PermissionConfig;
   theme: ThemeName;
+  spinnerVerbs: SpinnerVerbConfig;
 }
 
 /** 默认配置 */
@@ -49,6 +56,10 @@ export const DEFAULT_CONFIG: MiCodeConfig = {
     rules: [],
   },
   theme: 'dark',
+  spinnerVerbs: {
+    mode: 'append',
+    verbs: [],
+  },
 };
 
 /** 各 Provider 默认模型 */

@@ -17,9 +17,10 @@ import { useInput, useStdin, usePaste } from 'ink';
 import { App } from './App.js';
 import { useInputHandler } from './input/use-input-handler.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
+import { useSpinnerClock } from './hooks/useSpinnerClock.js';
 import { useRenderMode } from './state/render-mode.js';
 import { DropdownProvider } from './state/dropdown-context.js';
-import { InlineApp } from './inline/InlineApp.js';
+import { InlineAppV2 } from './inline-v2/InlineAppV2.js';
 import { createSelectionStore } from './state/selection-store.js';
 import { createMouseParser } from './input/mouse-events.js';
 import { writeClipboard } from './input/clipboard.js';
@@ -34,6 +35,7 @@ import type { InputStore } from './state/input-store.js';
 import type { StatusStore } from './state/status-store.js';
 import type { LogoStore } from './state/logo-store.js';
 import type { SpinnerStore } from './state/spinner-store.js';
+import { selectSpinnerView } from './state/spinner-view.js';
 import type { CompletionStore } from './state/completion-store.js';
 import type { SelectStore } from './state/select-store.js';
 import type { OverlayStore } from './state/overlay-store.js';
@@ -69,12 +71,10 @@ export interface ConnectedAppProps {
   onAbortStream?: () => void;
   /** ESC 双击撤回末条 user turn */
   onRewindLastTurn?: () => void;
-  /** inline 模式渲染器（alt-screen 模式为 undefined） */
-  inlineRenderer?: import('./inline/InlineRenderer.js').InlineRenderer;
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, onExit, onTab, onToggleOverlay, onAbortStream, onRewindLastTurn, inlineRenderer: _inlineRenderer,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, onExit, onTab, onToggleOverlay, onAbortStream, onRewindLastTurn,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store（拖拽写入，所有区域订阅高亮）
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -85,7 +85,30 @@ export function ConnectedApp({
 
   // 渲染模式检测（须在 completion 订阅之前——后者据 isInline 短路）
   const { mode } = useRenderMode();
+  useSpinnerClock(spinnerStore);
   const isInline = mode === 'inline';
+
+  // ── V2 resize 处理(仅 inline V2 路径需要) ──────────────────────────────
+  // 物理本质:Ink incrementalRendering 在 cols 变化时只擦活动区,不擦 scrollback。
+  // 旧的宽 border 残留在 scrollback 里 → resize 后画面错乱。
+  // 修复:cols 变化时,清屏 + 清 scrollback(\x1b[3J)+ 用 key 重挂载 <InlineAppV2>,
+  // 让 <Static> 重新写所有消息(logo + finalized)。
+  // alt-screen 路径不需要(它走自研双缓冲 renderer,自己处理 resize)。
+  // V0 inline 路径也不需要(V0 InlineRenderer 自己在 cols 变化时清屏重画)。
+  const prevColsRef = useRef(cols);
+  const [v2ResizeKey, setV2ResizeKey] = useState(0);
+  useEffect(() => {
+    if (prevColsRef.current !== cols) {
+      prevColsRef.current = cols;
+      // 只在 inline 模式清屏(V2 路径)
+      if (isInline) {
+        // 清屏 + 清 scrollback + 光标归位
+        process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+        // 触发 <InlineAppV2> 重挂载 → <Static> 重写所有内容
+        setV2ResizeKey((k) => k + 1);
+      }
+    }
+  }, [cols, isInline]);
 
   // 订阅所有 store
   const messages = useStore(messagesStore, (s) => s.messages);
@@ -97,7 +120,8 @@ export function ConnectedApp({
   const logo = useStore(logoStore, useShallow((s) => ({
     version: s.version, dir: s.dir,
   })));
-  const spinnerActive = useStore(spinnerStore, (s) => s.active);
+  const spinnerRowCount = useStore(spinnerStore, state => selectSpinnerView(state).rowCount);
+  const spinnerActive = spinnerRowCount > 0;
   // completionStore 订阅：inline 模式下用常量短路，避免每次候选变化触发 ConnectedApp 重渲染
   // （inline 模式的下拉渲染在 InlineApp 内部直接读 completionStore，不经此处）。
   // useStore 用 Object.is 比较 selector 输出，常量 false/[] 永远不变 → 零重渲染。
@@ -114,12 +138,12 @@ export function ConnectedApp({
   // 输入框视口固定为 MAX_VISIBLE_INPUT_LINES 行，不再随输入行数增长——历史区大小稳定。
   const inputViewportExtraLines = MAX_VISIBLE_INPUT_LINES - 1;
   const suggestionRows = completionVisible ? Math.min(completionCandidates.length, 8) : 0;
-  const footerRows = FOOTER_BASE_ROWS + (spinnerActive ? 1 : 0) + suggestionRows + inputViewportExtraLines;
+  const footerRows = FOOTER_BASE_ROWS + spinnerRowCount + suggestionRows + inputViewportExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
   const maxScroll = Math.max(0, flatLineCount - visibleRows);
   const effectiveScrollTop = scrolledAway ? scrollTop : maxScroll;
   const scrollboxRenderedRows = Math.min(flatLineCount, visibleRows);
-  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + (spinnerActive ? 1 : 0) + suggestionRows + 1;
+  const inputRowY = scrollboxRenderedRows + LOGO_ROWS + spinnerRowCount + suggestionRows + 1;
 
   // 统一行文本映射
   const rowTextMap: RowTextMap = useMemo(() => buildRowTextMap({
@@ -267,7 +291,12 @@ export function ConnectedApp({
     }
   }
 
-  // 鼠标事件处理（仅 alt-screen 模式需要，inline 模式跳过）
+  // 鼠标事件处理（仅 alt-screen 模式需要，inline 模式跳过）。
+  // V2 模式（isInline=true）跳过 SGR 鼠标选区:终端原生选区即可（用户用鼠标拖选，
+  // 操作系统/终端处理高亮和复制）。这里依赖终端 scrollback,
+  // 已固化内容行号会随新消息滚动变化,rowTextMap 无法稳定映射,故 inline 路径
+  // （含 V0 和 V2）整体禁用 SGR 鼠标路由。后续若要在 inline 模式支持应用层选区,
+  // 需要重新设计行号映射方案。
   if (!isInline) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useInput((input: string) => {
@@ -298,22 +327,25 @@ export function ConnectedApp({
 
   // ── early return 只影响 JSX 输出，不影响 hooks ──
 
-  if (isInline && _inlineRenderer) {
+  // inline 模式恒走 V2(Ink reconciler + <Static>)。V0(InlineRenderer)已在 Stage 5b 删除。
+  if (isInline) {
     return (
       <DropdownProvider>
-        <InlineApp
+        <InlineAppV2
+          key={v2ResizeKey}
           messages={messages}
           status={status}
           logo={logo}
-          renderer={_inlineRenderer}
-          messagesStore={messagesStore}
-          inputStore={inputStore}
-          statusStore={statusStore}
-          spinnerStore={spinnerStore}
-          completionStore={completionStore}
-          selectStore={selectStore}
-          selectionStore={selectionStore}
-          overlayStore={overlayStore}
+          stores={{
+            messagesStore,
+            inputStore,
+            statusStore,
+            spinnerStore,
+            completionStore,
+            selectStore,
+            selectionStore,
+            overlayStore,
+          }}
           cols={cols}
           rows={rows}
         />

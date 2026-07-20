@@ -29,7 +29,7 @@ export interface InputViewport {
 /**
  * 计算输入框视口窗口。
  *
- * 算法（光标居中滚动，对齐下拉菜单 InlineRenderer.ts:62-67 同款公式）：
+ * 算法（光标居中滚动，与下拉菜单同款公式）：
  *   1. maxScroll = max(0, total - maxVisible)
  *   2. 居中起点 = cursorLine - floor(maxVisible / 2)
  *   3. viewportTop = clamp(居中起点, 0, maxScroll)
@@ -64,7 +64,7 @@ export function computeInputViewport(
  * 物理本质：终端原生会按列宽自动折行，CJK 占 2 列。应用层不做 word wrap（不改输入文本），
  * 但必须按物理行数记账（footerHeight），否则覆写时 cursorUp 不够 → border 残影。
  *
- * 算法（贪婪字符级折行，对齐 InlineApp.tsx foldLine）：
+ * 算法（贪婪字符级折行，对齐 text-layout.ts foldLine）：
  *   - 首行 budget = cols - firstLinePrefix（如 prompt '❯ ' 占 2 列）
  *   - 后续行 budget = cols
  *   - 逐字符累加 stringWidth，超出 budget 则换行

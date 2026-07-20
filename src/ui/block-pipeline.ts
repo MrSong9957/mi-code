@@ -110,7 +110,7 @@ export class BlockPipeline {
    * 缓冲吸收这个时序，等配对再 flush，保证 call→result→call→result 交替。
    */
   private toolBuffer: BufferedTool[] = [];
-  /** thinking 文本累积（供 ctrl+o 展开用） */
+  /** thinking 文本只在内存中累积，供 ctrl+o 展开；不写入默认可见消息区。 */
   private thinkingBuffer = '';
   /** 可折叠块存储（thinking + tool_result 的 summary/full）——ctrl+o 临时 alt screen 覆盖层渲染用 */
   private expandable = new ExpandableBlockStore();
@@ -132,17 +132,15 @@ export class BlockPipeline {
         break;
 
       case 'thinking_start':
-        // 固化 ● Thinking… 标题行(magenta)。下方流式显示思考内容(dim)。
-        // thinking_end 时擦除流式内容,打印摘要行(Thought for Ns)。
+        // 固化 ● Thinking… 标题行。原始思考仅缓存，结束后打印摘要行。
         this.openModelBlock();
         this.print(MessageFormatter.format('thinking', {}, 'Thinking…'), 'thinking_header');
         this.thinkingActive = true;
         break;
 
       case 'thinking_delta':
-        // 累积 thinking 文本 + 流式渲染（灰色 dim，实时显示思考过程）
+        // 仅累积供 ctrl+o 展开，禁止把原始推理流写进默认可见消息区。
         this.thinkingBuffer += block.content;
-        this.renderer.appendStreamingThinking(this.thinkingBuffer);
         break;
 
       case 'thinking_end': {
@@ -165,7 +163,7 @@ export class BlockPipeline {
             : summaryLines; // 无思考内容时 full = summary
           this.expandable.add({ id, kind: 'thinking', summaryLines, fullLines });
           // 摘要用 'thinking_summary' role（非 assistant），强制 messages-store 新建消息，
-          // 避免 appendLine 续接到已固化的 ● Thinking… 消息导致 InlineApp 跳过渲染。
+          // 避免 appendLine 续接到已固化的 ● Thinking… 消息导致渲染层跳过渲染。
           this.print(summaryLines, 'thinking_summary');
         }
         this.thinkingBuffer = '';

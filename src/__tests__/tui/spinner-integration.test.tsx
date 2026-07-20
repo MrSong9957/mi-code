@@ -2,7 +2,7 @@
 // Spinner 集成测试：端到端动画周期验证
 //
 // 验证 GlimmerMessage + ThinkingIndicator + DotsCycle 在完整
-// generating → thinking → stop 流程中协同工作。
+// responding → thinking → stop 流程中协同工作。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'ink-testing-library';
@@ -19,16 +19,19 @@ describe('Spinner integration', () => {
   it('full animation cycle: generating → thinking → stop', () => {
     const store = createSpinnerStore();
 
-    // Phase 1: generating with shimmer + dots
-    store.getState().start('generating');
+    // Phase 1: responding with shimmer + 省略号 + always-on metrics
+    store.getState().start('responding');
     const { lastFrame, rerender } = render(React.createElement(Spinner, { store }));
     vi.advanceTimersByTime(1000);
     rerender(React.createElement(Spinner, { store }));
     const genFrame = stripAnsi(lastFrame() ?? '');
     // Shimmer symbols present
     expect(genFrame).toMatch(/[·✢✳✶✻✽]/);
-    // Dots present in generating mode (padded to 3 chars)
-    expect(genFrame).toMatch(/\.{1,3}\s*$/);
+    // Claude Code 样式：verb 后固定省略号 …，不再用 1-3 点 dots cycle。
+    expect(genFrame).toContain('…');
+    expect(genFrame).not.toMatch(/\.{3}/);
+    // 末尾 metrics 段（始终显示，括号包裹）。
+    expect(genFrame).toMatch(/\(\d+s\)/);
 
     // Phase 2: switch to thinking via setMode
     store.getState().setMode('thinking');

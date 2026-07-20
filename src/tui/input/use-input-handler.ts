@@ -33,7 +33,10 @@ export function useInputHandler(
   onRewindLastTurn?: () => void,
 ): void {
   const DOUBLE_ESC_WINDOW_MS = 400;
+  const SUBMIT_DEDUP_MS = 500;
   const lastEscAtRef = useRef(0);
+  const lastSubmitAtRef = useRef(0);
+  const lastSubmitTextRef = useRef('');
 
   useInput((input: string, key: Key) => {
     const s = store.getState();
@@ -170,9 +173,26 @@ export function useInputHandler(
       return;
     }
 
-    // 回车：提交
+    // 过滤鼠标/控制序列（inline 模式下不拦截，防止误触发 submit）。
+    // 必须在 key.return 之前：鼠标释放事件（SGR \x1b[<0;col;rowm）、
+    // bracketed paste 结束符（\x1b[201~）等可能被 Ink 解析为 key.return=true。
+    const isControlSeqEarly = input.includes('\x1b') || /^\[<\d+;\d+;\d+[Mm]/.test(input);
+    if (isControlSeqEarly) {
+      return;
+    }
+
+    // 回车：提交（去重：同一文本 500ms 内不重复提交，防止鼠标事件误触发循环）
     if (key.return) {
-      s.submit();
+      const trimmed = store.getState().text.trim();
+      const now = Date.now();
+      if (trimmed !== '' && trimmed === lastSubmitTextRef.current && now - lastSubmitAtRef.current < SUBMIT_DEDUP_MS) {
+        return; // 去重：短时间内的重复提交
+      }
+      const result = s.submit();
+      if (result !== null) {
+        lastSubmitAtRef.current = now;
+        lastSubmitTextRef.current = result;
+      }
       return;
     }
 

@@ -96,14 +96,18 @@ export interface StreamingQueryOptions {
 /**
  * 流式查询循环
  *
- * 核心算法：
- *   while turnCount < maxTurns:
+ * 核心算法（对齐 Claude Code）：
+ *   while true:                                    ← 默认无限循环
+ *     0. 用户 ESC / maxTurns guard（仅显式传入时） → 退出
  *     1. 调用 AI（流式）
  *     2. 收集工具调用
- *     3. 如果没有工具调用 → 结束
+ *     3. 如果没有工具调用 → 结束（LLM 自主 end_turn）
  *     4. 执行工具（流式执行器）
  *     5. 将工具结果加入消息历史
  *     6. 继续循环
+ *
+ * 退出权优先级：用户 ESC > 显式 maxTurns > LLM 自主 end_turn > 错误恢复失败。
+ * 不传 maxTurns = 无限（依赖 LLM 自主收尾 + ESC + budget 软限制）。
  */
 export async function* streamingQuery(
   client: StreamingLLMClient,
@@ -116,7 +120,7 @@ export async function* streamingQuery(
     tools,
     signal,
     maxTokens = 8192,
-    maxTurns = 10,
+    maxTurns,
     enableStreamingExecution = true,
     eventBus,
     model = 'claude-sonnet-4-20250514',
@@ -138,10 +142,19 @@ export async function* streamingQuery(
   const failureInbox = new FailureInbox();
 
   try {
-  while (turnCount < maxTurns) {
+  // 对齐 Claude Code：默认无限循环，仅当显式传入 maxTurns 时作为安全网触发。
+  // 退出条件优先级：用户 ESC > 显式 maxTurns guard > LLM 自主 end_turn。
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
     // Abort 检查
     if (signal.aborted) {
       eventBus?.emitLoopEnd({ reason: 'user_abort' });
+      return;
+    }
+
+    // maxTurns 安全网检查（仅在显式传入时启用，undefined = 无限）
+    if (maxTurns !== undefined && turnCount >= maxTurns) {
+      eventBus?.emitLoopEnd({ reason: 'max_turns' });
       return;
     }
 
@@ -397,9 +410,9 @@ export async function* streamingQuery(
       }
     }
   }
-
-  // 达到最大轮数
-  eventBus?.emitLoopEnd({ reason: 'max_turns' });
+  // 循环退出全靠循环体内的 return（user_abort / max_turns guard / end_turn / 错误恢复失败）。
+  // 落到这里说明逻辑有漏洞——记录后兜底退出，避免死循环。
+  eventBus?.emitLoopEnd({ reason: 'unexpected_exit' });
   } finally {
     // 无论正常结束/错误/中断，都把最终消息列表回调出去（供会话持久化落盘）
     if (onMessages) onMessages(messages);
