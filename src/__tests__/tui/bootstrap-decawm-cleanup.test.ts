@@ -1,30 +1,38 @@
 // src/__tests__/tui/bootstrap-decawm-cleanup.test.ts
 //
-// 验证 bootstrap cleanup → InlineRenderer.destroy → DECAWM 恢复序列。
-// 整条 crash 兜底链：cleanup() → inlineRenderer?.destroy() → \x1b[?7h + \x1b[?25h。
+// 验证 V0 路径(InlineRenderer)的 cleanup → DECAWM 恢复序列。
+// 整条 crash 兜底链:cleanup() → inlineRenderer?.destroy() → \x1b[?7h + \x1b[?25h。
 //
-// 不测 Ink 渲染（太重），只 spy process.stdout.write 检查 cleanup 后的序列。
+// 注:默认 V2 已启用(Stage 5a.6),本测试显式 MICODE_INLINE_V2=0 强制走 V0 路径。
+// V2 路径的 cleanup 由 Ink reconciler 内部处理,不需要这些序列。
+// Stage 5b 删除 V0 后,本测试一并删除。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { bootstrap } from '../../tui/bootstrap.js';
 
-describe('bootstrap cleanup 恢复 DECAWM', () => {
+describe('bootstrap cleanup 恢复 DECAWM (V0 路径)', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let writeSpy: any;
   let originalColumns: number;
+  let origEnv: string | undefined;
 
   beforeEach(() => {
+    origEnv = process.env.MICODE_INLINE_V2;
+    // 强制走 V0 路径(默认现在是 V2)
+    process.env.MICODE_INLINE_V2 = '0';
     writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     originalColumns = process.stdout.columns;
     Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
   });
 
   afterEach(() => {
+    if (origEnv === undefined) delete process.env.MICODE_INLINE_V2;
+    else process.env.MICODE_INLINE_V2 = origEnv;
     writeSpy.mockRestore();
     Object.defineProperty(process.stdout, 'columns', { value: originalColumns, configurable: true });
   });
 
-  it('inline 模式 cleanup 写入 DECAWM ON + 光标可见', () => {
+  it('V0 inline 模式 cleanup 写入 DECAWM ON + 光标可见', () => {
     expect.hasAssertions();
     const handle = bootstrap({
       renderMode: 'inline',
