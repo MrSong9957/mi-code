@@ -14,6 +14,8 @@ import {
   saveImageCache,
   stripImagesForPersistence,
   ensureImageData,
+  buildOpenAIImagePart,
+  buildGeminiInlineData,
   MAX_IMAGE_BYTES,
 } from '../../agent/image-utils.js';
 import type { ImageBlock, Message } from '../../agent/types.js';
@@ -261,5 +263,50 @@ describe('图片转换 helper — ensureImageData', () => {
     const block = makeImageBlock({ mediaType: 'image/tiff' as any, data: '' });
     expect(() => ensureImageData(block)).toThrowError(/不支持的图片类型/);
     expect(() => ensureImageData(block)).not.toThrowError(/图片数据缺失/);
+  });
+});
+
+describe('图片转换 helper — buildOpenAIImagePart', () => {
+  it('PNG block → image_url data URL', () => {
+    const part = buildOpenAIImagePart(makeImageBlock({ mediaType: 'image/png', data: 'AAA' }));
+    expect(part.type).toBe('image_url');
+    expect(part.image_url.url).toBe('data:image/png;base64,AAA');
+  });
+
+  it('JPEG/GIF/WebP 各自的 mediaType 前缀正确', () => {
+    for (const mediaType of ['image/jpeg', 'image/gif', 'image/webp'] as const) {
+      const part = buildOpenAIImagePart(makeImageBlock({ mediaType, data: 'AAA' }));
+      expect(part.image_url.url).toBe(`data:${mediaType};base64,AAA`);
+    }
+  });
+
+  it('空 data 透传 ensureImageData 错误', () => {
+    expect(() => buildOpenAIImagePart(makeImageBlock({ data: '' }))).toThrowError(/图片数据缺失/);
+  });
+
+  it('非法 mediaType 透传 ensureImageData 错误', () => {
+    expect(() => buildOpenAIImagePart(makeImageBlock({ mediaType: 'image/svg+xml' as any }))).toThrowError(
+      /不支持的图片类型/,
+    );
+  });
+});
+
+describe('图片转换 helper — buildGeminiInlineData', () => {
+  it('PNG block → inlineData 纯 base64(无前缀)', () => {
+    const part = buildGeminiInlineData(makeImageBlock({ mediaType: 'image/png', data: 'AAA' }));
+    expect(part.inlineData.mimeType).toBe('image/png');
+    expect(part.inlineData.data).toBe('AAA'); // 不含 data: 前缀
+  });
+
+  it('JPEG/GIF/WebP 各自的 mimeType 正确', () => {
+    for (const mediaType of ['image/jpeg', 'image/gif', 'image/webp'] as const) {
+      const part = buildGeminiInlineData(makeImageBlock({ mediaType, data: 'AAA' }));
+      expect(part.inlineData.mimeType).toBe(mediaType);
+      expect(part.inlineData.data).toBe('AAA');
+    }
+  });
+
+  it('空 data 透传 ensureImageData 错误', () => {
+    expect(() => buildGeminiInlineData(makeImageBlock({ data: '' }))).toThrowError(/图片数据缺失/);
   });
 });

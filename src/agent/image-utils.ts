@@ -185,3 +185,20 @@ export function ensureImageData(block: ImageBlock): string {
   }
   return block.data;
 }
+
+/** 构造 OpenAI vision image_url part（含 data URL 前缀）。*/
+export function buildOpenAIImagePart(block: ImageBlock): OpenAIImagePart {
+  const data = ensureImageData(block);
+  return {
+    type: 'image_url',
+    image_url: { url: `data:${block.mediaType};base64,${data}` },
+  };
+}
+
+/** 构造 Gemini inlineData part（纯 base64，无前缀）。*/
+export function buildGeminiInlineData(block: ImageBlock): GeminiInlineData {
+  const data = ensureImageData(block);
+  return {
+    inlineData: { mimeType: block.mediaType, data },
+  };
+}
