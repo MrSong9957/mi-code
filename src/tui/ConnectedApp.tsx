@@ -91,6 +91,28 @@ export function ConnectedApp({
   useSpinnerClock(spinnerStore);
   const isInline = mode === 'inline';
 
+  // ── V2 resize 处理(仅 inline V2 路径需要) ──────────────────────────────
+  // 物理本质:Ink incrementalRendering 在 cols 变化时只擦活动区,不擦 scrollback。
+  // 旧的宽 border 残留在 scrollback 里 → resize 后画面错乱。
+  // 修复:cols 变化时,清屏 + 清 scrollback(\x1b[3J)+ 用 key 重挂载 <InlineAppV2>,
+  // 让 <Static> 重新写所有消息(logo + finalized)。
+  // alt-screen 路径不需要(它走自研双缓冲 renderer,自己处理 resize)。
+  // V0 inline 路径也不需要(V0 InlineRenderer 自己在 cols 变化时清屏重画)。
+  const prevColsRef = useRef(cols);
+  const [v2ResizeKey, setV2ResizeKey] = useState(0);
+  useEffect(() => {
+    if (prevColsRef.current !== cols) {
+      prevColsRef.current = cols;
+      // 只在 V2 路径(inline 模式 + 无 InlineRenderer)清屏
+      if (isInline && !_inlineRenderer) {
+        // 清屏 + 清 scrollback + 光标归位(对齐 V0 InlineApp.tsx:211)
+        process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+        // 触发 <InlineAppV2> 重挂载 → <Static> 重写所有内容
+        setV2ResizeKey((k) => k + 1);
+      }
+    }
+  }, [cols, isInline, _inlineRenderer]);
+
   // 订阅所有 store
   const messages = useStore(messagesStore, (s) => s.messages);
   const inputText = useStore(inputStore, (s) => s.text);
@@ -338,6 +360,7 @@ export function ConnectedApp({
     return (
       <DropdownProvider>
         <InlineAppV2
+          key={v2ResizeKey}
           messages={messages}
           status={status}
           logo={logo}
