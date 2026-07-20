@@ -109,15 +109,15 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
   // 用 boolean selector,只在 visible 翻转时触发本组件重渲染。
   const selectVisible = useStore(stores.selectStore, (s) => s.visible);
 
-  // 订阅 overlay 是否可见:visible 时用 <Overlay> 替换整棵活动区(只显示折叠块全文)。
+  // 订阅 overlay 是否可见:visible 时用 <Overlay> 替换活动区(只显示折叠块全文)。
   // 复用 alt-screen 的 <Overlay> 组件,Props 一致。
+  //
+  // **关键设计**:Overlay 不再 return 在根元素之外(以前 if (overlayVisible) return <Overlay/>),
+  // 而是作为同根 <Box> 下的条件子树。原因:Ink reconciler 在 <Static> 宿主节点身份变化时
+  // (staticNode !== previousStaticNode)会清空 fullStaticOutput,导致 logo + 已固化消息丢失。
+  // 父元素类型切换(Box→Overlay→Box)会让 <Static> 卸载重挂载 → identity 变化 → bug。
+  // 保持根元素稳定(<Box>),Overlay 作为内部条件渲染,避免 <Static> 卸载。
   const overlayVisible = useStore(stores.overlayStore, (s) => s.visible);
-
-  // Overlay 顶层优先:visible 时替代整棵树(包含 <Static>)。
-  // 这是 charter 铁律「禁止手动 CUP」的延伸——用条件渲染而非 saveCursor+eraseScreen。
-  if (overlayVisible) {
-    return <Overlay store={stores.overlayStore} cols={cols} />;
-  }
 
   // 输入框视口:光标居中滚动,超出 MAX_VISIBLE_INPUT_LINES 时 viewportTop 跟随。
   const totalInputLines = inputText.split('\n').length;
@@ -164,29 +164,37 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
           ? <LogoLineV2 key={item.id} logo={item.logo} />
           : <MessageLine key={item.id} msg={item.msg} cols={cols} />}
       </Static>
-      {streaming && (
-        <StreamingText
-          text={streaming.streamingText}
-          role={streaming.role === 'thinking' ? 'thinking' : 'assistant'}
-          cols={cols}
-        />
-      )}
-      {selectVisible ? (
-        // Select 选择器:替代 spinner+footer 占据活动区(自订阅 selectStore)
-        <SelectOverlayV2 store={stores.selectStore} cols={cols} />
+      {overlayVisible ? (
+        // Overlay 可见时,替换活动区(spinner+footer 隐藏,只显示折叠块全文)。
+        // 作为 <Box> 子节点而非根元素切换,保持 <Static> identity 稳定(见上面注释)。
+        <Overlay store={stores.overlayStore} cols={cols} />
       ) : (
         <>
-          <SpinnerMemo store={stores.spinnerStore} />
-          <FooterV2
-            input={inputText}
-            cursor={cursor}
-            status={statusData}
-            cols={cols}
-            inputRowY={inputRowY}
-            viewportTop={vp.viewportTop}
-            completionStore={stores.completionStore}
-            selectionStore={stores.selectionStore}
-          />
+          {streaming && (
+            <StreamingText
+              text={streaming.streamingText}
+              role={streaming.role === 'thinking' ? 'thinking' : 'assistant'}
+              cols={cols}
+            />
+          )}
+          {selectVisible ? (
+            // Select 选择器:替代 spinner+footer 占据活动区(自订阅 selectStore)
+            <SelectOverlayV2 store={stores.selectStore} cols={cols} />
+          ) : (
+            <>
+              <SpinnerMemo store={stores.spinnerStore} />
+              <FooterV2
+                input={inputText}
+                cursor={cursor}
+                status={statusData}
+                cols={cols}
+                inputRowY={inputRowY}
+                viewportTop={vp.viewportTop}
+                completionStore={stores.completionStore}
+                selectionStore={stores.selectionStore}
+              />
+            </>
+          )}
         </>
       )}
     </Box>
