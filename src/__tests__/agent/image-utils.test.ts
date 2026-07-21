@@ -247,10 +247,9 @@ describe('图片转换 helper — ensureImageData', () => {
     expect(() => ensureImageData(block)).toThrowError(/image\/png/);
   });
 
-  it('空 data 有 cachePath 抛中文错误(含 cachePath 与 AUTO-0028)', () => {
+  it('空 data + cachePath 指向不存在的文件:抛「缓存文件丢失」错误(含路径)', () => {
     const block = makeImageBlock({ data: '', cachePath: '/tmp/x.png' });
-    expect(() => ensureImageData(block)).toThrowError(/图片数据缺失/);
-    expect(() => ensureImageData(block)).toThrowError(/AUTO-0028/);
+    expect(() => ensureImageData(block)).toThrowError(/缓存文件丢失/);
     expect(() => ensureImageData(block)).toThrowError(/\/tmp\/x\.png/);
   });
 
@@ -316,13 +315,13 @@ describe('图片转换 helper — buildGeminiInlineData', () => {
 describe('图片转换 helper — 三家 client 共享防御', () => {
   // OpenAI / Google / Anthropic 三家都通过 ensureImageData 防御，
   // 因此在 helper 层验证一次即可，client 层不重复。
-  it('无论经过哪个 builder，空 data 都抛中文错误', () => {
+  it('无论经过哪个 builder，空 data + 不存在 cachePath 都抛「缓存文件丢失」错误', () => {
     const block = makeImageBlock({ data: '', cachePath: '/x.png' });
     // 直接调用 helper
-    expect(() => ensureImageData(block)).toThrowError(/AUTO-0028/);
+    expect(() => ensureImageData(block)).toThrowError(/缓存文件丢失/);
     // 经 OpenAI builder 透传
-    expect(() => buildOpenAIImagePart(block)).toThrowError(/AUTO-0028/);
+    expect(() => buildOpenAIImagePart(block)).toThrowError(/缓存文件丢失/);
     // 经 Gemini builder 透传
-    expect(() => buildGeminiInlineData(block)).toThrowError(/AUTO-0028/);
+    expect(() => buildGeminiInlineData(block)).toThrowError(/缓存文件丢失/);
   });
 });
