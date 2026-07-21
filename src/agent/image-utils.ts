@@ -5,7 +5,7 @@
 // 魔数检测优先于扩展名,防伪装文件。
 
 import { readFile, mkdir, writeFile } from 'fs/promises';
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import type { ImageBlock, ImageMediaType, Message, ContentBlock } from './types.js';
@@ -165,8 +165,13 @@ const SUPPORTED_MEDIA_TYPES: ReadonlySet<ImageMediaType> = new Set([
 
 /**
  * 返回可用的 base64 data。
- * 先校验 mediaType 合法性（防御 cast 绕过类型），再校验 data 非空。
- * 空 data 时抛中文错误——AUTO-0028 会把此路径改为「从 cachePath 回填」。
+ *
+ * 路径优先级：
+ *   1. mediaType 白名单校验（不变，防御 cast 绕过类型）
+ *   2. 热路径：data 非空直接返回（首次发送）
+ *   3. 冷路径：委托 rehydrateFromCache 从 cachePath 回填（resume 后）
+ *
+ * 三家 provider client 都经此 helper，一处修改三家受益。
  */
 export function ensureImageData(block: ImageBlock): string {
   if (!SUPPORTED_MEDIA_TYPES.has(block.mediaType)) {
@@ -175,15 +180,49 @@ export function ensureImageData(block: ImageBlock): string {
         `支持的类型：image/png、image/jpeg、image/gif、image/webp`,
     );
   }
-  if (!block.data) {
+  if (block.data) return block.data;
+  return rehydrateFromCache(block);
+}
+
+/**
+ * 从 cachePath 读回 base64 data（resume 场景）。
+ *
+ * 当前方案：每次 convertMessages 都读磁盘，不缓存。多轮对话中同一图片会重复读,
+ * 但单图磁盘成本（µs-ms 级）远低于 API 往返（数百 ms 到数秒）。
+ *
+ * 注意：不回写 block.data，保持 ensureImageData 无副作用。
+ * 如未来成为瓶颈，可在本函数内部加 Map<cachePath, string> 缓存，对外接口不变。
+ *
+ * 失败路径：
+ *   - cachePath 缺失：状态损坏（理论上不可能，stripImagesForPersistence 总保留 cachePath）
+ *   - 文件不存在：用户清缓存 / 跨设备迁移，建议重新 /image
+ *   - 0 字节文件：剪贴板保存失败残留，silent corruption，必须 throw
+ *   - EACCES/EIO 等系统错误：不包装，自然冒泡（与 encodeImageBlock 一致）
+ */
+function rehydrateFromCache(block: ImageBlock): string {
+  if (!block.cachePath) {
     throw new Error(
-      `图片数据缺失，无法发送。\n` +
-        `原因：会话恢复后图片未从缓存回填（等待 AUTO-0028 实现）。\n` +
-        `缓存路径：${block.cachePath ?? '(未记录)'}\n` +
-        `建议：重新发送 /image 命令附加图片。`,
+      `图片数据缺失，且未记录缓存路径，无法发送。\n` +
+        `mediaType：${block.mediaType}\n` +
+        `这通常是会话状态损坏，请到 GitHub Issues 反馈。`,
     );
   }
-  return block.data;
+  if (!existsSync(block.cachePath)) {
+    throw new Error(
+      `图片缓存文件丢失，无法发送历史图片。\n` +
+        `缓存路径：${block.cachePath}\n` +
+        `mediaType：${block.mediaType}\n` +
+        `建议：重新使用 /image 命令附加该图片。`,
+    );
+  }
+  const buf = readFileSync(block.cachePath);
+  if (buf.length === 0) {
+    throw new Error(
+      `图片缓存文件为空：${block.cachePath}\n` +
+        `建议：重新使用 /image 命令附加该图片。`,
+    );
+  }
+  return buf.toString('base64');
 }
 
 /** 构造 OpenAI vision image_url part（含 data URL 前缀）。*/
