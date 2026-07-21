@@ -68,6 +68,8 @@ export const AskQuestionOverlayV2 = React.memo(function AskQuestionOverlayV2({
         <Text>{tabs}</Text>
         <Text bold>{truncateLine('Submit', width)}</Text>
         {unanswered && <Text>{truncateLine('Answer all questions before submitting', width)}</Text>}
+        <Text>{truncateLine(`${state.focusIndex === 0 ? '> ' : '  '}Submit answers`, width)}</Text>
+        <Text>{truncateLine(`${state.focusIndex === 1 ? '> ' : '  '}Cancel`, width)}</Text>
         <Text dimColor>{truncateLine('Enter submit · Esc cancel', width)}</Text>
       </Box>
     );

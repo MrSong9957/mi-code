@@ -89,6 +89,21 @@ describe('<AskQuestionOverlayV2>', () => {
     expect(lastFrame()).toContain('Answer all questions before submitting');
   });
 
+  it('renders focused Submit answers and Cancel actions on the Submit page', async () => {
+    const store = openStore();
+    store.getState().nextPage();
+    store.getState().nextPage();
+    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+
+    expect(lastFrame()).toContain('> Submit answers');
+    expect(lastFrame()).toContain('  Cancel');
+
+    store.getState().moveFocusNext();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(lastFrame()).toContain('  Submit answers');
+    expect(lastFrame()).toContain('> Cancel');
+  });
+
   it('renders contextual help for Other input mode', () => {
     const store = openStore();
     store.setState({ inputMode: true });
