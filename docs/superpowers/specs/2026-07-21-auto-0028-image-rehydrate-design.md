@@ -291,7 +291,7 @@ throw new Error(
 
 ```ts
 throw new Error(
-  `图片缓存文件为空: ${block.cachePath}\n` +
+  `图片缓存文件为空:${block.cachePath}\n` +
     `建议:重新使用 /image 命令附加该图片。`,
 );
 ```
