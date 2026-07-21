@@ -21,6 +21,7 @@ import { streamingQuery } from './agent/streaming-query.js';
 import { StreamEventBus } from './agent/stream-event-bus.js';
 import { stripImagesForPersistence } from './agent/image-utils.js';
 import type { ContentBlock } from './agent/types.js';
+import { formatUserContentForResume } from './utils/format-content.js';
 import { BlockPipeline } from './ui/block-pipeline.js';
 import { bootstrap, type BootstrapHandle } from './tui/bootstrap.js';
 import { readSpinnerContext } from './tui/spinner-context.js';
@@ -887,7 +888,7 @@ if (cliOpts.list) {
     printLine(`── resumed ${sessionMessages.length} messages ──`);
     for (const m of sessionMessages) {
       if (m.role === 'user') {
-        const text = typeof m.content === 'string' ? m.content : '(结构化内容)';
+        const text = formatUserContentForResume(m.content);
         pipeline.emit({ kind: 'user_input', text });
       } else {
         // assistant：从 content 提取文本

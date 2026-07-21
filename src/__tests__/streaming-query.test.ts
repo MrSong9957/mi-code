@@ -313,3 +313,79 @@ describe('streamingQuery 429 限流退避', () => {
     sleepSpy.mockRestore();
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// AUTO-0030:end_turn 时 assistant 消息必须进 onMessages 回调
+//
+// 物理本质:LLM 以纯文本回复(无工具调用)收尾时,streamingQuery 的 finally
+// 通过 onMessages 把 messages 数组甩给持久化层。原 bug:end_turn 提前 return
+// 跳过了把 assistantMessages 合并进 messages 的步骤,导致 JSONL 只存 user 不存 assistant。
+// ════════════════════════════════════════════════════════════════════
+describe('AUTO-0030:end_turn 时 onMessages 应含 assistant 消息', () => {
+  it('纯文本回复:end_turn 收尾,onMessages 收到的 messages 应含本轮 assistant', async () => {
+    // 主模型剧本:单轮纯文本回复,end_turn
+    const client = new ScriptedStreamClient([
+      [{ type: 'text', text: '你好,这是回复。' }],
+    ]);
+    const registry = new ToolRegistry();
+    const ac = new AbortController();
+
+    let capturedMessages: Message[] | undefined;
+    await drain(streamingQuery(client, registry, '你好', {
+      systemPrompt: 'sys',
+      tools: [],
+      signal: ac.signal,
+      maxTurns: 5,
+      enableStreamingExecution: false,
+      onMessages: (msgs) => { capturedMessages = msgs; },
+    }));
+
+    // 核心断言:onMessages 收到 2 条消息:user + assistant
+    expect(capturedMessages).toBeDefined();
+    expect(capturedMessages!.length).toBe(2);
+    expect(capturedMessages![0].role).toBe('user');
+    expect(capturedMessages![1].role).toBe('assistant');
+    // assistant 内容是本轮回复的文本
+    const asstContent = capturedMessages![1].content;
+    expect(Array.isArray(asstContent)).toBe(true);
+    const textBlock = (asstContent as ContentBlock[]).find(b => b.type === 'text') as { text: string } | undefined;
+    expect(textBlock?.text).toBe('你好,这是回复。');
+  });
+
+  it('多轮工具调用:最后 end_turn 那轮的 assistant 也应进 messages', async () => {
+    // 剧本:第一轮 tool_use,第二轮 纯文本 end_turn
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'call_1', name: 'echo', input: { x: 'hi' } }],
+      [{ type: 'text', text: '完成。' }],
+    ]);
+    const registry = new ToolRegistry();
+    const echoDef: ToolDefinition = {
+      name: 'echo',
+      description: 'echo input',
+      parameters: { type: 'object', properties: { x: { type: 'string' } } },
+    };
+    registry.register(echoDef, async () => 'ok');
+    const ac = new AbortController();
+
+    let capturedMessages: Message[] | undefined;
+    await drain(streamingQuery(client, registry, '做一下', {
+      systemPrompt: 'sys',
+      tools: registry.getDefinitions(),
+      signal: ac.signal,
+      maxTurns: 5,
+      enableStreamingExecution: false,
+      onMessages: (msgs) => { capturedMessages = msgs; },
+    }));
+
+    // 期望 4 条:user → assistant(tool_use) → user(tool_result) → assistant(text 结尾)
+    expect(capturedMessages).toBeDefined();
+    expect(capturedMessages!.length).toBe(4);
+    expect(capturedMessages!.map(m => m.role)).toEqual([
+      'user', 'assistant', 'user', 'assistant',
+    ]);
+    // 最后一条 assistant 应含本轮的「完成。」文本
+    const lastAsst = capturedMessages![3];
+    const textBlock = (lastAsst.content as ContentBlock[]).find(b => b.type === 'text') as { text: string } | undefined;
+    expect(textBlock?.text).toBe('完成。');
+  });
+});

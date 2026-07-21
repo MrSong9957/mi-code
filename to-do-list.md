@@ -39,15 +39,26 @@
   > 当前 `src/tui/input/paste-handler.ts:8` 有 TODO：图片占位符 `[Image #N]` 需走单独 content block，但「当前零基础设施」。仅支持 `/image` 命令，不支持 Ctrl+V 粘贴和 drag-and-drop。
   > 依赖：AUTO-0001
 
-- [ ] AUTO-0028: 会话恢复（resume）回填图片
-  > `src/agent/image-utils.ts:128` `saveImageCache` 已落盘 `cachePath`，但全仓无读取处（只写不读）。重启会话时图片会以空 data 发送（损坏）。需补 `readFile(cachePath)` → 回填 base64 的 rehydrate 路径。
-  > 依赖：AUTO-0001
+- [ ] AUTO-0030: 修复 end_turn 时 assistant 消息未持久化 ~~(待办)~~
+  > (已完成,见「已完成」分区)
 
 ## 已完成
+
+- [x] AUTO-0030: 修复 end_turn 时 assistant 消息未持久化
+  > AUTO-0028 实测时发现:resume 后 JSONL 只有 user 消息,0 条 assistant。根因 `src/agent/streaming-query.ts:255-258` 的 end_turn 提前 `return`,跳过了阶段 4 把 `assistantMessages` 合并进 `messages` 的步骤。所有以纯文本回复收尾的会话(绝大多数),最后一条 assistant 都丢失。day-1 bug(`ddb7725` 持久化功能引入时就在)。
+  > 完成:在 end_turn return 前补一段 `if (assistantMessages.length > 0) messages = [...messages, { role:'assistant', content: assistantMessages.flatMap(m => m.content) }]`。新增 2 条集成测试(纯文本 end_turn + 多轮工具调用末尾 end_turn)到 `streaming-query.test.ts`,均 RED 验证 → GREEN。全量 1687 passed、tsc exit 0。
 
 - [x] AUTO-0026: OpenAI / Google provider 发送图片
   > 补齐 OpenAI 与 Google 两家 stream client 的图片输入支持，对齐已实现的 Anthropic provider。
   > 完成：抽取 3 个共享 helper 到 `image-utils.ts`（`ensureImageData` mediaType+空 data 校验、`buildOpenAIImagePart` 拼 data URL、`buildGeminiInlineData` 纯 base64）；三家 client 统一接入空 data 防御（含 Anthropic 补漏）；修复 OpenAI client 原 `else if (textParts.length > 0)` 导致纯图片消息被完全丢弃的 bug，组装改为四分支；新增 helper 单测 14 条 + OpenAI/Google mock SDK 集成测试 4 条。49 个 agent 测试全过、tsc exit 0、grep `// image block:MVP 跳过` 零命中。
+
+- [x] AUTO-0028: 会话恢复（resume）回填图片
+  > resume 后历史消息中的 ImageBlock 从 cachePath 读回 base64，替换原 throw 兜底。
+  > 完成：ensureImageData 新增冷路径，委托私有 rehydrateFromCache(existsSync + readFileSync + 0 字节校验)。三家 provider client 零改动,经 ensureImageData 统一受益。4 种错误路径(cachePath 缺失 / 文件不存在 / 0 字节 / 系统 EACCES 等)分级处理,前三种 throw 中文消息,系统错误不包装自然冒泡。改写 2 条原契约测试(去掉 /AUTO-0028/ 正则) + 新增 6 条回填测试(通用 + PNG/JPEG/GIF/WebP + 0 字节边界)。不引入缓存(YAGNI),不回写 block.data(保持无副作用)。55 个 agent 测试全过、tsc exit 0、全量 1678 passed。
+
+- [x] AUTO-0029: resume 回显格式化（user 消息内容）
+  > AUTO-0028 实测暴露：resume 后带图历史消息显示成 `(结构化内容)`，用户看不到自己当初发了什么。本任务把数组 content 转人类可读字符串。
+  > 完成：新建 `src/utils/format-content.ts` 纯函数 `formatUserContentForResume`,text 原文 / image `[图片 <cachePath>]`(无 cachePath 降级 `[图片]`) / tool_use `[工具调用]` / tool_result `[工具结果]`,非空片段空格连接。接入 `src/index.ts:891` 替换 `(结构化内容)` 三元表达式。6 条单测覆盖字符串透传 / 纯 text / text+image / 无 cachePath 防御 / 空数组 / tool 混合。tsc exit 0、全量 1684 passed。
 
 - [x] AUTO-0002: 斜杠命令体系
   > 实现 /command 交互方式，支持如 /help、/clear 等快捷指令
@@ -156,3 +167,7 @@
 | 2026-07-21 | AUTO-0001、AUTO-0025~0028 | @agent | 核实 AUTO-0001 现状后拆分子任务：AUTO-0026（OpenAI/Google provider 发图，当前 MVP 跳过）、AUTO-0027（拖拽/粘贴捕获，paste-handler 有 TODO）、AUTO-0028（resume 会话恢复回填，cachePath 只写不读）；AUTO-0006 新建子任务 AUTO-0025（接入下拉选择菜单）。 |
 | 2026-07-21 | - | @agent | 顺手按文件顶部「核心规则」归位：AUTO-0009~0024 已是 `[x]` 但原堆在「待办」分区，现一并移入「已完成」。 |
 | 2026-07-21 | AUTO-0026 | @agent | 完成 OpenAI/Google provider 图片输入支持（feat/openai-google-image-support 分支，6 个 TDD commit）：3 个共享 helper + 类型、三家统一空 data 防御、OpenAI 纯图片丢弃 bug 修复；49 个 agent 测试全过、tsc exit 0；经 brainstorming→writing-plans→subagent-driven 全流程 + 三轮 code review。 |
+| 2026-07-21 | AUTO-0028 | @agent | 完成 resume 图片 rehydrate:ensureImageData 新增冷路径 + 私有 rehydrateFromCache(existsSync + readFileSync + 0 字节校验);2 条原契约测试改写 + 6 条新增;55 个 agent 测试全过、tsc exit 0、全量 1678 passed(StatusBar 2 条既有失败按设计豁免)。AUTO-0001 父任务仍不关闭(剩 AUTO-0027)。 |
+| 2026-07-21 | AUTO-0029 | @agent | AUTO-0028 实测暴露 resume 回显 `(结构化内容)` 缺口,顺手补:新建 `src/utils/format-content.ts` 纯函数 + 接入 `index.ts:891`;6 条单测全过,tsc exit 0,全量 1684 passed 不回归。 |
+| 2026-07-21 | AUTO-0029 | @agent | 实测发现 C 方案 `[图片 <完整 cachePath>]` 在 Windows 长路径下视觉糟糕(90+ 字符),改用 `path.basename` 只显示文件名 `[图片 1.jpg]`;新增 1 条 Windows 反斜杠路径测试(共 7 条)。 |
+| 2026-07-21 | AUTO-0030 | @agent | AUTO-0028 实测暴露 resume 后 JSONL 只存 user 不存 assistant 的严重数据完整性 bug。根因:`streaming-query.ts:255-258` end_turn 提前 return 跳过阶段 4 assistantMessages 合并。修复 + 2 条集成测试(纯文本 + 工具调用末尾),全量 1687 passed、tsc exit 0。day-1 bug 自持久化功能(`ddb7725`)引入就在。 |
