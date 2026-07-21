@@ -4,6 +4,7 @@
 // 本函数只管「显示」,不管发送给模型的真实数据——后者由 streamingQuery 处理。
 // 字符串 content 原样透传;数组 content 按 block.type 分支转占位符,空格连接。
 
+import { basename } from 'path';
 import type { ContentBlock } from '../agent/types.js';
 
 /**
@@ -11,9 +12,12 @@ import type { ContentBlock } from '../agent/types.js';
  *
  * 分支:
  *   - text       原文
- *   - image      [图片 <cachePath>] 或 [图片](无 cachePath 防御)
+ *   - image      [图片 <basename>] 或 [图片](无 cachePath 防御)
  *   - tool_use   [工具调用]
  *   - tool_result [工具结果]
+ *
+ * image 只显示 cachePath 的 basename(如 `1.jpg`),不显示完整路径——
+ * 完整路径含 sessionId UUID + 用户家目录,视觉噪声大,且用户不关心。
  *
  * 拼接:非空片段用空格连接。空数组返回空字符串。
  */
@@ -23,7 +27,7 @@ export function formatUserContentForResume(content: string | ContentBlock[]): st
     .map(block => {
       switch (block.type) {
         case 'text': return block.text;
-        case 'image': return block.cachePath ? `[图片 ${block.cachePath}]` : '[图片]';
+        case 'image': return block.cachePath ? `[图片 ${basename(block.cachePath)}]` : '[图片]';
         case 'tool_use': return '[工具调用]';
         case 'tool_result': return '[工具结果]';
         default: return '';

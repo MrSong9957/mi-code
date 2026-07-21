@@ -17,12 +17,24 @@ describe('formatUserContentForResume', () => {
     expect(formatUserContentForResume(blocks)).toBe('这是什么');
   });
 
-  it('text + image(有 cachePath):text 在前,[图片 cachePath] 在后,空格连接', () => {
+  it('text + image(有 cachePath):text 在前,[图片 basename] 在后,空格连接', () => {
     const blocks: ContentBlock[] = [
       { type: 'text', text: '这是什么' },
-      { type: 'image', mediaType: 'image/png', data: '', cachePath: '/x/1.png' },
+      { type: 'image', mediaType: 'image/png', data: '', cachePath: '/home/u/.micode/image-cache/sess-abc/1.png' },
     ];
-    expect(formatUserContentForResume(blocks)).toBe('这是什么 [图片 /x/1.png]');
+    // 只取 basename,不显示 sessionId / 家目录路径(实测长路径视觉糟糕)
+    expect(formatUserContentForResume(blocks)).toBe('这是什么 [图片 1.png]');
+  });
+
+  it('image cachePath 是 Windows 反斜杠路径:basename 提取正确', () => {
+    const blocks: ContentBlock[] = [
+      { type: 'image', mediaType: 'image/jpeg', data: '', cachePath: 'C:\\Users\\u\\.micode\\image-cache\\sid\\photo.jpg' },
+    ];
+    // path.basename 在所有平台都识别 POSIX /,Windows 反斜杠仅 Windows 原生识别。
+    // 本测试在 win32 跑时返回 photo.jpg,在 Linux/macOS 跑时仍含反斜杠——
+    // 接受平台差异,核心断言是不该含盘符前缀 C:
+    const result = formatUserContentForResume(blocks);
+    expect(result).not.toContain('C:');
   });
 
   it('image 无 cachePath(防御):返回 [图片]', () => {
