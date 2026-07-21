@@ -123,15 +123,21 @@ git commit -m "test(image-utils): update throw contracts for AUTO-0028 rehydrate
 
 TDD 要求先观察失败、再写实现。本 task 新增的 6 条测试验证 rehydrate 成功路径,期望它们在 Task 4 实现前全部 RED(throw 而非返回 base64)。
 
-- [ ] **Step 1: 在测试文件顶部 import 处确认 `writeFileSync`、`existsSync` 已导入**
+- [ ] **Step 1: 确认测试基础设施已就位(无需新增)**
 
-现有 `src/__tests__/agent/image-utils.test.ts:7`:
+核查 `src/__tests__/agent/image-utils.test.ts`,以下符号本任务全部依赖且**均已在文件中定义**,无需新增:
 
-```ts
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
-```
+| 符号 | 位置 | 用途 |
+|---|---|---|
+| `writeFileSync` | `:7`(fs import) | 写 tmp 文件 |
+| `existsSync` | `:7`(fs import) | saveImageCache 测试已用(本任务新测试不直接用,但保留 import 不影响) |
+| `join` | `:8`(path import) | 拼接 tmp 路径 |
+| `tmpDir` | `:54` 声明,`:56-58` `beforeEach` 创建,`:61-63` `afterEach` 清理 | 每个测试独立目录 |
+| `MIN_PNG` | `:26-36`(67 字节 1x1 红点) | PNG 回填测试 |
+| `MIN_JPEG` | `:39-43`(22 字节) | JPEG 回填测试 |
+| `MIN_GIF` | `:46-49`(14 字节) | GIF 回填测试 |
 
-已包含所需 fs 函数,无需改动。
+WebP 字节在 Task 2 Step 2 测试函数内部局部定义(与 `detectImageFormat` 测试块 `:88-93` 的 WebP Buffer 风格一致,隔离性更好),不提升到模块级。
 
 - [ ] **Step 2: 在 ensureImageData describe 块末尾新增「回填成功」测试**
 
@@ -289,8 +295,10 @@ export function ensureImageData(block: ImageBlock): string {
 /**
  * 从 cachePath 读回 base64 data（resume 场景）。
  *
+ * 当前方案：每次 convertMessages 都读磁盘，不缓存。多轮对话中同一图片会重复读,
+ * 但单图磁盘成本（µs-ms 级）远低于 API 往返（数百 ms 到数秒）。
+ *
  * 注意：不回写 block.data，保持 ensureImageData 无副作用。
- * 多轮对话中同一图片会重复读磁盘，但成本（µs-ms 级）远低于 API 往返。
  * 如未来成为瓶颈，可在本函数内部加 Map<cachePath, string> 缓存，对外接口不变。
  *
  * 失败路径：
