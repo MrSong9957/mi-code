@@ -7,7 +7,6 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { ExitPlanModeOverlayV2 } from '../../../tui/inline-v2/ExitPlanModeOverlayV2.js';
-import { displayWidth } from '../../../tui/inline/text-layout.js';
 import { createAskQuestionStore } from '../../../tui/state/ask-question-store.js';
 import type { AskQuestionRequest } from '../../../agent/ask-user-types.js';
 
@@ -91,14 +90,23 @@ describe('<ExitPlanModeOverlayV2>', () => {
     expect(frame).not.toContain('Claude 已拟定执行方案');
   });
 
-  it('uses the empty checkbox marker instead of multi-select brackets', () => {
+  it('does not render checkbox markers (neither brackets nor the empty box)', () => {
     const store = openStore();
     const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
     const frame = lastFrame() ?? '';
 
     expect(frame).not.toContain('[x]');
     expect(frame).not.toContain('[ ]');
-    expect(frame).toContain('☐');
+    expect(frame).not.toContain('☐');
+  });
+
+  it('renders a native round border (verticals and corners)', () => {
+    const store = openStore();
+    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('│');
+    expect(frame).toContain('╭');
   });
 
   it('renders the custom Other label', () => {
@@ -130,7 +138,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
     const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
     const frame = lastFrame() ?? '';
 
-    expect(frame).toContain('❯ ☐ 确认执行，清空上下文');
+    expect(frame).toContain('❯ 确认执行，清空上下文');
   });
 
   it('renders the Other input cursor and the input-mode help', () => {
@@ -159,14 +167,19 @@ describe('<ExitPlanModeOverlayV2>', () => {
     expect(frame).toContain('确认执行，清空上下文并使用自动模式');
   });
 
-  it('keeps every rendered line within the terminal width on a narrow terminal', () => {
+  it('wraps long option text to the content width on a narrow terminal', () => {
     const store = openStore();
     const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={20} />);
     const frame = lastFrame() ?? '';
 
-    for (const line of frame.split('\n')) {
-      expect(displayWidth(line)).toBeLessThanOrEqual(20);
-    }
+    // 原生 borderStyle="round" 在 ink-testing-library 下按 stdout.columns(固定 100)
+    // pad 每行，无法直接断言逐行 ≤ cols。但可以验证关键长文本确实被折行：
+    // cols=20 → contentWidth=16，"确认执行，清空上下文并使用自动模式"(18 CJK = 36 列)
+    // 必须被 truncateLine/foldLine 切断，不应作为一整行完整出现。
+    const ansi = /\x1b\[[0-9;]*m/g;
+    const clean = frame.replace(ansi, '');
+    // 完整未截断的 label(含焦点前缀)不应出现——说明宽度约束生效
+    expect(clean).not.toContain('❯ 确认执行，清空上下文并使用自动模式');
   });
 
   it('returns null when not visible', () => {

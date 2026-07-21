@@ -79,7 +79,7 @@ export const ExitPlanModeOverlayV2 = React.memo(function ExitPlanModeOverlayV2({
 
   if (!state.visible || !state.request) return null;
 
-  const width = Math.max(1, cols);
+  const contentWidth = Math.max(1, cols - 4);  // 减去左右边框(各1) + paddingX(各1)
 
   const presentation = state.request.presentation;
   const question = state.request.questions[0];
@@ -91,9 +91,7 @@ export const ExitPlanModeOverlayV2 = React.memo(function ExitPlanModeOverlayV2({
   const hasPlanBody = presentation?.kind === 'plan-approval'
     && presentation.content.trim() !== '';
 
-  // 顶部圆角边框：╭ + ─×(cols-2) + ╮，合计 cols 列宽。
-  const topBorder = width >= 2 ? `╭${'─'.repeat(width - 2)}╮` : '─'.repeat(width);
-  const divider = '┄'.repeat(width);
+  const divider = '┄'.repeat(contentWidth);
 
   // 审批操作行（选项 + 描述 + Other + Chat）
   const rows: LineRow[] = [];
@@ -103,13 +101,13 @@ export const ExitPlanModeOverlayV2 = React.memo(function ExitPlanModeOverlayV2({
     const focused = isFocused ? '❯ ' : '  ';
     rows.push({
       key: `option-${index}`,
-      text: truncateLine(`${focused}☐ ${option.label}`, width),
+      text: truncateLine(`${focused}${option.label}`, contentWidth),
       color: isFocused ? theme.suggestion : undefined,
     });
-    foldLine(option.description, Math.max(1, width - 6)).forEach((line, lineIndex) => {
+    foldLine(option.description, Math.max(1, contentWidth - 2)).forEach((line, lineIndex) => {
       rows.push({
         key: `desc-${index}-${lineIndex}`,
-        text: truncateLine(`      ${line}`, width),
+        text: truncateLine(`  ${line}`, contentWidth),  // 2空格缩进(对齐 CC paddingLeft={2})
         color: theme.textMuted,
       });
     });
@@ -122,14 +120,14 @@ export const ExitPlanModeOverlayV2 = React.memo(function ExitPlanModeOverlayV2({
     const isOtherFocused = state.focusIndex === otherIndex;
     rows.push({
       key: 'other',
-      text: truncateLine(`${isOtherFocused ? '❯ ' : '  '}${otherLabel}：${draft}`, width),
+      text: truncateLine(`${isOtherFocused ? '❯ ' : '  '}${otherLabel}：${draft}`, contentWidth),
       color: isOtherFocused ? theme.suggestion : undefined,
     });
   } else {
     const isOtherFocused = state.focusIndex === otherIndex;
     rows.push({
       key: 'other',
-      text: truncateLine(`${isOtherFocused ? '❯ ' : '  '}${otherLabel}`, width),
+      text: truncateLine(`${isOtherFocused ? '❯ ' : '  '}${otherLabel}`, contentWidth),
       color: isOtherFocused ? theme.suggestion : undefined,
     });
   }
@@ -139,7 +137,7 @@ export const ExitPlanModeOverlayV2 = React.memo(function ExitPlanModeOverlayV2({
     const isChatFocused = state.focusIndex === chatIndex;
     rows.push({
       key: 'chat',
-      text: truncateLine(`${isChatFocused ? '❯ ' : '  '}与 Agent 讨论此计划`, width),
+      text: truncateLine(`${isChatFocused ? '❯ ' : '  '}与 Agent 讨论此计划`, contentWidth),
       color: isChatFocused ? theme.suggestion : theme.textMuted,
     });
   }
@@ -149,24 +147,23 @@ export const ExitPlanModeOverlayV2 = React.memo(function ExitPlanModeOverlayV2({
     : '↑↓ 导航 · Enter 选择 · Esc 取消';
 
   return (
-    <Box flexDirection="column">
-      <Text color={theme.brand}>{topBorder}</Text>
-      <Text color={theme.brand} bold>{truncateLine('准备开始编码？', width)}</Text>
-      {foldLine('以下是 Agent 拟定的计划：', width).map((line, i) => (
-        <Text key={`intro-${i}`} color={theme.textMuted}>{line}</Text>
+    <Box flexDirection="column" borderStyle="round" borderColor={theme.planMode} paddingX={1}>
+      <Text color={theme.planMode} bold>{truncateLine('准备开始编码？', contentWidth)}</Text>
+      {foldLine('以下是 Agent 拟定的计划：', contentWidth).map((line, i) => (
+        <Text key={`intro-${i}`}>{line}</Text>
       ))}
       <Text color={theme.borderMuted}>{divider}</Text>
       {hasPlanBody
         ? renderPlanBody(presentation!.content)
         : <Text color={theme.textMuted}>未找到计划正文</Text>}
       <Text color={theme.borderMuted}>{divider}</Text>
-      {foldLine('Agent 已完成计划，是否继续执行？', width).map((line, i) => (
+      {foldLine('Agent 已完成计划，是否继续执行？', contentWidth).map((line, i) => (
         <Text key={`prompt-${i}`} color={theme.textMuted}>{line}</Text>
       ))}
       {rows.map((row) => row.color
         ? <Text key={row.key} color={row.color}>{row.text}</Text>
         : <Text key={row.key}>{row.text}</Text>)}
-      <Text color={theme.textMuted}>{truncateLine(help, width)}</Text>
+      <Text color={theme.textMuted}>{truncateLine(help, contentWidth)}</Text>
     </Box>
   );
 });
