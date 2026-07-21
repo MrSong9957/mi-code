@@ -68,6 +68,10 @@ export class ConfigStore {
             verbs: saved.spinnerVerbs.verbs.filter((v): v is string => typeof v === 'string'),
           };
         }
+        // plan 目录（向后兼容：旧文件无此字段时保留默认 undefined → ~/.micode/plans/）
+        if (typeof saved.plansDirectory === 'string') {
+          config.plansDirectory = saved.plansDirectory;
+        }
       } catch {
         // 配置文件损坏，使用默认
       }
@@ -210,6 +214,17 @@ export class ConfigStore {
   /** 设置权限规则列表（持久化，替换全部） */
   setPermissionRules(rules: PermissionRuleConfig[]): void {
     this.config.permissions.rules = [...rules];
+    this.save();
+  }
+
+  /** 获取 plan 目录覆盖（未配置返回 undefined，由 PlanStore 用默认 ~/.micode/plans/） */
+  getPlansDirectory(): string | undefined {
+    return this.config.plansDirectory;
+  }
+
+  /** 设置 plan 目录覆盖（持久化）。传 undefined 清除配置回到默认。 */
+  setPlansDirectory(path: string | undefined): void {
+    this.config.plansDirectory = path;
     this.save();
   }
 

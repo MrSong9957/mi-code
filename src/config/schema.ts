@@ -45,6 +45,8 @@ export interface MiCodeConfig {
   permissions: PermissionConfig;
   theme: ThemeName;
   spinnerVerbs: SpinnerVerbConfig;
+  /** plan 文件落盘目录（绝对路径或相对 cwd 的路径）。未配置时用 ~/.micode/plans/ */
+  plansDirectory?: string;
 }
 
 /** 默认配置 */
@@ -60,6 +62,7 @@ export const DEFAULT_CONFIG: MiCodeConfig = {
     mode: 'append',
     verbs: [],
   },
+  plansDirectory: undefined,
 };
 
 /** 各 Provider 默认模型 */

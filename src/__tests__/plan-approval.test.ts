@@ -5,7 +5,7 @@
 // - PlanStore = 档案柜本身（落盘、读、状态标记）
 // - 工具 = AI 写图纸 + 提交审批
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { PermissionChecker } from '../permission/checker.js';
@@ -113,6 +113,61 @@ describe('PlanStore', () => {
     store.setStatus('approved');
     const current = store.getCurrent()!;
     expect(current.content).toContain('status: approved');
+  });
+
+  it('write 用 slug 命名：<sessionId>-<6hex>.md', () => {
+    const store = new PlanStore(join(tempDir, 'micode'));
+    const filePath = store.write('sess-1', 'plan body');
+    expect(filePath).toMatch(/sess-1-[a-f0-9]{6}\.md$/);
+  });
+
+  it('清理机制：write 时删除超过 30 天的 plan 文件', () => {
+    const baseDir = join(tempDir, 'micode');
+    const store = new PlanStore(baseDir);
+    const plansDir = store.getPlansDir();
+    // 放一个 31 天前 mtime 的旧文件
+    const oldFile = join(plansDir, 'old-sess-deadbeef.md');
+    writeFileSync(oldFile, '---\ncreated: x\n---\nold\n', 'utf8');
+    const oldTime = (Date.now() / 1000) - (31 * 24 * 60 * 60);
+    utimesSync(oldFile, oldTime, oldTime);
+    expect(existsSync(oldFile)).toBe(true);
+    // 触发惰性清理
+    store.write('sess-1', 'new plan');
+    expect(existsSync(oldFile)).toBe(false);
+  });
+
+  it('恢复机制：currentPath 丢失时从目录恢复最新 plan', () => {
+    const baseDir = join(tempDir, 'micode');
+    const store1 = new PlanStore(baseDir);
+    const filePath = store1.write('sess-1', 'recovery plan');
+    // 新建第二个 store（currentPath=null，模拟重启）
+    const store2 = new PlanStore(baseDir);
+    expect(store2.getCurrent()).not.toBeNull();
+    const recovered = store2.getCurrent()!;
+    expect(recovered.filePath).toBe(filePath);
+    expect(recovered.content).toContain('recovery plan');
+  });
+
+  it('plansDirOverride：绝对路径覆盖默认 plans 目录', () => {
+    const custom = join(tempDir, 'custom-plans');
+    const store = new PlanStore(join(tempDir, 'micode'), custom);
+    expect(store.getPlansDir()).toBe(custom);
+    const filePath = store.write('sess-1', 'plan');
+    expect(existsSync(filePath)).toBe(true);
+    expect(filePath.startsWith(custom)).toBe(true);
+  });
+
+  it('plansDirOverride：相对路径相对 cwd 解析', () => {
+    const store = new PlanStore(join(tempDir, 'micode'), 'rel-plans');
+    expect(store.getPlansDir()).toBe(join(process.cwd(), 'rel-plans'));
+    // 清理测试副产物
+    rmSync(store.getPlansDir(), { recursive: true, force: true });
+  });
+
+  it('plansDirOverride 省略时回退默认 baseDir/plans', () => {
+    const baseDir = join(tempDir, 'micode');
+    const store = new PlanStore(baseDir);
+    expect(store.getPlansDir()).toBe(join(baseDir, 'plans'));
   });
 });
 

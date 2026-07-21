@@ -291,7 +291,8 @@ toolRegistry.register(askTool.definition, askTool.executor);
  * 目录 ~/.micode/plans/，文件名 <sessionId>-<ts>.md。
  * 同时把 planDir 注册到 PermissionChecker，让 plan 模式下 write_file 写到该目录放行。
  */
-const planStore = new PlanStore(join(homedir(), '.micode'));
+const configuredPlansDir = configStore.getPlansDirectory();
+const planStore = new PlanStore(join(homedir(), '.micode'), configuredPlansDir);
 permissionChecker.setPlanDir(planStore.getPlansDir());
 // 注册 write_plan_file 与 exit_plan_mode 工具（依赖 planStore + askManager）
 const writePlanTool = createWritePlanTool(planStore, () => sessionId);

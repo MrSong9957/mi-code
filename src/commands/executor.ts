@@ -212,6 +212,11 @@ function handleConfig(cmd: Command, config: ConfigStore): CommandResult {
       config.setDefaultProvider(value);
       return { message: `Default provider set to: ${value}` };
     }
+    if (key === 'plansDirectory') {
+      const cleared = value === 'default' || value === '';
+      config.setPlansDirectory(cleared ? undefined : value);
+      return { message: `plansDirectory set to: ${cleared ? '(default ~/.micode/plans/)' : value}` };
+    }
     return { message: `Unknown config key: ${key}` };
   }
 
