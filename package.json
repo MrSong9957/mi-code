@@ -15,7 +15,8 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
+    "gen:prompts": "node scripts/gen-prompts.mjs",
+    "build": "node scripts/gen-prompts.mjs && tsc",
     "postinstall": "patch-package"
   },
   "keywords": [],

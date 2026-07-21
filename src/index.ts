@@ -36,6 +36,7 @@ import { TodoManager } from './agent/todo.js';
 import { createTaskTool } from './agent/tools/task-tool.js';
 import { createSpawnAgentTool } from './agent/tools/spawn-agent-tool.js';
 import { createSpawnSelfOrganizingTool } from './agent/tools/spawn-self-organizing-tool.js';
+import { plannerPrompt } from './prompts/index.js';
 import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
 import { parseBlockPrefix } from './commands/parser.js';
@@ -564,31 +565,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const skillsDescription = skillRegistry.describeAvailable();
   const currentMode = permissionChecker.getMode();
   const planModeInstruction = currentMode === 'plan'
-    ? '\n\n## PLAN MODE ACTIVE\n' +
-      'You MUST NOT make any edits, run write tools, or otherwise change the system. ' +
-      'Only read-only operations and the plan-related tools (write_plan_file, exit_plan_mode) are allowed.\n' +
-      '\n' +
-      '## Communication（重要）\n' +
-      'Always give the user a concise verbal update — never chain tool calls in silence:\n' +
-      '- Before a batch of tool calls: one short sentence on what you are about to look at and why.\n' +
-      '- After exploration is complete: a thorough but concise summary of what you found, the architecture/design, ' +
-      'and (if you propose changes) how the user can verify them. This summary is your deliverable.\n' +
-      'The user should never feel the task is half-done or left hanging.\n' +
-      '\n' +
-      'Workflow:\n' +
-      '1. Explore the codebase — prefer dedicated read-only tools:\n' +
-      '   - read_file (view a file OR list a directory)\n' +
-      '   - glob (find files by name pattern, e.g. "**/*.ts")\n' +
-      '   - grep (search file contents by regex)\n' +
-      '   For cases those tools cannot cover (git log, find with complex filters),\n' +
-      '   you MAY use run_bash with read-only commands (ls/cat/grep/git status/git diff).\n' +
-      '   NEVER run write commands (mkdir/rm/git commit/npm install/...).\n' +
-      '2. When you have a complete plan, call write_plan_file with the full Markdown content\n' +
-      '3. Call exit_plan_mode to submit it for user approval\n' +
-      '4. The user will choose an execution mode in the approval questionnaire or request changes\n' +
-      'For large or unfamiliar codebases, consider spawning an explore agent (spawn_agent role="explore") ' +
-      'to investigate in parallel without bloating your main context.\n' +
-      'Do NOT execute the plan until it is approved and the mode switches to build.'
+    ? `\n\n${plannerPrompt}`
     : '';
 
   const systemPrompt = [

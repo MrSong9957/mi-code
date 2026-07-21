@@ -8,6 +8,7 @@ import { ToolRegistry } from '../agent/tool-registry.js';
 import type { ToolDefinition, ToolExecutor, RegisteredTool } from '../agent/types.js';
 import type { SubagentOptions, SubagentResult } from '../agent/subagent.js';
 import { PermissionChecker } from '../permission/checker.js';
+import { plannerPrompt } from '../prompts/index.js';
 
 describe('ROLE_REGISTRY 角色注册表', () => {
   it('三个角色都有 systemPrompt 与 tools', () => {
@@ -38,6 +39,14 @@ describe('ROLE_REGISTRY 角色注册表', () => {
     expect(tools).toContain('read_file');
     // plan 角色仍不应有通用 write_file（只能写 plan 文件）
     expect(tools).not.toContain('write_file');
+  });
+
+  it('plan 角色 systemPrompt 使用共享的 plannerPrompt（单源真理）', () => {
+    expect(ROLE_REGISTRY.plan.systemPrompt).toBe(plannerPrompt);
+    // 关键指令必须存在于 planner 提示词内容中
+    expect(plannerPrompt).toMatch(/plan mode/i);
+    expect(plannerPrompt).toContain('write_plan_file');
+    expect(plannerPrompt).toContain('exit_plan_mode');
   });
 
   it('general 用 "*" 表示全量工具', () => {

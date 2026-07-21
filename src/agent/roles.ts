@@ -7,6 +7,7 @@
 // subagent.ts 与 self-organizing.ts 都从这里取配置，避免重复定义。
 
 import type { RegisteredTool } from './types.js';
+import { plannerPrompt } from '../prompts/index.js';
 
 /** 子代理角色 */
 export type Role = 'explore' | 'plan' | 'general';
@@ -45,14 +46,7 @@ export const ROLE_REGISTRY: Record<Role, RoleConfig> = {
     tools: ['read_file', 'run_bash', 'load_skill', 'memory_read', 'memory_list'],
   },
   plan: {
-    systemPrompt: [
-      'You are a planning agent.',
-      'Explore the codebase (read-only) to understand the current architecture,',
-      'then write your implementation plan using write_plan_file,',
-      'and submit it with exit_plan_mode.',
-      'Do NOT implement the plan yourself — just design it and submit for approval.',
-      'Use ask_user_question if you need to clarify requirements.',
-    ].join(' '),
+    systemPrompt: plannerPrompt,
     tools: [
       'read_file', 'run_bash', 'load_skill', 'memory_read', 'memory_list',
       'write_plan_file', 'exit_plan_mode', 'ask_user_question',
