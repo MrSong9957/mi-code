@@ -253,6 +253,19 @@ export async function* streamingQuery(
 
     // ═══════ 阶段 2：检查是否继续 ═══════
     if (!needsFollowUp) {
+      // AUTO-0030 修复:end_turn 退出前必须把本轮 assistant 消息合并进 messages,
+      // 否则 finally 里 onMessages(messages) 回调出去的数组漏掉最后一条 assistant,
+      // 持久化层(index.ts → sessionStore.append)落盘的 JSONL 会缺这条消息。
+      // 原 bug:此处直接 return 跳过了阶段 4 的 messages 合并步骤。
+      if (assistantMessages.length > 0) {
+        messages = [
+          ...messages,
+          {
+            role: 'assistant',
+            content: assistantMessages.flatMap(m => m.content),
+          },
+        ];
+      }
       eventBus?.emitLoopEnd({ reason: 'end_turn' });
       return;
     }
