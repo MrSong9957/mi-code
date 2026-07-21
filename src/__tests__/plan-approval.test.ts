@@ -224,8 +224,18 @@ describe('exit_plan_mode 工具', () => {
       },
     ]);
     expect(request.otherLabel).toBe('提出修改意见');
+    expect(request.presentation).toEqual({
+      kind: 'plan-approval',
+      content: 'plan body\n',
+      filePath: expect.stringMatching(/\.md$/),
+    });
     settle(ui, { kind: 'cancelled' });
     await pending;
+  });
+
+  it('keeps presentation metadata out of the public tool schema', () => {
+    const { tool } = createReadyTool();
+    expect(JSON.stringify(tool.definition.parameters)).not.toContain('presentation');
   });
 
   it.each([

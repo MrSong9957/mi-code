@@ -9,6 +9,7 @@ import type { PlanStore } from '../../plan/plan-store.js';
 import type { AskUserManager } from '../ask-user-manager.js';
 import type { AskQuestionRequest } from '../ask-user-types.js';
 import { serializeAskQuestionOutcome } from '../ask-user-serialization.js';
+import { stripPlanFrontmatter } from '../../plan/plan-presentation.js';
 
 /**
  * write_plan_file：把 plan 内容写到 PlanStore。
@@ -106,6 +107,11 @@ export function createExitPlanModeTool(
           multiSelect: false,
         }],
         otherLabel: '提出修改意见',
+        presentation: {
+          kind: 'plan-approval',
+          content: stripPlanFrontmatter(plan.content),
+          filePath: plan.filePath,
+        },
       };
       const outcome = await askManager.ask(request);
 

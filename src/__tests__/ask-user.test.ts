@@ -99,6 +99,7 @@ describe('createAskUserTool', () => {
     }));
     expect(definition).not.toHaveProperty('preview');
     expect(definition).not.toHaveProperty('annotations');
+    expect(JSON.stringify(definition.parameters)).not.toContain('presentation');
   });
 
   it('ignores unknown fields and passes only validated input to the manager', async () => {

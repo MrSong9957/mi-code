@@ -10,9 +10,16 @@ export interface AskQuestion {
   multiSelect: boolean;
 }
 
+export interface PlanApprovalPresentation {
+  kind: 'plan-approval';
+  content: string;
+  filePath: string;
+}
+
 export interface AskQuestionRequest {
   questions: AskQuestion[];
   otherLabel?: string;
+  presentation?: PlanApprovalPresentation;
 }
 
 export type AskQuestionOutcome =
