@@ -40,6 +40,9 @@ export interface PermissionDecision {
  * 注：todo_write 不在内（plan 模式允许维护 TODO，与 Claude Code 一致）；
  *     read_file/glob/grep/load_skill/schedule_list/memory_read/memory_list/idle/read_inbox
  *     均为纯读，也不在内。
+ *
+ * 注：spawn_agent 不在本列表——plan 模式下可见（支持子代理委派探索），
+ *     子代理自身的写操作由 PermissionChecker 硬约束兜底拦截。
  */
 export const WRITE_TOOLS = [
   // 文件（Shell 不在此列——见上面 run_bash 的特殊处理）
@@ -59,10 +62,9 @@ export const WRITE_TOOLS = [
   'worktree',
   // 记忆
   'memory_write',
-  // 团队协作（改变协商/收件箱状态、派生子代理）
+  // 团队协作（改变协商/收件箱状态）
   'spawn_teammate',
   'spawn_self_organizing',
-  'spawn_agent',
   'send_message',
   'shutdown_request',
   'respond_request',

@@ -10,7 +10,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { PermissionChecker } from '../permission/checker.js';
 import { PlanStore } from '../plan/plan-store.js';
-import { createWritePlanTool, createExitPlanModeTool } from '../agent/tools/plan-tools.js';
+import { createWritePlanTool, createExitPlanModeTool, createReadPlanTool } from '../agent/tools/plan-tools.js';
 import { AskUserManager } from '../agent/ask-user-manager.js';
 import type { AskQuestionOutcome, AskQuestionOutcomeCallback, AskQuestionRequest } from '../agent/ask-user-types.js';
 
@@ -192,6 +192,35 @@ describe('write_plan_file 工具', () => {
     const { executor } = createWritePlanTool(store, () => 'sess-1');
     const result = await executor({ content: '' });
     expect(result).toMatch(/Error/i);
+  });
+});
+
+describe('read_plan_file 工具', () => {
+  it('definition 字段正确', () => {
+    const store = new PlanStore(join(tempDir, 'micode'));
+    const { definition } = createReadPlanTool(store);
+    expect(definition.name).toBe('read_plan_file');
+    expect(definition.parameters.required).toEqual([]);
+  });
+
+  it('executor 返回剥离 frontmatter 的计划正文', async () => {
+    const store = new PlanStore(join(tempDir, 'micode'));
+    store.write('sess-1', '# Plan\nDo X');
+    const { executor } = createReadPlanTool(store);
+    const result = await executor({});
+    // 正文保留，frontmatter 被剥离
+    expect(result).toContain('# Plan');
+    expect(result).toContain('Do X');
+    expect(result).not.toMatch(/^---\n/);
+    expect(result).not.toContain('status: pending');
+  });
+
+  it('无计划时返回 Error', async () => {
+    const store = new PlanStore(join(tempDir, 'micode'));
+    const { executor } = createReadPlanTool(store);
+    const result = await executor({});
+    expect(result).toMatch(/Error/i);
+    expect(result).toMatch(/write_plan_file/);
   });
 });
 

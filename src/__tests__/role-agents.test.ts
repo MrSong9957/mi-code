@@ -28,14 +28,16 @@ describe('ROLE_REGISTRY 角色注册表', () => {
     expect(tools).not.toContain('write_plan_file');
     expect(tools).toContain('read_file');
     expect(tools).toContain('run_bash');
+    expect(tools).toContain('read_plan_file');
   });
 
-  it('plan 白名单含 write_plan_file + exit_plan_mode + ask_user_question', () => {
+  it('plan 白名单含 write_plan_file + exit_plan_mode + ask_user_question + read_plan_file', () => {
     const tools = ROLE_REGISTRY.plan.tools;
     if (tools === '*') throw new Error('plan 不应是 *');
     expect(tools).toContain('write_plan_file');
     expect(tools).toContain('exit_plan_mode');
     expect(tools).toContain('ask_user_question');
+    expect(tools).toContain('read_plan_file');
     expect(tools).toContain('read_file');
     // plan 角色仍不应有通用 write_file（只能写 plan 文件）
     expect(tools).not.toContain('write_file');
@@ -55,7 +57,7 @@ describe('ROLE_REGISTRY 角色注册表', () => {
 });
 
 describe('filterToolsByRole 工具过滤', () => {
-  /** 构造测试用 Map：含 5 个虚拟工具 */
+  /** 构造测试用 Map：含 6 个虚拟工具 */
   function makeTools(): Map<string, RegisteredTool> {
     const m = new Map<string, RegisteredTool>();
     const mk = (name: string): RegisteredTool => ({
@@ -67,13 +69,14 @@ describe('filterToolsByRole 工具过滤', () => {
     m.set('write_plan_file', mk('write_plan_file'));
     m.set('run_bash', mk('run_bash'));
     m.set('exit_plan_mode', mk('exit_plan_mode'));
+    m.set('read_plan_file', mk('read_plan_file'));
     return m;
   }
 
   it('role=undefined：返回全量（向后兼容）', () => {
     const all = makeTools();
     const result = filterToolsByRole(all, undefined);
-    expect(result.size).toBe(5);
+    expect(result.size).toBe(6);
   });
 
   it('role=explore：只读子集（无 write_file / write_plan_file）', () => {
@@ -81,6 +84,7 @@ describe('filterToolsByRole 工具过滤', () => {
     const result = filterToolsByRole(all, 'explore');
     expect(result.has('read_file')).toBe(true);
     expect(result.has('run_bash')).toBe(true);
+    expect(result.has('read_plan_file')).toBe(true);
     expect(result.has('write_file')).toBe(false);
     expect(result.has('write_plan_file')).toBe(false);
     expect(result.has('exit_plan_mode')).toBe(false);
@@ -92,13 +96,14 @@ describe('filterToolsByRole 工具过滤', () => {
     expect(result.has('read_file')).toBe(true);
     expect(result.has('write_plan_file')).toBe(true);
     expect(result.has('exit_plan_mode')).toBe(true);
+    expect(result.has('read_plan_file')).toBe(true);
     expect(result.has('write_file')).toBe(false);
   });
 
   it('role=general：返回全量', () => {
     const all = makeTools();
     const result = filterToolsByRole(all, 'general');
-    expect(result.size).toBe(5);
+    expect(result.size).toBe(6);
   });
 
   it('不修改原 Map', () => {

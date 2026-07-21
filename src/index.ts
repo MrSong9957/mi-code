@@ -55,7 +55,7 @@ import { AskUserManager } from './agent/ask-user-manager.js';
 import { createAskUserTool } from './agent/tools/ask-user-tool.js';
 import { PlanStore } from './plan/plan-store.js';
 import { applyPlanApproval } from './plan/plan-approval-transition.js';
-import { createWritePlanTool, createExitPlanModeTool } from './agent/tools/plan-tools.js';
+import { createWritePlanTool, createExitPlanModeTool, createReadPlanTool } from './agent/tools/plan-tools.js';
 import { setWorkdir, getWorkdir } from './agent/tools/path-sandbox.js';
 import { HistoryManager } from './history.js';
 import { splitSubmitTracks, commitNewTurn } from './tui/input/submit-transformer.js';
@@ -311,9 +311,13 @@ const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
   }),
 });
 toolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
-// 同时注册到 childToolRegistry：plan 角色子代理需要这两个工具（白名单由 roles.ts 控制）
+// read_plan_file：只读工具，plan 模式下自然可见（不在 WRITE_TOOLS）
+const readPlanTool = createReadPlanTool(planStore);
+toolRegistry.register(readPlanTool.definition, readPlanTool.executor);
+// 同时注册到 childToolRegistry：plan/explore 角色子代理需要这两个工具（白名单由 roles.ts 控制）
 childToolRegistry.register(writePlanTool.definition, writePlanTool.executor);
 childToolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
+childToolRegistry.register(readPlanTool.definition, readPlanTool.executor);
 // ask_user_question 同样需要给子代理（plan 角色白名单含此工具）
 const askToolChild = createAskUserTool(askManager);
 childToolRegistry.register(askToolChild.definition, askToolChild.executor);

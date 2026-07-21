@@ -52,6 +52,33 @@ export function createWritePlanTool(
   };
 }
 
+/**
+ * read_plan_file：读回当前计划文件内容（剥离 frontmatter）。
+ * 让 LLM 能增量编辑计划——读回当前草稿，修改后用 write_plan_file 全量重写。
+ */
+export function createReadPlanTool(
+  planStore: PlanStore,
+): { definition: ToolDefinition; executor: ToolExecutor } {
+  return {
+    definition: {
+      name: 'read_plan_file',
+      description: 'Read the current plan file content. Returns the plan Markdown without frontmatter. Use this to review your current draft before updating it with write_plan_file.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+    executor: async () => {
+      const plan = planStore.getCurrent();
+      if (!plan) {
+        return 'Error: no plan written yet. Call write_plan_file first.';
+      }
+      return stripPlanFrontmatter(plan.content);
+    },
+  };
+}
+
 export interface ExitPlanModeDeps {
   getUsagePercent: () => number;
   onApprove: (mode: 'auto' | 'build', clearContext: boolean) => void;

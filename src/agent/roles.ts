@@ -43,13 +43,13 @@ export const ROLE_REGISTRY: Record<Role, RoleConfig> = {
       'Investigate the assigned topic thoroughly, then return a concise factual summary',
       '(file paths + line numbers + key findings). Do NOT propose solutions, just report.',
     ].join(' '),
-    tools: ['read_file', 'run_bash', 'load_skill', 'memory_read', 'memory_list'],
+    tools: ['read_file', 'run_bash', 'load_skill', 'memory_read', 'memory_list', 'read_plan_file'],
   },
   plan: {
     systemPrompt: plannerPrompt,
     tools: [
       'read_file', 'run_bash', 'load_skill', 'memory_read', 'memory_list',
-      'write_plan_file', 'exit_plan_mode', 'ask_user_question',
+      'read_plan_file', 'write_plan_file', 'exit_plan_mode', 'ask_user_question',
     ],
   },
   general: {
