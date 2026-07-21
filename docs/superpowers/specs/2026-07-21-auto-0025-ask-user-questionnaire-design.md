@@ -256,18 +256,86 @@ Questions asked:
 
 `exit_plan_mode` 是旧版 `AskUserManager.ask()` 的另一个调用方。新 overlay 接管键盘后，原 `handleUserSubmit()` 中的 pending question 与 `/approve`、`/reject` 特判不会再执行，必须在本任务内原子迁移。
 
-迁移方案：
+### 问卷结构
 
-- `exit_plan_mode` 使用新问卷协议打开单题单选。
-- 选项为 `Approve`（开始实现）与 `Reject`（要求修改），自动 Other 用于具体拒绝原因。
-- `createExitPlanModeTool` 注入 `onApprove` 回调。
-- Approve 时回调同时：
-  - `permissionChecker.setMode('build')`；
-  - `configStore.setPermissionMode('build')`；
-  - `statusStore.setMode('build')`；
-  - 输出批准提示。
-- Reject、Other、Esc、Chat 都保持 plan 未批准，并返回对应原因或反馈。
-- 删除 `handleUserSubmit()` 中旧 pending answer、`/approve`、`/reject` 特判。
+`exit_plan_mode` 使用新问卷协议打开单题单选，header 为 `Plan`，问题为：
+
+```text
+Claude 已拟定执行方案，是否继续？
+```
+
+正式选项只有三个：
+
+```ts
+options: [
+  {
+    label: '确认执行，清空上下文并使用自动模式',
+    description: `重置对话（已占用 ${getUsagePercent()}%），Agent 自动执行所有修改`,
+  },
+  {
+    label: '确认执行，使用自动模式',
+    description: '保留当前上下文，Agent 自动执行所有修改',
+  },
+  {
+    label: '确认执行，手动审核修改',
+    description: '保留当前上下文，每步修改需你确认',
+  },
+]
+```
+
+第 4 行使用问卷自动追加的 Other，并在 `exit_plan_mode` 内显示为“提出修改意见”。它仍是标准 Other：Enter 进入文本输入，最终答案是用户输入文本，不是显示标签。模型公开的 `AskUserQuestion` schema 不增加自定义 Other 字段。
+
+上下文占用百分比不引入新的 store。`createExitPlanModeTool` 注入 `getUsagePercent(): number`，bootstrap 使用现有 `statusStore.contextPct` 换算并取整。该函数在构造本次问卷 options 时调用，使描述使用当时的占用值。
+
+### 选项映射与执行时序
+
+`createExitPlanModeTool` 注入：
+
+```ts
+onApprove(mode: 'auto' | 'build', clearContext: boolean): void
+```
+
+映射如下：
+
+| 用户答案 | mode | clearContext | 是否批准 |
+|---|---|---:|---|
+| 确认执行，清空上下文并使用自动模式 | `auto` | `true` | 是 |
+| 确认执行，使用自动模式 | `auto` | `false` | 是 |
+| 确认执行，手动审核修改 | `build` | `false` | 是 |
+| Other 自由输入 | — | — | 否 |
+
+`plan-tools.ts` 的 executor 在 `await manager.ask(request)` 得到 `submitted` outcome 后读取问题答案。前三个精确标签分别触发上述 `onApprove`；Other 文本不触发回调。模式切换发生在返回 tool result 之前，随后所有 submitted outcome 都使用通用问卷 serializer，批准结果示例为：
+
+```text
+User has answered your questions: "Claude 已拟定执行方案，是否继续？"="确认执行，使用自动模式". You can now continue with the user's answers in mind.
+```
+
+### `onApprove` 的状态更新
+
+入口层回调负责同步真实运行状态。若 `clearContext` 为 true，先完成以下清理：
+
+1. 清空 pipeline/UI 消息。
+2. 将内存中的 `sessionMessages` 置空。
+3. 生成新的 `sessionId`，防止后续持久化或 resume 重新带回旧会话。
+4. 将 `statusStore.contextPct` 重置为 `0`。
+
+完成可选清理后，按顺序切换模式：
+
+1. `permissionChecker.setMode(mode)`。
+2. `configStore.setPermissionMode(mode)`。
+3. `statusStore.setMode(mode)`。
+
+`auto` 表示 Agent 自动执行允许的修改，`build` 表示逐步审核；项目不引入 `manual` 模式。
+
+### 未批准路径与旧逻辑清理
+
+| 用户操作 | tool result | Plan 状态 |
+|---|---|---|
+| Other 输入修改意见 | 标准 submitted 序列化，包含用户文本 | 未批准 |
+| Esc | `User declined to answer questions` | 未批准 |
+| Chat | 标准澄清反馈，包含当前答案与未答问题 | 未批准 |
+
+`ask-user-tool.ts` 只负责通用的 validate → ask → serialize，不包含 `exit_plan_mode` 分支。删除 `handleUserSubmit()` 中旧 pending question 等待、`/approve`、`/reject` 特判以及旧 plan approval input-handler 注入；全部 plan approval 交互统一经过 `exit_plan_mode` → 问卷 → outcome → `onApprove`。
 
 这属于 manager 协议直接迁移，不拆成独立任务，避免仓库出现一段 AskUserQuestion 已升级但 plan approval 已损坏的中间态。
 
@@ -307,8 +375,11 @@ Questions asked:
 - 真实 `createAskUserTool → AskUserManager → AskQuestionStore adapter → outcome → tool result`。
 - validation 失败不打开 UI。
 - Chat fixture 逐字匹配。
-- `exit_plan_mode` Approve 后同时断言 permission mode、配置与状态栏切到 build。
-- Reject/Other/Esc 不切换 build，plan 状态与反馈正确。
+- `exit_plan_mode` 选项 1 调用 `onApprove('auto', true)`；pipeline/UI、`sessionMessages`、`sessionId` 与 `contextPct` 的清理全部生效，permission、配置、状态栏切到 auto。
+- 选项 2 调用 `onApprove('auto', false)`，不清空上下文，三处模式切到 auto。
+- 选项 3 调用 `onApprove('build', false)`，不清空上下文，三处模式切到 build。
+- Other、Esc、Chat 均不调用 `onApprove`；分别返回用户修改意见、拒绝字符串和逐字匹配的澄清反馈。
+- `getUsagePercent()` 返回 `22` 时，第一个选项 description 包含 `22%`。
 
 ### 回归保护
 
