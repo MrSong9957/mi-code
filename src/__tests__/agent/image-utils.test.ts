@@ -263,6 +263,55 @@ describe('图片转换 helper — ensureImageData', () => {
     expect(() => ensureImageData(block)).toThrowError(/不支持的图片类型/);
     expect(() => ensureImageData(block)).not.toThrowError(/图片数据缺失/);
   });
+
+  // ── AUTO-0028: cachePath 回填路径 ──
+
+  it('空 data + cachePath 指向真实文件:返回文件内容的 base64', () => {
+    const cachePath = join(tmpDir, 'cached.png');
+    writeFileSync(cachePath, MIN_PNG);
+    const block = makeImageBlock({ data: '', cachePath });
+    expect(ensureImageData(block)).toBe(MIN_PNG.toString('base64'));
+  });
+
+  it('PNG 文件回填:base64 与源字节精确相等', () => {
+    const cachePath = join(tmpDir, 'png.png');
+    writeFileSync(cachePath, MIN_PNG);
+    const block = makeImageBlock({ data: '', cachePath, mediaType: 'image/png' });
+    expect(ensureImageData(block)).toBe(MIN_PNG.toString('base64'));
+  });
+
+  it('JPEG 文件回填:base64 与源字节精确相等', () => {
+    const cachePath = join(tmpDir, 'jpeg.jpg');
+    writeFileSync(cachePath, MIN_JPEG);
+    const block = makeImageBlock({ data: '', cachePath, mediaType: 'image/jpeg' });
+    expect(ensureImageData(block)).toBe(MIN_JPEG.toString('base64'));
+  });
+
+  it('GIF 文件回填:base64 与源字节精确相等', () => {
+    const cachePath = join(tmpDir, 'gif.gif');
+    writeFileSync(cachePath, MIN_GIF);
+    const block = makeImageBlock({ data: '', cachePath, mediaType: 'image/gif' });
+    expect(ensureImageData(block)).toBe(MIN_GIF.toString('base64'));
+  });
+
+  it('WebP 文件回填:base64 与源字节精确相等', () => {
+    const webpBytes = Buffer.from([
+      0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00,
+      0x57, 0x45, 0x42, 0x50,
+    ]);
+    const cachePath = join(tmpDir, 'webp.webp');
+    writeFileSync(cachePath, webpBytes);
+    const block = makeImageBlock({ data: '', cachePath, mediaType: 'image/webp' });
+    expect(ensureImageData(block)).toBe(webpBytes.toString('base64'));
+  });
+
+  it('0 字节文件:抛「缓存文件为空」错误', () => {
+    const cachePath = join(tmpDir, 'empty.png');
+    writeFileSync(cachePath, Buffer.alloc(0));
+    const block = makeImageBlock({ data: '', cachePath });
+    expect(() => ensureImageData(block)).toThrowError(/缓存文件为空/);
+    expect(() => ensureImageData(block)).toThrowError(cachePath);
+  });
 });
 
 describe('图片转换 helper — buildOpenAIImagePart', () => {
