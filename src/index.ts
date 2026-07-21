@@ -53,6 +53,7 @@ import { createMemoryWriteTool, createMemoryReadTool, createMemoryListTool } fro
 import { AskUserManager } from './agent/ask-user-manager.js';
 import { createAskUserTool } from './agent/tools/ask-user-tool.js';
 import { PlanStore } from './plan/plan-store.js';
+import { applyPlanApproval } from './plan/plan-approval-transition.js';
 import { createWritePlanTool, createExitPlanModeTool } from './agent/tools/plan-tools.js';
 import { setWorkdir, getWorkdir } from './agent/tools/path-sandbox.js';
 import { HistoryManager } from './history.js';
@@ -276,15 +277,9 @@ const SUBMIT_DEDUP_WINDOW_MS = 2000;
 let lastSubmitText = '';
 let lastSubmitAt = 0;
 
-/**
- * AskUserManager：AI 向用户提问的挂起-应答状态机。
- * 物理本质：服务员把问题递给顾客（贴消息区 + 页脚提示）后站等回话。
- * 与 handleInput 共享同一实例：工具 executor 内 ask() 挂起，回车提交时 resolve()。
- */
 const askManager = new AskUserManager({
-  printLine: (s) => printLine(s),
-  // 提问提示走消息区（charter StatusBar 无 hint 字段，提示信息进 messagesStore 显示）
-  setHint: (s) => { if (s) printLine(s); },
+  open: (id, request, done) => tuiHandle?.askQuestionStore.getState().open(id, request, done),
+  close: (id) => tuiHandle?.askQuestionStore.getState().close(id),
 });
 // 注册 ask_user_question 工具（依赖 askManager）
 const askTool = createAskUserTool(askManager);
@@ -300,7 +295,18 @@ permissionChecker.setPlanDir(planStore.getPlansDir());
 // 注册 write_plan_file 与 exit_plan_mode 工具（依赖 planStore + askManager）
 const writePlanTool = createWritePlanTool(planStore, () => sessionId);
 toolRegistry.register(writePlanTool.definition, writePlanTool.executor);
-const exitPlanTool = createExitPlanModeTool(askManager, planStore);
+const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
+  getUsagePercent: () => Math.round((tuiHandle?.statusStore.getState().contextPct ?? 0) * 100),
+  onApprove: (mode, clearContext) => applyPlanApproval(mode, clearContext, {
+    clearPipeline: () => pipeline.clear(),
+    clearSessionMessages: () => { sessionMessages = []; },
+    rotateSessionId: () => { sessionId = randomUUID(); },
+    resetContextUsage: () => tuiHandle?.statusStore.getState().setContextPct(0),
+    setPermissionMode: (next) => permissionChecker.setMode(next),
+    setConfigMode: (next) => configStore.setPermissionMode(next),
+    setStatusMode: (next) => tuiHandle?.statusStore.getState().setMode(next),
+  }),
+});
 toolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
 // 同时注册到 childToolRegistry：plan 角色子代理需要这两个工具（白名单由 roles.ts 控制）
 childToolRegistry.register(writePlanTool.definition, writePlanTool.executor);
@@ -381,8 +387,7 @@ function handleToggleOverlay(handle: BootstrapHandle | null): void {
  *
  * 职责（与旧实现完全一致）：
  * 1. 'exit' 命令 → cleanup + 退出
- * 2. pending question（askManager.hasPending）→ resolve（/approve //reject 特判）
- * 3. 新 turn：history 落盘 + clearTurnState + emit user_input + 命令解析 + agent loop
+ * 2. 新 turn：history 落盘 + clearTurnState + emit user_input + 命令解析 + agent loop
  *
  * ink-store 迁移点：input/cursorPos 已由 inputStore 管理（submit 时清空），故删除旧
  * input=''/cursorPos=0/syncInput；layout.* → tuiHandle.statusStore。
@@ -488,31 +493,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     process.exit(0);
   }
 
-  // 1. 优先处理 pending question：agent 运行中也可回答
-  if (askManager.hasPending()) {
-    if (!userInput) return; // 空回车：忽略
-    // plan 批准流特判：/approve /reject 走专属副作用（切 mode + resolve）
-    if (userInput === '/approve' || userInput.startsWith('/reject')) {
-      pipeline.emit({ kind: 'user_input', text: userInput });
-      if (userInput === '/approve') {
-        permissionChecker.setMode('build');
-        configStore.setPermissionMode('build');
-        tuiHandle?.statusStore.getState().setMode('build');
-        printLine('✓ Plan approved. Switched to build mode.');
-        askManager.resolve('approve');
-      } else {
-        const reason = userInput.slice('/reject'.length).trim();
-        printLine(`✗ Plan rejected${reason ? ': ' + reason : ''}.`);
-        askManager.resolve(reason || 'reject');
-      }
-      return;
-    }
-    pipeline.emit({ kind: 'user_input', text: userInput });
-    askManager.resolve(userInput);
-    return;
-  }
-
-  // 2. 新 turn
+  // 新 turn
   // 快照提交前的 messagesStore 长度(撤回判断用,见 handleRewindLastTurn)。
   // 必须在 commitNewTurn emit user_input 之前——emit 后 user 消息就进 store 了。
   lastSubmitMsgsLen = tuiHandle?.messagesStore.getState().messages.length ?? 0;
@@ -603,7 +584,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       '   NEVER run write commands (mkdir/rm/git commit/npm install/...).\n' +
       '2. When you have a complete plan, call write_plan_file with the full Markdown content\n' +
       '3. Call exit_plan_mode to submit it for user approval\n' +
-      '4. The user will respond with /approve (you may then implement) or /reject <reason> (revise and resubmit)\n' +
+      '4. The user will choose an execution mode in the approval questionnaire or request changes\n' +
       'For large or unfamiliar codebases, consider spawning an explore agent (spawn_agent role="explore") ' +
       'to investigate in parallel without bloating your main context.\n' +
       'Do NOT execute the plan until it is approved and the mode switches to build.'

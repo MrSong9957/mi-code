@@ -1,5 +1,5 @@
 // StreamingToolExecutor v2 测试（基于结构化事件）
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { StreamingToolExecutor, isConcurrencySafe } from '../agent/streaming-executor.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
 import type { ToolDefinition, ToolExecutor, ToolUseBlock } from '../agent/types.js';
@@ -98,5 +98,39 @@ describe('StreamingToolExecutor v2', () => {
     expect(isConcurrencySafe('grep')).toBe(true);
     expect(isConcurrencySafe('echo')).toBe(false);
     expect(isConcurrencySafe('write_file')).toBe(false);
+  });
+
+  it('serializes deferred ask_user_question calls and preserves result order', async () => {
+    const registry = new ToolRegistry();
+    let active = 0;
+    let maxActive = 0;
+    const releases = new Map<string, () => void>();
+    registry.register({
+      name: 'ask_user_question',
+      description: 'Ask the user',
+      parameters: { type: 'object', properties: { call: { type: 'string' } } },
+    }, async (input) => {
+      const call = input.call as string;
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => { releases.set(call, resolve); });
+      active -= 1;
+      return call;
+    });
+    const serialExecutor = new StreamingToolExecutor(registry);
+
+    serialExecutor.addTool(createToolUseBlock('call-1', 'ask_user_question', { call: 'call-1' }));
+    serialExecutor.addTool(createToolUseBlock('call-2', 'ask_user_question', { call: 'call-2' }));
+
+    expect(active).toBe(1);
+    expect(releases.has('call-2')).toBe(false);
+    releases.get('call-1')!();
+    await vi.waitFor(() => expect(releases.has('call-2')).toBe(true));
+    releases.get('call-2')!();
+
+    const results = [];
+    for await (const batch of serialExecutor.getRemainingResults()) results.push(...batch);
+    expect(maxActive).toBe(1);
+    expect(results.map((tool) => tool.id)).toEqual(['call-1', 'call-2']);
   });
 });

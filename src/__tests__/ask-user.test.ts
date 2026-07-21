@@ -1,144 +1,155 @@
-// AskUserManager + ask_user_question 工具测试
-//
-// 物理本质：验证"服务员提问-顾客应答"状态机的所有状态迁移。
-// 用 mock UI 回调（不依赖真实 layout/pipeline），单测纯逻辑。
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AskUserManager } from '../agent/ask-user-manager.js';
+import type {
+  AskQuestionOutcome,
+  AskQuestionOutcomeCallback,
+  AskQuestionRequest,
+} from '../agent/ask-user-types.js';
 import { createAskUserTool } from '../agent/tools/ask-user-tool.js';
 
-/** 构造一个 mock UI 与 manager */
+const request: AskQuestionRequest = {
+  questions: [{
+    question: 'Which cache?',
+    header: 'Cache',
+    options: [
+      { label: 'Redis', description: 'Use Redis' },
+      { label: 'Memory', description: 'Use process memory' },
+    ],
+    multiSelect: false,
+  }],
+};
+
 function makeManager() {
-  const prints: string[] = [];
-  const hints: (string | undefined)[] = [];
   const ui = {
-    printLine: vi.fn((s: string) => { prints.push(s); }),
-    setHint: vi.fn((s: string | undefined) => { hints.push(s); }),
+    open: vi.fn<(id: string, value: AskQuestionRequest, done: AskQuestionOutcomeCallback) => void>(),
+    close: vi.fn<(id: string) => void>(),
   };
-  return { manager: new AskUserManager(ui), prints, hints, ui };
+  return { manager: new AskUserManager(ui), ui };
 }
 
-describe('AskUserManager 状态机', () => {
-  it('初始状态无 pending', () => {
-    const { manager } = makeManager();
-    expect(manager.hasPending()).toBe(false);
-    expect(manager.getPending()).toBeNull();
-  });
+function completeLatest(
+  ui: ReturnType<typeof makeManager>['ui'],
+  outcome: AskQuestionOutcome,
+): void {
+  const call = ui.open.mock.calls.at(-1)!;
+  call[2](call[0], outcome);
+}
 
-  it('ask() 后立即有 pending，UI 收到问题与 hint', async () => {
-    const { manager, prints, hints } = makeManager();
-    // 不 await，否则会卡住
-    const p = manager.ask({
-      id: 'q1', header: 'Mode', question: 'Use Redis?',
-      options: ['yes', 'no'],
+describe('AskUserManager', () => {
+  it('opens the UI and resolves the submitted outcome', async () => {
+    const { manager, ui } = makeManager();
+
+    const pending = manager.ask(request);
+    const [requestId, openedRequest, done] = ui.open.mock.calls[0]!;
+
+    expect(requestId).toEqual(expect.any(String));
+    expect(openedRequest).toBe(request);
+    done(requestId, { kind: 'submitted', answers: { 'Which cache?': 'Redis' } });
+    await expect(pending).resolves.toEqual({
+      kind: 'submitted',
+      answers: { 'Which cache?': 'Redis' },
     });
-
-    expect(manager.hasPending()).toBe(true);
-    expect(manager.getPending()?.question).toBe('Use Redis?');
-    // 问题 + 两个选项已渲染
-    expect(prints).toContain('❓ Use Redis?');
-    expect(prints).toContain('   1. yes');
-    expect(prints).toContain('   2. no');
-    // hint 已设置
-    expect(hints[hints.length - 1]).toMatch(/answer/i);
-
-    // resolve 后 promise settle
-    manager.resolve('yes');
-    await expect(p).resolves.toBe('yes');
-    expect(manager.hasPending()).toBe(false);
   });
 
-  it('resolve() 后清除 hint', async () => {
-    const { manager, hints } = makeManager();
-    const p = manager.ask({ id: 'q1', header: 'H', question: 'Q?' });
-    manager.resolve('answer');
-    await p;
-    // 最后一次 setHint 调用应是 undefined（清除）
-    expect(hints[hints.length - 1]).toBeUndefined();
-  });
+  it('cancels the previous request and ignores its stale callback', async () => {
+    const { manager, ui } = makeManager();
+    const first = manager.ask(request);
+    const [firstId, , finishFirst] = ui.open.mock.calls[0]!;
 
-  it('cancel() resolve 空串', async () => {
-    const { manager } = makeManager();
-    const p = manager.ask({ id: 'q1', header: 'H', question: 'Q?' });
-    manager.cancel();
-    await expect(p).resolves.toBe('');
-    expect(manager.hasPending()).toBe(false);
-  });
+    const secondRequest: AskQuestionRequest = {
+      questions: [{ ...request.questions[0]!, question: 'Which database?' }],
+    };
+    const second = manager.ask(secondRequest);
+    const [secondId, , finishSecond] = ui.open.mock.calls[1]!;
 
-  it('resolve() 在无 pending 时不抛错', () => {
-    const { manager } = makeManager();
-    expect(() => manager.resolve('x')).not.toThrow();
-  });
+    await expect(first).resolves.toEqual({ kind: 'cancelled' });
+    expect(ui.close).toHaveBeenCalledWith(firstId);
 
-  it('ask() 在已有 pending 时覆盖旧的（旧 resolver 收到空串）', async () => {
-    const { manager } = makeManager();
-    const p1 = manager.ask({ id: 'q1', header: 'A', question: 'A?' });
-    // 第二次 ask 时，旧的应被 settle
-    const p2 = manager.ask({ id: 'q2', header: 'B', question: 'B?' });
+    let secondSettled = false;
+    void second.then(() => { secondSettled = true; });
+    finishFirst(firstId, { kind: 'submitted', answers: { 'Which cache?': 'Redis' } });
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
 
-    // 旧的应 resolve 空串
-    await expect(p1).resolves.toBe('');
-    expect(manager.getPending()?.question).toBe('B?');
-
-    // 第二个正常 resolve
-    manager.resolve('b-answer');
-    await expect(p2).resolves.toBe('b-answer');
-  });
-
-  it('无 options 时不渲染选项列表，hint 文案不同', async () => {
-    const { manager, prints, hints } = makeManager();
-    const p = manager.ask({ id: 'q1', header: 'H', question: 'Free-form?' });
-    // 仅问题行，无 "1." / "2." 选项行
-    expect(prints.filter(s => /^\s+\d+\./.test(s))).toEqual([]);
-    expect(hints[hints.length - 1]).toMatch(/answer/i);
-    manager.resolve('x');
-    await p;
+    finishSecond(secondId, { kind: 'cancelled' });
+    await expect(second).resolves.toEqual({ kind: 'cancelled' });
   });
 });
 
 describe('createAskUserTool', () => {
-  it('definition 字段正确', () => {
+  it('publishes only the nested questionnaire schema', () => {
     const { manager } = makeManager();
     const { definition } = createAskUserTool(manager);
+    const properties = definition.parameters.properties!;
+    const questionProperties = properties.questions!.items!.properties!;
+    const optionProperties = questionProperties.options!.items!.properties!;
+
     expect(definition.name).toBe('ask_user_question');
-    expect(definition.parameters.required).toEqual(['question']);
+    expect(definition.parameters.required).toEqual(['questions']);
+    expect(properties).not.toHaveProperty('question');
+    expect(questionProperties).toEqual(expect.objectContaining({
+      question: expect.any(Object),
+      header: expect.any(Object),
+      options: expect.any(Object),
+      multiSelect: expect.any(Object),
+    }));
+    expect(optionProperties).toEqual(expect.objectContaining({
+      label: expect.any(Object),
+      description: expect.any(Object),
+    }));
+    expect(definition).not.toHaveProperty('preview');
+    expect(definition).not.toHaveProperty('annotations');
   });
 
-  it('executor 调 mgr.ask → resolve → 返回答案', async () => {
-    const { manager } = makeManager();
+  it('ignores unknown fields and passes only validated input to the manager', async () => {
+    const { manager, ui } = makeManager();
     const { executor } = createAskUserTool(manager);
-    // 不 await，否则会卡住
-    const p = executor({ question: 'Cache strategy?', header: 'Cache' });
-    // mgr 已 pending，且问题文案已传给 UI
-    expect(manager.hasPending()).toBe(true);
-    expect(manager.getPending()?.question).toBe('Cache strategy?');
-    // 模拟用户回答
-    manager.resolve('redis');
-    await expect(p).resolves.toBe('redis');
+    const input = {
+      ...request,
+      unknownRoot: true,
+      questions: [{
+        ...request.questions[0]!,
+        unknownQuestion: 'ignored',
+        options: request.questions[0]!.options.map((option) => ({ ...option, unknownOption: 1 })),
+      }],
+    };
+
+    const result = executor(input);
+    expect(ui.open.mock.calls[0]![1]).toEqual(request);
+    completeLatest(ui, { kind: 'cancelled' });
+    await expect(result).resolves.toBe('User declined to answer questions');
   });
 
-  it('空回答 → 返回 "(no answer)"', async () => {
-    const { manager } = makeManager();
+  it('returns validator errors without opening the UI', async () => {
+    const { manager, ui } = makeManager();
     const { executor } = createAskUserTool(manager);
-    const p = executor({ question: 'Q?' });
-    manager.resolve('');
-    await expect(p).resolves.toBe('(no answer)');
+
+    await expect(executor({})).resolves.toBe('Error: questions must be an array');
+    expect(ui.open).not.toHaveBeenCalled();
   });
 
-  it('options 数组被透传给 mgr', async () => {
-    const { manager } = makeManager();
+  it.each([
+    {
+      name: 'submitted',
+      outcome: { kind: 'submitted', answers: { 'Which cache?': 'Redis' } } as AskQuestionOutcome,
+      expected: 'User has answered your questions: "Which cache?"="Redis". You can now continue with the user\'s answers in mind.',
+    },
+    {
+      name: 'cancelled',
+      outcome: { kind: 'cancelled' } as AskQuestionOutcome,
+      expected: 'User declined to answer questions',
+    },
+    {
+      name: 'chat',
+      outcome: { kind: 'chat', feedback: 'Please clarify the tradeoff.' } as AskQuestionOutcome,
+      expected: 'Please clarify the tradeoff.',
+    },
+  ])('serializes the $name outcome exactly', async ({ outcome, expected }) => {
+    const { manager, ui } = makeManager();
     const { executor } = createAskUserTool(manager);
-    const p = executor({ question: 'Pick', options: ['a', 'b', 'c'] });
-    expect(manager.getPending()?.options).toEqual(['a', 'b', 'c']);
-    manager.resolve('b');
-    await p;
-  });
 
-  it('缺少 question 字段 → 返回 Error', async () => {
-    const { manager } = makeManager();
-    const { executor } = createAskUserTool(manager);
-    const result = await executor({});
-    expect(result).toMatch(/Error/i);
-    // 不应进入 pending
-    expect(manager.hasPending()).toBe(false);
+    const result = executor(request);
+    completeLatest(ui, outcome);
+    await expect(result).resolves.toBe(expected);
   });
 });
