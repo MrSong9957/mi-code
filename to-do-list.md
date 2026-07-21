@@ -39,15 +39,15 @@
   > 当前 `src/tui/input/paste-handler.ts:8` 有 TODO：图片占位符 `[Image #N]` 需走单独 content block，但「当前零基础设施」。仅支持 `/image` 命令，不支持 Ctrl+V 粘贴和 drag-and-drop。
   > 依赖：AUTO-0001
 
-- [ ] AUTO-0028: 会话恢复（resume）回填图片
-  > `src/agent/image-utils.ts:128` `saveImageCache` 已落盘 `cachePath`，但全仓无读取处（只写不读）。重启会话时图片会以空 data 发送（损坏）。需补 `readFile(cachePath)` → 回填 base64 的 rehydrate 路径。
-  > 依赖：AUTO-0001
-
 ## 已完成
 
 - [x] AUTO-0026: OpenAI / Google provider 发送图片
   > 补齐 OpenAI 与 Google 两家 stream client 的图片输入支持，对齐已实现的 Anthropic provider。
   > 完成：抽取 3 个共享 helper 到 `image-utils.ts`（`ensureImageData` mediaType+空 data 校验、`buildOpenAIImagePart` 拼 data URL、`buildGeminiInlineData` 纯 base64）；三家 client 统一接入空 data 防御（含 Anthropic 补漏）；修复 OpenAI client 原 `else if (textParts.length > 0)` 导致纯图片消息被完全丢弃的 bug，组装改为四分支；新增 helper 单测 14 条 + OpenAI/Google mock SDK 集成测试 4 条。49 个 agent 测试全过、tsc exit 0、grep `// image block:MVP 跳过` 零命中。
+
+- [x] AUTO-0028: 会话恢复（resume）回填图片
+  > resume 后历史消息中的 ImageBlock 从 cachePath 读回 base64，替换原 throw 兜底。
+  > 完成：ensureImageData 新增冷路径，委托私有 rehydrateFromCache(existsSync + readFileSync + 0 字节校验)。三家 provider client 零改动,经 ensureImageData 统一受益。4 种错误路径(cachePath 缺失 / 文件不存在 / 0 字节 / 系统 EACCES 等)分级处理,前三种 throw 中文消息,系统错误不包装自然冒泡。改写 2 条原契约测试(去掉 /AUTO-0028/ 正则) + 新增 6 条回填测试(通用 + PNG/JPEG/GIF/WebP + 0 字节边界)。不引入缓存(YAGNI),不回写 block.data(保持无副作用)。49 个 agent 测试全过、tsc exit 0。
 
 - [x] AUTO-0002: 斜杠命令体系
   > 实现 /command 交互方式，支持如 /help、/clear 等快捷指令
@@ -156,3 +156,4 @@
 | 2026-07-21 | AUTO-0001、AUTO-0025~0028 | @agent | 核实 AUTO-0001 现状后拆分子任务：AUTO-0026（OpenAI/Google provider 发图，当前 MVP 跳过）、AUTO-0027（拖拽/粘贴捕获，paste-handler 有 TODO）、AUTO-0028（resume 会话恢复回填，cachePath 只写不读）；AUTO-0006 新建子任务 AUTO-0025（接入下拉选择菜单）。 |
 | 2026-07-21 | - | @agent | 顺手按文件顶部「核心规则」归位：AUTO-0009~0024 已是 `[x]` 但原堆在「待办」分区，现一并移入「已完成」。 |
 | 2026-07-21 | AUTO-0026 | @agent | 完成 OpenAI/Google provider 图片输入支持（feat/openai-google-image-support 分支，6 个 TDD commit）：3 个共享 helper + 类型、三家统一空 data 防御、OpenAI 纯图片丢弃 bug 修复；49 个 agent 测试全过、tsc exit 0；经 brainstorming→writing-plans→subagent-driven 全流程 + 三轮 code review。 |
+| 2026-07-21 | AUTO-0028 | @agent | 完成 resume 图片 rehydrate:ensureImageData 新增冷路径 + 私有 rehydrateFromCache(existsSync + readFileSync + 0 字节校验);2 条原契约测试改写 + 6 条新增;49 个 agent 测试全过、tsc exit 0。AUTO-0001 父任务仍不关闭(剩 AUTO-0027)。 |
