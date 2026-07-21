@@ -28,6 +28,7 @@ import { SpinnerMemo } from './spinner-memo.js';
 import { FooterV2 } from './FooterV2.js';
 import { StreamingText } from './StreamingText.js';
 import { SelectOverlayV2 } from './SelectOverlayV2.js';
+import { AskQuestionOverlayV2 } from './AskQuestionOverlayV2.js';
 import { OverlayHost } from './OverlayHost.js';
 import { selectSpinnerView } from '../state/spinner-view.js';
 import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
@@ -41,6 +42,7 @@ import type { CompletionStore } from '../state/completion-store.js';
 import type { SelectStore } from '../state/select-store.js';
 import type { SelectionStore } from '../state/selection-store.js';
 import type { OverlayStore } from '../state/overlay-store.js';
+import type { AskQuestionStore } from '../state/ask-question-store.js';
 
 /** LOGO 在 <Static> items 数组里的特殊 id(避免与消息 uuid 冲突) */
 export const LOGO_STATIC_ID = '__logo__';
@@ -68,6 +70,7 @@ export interface InlineAppV2Stores {
   selectStore: SelectStore;
   selectionStore: SelectionStore;
   overlayStore: OverlayStore;
+  askQuestionStore: AskQuestionStore;
 }
 
 export interface InlineAppV2Props {
@@ -108,6 +111,7 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
   // 订阅 select 是否可见:visible 时用 SelectOverlay 替代 spinner+footer。
   // 用 boolean selector,只在 visible 翻转时触发本组件重渲染。
   const selectVisible = useStore(stores.selectStore, (s) => s.visible);
+  const askQuestionVisible = useStore(stores.askQuestionStore, (s) => s.visible);
 
   // 订阅 overlay 是否可见:visible 时用 <Overlay> 替换活动区(只显示折叠块全文)。
   // 复用 alt-screen 的 <Overlay> 组件,Props 一致。
@@ -180,7 +184,9 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
             cols={cols}
           />
         )}
-        {selectVisible ? (
+        {askQuestionVisible ? (
+          <AskQuestionOverlayV2 store={stores.askQuestionStore} cols={cols} />
+        ) : selectVisible ? (
           // Select 选择器:替代 spinner+footer 占据活动区(自订阅 selectStore)
           <SelectOverlayV2 store={stores.selectStore} cols={cols} />
         ) : (

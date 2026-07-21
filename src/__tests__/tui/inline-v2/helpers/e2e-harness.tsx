@@ -36,6 +36,7 @@ import { createSpinnerStore } from '../../../../tui/state/spinner-store.js';
 import { createCompletionStore } from '../../../../tui/state/completion-store.js';
 import { createSelectStore } from '../../../../tui/state/select-store.js';
 import { createOverlayStore } from '../../../../tui/state/overlay-store.js';
+import { createAskQuestionStore } from '../../../../tui/state/ask-question-store.js';
 import { EMPTY_SPINNER_CONTEXT } from '../../../../tui/state/spinner-store.js';
 
 export interface E2EHarnessOptions {
@@ -80,6 +81,7 @@ export interface E2EHarness {
     selectStore: ReturnType<typeof createSelectStore>;
     overlayStore: ReturnType<typeof createOverlayStore>;
     completionStore: ReturnType<typeof createCompletionStore>;
+    askQuestionStore: ReturnType<typeof createAskQuestionStore>;
   };
 }
 
@@ -106,6 +108,7 @@ export function createE2EHarness(opts: E2EHarnessOptions = {}): E2EHarness {
   const completionStore = createCompletionStore();
   const selectStore = createSelectStore();
   const overlayStore = createOverlayStore();
+  const askQuestionStore = createAskQuestionStore();
   const themeStore = createThemeStore('dark');
 
   const instance = render(
@@ -120,6 +123,7 @@ export function createE2EHarness(opts: E2EHarnessOptions = {}): E2EHarness {
           completionStore,
           selectStore,
           overlayStore,
+          askQuestionStore,
           onExit: opts.onExit ?? (() => {}),
           onTab: opts.onTab,
           onToggleOverlay: opts.onToggleOverlay,
@@ -143,6 +147,7 @@ export function createE2EHarness(opts: E2EHarnessOptions = {}): E2EHarness {
       selectStore,
       overlayStore,
       completionStore,
+      askQuestionStore,
     },
   };
 }
@@ -170,6 +175,9 @@ export const KEYS = {
   CTRL_C: '\u0003',
   // Ctrl+U(删到行首)
   CTRL_U: '\u0015',
+  CTRL_P: '\u0010',
+  CTRL_N: '\u000e',
+  SHIFT_TAB: '\u001b[Z',
 };
 
 /** 工具:等待若干 ms(让 React 调度完成异步渲染) */

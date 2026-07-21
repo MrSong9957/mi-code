@@ -1,129 +1,144 @@
-# Task 4 — Shared Spinner View report
+# AUTO-0025 Task 4 Report
 
-## Scope
+## Status
 
-Implemented only Task 4: an atomic `SpinnerContextSnapshot` in the spinner store and the pure shared `selectSpinnerView()` / `selectSpinnerTip()` selector. Ink, inline, Bootstrap, and `index` were not changed.
+Implemented questionnaire keyboard routing, bootstrap-owned store composition, `ConnectedApp` / `InlineAppV2` wiring, compile-fixture updates, and the V2 inline questionnaire user-path E2E suite. Task 5 manager/tools code was not changed.
 
 ## TDD evidence
 
-### RED
+### Input routing RED
 
 Command:
 
 ```powershell
-npx.cmd vitest run src/__tests__/tui/spinner-view.test.ts src/__tests__/tui/spinner-store.test.ts --reporter=verbose
+npx.cmd vitest run src/__tests__/tui/use-input-handler.test.tsx
 ```
 
-Exit code: `1`.
+Observed before production routing was added:
 
-Observed failures:
+- Exit code: 1
+- 1 test file failed
+- 8 questionnaire tests failed, 36 tests passed
+- Failures showed `focusIndex` / `pageIndex` remained `0`, outcomes were never called, and Other mode never opened.
+- The Ctrl+C-global-priority test passed, proving that fixture wiring itself was valid.
 
-- `store.getState(...).setContext is not a function` in the atomic copy and normalization test.
-- `Cannot find module '../../tui/state/spinner-view.js'` in the shared selector suite.
+### Input routing GREEN
 
-Reason: Task 4's store setter and selector module did not yet exist. This is the expected RED state.
+Same command after the minimal routing implementation:
 
-### GREEN
+- Exit code: 0
+- 44/44 tests passed
+
+Covered routes: Up/Down, Ctrl+P/Ctrl+N, Tab/Right, Shift+Tab/Left, Space/Enter, Other character/Backspace/Delete/Enter, Esc, Chat, Ctrl+C, and questionnaire priority over overlay/select/completion/input. Every draft-preservation assertion passed.
+
+### E2E RED
 
 Command:
 
 ```powershell
-npx.cmd vitest run src/__tests__/tui/spinner-view.test.ts src/__tests__/tui/spinner-store.test.ts --reporter=verbose
+npx.cmd vitest run src/__tests__/tui/inline-v2/ask-question-e2e.test.tsx
 ```
 
-Exit code: `0`; 2 test files and 38 tests passed.
+Observed before production composition was added:
 
-The tests cover:
+- Exit code: 1
+- 5/5 tests failed
+- Frames still showed the old footer/spinner and did not contain the questionnaire.
+- Esc/Chat outcomes were never called because `ConnectedApp` did not yet route the harness-owned store.
 
-- `setContext()` deep copies teammates, tasks, and each `blockedBy`; optional text is trimmed and blank text becomes `null`.
-- inactive has zero rows; brief has only its animation row.
-- normal prefers non-shutdown teammates, then falls back to uncompleted tasks.
-- Tip threshold precedence at 30 seconds and 30 minutes.
-- normal auxiliary ordering: activity, Tip, Budget, NextTask.
-- animation takes the store's effective `time`, while its active teammate count derives only from `context.teammates` with `status === 'working'`.
+### E2E GREEN
+
+Same command after wiring one store through `ConnectedApp` and `InlineAppV2`:
+
+- Exit code: 0
+- 5/5 tests passed
+
+Covered: immediate single-choice settlement, multi-question flow through Submit, Esc cancellation, Chat settlement, spinner/footer replacement and restoration, and byte-for-byte preservation of a pre-existing multiline Unicode draft.
+
+## Implementation
+
+- `useInputHandler` now accepts an optional final `askQuestionStore` argument. Production supplies it; unrelated positional call sites remain unchanged.
+- Routing order is Ctrl+C, questionnaire, overlay, select, completion, normal input.
+- Other editing stays exclusively in `AskQuestionStore`; it cannot mutate `InputStore`.
+- `bootstrap()` owns one `askQuestionStore`, exposes it on `BootstrapHandle`, passes that same instance to `ConnectedApp`, and returns it.
+- `ConnectedApp` passes the same instance to `useInputHandler` and `InlineAppV2`.
+- `InlineAppV2` subscribes only to questionnaire visibility and renders questionnaire before select, spinner, and footer.
+- The E2E harness mirrors production ownership and exposes the same store to tests.
+- All requested direct `InlineAppV2Stores` / `ConnectedApp` fixtures were updated mechanically; their assertions were not changed.
+
+## Files
+
+Production:
+
+- `src/tui/input/use-input-handler.ts`
+- `src/tui/ConnectedApp.tsx`
+- `src/tui/bootstrap.tsx`
+- `src/tui/inline-v2/InlineAppV2.tsx`
+
+Tests and fixtures:
+
+- `src/__tests__/tui/use-input-handler.test.tsx`
+- `src/__tests__/tui/inline-v2/helpers/e2e-harness.tsx`
+- `src/__tests__/tui/inline-v2/ask-question-e2e.test.tsx`
+- `src/__tests__/tui/inline-v2/inline-app-v2.test.tsx`
+- `src/__tests__/tui/inline-v2/logo-regression.test.tsx`
+- `src/__tests__/tui/inline-v2/logo-static-identity.test.tsx`
+- `src/__tests__/tui/inline-v2/overlay-footer-recovery.test.tsx`
+- `src/__tests__/tui/inline-v2/v2-resize.test.tsx`
+- `src/__tests__/tui/connected-app-spinner-clock.test.tsx`
 
 ## Verification
 
-### Focused and affected store tests
+Required combined command:
 
 ```powershell
-npx.cmd vitest run src/__tests__/tui/spinner-view.test.ts src/__tests__/tui/spinner-store.test.ts --reporter=dot
+npx.cmd vitest run src/__tests__/tui/use-input-handler.test.tsx src/__tests__/tui/inline-v2/ask-question-e2e.test.tsx src/__tests__/tui/inline-v2/inline-app-v2.test.tsx src/__tests__/tui/inline-v2/select-overlay.test.tsx
 ```
 
-Exit code: `0`; 2 test files and 38 tests passed.
+Result: exit 0, 4 files passed, 72/72 tests passed.
 
-### TypeScript
+Expanded Task 4 regression command covering every changed fixture:
+
+```powershell
+npx.cmd vitest run src/__tests__/tui/use-input-handler.test.tsx src/__tests__/tui/inline-v2/ask-question-e2e.test.tsx src/__tests__/tui/inline-v2/inline-app-v2.test.tsx src/__tests__/tui/inline-v2/select-overlay.test.tsx src/__tests__/tui/inline-v2/logo-regression.test.tsx src/__tests__/tui/inline-v2/logo-static-identity.test.tsx src/__tests__/tui/inline-v2/overlay-footer-recovery.test.tsx src/__tests__/tui/inline-v2/v2-resize.test.tsx src/__tests__/tui/connected-app-spinner-clock.test.tsx
+```
+
+Result: exit 0, 9 files passed, 96/96 tests passed.
+
+TypeScript:
 
 ```powershell
 npm.cmd run typecheck
 ```
 
-Exit code: `0`.
+Result: exit 0.
 
-### Related ESLint
+Focused lint:
 
-```powershell
-npx.cmd eslint src/tui/state/spinner-store.ts src/tui/state/spinner-view.ts src/__tests__/tui/spinner-store.test.ts src/__tests__/tui/spinner-view.test.ts
-```
+- Normal lint on production/input/bootstrap, substantive tests, harness, E2E, and clean fixtures: exit 0.
+- `ConnectedApp.tsx` passed with `--no-inline-config` to bypass its pre-existing references to an unavailable `react-hooks/rules-of-hooks` plugin rule.
+- `InlineAppV2.tsx` and two mechanical fixtures passed with only their pre-existing `no-unused-vars` diagnostics disabled.
+- A raw lint run over every touched file reports only six pre-existing diagnostics on unchanged lines: three missing `react-hooks/rules-of-hooks` rule definitions, `overlayVisible`, `overlayVer`, and an unused `vi` import.
 
-Exit code: `0`.
-
-### Diff whitespace
-
-```powershell
-git diff --check
-```
-
-Exit code: `0`.
-
-### Full suite
+Additional full-suite check:
 
 ```powershell
-npm.cmd test -- --reporter=dot
+npm.cmd test
 ```
 
-Exit code: `1` after 69.5 seconds. The focused Task 4 suites passed, but the repository-wide suite has pre-existing/unrelated failures outside this task's files, including:
+Result: exit 1 with 13 unrelated failures outside Task 4: background timeout classification (3), ANSI-sensitive layout assertions (2), Windows process-tree cleanup assertions (2), and sandbox-denied image-cache writes (6). All Task 4 tests passed within that run.
 
-- inline footer physical-line and status truncation expectations that differ by one reserved row;
-- image command/cache tests blocked by `EPERM` writing under `C:\Users\sry27\.micode\image-cache` in this sandbox;
-- Windows process-tree cleanup assertions in `bash-process-control.test.ts`;
-- `layout.test.tsx` StatusBar plain-text assertions against ANSI-styled output.
+## Self-review
 
-## Risks and decisions
+- Confirmed the diff contains only the 13 Task 4 production/test files listed above plus this report; no manager/tools files changed.
+- Confirmed `askQuestionStore` identity is created once in bootstrap and is not recreated by components.
+- Confirmed Ctrl+C returns before questionnaire state is inspected.
+- Confirmed questionnaire returns before overlay/select/completion/input branches.
+- Confirmed input-mode editing branches precede navigation and all draft-preservation tests use the real stores.
+- Confirmed active-region precedence is questionnaire, select, spinner/footer without changing existing overlay host lifecycle or fixture assertions.
+- Found one initially missed second store factory in `logo-regression.test.tsx`; its existing 7 failing whole-tree tests identified the omission, and adding only the missing fixture store restored 12/12.
 
-- The legacy `activeTeammateCount` and `setActiveTeammateCount` remain unchanged because existing Ink, inline, and Bootstrap consumers still use them. The new selector deliberately does not read either field.
-- The selector is intentionally not wired into renderers in this task; that work belongs to later tasks.
-- No plan contradiction was found. The supplied Task 4 brief explicitly requires retaining the compatibility fields until Task 7.
-- The full suite is not green due to the unrelated failures listed above. They are deliberately not changed because Task 4 forbids modifying inline, Bootstrap, or UI integration paths.
+## Concerns
 
-## Review follow-up — 2026-07-19
-
-### RED
-
-Command:
-
-```powershell
-npx.cmd vitest run src/__tests__/tui/spinner-view.test.ts src/__tests__/tui/spinner-store.test.ts --reporter=verbose
-```
-
-Exit code: `1`; 2 test files failed with 2 failed and 39 passed tests.
-
-- The store test showed CR/LF remained in teammate, task, Tip, Budget, and NextTask snapshot fields.
-- The view test showed a teammate auxiliary line containing CR/LF, proving one logical auxiliary item could occupy multiple physical rows.
-- The newly added 1,799,999 ms and pause/resume Tip tests already passed, confirming the existing effective-time clock behavior before the text fix.
-
-### Fix
-
-`normalizeSpinnerContext()` now replaces each CRLF, LF, or CR sequence with one space and trims every visible context string. It applies to teammate name/role; task content/owner/activeForm/blockedBy entries; and Tip/Budget/NextTask. Optional values that become empty are normalized to `null`; task `id` remains untouched. Ordinary internal whitespace is not collapsed.
-
-### GREEN and verification
-
-```powershell
-npx.cmd vitest run src/__tests__/tui/spinner-view.test.ts src/__tests__/tui/spinner-store.test.ts --reporter=verbose
-npx.cmd vitest run src/__tests__/tui/spinner-view.test.ts src/__tests__/tui/spinner-store.test.ts --reporter=dot
-npm.cmd run typecheck
-npx.cmd eslint src/tui/state/spinner-store.ts src/tui/state/spinner-view.ts src/__tests__/tui/spinner-store.test.ts src/__tests__/tui/spinner-view.test.ts
-git diff --check
-```
-
-All commands exited `0`; the focused suite passed 2 files and 41 tests.
+- No Task 4 blocking concern.
+- Repository-wide lint and test baselines contain the unrelated diagnostics/failures documented above. They were deliberately not fixed because Task 4 forbids expanding into manager/tools or unrelated cleanup.

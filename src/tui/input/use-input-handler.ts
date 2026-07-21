@@ -18,6 +18,7 @@ import type { InputStore } from '../state/input-store.js';
 import type { CompletionStore } from '../state/completion-store.js';
 import type { SelectStore } from '../state/select-store.js';
 import type { SpinnerStore } from '../state/spinner-store.js';
+import type { AskQuestionStore } from '../state/ask-question-store.js';
 
 export function useInputHandler(
   store: InputStore,
@@ -31,6 +32,7 @@ export function useInputHandler(
   spinnerStore?: SpinnerStore,
   onAbortStream?: () => void,
   onRewindLastTurn?: () => void,
+  askQuestionStore?: AskQuestionStore,
 ): void {
   const DOUBLE_ESC_WINDOW_MS = 400;
   const SUBMIT_DEDUP_MS = 500;
@@ -42,19 +44,34 @@ export function useInputHandler(
     const s = store.getState();
     const completion = completionStore?.getState();
 
+    if (key.ctrl && input === 'c') {
+      onExit?.();
+      return;
+    }
+
+    const ask = askQuestionStore?.getState();
+    if (ask?.visible) {
+      if (key.escape) ask.cancel();
+      else if (ask.inputMode && key.return) ask.submitOther();
+      else if (ask.inputMode && (key.backspace || input === '\x7f' || input === '\x08')) ask.backspaceOther();
+      else if (ask.inputMode && key.delete) ask.deleteOther();
+      else if (ask.inputMode && key.leftArrow) ask.moveOtherCursorLeft();
+      else if (ask.inputMode && key.rightArrow) ask.moveOtherCursorRight();
+      else if (ask.inputMode && input && !key.ctrl && !key.meta) ask.insertOther(input);
+      else if (key.upArrow || (key.ctrl && input === 'p')) ask.moveFocusPrevious();
+      else if (key.downArrow || (key.ctrl && input === 'n')) ask.moveFocusNext();
+      else if ((key.tab && !key.shift) || key.rightArrow) ask.nextPage();
+      else if ((key.tab && key.shift) || key.leftArrow) ask.previousPage();
+      else if (key.return || input === ' ') ask.activateFocused();
+      return;
+    }
+
     // 覆盖层激活时：只处理关闭键（q / Ctrl+O / Esc / Ctrl+C），其余吞掉
     if (overlayVisible?.()) {
-      if (key.ctrl && input === 'c') { onExit?.(); return; }
       if (input === 'q' || (key.ctrl && input === 'o') || key.escape) {
         onToggleOverlay?.();
         return;
       }
-      return;
-    }
-
-    // Ctrl+C：退出
-    if (key.ctrl && input === 'c') {
-      onExit?.();
       return;
     }
 

@@ -18,6 +18,7 @@ import { createSpinnerStore } from '../../../tui/state/spinner-store.js';
 import { createCompletionStore } from '../../../tui/state/completion-store.js';
 import { createSelectStore } from '../../../tui/state/select-store.js';
 import { createOverlayStore } from '../../../tui/state/overlay-store.js';
+import { createAskQuestionStore } from '../../../tui/state/ask-question-store.js';
 import { createSelectionStore } from '../../../tui/state/selection-store.js';
 import { selectSpinnerView } from '../../../tui/state/spinner-view.js';
 
@@ -31,6 +32,7 @@ function createStores(): InlineAppV2Stores {
     selectStore: createSelectStore(),
     selectionStore: createSelectionStore(),
     overlayStore: createOverlayStore(),
+    askQuestionStore: createAskQuestionStore(),
   };
 }
 

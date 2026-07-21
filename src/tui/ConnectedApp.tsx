@@ -39,6 +39,7 @@ import { selectSpinnerView } from './state/spinner-view.js';
 import type { CompletionStore } from './state/completion-store.js';
 import type { SelectStore } from './state/select-store.js';
 import type { OverlayStore } from './state/overlay-store.js';
+import type { AskQuestionStore } from './state/ask-question-store.js';
 
 /** LOGO 区占的行数（与 App.tsx 一致） */
 const LOGO_ROWS = 3;
@@ -64,6 +65,7 @@ export interface ConnectedAppProps {
   completionStore: CompletionStore;
   selectStore: SelectStore;
   overlayStore: OverlayStore;
+  askQuestionStore: AskQuestionStore;
   onExit: () => void;
   onTab?: (text: string) => void;
   onToggleOverlay?: () => void;
@@ -74,7 +76,7 @@ export interface ConnectedAppProps {
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, onExit, onTab, onToggleOverlay, onAbortStream, onRewindLastTurn,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, askQuestionStore, onExit, onTab, onToggleOverlay, onAbortStream, onRewindLastTurn,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store（拖拽写入，所有区域订阅高亮）
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -194,6 +196,7 @@ export function ConnectedApp({
     inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible,
     handlePageScroll, completionStore, selectStore,
     spinnerStore, onAbortStream, onRewindLastTurn,
+    askQuestionStore,
   );
 
   // 粘贴占位符：bracketed paste 内容 → storePastedContent 生成占位符 → insert 到输入框。
@@ -345,6 +348,7 @@ export function ConnectedApp({
             selectStore,
             selectionStore,
             overlayStore,
+            askQuestionStore,
           }}
           cols={cols}
           rows={rows}
