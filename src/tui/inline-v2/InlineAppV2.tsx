@@ -29,6 +29,7 @@ import { FooterV2 } from './FooterV2.js';
 import { StreamingText } from './StreamingText.js';
 import { SelectOverlayV2 } from './SelectOverlayV2.js';
 import { AskQuestionOverlayV2 } from './AskQuestionOverlayV2.js';
+import { ExitPlanModeOverlayV2 } from './ExitPlanModeOverlayV2.js';
 import { OverlayHost } from './OverlayHost.js';
 import { selectSpinnerView } from '../state/spinner-view.js';
 import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
@@ -113,6 +114,15 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
   const selectVisible = useStore(stores.selectStore, (s) => s.visible);
   const askQuestionVisible = useStore(stores.askQuestionStore, (s) => s.visible);
 
+  // 订阅 askQuestion 的 presentation kind:用于路由分发。
+  // plan-approval → <ExitPlanModeOverlayV2>(计划正文 + 审批操作),
+  // 缺失/未知 kind → 安全回退 <AskQuestionOverlayV2>(通用问卷)。
+  // askQuestionVisible 为 false 时不需要 kind,返回 null 避免不必要订阅。
+  const askPresentationKind = useStore(stores.askQuestionStore, (s) => {
+    if (!s.visible || !s.request) return null;
+    return s.request.presentation?.kind ?? null;
+  });
+
   // 订阅 overlay 是否可见:visible 时用 <Overlay> 替换活动区(只显示折叠块全文)。
   // 复用 alt-screen 的 <Overlay> 组件,Props 一致。
   //
@@ -185,7 +195,11 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
           />
         )}
         {askQuestionVisible ? (
-          <AskQuestionOverlayV2 store={stores.askQuestionStore} cols={cols} />
+          askPresentationKind === 'plan-approval' ? (
+            <ExitPlanModeOverlayV2 store={stores.askQuestionStore} cols={cols} />
+          ) : (
+            <AskQuestionOverlayV2 store={stores.askQuestionStore} cols={cols} />
+          )
         ) : selectVisible ? (
           // Select 选择器:替代 spinner+footer 占据活动区(自订阅 selectStore)
           <SelectOverlayV2 store={stores.selectStore} cols={cols} />
