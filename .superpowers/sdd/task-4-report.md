@@ -142,3 +142,45 @@ Result: exit 1 with 13 unrelated failures outside Task 4: background timeout cla
 
 - No Task 4 blocking concern.
 - Repository-wide lint and test baselines contain the unrelated diagnostics/failures documented above. They were deliberately not fixed because Task 4 forbids expanding into manager/tools or unrelated cleanup.
+
+## Reviewer follow-up: questionnaire paste ownership
+
+### Finding
+
+`ConnectedApp` owns Ink's `usePaste` callback independently of `useInputHandler`. The original Task 4 wiring routed keyboard input correctly, but bracketed paste still unconditionally inserted a generated placeholder into `InputStore` while the questionnaire was visible. This violated the input-draft preservation invariant and could not populate Other mode.
+
+### RED
+
+Added three full-tree Ink/E2E cases to `ask-question-e2e.test.tsx`:
+
+1. Visible questionnaire outside Other mode swallows paste and preserves `InputStore` exactly.
+2. Visible questionnaire in Other mode inserts the raw pasted text into `AskQuestionStore.otherDraft` and preserves `InputStore` exactly.
+3. After questionnaire close, ordinary paste still uses the existing placeholder path.
+
+Command:
+
+```powershell
+npx.cmd vitest run src/__tests__/tui/inline-v2/ask-question-e2e.test.tsx
+```
+
+Observed before the fix: exit 1, 2 failed and 6 passed. The first failure showed `[Pasted text #1 +2 lines]` appended to the input draft; the second showed `otherDraft === ''` instead of the raw `alpha\nbeta`. The closed-questionnaire regression case already passed.
+
+### Minimal fix and GREEN
+
+`ConnectedApp` now reads `askQuestionStore.getState()` inside `usePaste`. If visible, it inserts the original paste text into Other only when `inputMode` is true, then returns; otherwise it swallows the paste. Only an invisible questionnaire reaches `storePastedContent()` and `inputStore.insert()`.
+
+Commands and results:
+
+```powershell
+npx.cmd vitest run src/__tests__/tui/inline-v2/ask-question-e2e.test.tsx src/__tests__/tui/paste-inline-integration.test.tsx
+```
+
+Exit 0, 2 files and 12/12 tests passed.
+
+```powershell
+npx.cmd vitest run src/__tests__/tui/use-input-handler.test.tsx src/__tests__/tui/paste-inline-integration.test.tsx src/__tests__/tui/inline-v2/ask-question-e2e.test.tsx src/__tests__/tui/inline-v2/inline-app-v2.test.tsx src/__tests__/tui/inline-v2/select-overlay.test.tsx src/__tests__/tui/inline-v2/logo-regression.test.tsx src/__tests__/tui/inline-v2/logo-static-identity.test.tsx src/__tests__/tui/inline-v2/overlay-footer-recovery.test.tsx src/__tests__/tui/inline-v2/v2-resize.test.tsx src/__tests__/tui/connected-app-spinner-clock.test.tsx
+```
+
+Exit 0, 10 files and 103/103 tests passed.
+
+`npm.cmd run typecheck`, focused ESLint for the two changed source/test files, and `git diff --check` all exited 0. No image-paste behavior was added and no Task 5 files changed.

@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AskQuestionRequest } from '../../../agent/ask-user-types.js';
+import { resetPasteState } from '../../../tui/input/paste-handler.js';
 import { createE2EHarness, KEYS, waitMs } from './helpers/e2e-harness.js';
 
 const singleRequest: AskQuestionRequest = {
@@ -32,6 +33,8 @@ const multiRequest: AskQuestionRequest = {
 };
 
 describe('V2 inline E2E - questionnaire user paths', () => {
+  beforeEach(() => { resetPasteState(); });
+
   it('settles a single-choice question immediately and preserves the existing input draft byte-for-byte', async () => {
     const h = createE2EHarness();
     const draft = ' pre-existing\n草稿 😀 ';
@@ -50,6 +53,62 @@ describe('V2 inline E2E - questionnaire user paths', () => {
       });
       expect(h.stores.askQuestionStore.getState().visible).toBe(false);
       expect(h.stores.inputStore.getState().text).toBe(draft);
+    } finally {
+      h.unmount();
+    }
+  });
+
+  it('swallows bracketed paste while a questionnaire is visible outside Other mode', async () => {
+    const h = createE2EHarness();
+    const draft = 'draft stays byte-for-byte';
+    try {
+      h.stores.inputStore.getState().setText(draft);
+      h.stores.askQuestionStore.getState().open('ask-paste-1', singleRequest, () => {});
+      await waitMs(20);
+
+      h.stdin.write('\x1b[200~alpha\nbeta\x1b[201~');
+      await waitMs(20);
+
+      expect(h.stores.inputStore.getState().text).toBe(draft);
+      expect(h.stores.askQuestionStore.getState().otherDraft).toBe('');
+    } finally {
+      h.unmount();
+    }
+  });
+
+  it('routes raw bracketed paste text into Other mode without changing the normal input draft', async () => {
+    const h = createE2EHarness();
+    const draft = 'draft stays byte-for-byte';
+    const pasted = 'alpha\nbeta';
+    try {
+      h.stores.inputStore.getState().setText(draft);
+      h.stores.askQuestionStore.getState().open('ask-paste-2', singleRequest, () => {});
+      h.stores.askQuestionStore.getState().moveFocusNext();
+      h.stores.askQuestionStore.getState().moveFocusNext();
+      h.stores.askQuestionStore.getState().activateFocused();
+      expect(h.stores.askQuestionStore.getState().inputMode).toBe(true);
+
+      h.stdin.write(`\x1b[200~${pasted}\x1b[201~`);
+      await waitMs(20);
+
+      expect(h.stores.askQuestionStore.getState().otherDraft).toBe(pasted);
+      expect(h.stores.inputStore.getState().text).toBe(draft);
+    } finally {
+      h.unmount();
+    }
+  });
+
+  it('keeps the existing placeholder paste behavior after the questionnaire closes', async () => {
+    const h = createE2EHarness();
+    try {
+      h.stores.askQuestionStore.getState().open('ask-paste-3', singleRequest, () => {});
+      h.stores.askQuestionStore.getState().close('ask-paste-3');
+
+      h.stdin.write('\x1b[200~alpha\nbeta\x1b[201~');
+      await waitMs(20);
+
+      expect(h.stores.inputStore.getState().text).toContain('[Pasted text #1');
+      expect(h.stores.inputStore.getState().text).not.toContain('alpha\nbeta');
     } finally {
       h.unmount();
     }

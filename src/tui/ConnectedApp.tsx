@@ -203,6 +203,11 @@ export function ConnectedApp({
   // usePaste 自动管 \x1b[?2004h 生命周期，inline/alt-screen 都生效。
   // 粘贴内容走单独通道，不泄漏到 useInput（Ink 文档：separate event channels）。
   usePaste((text: string) => {
+    const ask = askQuestionStore.getState();
+    if (ask.visible) {
+      if (ask.inputMode) ask.insertOther(text);
+      return;
+    }
     inputStore.getState().insert(storePastedContent(text));
   });
 
