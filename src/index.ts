@@ -299,6 +299,7 @@ const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
   getUsagePercent: () => Math.round((tuiHandle?.statusStore.getState().contextPct ?? 0) * 100),
   onApprove: (mode, clearContext) => applyPlanApproval(mode, clearContext, {
     clearPipeline: () => pipeline.clear(),
+    triggerClearScreen: () => tuiHandle?.clearScreenStore.getState().triggerClearScreen(),
     clearSessionMessages: () => { sessionMessages = []; },
     rotateSessionId: () => { sessionId = randomUUID(); },
     resetContextUsage: () => tuiHandle?.statusStore.getState().setContextPct(0),

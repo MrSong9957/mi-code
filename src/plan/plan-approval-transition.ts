@@ -8,6 +8,8 @@ export interface PlanApprovalTransitionDeps {
   setPermissionMode: (mode: PlanApprovalMode) => void;
   setConfigMode: (mode: PlanApprovalMode) => void;
   setStatusMode: (mode: PlanApprovalMode) => void;
+  /** 触发终端清屏信号(仅在 clearContext=true 时调用,通知 ConnectedApp 清屏+重挂载) */
+  triggerClearScreen: () => void;
 }
 
 export function applyPlanApproval(
@@ -17,6 +19,7 @@ export function applyPlanApproval(
 ): void {
   if (clearContext) {
     deps.clearPipeline();
+    deps.triggerClearScreen();   // 清屏信号(在 clearPipeline 之后,确保重挂载时 messages 已空)
     deps.clearSessionMessages();
     deps.rotateSessionId();
     deps.resetContextUsage();

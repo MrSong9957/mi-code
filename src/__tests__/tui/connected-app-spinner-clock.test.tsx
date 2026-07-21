@@ -24,6 +24,7 @@ import {
   TICK_MS,
 } from '../../tui/state/spinner-store.js';
 import { createStatusStore } from '../../tui/state/status-store.js';
+import { createClearScreenStore } from '../../tui/state/clear-screen-store.js';
 
 function renderConnected(mode: RenderMode) {
   const spinnerStore = createSpinnerStore();
@@ -44,6 +45,7 @@ function renderConnected(mode: RenderMode) {
         selectStore={createSelectStore()}
         overlayStore={createOverlayStore()}
         askQuestionStore={createAskQuestionStore()}
+        clearScreenStore={createClearScreenStore()}
         onExit={() => {}}
       />
     </RenderModeProvider>,

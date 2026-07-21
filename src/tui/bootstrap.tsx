@@ -33,6 +33,7 @@ import { createCompletionStore, type CompletionStore } from './state/completion-
 import { createSelectStore, type SelectStore } from './state/select-store.js';
 import { createOverlayStore, type OverlayStore } from './state/overlay-store.js';
 import { createAskQuestionStore, type AskQuestionStore } from './state/ask-question-store.js';
+import { createClearScreenStore, type ClearScreenStore } from './state/clear-screen-store.js';
 import { PipelineToStoreAdapter } from './state/pipeline-adapter.js';
 import { RenderModeProvider, type RenderMode } from './state/render-mode.js';
 import { ConnectedApp } from './ConnectedApp.js';
@@ -87,6 +88,8 @@ export interface BootstrapHandle {
   overlayStore: OverlayStore;
   askQuestionStore: AskQuestionStore;
   themeStore: ThemeStore;
+  /** 计划批准后清屏信号(auto+clear 模式:index.ts 的 applyPlanApproval 触发) */
+  clearScreenStore: ClearScreenStore;
   /** spinner 控制（对标 Claude Code 四套动画：mode 决定配色，verb 决定文字） */
   startSpinner: (mode: SpinnerMode) => void;
   stopSpinner: () => void;
@@ -139,6 +142,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const selectStore = createSelectStore();
   const overlayStore = createOverlayStore();
   const askQuestionStore = createAskQuestionStore();
+  const clearScreenStore = createClearScreenStore();
   const adapter = new PipelineToStoreAdapter(messagesStore);
   const pipeline = new BlockPipeline(adapter);
 
@@ -199,7 +203,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     React.createElement(RenderModeProvider, { initialMode: renderMode, children:
       React.createElement(ThemeStoreProvider, { store: themeStore },
         React.createElement(ConnectedApp, {
-          messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, askQuestionStore,
+          messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, askQuestionStore, clearScreenStore,
           onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
           onAbortStream: opts.onAbortStream, onRewindLastTurn: opts.onRewindLastTurn,
         }),
@@ -228,6 +232,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
     overlayStore,
     askQuestionStore,
     themeStore,
+    clearScreenStore,
     startSpinner: (mode) => { spinnerStore.getState().start(mode); },
     stopSpinner: () => {
       stopSpinnerAndAppendCompletion(spinnerStore, messagesStore);
