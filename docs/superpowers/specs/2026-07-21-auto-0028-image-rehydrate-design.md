@@ -266,9 +266,9 @@ throw new Error(
 
 ```ts
 throw new Error(
-  `图片数据缺失,且未记录缓存路径,无法发送。\n` +
-    `mediaType:${block.mediaType}\n` +
-    `这通常是会话状态损坏,请到 GitHub Issues 反馈。`,
+  `图片数据缺失，且未记录缓存路径，无法发送。\n` +
+    `mediaType：${block.mediaType}\n` +
+    `这通常是会话状态损坏，请到 GitHub Issues 反馈。`,
 );
 ```
 
@@ -278,10 +278,10 @@ throw new Error(
 
 ```ts
 throw new Error(
-  `图片缓存文件丢失,无法发送历史图片。\n` +
-    `缓存路径:${block.cachePath}\n` +
-    `mediaType:${block.mediaType}\n` +
-    `建议:重新使用 /image 命令附加该图片。`,
+  `图片缓存文件丢失，无法发送历史图片。\n` +
+    `缓存路径：${block.cachePath}\n` +
+    `mediaType：${block.mediaType}\n` +
+    `建议：重新使用 /image 命令附加该图片。`,
 );
 ```
 
@@ -291,8 +291,8 @@ throw new Error(
 
 ```ts
 throw new Error(
-  `图片缓存文件为空:${block.cachePath}\n` +
-    `建议:重新使用 /image 命令附加该图片。`,
+  `图片缓存文件为空：${block.cachePath}\n` +
+    `建议：重新使用 /image 命令附加该图片。`,
 );
 ```
 
@@ -376,12 +376,13 @@ throw new Error(
 
 **目的**:确保 `rehydrateFromCache` 不依赖魔数分支,纯按字节读回 base64。mediaType 字段在 rehydrate 路径下**只用于白名单校验**(已由 `ensureImageData` 入口完成),不参与读取逻辑。
 
-#### 测试组 3:边界条件(2 条)
+#### 测试组 3:边界条件(1 条,符号链接测试已删减)
 
 | # | 场景 | 期望 |
 |---|---|---|
-| 3.1 | cachePath 是符号链接指向真实文件 | 正常回填(操作系统层面 `existsSync`/`readFileSync` 自然支持) |
 | 3.2 | cachePath 指向 0 字节文件 | throw `/缓存文件为空/` |
+
+**3.1 符号链接测试主动删减**:覆盖 OS 层 fs 语义(`existsSync`/`readFileSync` 对 symlink 透明穿透)而非被测代码行为,且 CI 环境(尤其 Windows / 沙箱容器)可能 `EPERM` 拒绝创建 symlink,稳定性风险高。投入产出比低,不写。
 
 ### 临时文件管理
 

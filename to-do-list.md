@@ -47,7 +47,7 @@
 
 - [x] AUTO-0028: 会话恢复（resume）回填图片
   > resume 后历史消息中的 ImageBlock 从 cachePath 读回 base64，替换原 throw 兜底。
-  > 完成：ensureImageData 新增冷路径，委托私有 rehydrateFromCache(existsSync + readFileSync + 0 字节校验)。三家 provider client 零改动,经 ensureImageData 统一受益。4 种错误路径(cachePath 缺失 / 文件不存在 / 0 字节 / 系统 EACCES 等)分级处理,前三种 throw 中文消息,系统错误不包装自然冒泡。改写 2 条原契约测试(去掉 /AUTO-0028/ 正则) + 新增 6 条回填测试(通用 + PNG/JPEG/GIF/WebP + 0 字节边界)。不引入缓存(YAGNI),不回写 block.data(保持无副作用)。49 个 agent 测试全过、tsc exit 0。
+  > 完成：ensureImageData 新增冷路径，委托私有 rehydrateFromCache(existsSync + readFileSync + 0 字节校验)。三家 provider client 零改动,经 ensureImageData 统一受益。4 种错误路径(cachePath 缺失 / 文件不存在 / 0 字节 / 系统 EACCES 等)分级处理,前三种 throw 中文消息,系统错误不包装自然冒泡。改写 2 条原契约测试(去掉 /AUTO-0028/ 正则) + 新增 6 条回填测试(通用 + PNG/JPEG/GIF/WebP + 0 字节边界)。不引入缓存(YAGNI),不回写 block.data(保持无副作用)。55 个 agent 测试全过、tsc exit 0、全量 1678 passed。
 
 - [x] AUTO-0002: 斜杠命令体系
   > 实现 /command 交互方式，支持如 /help、/clear 等快捷指令
@@ -156,4 +156,4 @@
 | 2026-07-21 | AUTO-0001、AUTO-0025~0028 | @agent | 核实 AUTO-0001 现状后拆分子任务：AUTO-0026（OpenAI/Google provider 发图，当前 MVP 跳过）、AUTO-0027（拖拽/粘贴捕获，paste-handler 有 TODO）、AUTO-0028（resume 会话恢复回填，cachePath 只写不读）；AUTO-0006 新建子任务 AUTO-0025（接入下拉选择菜单）。 |
 | 2026-07-21 | - | @agent | 顺手按文件顶部「核心规则」归位：AUTO-0009~0024 已是 `[x]` 但原堆在「待办」分区，现一并移入「已完成」。 |
 | 2026-07-21 | AUTO-0026 | @agent | 完成 OpenAI/Google provider 图片输入支持（feat/openai-google-image-support 分支，6 个 TDD commit）：3 个共享 helper + 类型、三家统一空 data 防御、OpenAI 纯图片丢弃 bug 修复；49 个 agent 测试全过、tsc exit 0；经 brainstorming→writing-plans→subagent-driven 全流程 + 三轮 code review。 |
-| 2026-07-21 | AUTO-0028 | @agent | 完成 resume 图片 rehydrate:ensureImageData 新增冷路径 + 私有 rehydrateFromCache(existsSync + readFileSync + 0 字节校验);2 条原契约测试改写 + 6 条新增;49 个 agent 测试全过、tsc exit 0。AUTO-0001 父任务仍不关闭(剩 AUTO-0027)。 |
+| 2026-07-21 | AUTO-0028 | @agent | 完成 resume 图片 rehydrate:ensureImageData 新增冷路径 + 私有 rehydrateFromCache(existsSync + readFileSync + 0 字节校验);2 条原契约测试改写 + 6 条新增;55 个 agent 测试全过、tsc exit 0、全量 1678 passed(StatusBar 2 条既有失败按设计豁免)。AUTO-0001 父任务仍不关闭(剩 AUTO-0027)。 |
