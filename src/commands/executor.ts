@@ -284,8 +284,6 @@ function handleHelp(): CommandResult {
   /build               Standard mode: writes ask for confirmation
   /plan                Plan mode: all writes blocked (read-only)
   /auto                Auto mode: everything allowed (dangerous cmds still blocked)
-  /approve             (After exit_plan_mode) Approve plan & switch to build
-  /reject [reason]     (After exit_plan_mode) Reject plan, stay in plan mode
   /compact             Trigger context compaction
   /image <path> [text] Attach an image file (PNG/JPEG/GIF/WebP, max 3.75MB)
   /image [text]        Attach image from clipboard (Win: screenshot first, then /image)

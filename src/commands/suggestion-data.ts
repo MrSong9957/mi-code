@@ -34,8 +34,6 @@ export const COMMAND_SUGGESTIONS: readonly SuggestionItem[] = Object.freeze([
   { name: 'build',    description: 'Standard mode: writes ask confirmation', group: 'Mode' },
   { name: 'plan',     description: 'Plan mode: read-only', group: 'Mode' },
   { name: 'auto',     description: 'Auto mode: everything allowed', group: 'Mode' },
-  { name: 'approve',  description: 'Approve plan & switch to build', group: 'Mode' },
-  { name: 'reject',   description: 'Reject plan, stay in plan mode', argHint: '[reason]', group: 'Mode' },
   // Skills
   { name: 'skill',    description: 'Manage skills', argHint: '<list|off|retry>', group: 'Skills' },
   { name: 'trigger',  description: 'Trigger or block a skill', argHint: '<name>', group: 'Skills' },

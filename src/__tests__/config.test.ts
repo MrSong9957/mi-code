@@ -207,6 +207,8 @@ describe('Command Executor', () => {
     const store = new ConfigStore(tempDir);
     const result = executeCommand({ name: 'help', args: [] }, store);
     expect(result.message).toContain('Available commands');
+    expect(result.message).not.toContain('/approve');
+    expect(result.message).not.toContain('/reject');
   });
 
   it('should execute /login command', () => {
