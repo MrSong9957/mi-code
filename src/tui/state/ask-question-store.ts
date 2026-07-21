@@ -160,6 +160,10 @@ export function createAskQuestionStore(): AskQuestionStore {
           const label = question.options[state.focusIndex]!.label;
           if (!question.multiSelect) {
             set({ selected: { ...state.selected, [question.question]: [label] } });
+            if (state.request.questions.length === 1) {
+              get().submit();
+              return;
+            }
             get().nextPage();
             return;
           }

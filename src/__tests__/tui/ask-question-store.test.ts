@@ -45,13 +45,12 @@ describe('AskQuestionStore', () => {
     expectReset(store);
   });
 
-  it('advances a single-choice question directly to submit and submits it', () => {
+  it('submits a single-choice question immediately', () => {
     const single: AskQuestionRequest = { questions: [request.questions[0]!] };
     const { store, onOutcome } = openStore(single);
     store.getState().activateFocused();
-    expect(store.getState()).toMatchObject({ pageIndex: 1, focusIndex: 0 });
-    store.getState().activateFocused();
     expect(onOutcome).toHaveBeenCalledWith('req-1', { kind: 'submitted', answers: { Q1: 'A' } });
+    expectReset(store);
   });
 
   it('keeps multi-select questions open while toggling choices', () => {
