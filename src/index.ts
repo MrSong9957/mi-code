@@ -591,6 +591,13 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     'Only use tools when the user asks you to do something concrete (run a command, read/edit a file, search code).',
     'For questions, explanations, and advice, respond with plain text — never wrap your reply in a Bash echo command.',
     '',
+    // 意图检测层：探索型/规划型任务优先 spawn 子代理，避免主上下文膨胀。
+    // 在任何模式下生效（不限于 plan 模式），让"生成改造计划"等请求自动触发委派。
+    'When the user\'s request implies a multi-step investigation, planning, architecture analysis,',
+    'or restructuring task (e.g. "generate a plan", "改造", "分析架构", "refactor"), spawn explore',
+    'sub-agents (spawn_agent role="explore") to investigate in parallel FIRST, before reading files',
+    'yourself. Each sub-agent returns a summary you can synthesize — this keeps your context focused.',
+    '',
     skillsDescription,
     reminder ? `\n${reminder}` : '',
     planModeInstruction,

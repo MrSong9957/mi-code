@@ -102,6 +102,8 @@ async function runSubagentWithClient(
   const subRegistry = buildSubRegistry(toolSubset);
 
   let resultText = '';
+  // 收集工具调用信息，用于 maxTurns 耗尽且无文本输出时的 fallback 摘要
+  const toolCallNames: string[] = [];
   for await (const message of streamingQuery(client, subRegistry, prompt, {
     systemPrompt: system,
     tools: Array.from(toolSubset.values()).map(t => t.definition),
@@ -115,13 +117,27 @@ async function runSubagentWithClient(
       const content = (message as { content?: unknown }).content;
       if (Array.isArray(content)) {
         for (const block of content) {
-          if (block !== null && typeof block === 'object' && 'type' in block && (block as { type: string }).type === 'text') {
-            const text = (block as { text?: string }).text;
-            if (text) resultText += text;
+          if (block !== null && typeof block === 'object' && 'type' in block) {
+            const bt = (block as { type: string }).type;
+            if (bt === 'text') {
+              const text = (block as { text?: string }).text;
+              if (text) resultText += text;
+            } else if (bt === 'tool_use') {
+              // 记录工具名用于 fallback
+              const name = (block as { name?: string }).name;
+              if (name) toolCallNames.push(name);
+            }
           }
         }
       }
     }
+  }
+  // 模型可能只调工具不输出文字（某些 GLM/MiMo 行为），用工具调用信息兜底
+  if (!resultText && toolCallNames.length > 0) {
+    const counts: Record<string, number> = {};
+    for (const n of toolCallNames) counts[n] = (counts[n] ?? 0) + 1;
+    const summary = Object.entries(counts).map(([n, c]) => `${n}${c > 1 ? `×${c}` : ''}`).join(', ');
+    return `Sub-agent completed ${toolCallNames.length} tool call(s) [${summary}] — no explicit text summary produced.`;
   }
   return resultText || '(no summary)';
 }
