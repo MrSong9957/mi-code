@@ -54,7 +54,7 @@ import { MemoryManager } from './memory/index.js';
 import { createMemoryWriteTool, createMemoryReadTool, createMemoryListTool } from './agent/tools/memory-tool.js';
 import { AskUserManager } from './agent/ask-user-manager.js';
 import { createAskUserTool } from './agent/tools/ask-user-tool.js';
-import { PlanStore } from './plan/plan-store.js';
+import { PlanStore, type PlanContext } from './plan/plan-store.js';
 import { applyPlanApproval } from './plan/plan-approval-transition.js';
 import { createWritePlanTool, createExitPlanModeTool, createReadPlanTool } from './agent/tools/plan-tools.js';
 import { setWorkdir, getWorkdir } from './agent/tools/path-sandbox.js';
@@ -157,6 +157,7 @@ const cliOpts = parseCliArgs();
 const sessionStore = new SessionStore();
 // 会话 ID：resume 时用恢复的 id，否则新建
 let sessionId: string = randomUUID();
+let currentPlanContext: PlanContext | null = null;
 // 当前会话累积消息（resume 时预载，streamingQuery onMessages 时更新）
 let sessionMessages: Message[] = [];
 
@@ -322,10 +323,11 @@ const configuredPlansDir = configStore.getPlansDirectory();
 const planStore = new PlanStore(join(homedir(), '.micode'), configuredPlansDir);
 permissionChecker.setPlanDir(planStore.getPlansDir());
 // 注册 write_plan_file 与 exit_plan_mode 工具（依赖 planStore + askManager）
-const writePlanTool = createWritePlanTool(planStore, () => sessionId);
+const writePlanTool = createWritePlanTool(planStore, () => currentPlanContext);
 toolRegistry.register(writePlanTool.definition, writePlanTool.executor);
 const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
   getUsagePercent: () => Math.round((tuiHandle?.statusStore.getState().contextPct ?? 0) * 100),
+  getPlanContext: () => currentPlanContext,
   onApprove: (mode, clearContext) => applyPlanApproval(mode, clearContext, {
     clearPipeline: () => pipeline.clear(),
     triggerClearScreen: () => tuiHandle?.clearScreenStore.getState().triggerClearScreen(),
@@ -339,7 +341,7 @@ const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
 });
 toolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
 // read_plan_file：只读工具，plan 模式下自然可见（不在 WRITE_TOOLS）
-const readPlanTool = createReadPlanTool(planStore);
+const readPlanTool = createReadPlanTool(planStore, () => currentPlanContext);
 toolRegistry.register(readPlanTool.definition, readPlanTool.executor);
 // 同时注册到 childToolRegistry：plan/explore 角色子代理需要这些工具（白名单由 roles.ts 控制）
 childToolRegistry.register(writePlanTool.definition, writePlanTool.executor);
@@ -538,6 +540,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     { historyText: trimmedRaw, agentText: userInput, project: currentProject, isProcessing }
   );
   if (!committed) return;
+  currentPlanContext = { sessionId, turnId: randomUUID() };
+  planStore.beginTurn(currentPlanContext);
 
   // 检查 ! 前缀拦截
   const blockReq = parseBlockPrefix(userInput);

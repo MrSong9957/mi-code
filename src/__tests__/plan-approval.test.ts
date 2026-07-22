@@ -74,6 +74,9 @@ describe('PermissionChecker planDir 白名单', () => {
 });
 
 describe('PlanStore', () => {
+  const oldContext = { sessionId: 'sess-1', turnId: 'turn-old' };
+  const currentContext = { sessionId: 'sess-1', turnId: 'turn-current' };
+
   it('构造时创建 plans 目录', () => {
     const baseDir = join(tempDir, 'micode');
     const store = new PlanStore(baseDir);
@@ -81,43 +84,54 @@ describe('PlanStore', () => {
     expect(store.getPlansDir()).toBe(join(baseDir, 'plans'));
   });
 
-  it('write 落盘 + 返回路径 + getCurrent 读出', () => {
+  it('writes a pending plan for the begun current turn', () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    const filePath = store.write('sess-1', '# My Plan\n\nDo X');
+    store.beginTurn(currentContext);
+    const filePath = store.write(currentContext, '# My Plan\n\nDo X');
     expect(existsSync(filePath)).toBe(true);
-    const current = store.getCurrent();
+    const current = store.getActive(currentContext);
     expect(current).not.toBeNull();
     expect(current!.filePath).toBe(filePath);
     expect(current!.content).toContain('# My Plan');
     expect(current!.content).toContain('session: sess-1');
+    expect(current!.content).toContain('turn: turn-current');
     expect(current!.content).toContain('status: pending');
   });
 
-  it('多次 write：currentPath 指向最新', () => {
+  it('invalidates the prior active plan when a new turn begins', () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    store.write('sess-1', 'plan v1');
-    store.write('sess-1', 'plan v2');
-    const current = store.getCurrent()!;
-    expect(current.content).toContain('plan v2');
-    expect(current.content).not.toContain('plan v1');
+    store.beginTurn(oldContext);
+    store.write(oldContext, 'old plan');
+    store.beginTurn(currentContext);
+
+    expect(store.getActive(currentContext)).toBeNull();
+    expect(store.getActive(oldContext)).toBeNull();
   });
 
-  it('getCurrent 无 plan 时返回 null', () => {
+  it('rejects writes for a context that is no longer current', () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    expect(store.getCurrent()).toBeNull();
+    store.beginTurn(oldContext);
+    store.beginTurn(currentContext);
+
+    expect(() => store.write(oldContext, 'stale plan')).toThrow(/current turn/i);
   });
 
-  it('setStatus 更新 frontmatter', () => {
+  it('marks only the matching active plan and clears its approval capability', () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    store.write('sess-1', 'plan');
-    store.setStatus('approved');
-    const current = store.getCurrent()!;
-    expect(current.content).toContain('status: approved');
+    store.beginTurn(currentContext);
+    const filePath = store.write(currentContext, 'plan');
+
+    expect(store.setStatus(oldContext, 'approved')).toBe(false);
+    expect(store.setStatus(currentContext, 'approved')).toBe(true);
+    expect(store.getActive(currentContext)).toBeNull();
+    expect(store.recoverLatestForSession('sess-1')!.filePath).toBe(filePath);
+    expect(store.recoverLatestForSession('sess-1')!.content).toContain('status: approved');
   });
 
   it('write 用 slug 命名：<sessionId>-<6hex>.md', () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    const filePath = store.write('sess-1', 'plan body');
+    store.beginTurn(currentContext);
+    const filePath = store.write(currentContext, 'plan body');
     expect(filePath).toMatch(/sess-1-[a-f0-9]{6}\.md$/);
   });
 
@@ -132,27 +146,36 @@ describe('PlanStore', () => {
     utimesSync(oldFile, oldTime, oldTime);
     expect(existsSync(oldFile)).toBe(true);
     // 触发惰性清理
-    store.write('sess-1', 'new plan');
+    store.beginTurn(currentContext);
+    store.write(currentContext, 'new plan');
     expect(existsSync(oldFile)).toBe(false);
   });
 
-  it('恢复机制：currentPath 丢失时从目录恢复最新 plan', () => {
+  it('recovers only the latest plan for the requested session without activating it', () => {
     const baseDir = join(tempDir, 'micode');
     const store1 = new PlanStore(baseDir);
-    const filePath = store1.write('sess-1', 'recovery plan');
-    // 新建第二个 store（currentPath=null，模拟重启）
+    const s1 = { sessionId: 's1', turnId: 's1-turn' };
+    const s2 = { sessionId: 's2', turnId: 's2-turn' };
+    store1.beginTurn(s1);
+    const filePath = store1.write(s1, 's1 recovery plan');
+    store1.beginTurn(s2);
+    store1.write(s2, 'newer s2 plan');
     const store2 = new PlanStore(baseDir);
-    expect(store2.getCurrent()).not.toBeNull();
-    const recovered = store2.getCurrent()!;
+
+    const recovered = store2.recoverLatestForSession('s1');
+    expect(recovered).not.toBeNull();
     expect(recovered.filePath).toBe(filePath);
-    expect(recovered.content).toContain('recovery plan');
+    expect(recovered.content).toContain('s1 recovery plan');
+    store2.beginTurn({ sessionId: 's1', turnId: 'new-turn' });
+    expect(store2.getActive({ sessionId: 's1', turnId: 'new-turn' })).toBeNull();
   });
 
   it('plansDirOverride：绝对路径覆盖默认 plans 目录', () => {
     const custom = join(tempDir, 'custom-plans');
     const store = new PlanStore(join(tempDir, 'micode'), custom);
     expect(store.getPlansDir()).toBe(custom);
-    const filePath = store.write('sess-1', 'plan');
+    store.beginTurn(currentContext);
+    const filePath = store.write(currentContext, 'plan');
     expect(existsSync(filePath)).toBe(true);
     expect(filePath.startsWith(custom)).toBe(true);
   });
@@ -172,41 +195,45 @@ describe('PlanStore', () => {
 });
 
 describe('write_plan_file 工具', () => {
+  const context = { sessionId: 'sess-1', turnId: 'turn-1' };
   it('definition 字段正确', () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    const { definition } = createWritePlanTool(store, () => 'sess-1');
+    const { definition } = createWritePlanTool(store, () => context);
     expect(definition.name).toBe('write_plan_file');
     expect(definition.parameters.required).toEqual(['content']);
   });
 
   it('executor 写盘成功', async () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    const { executor } = createWritePlanTool(store, () => 'sess-1');
+    store.beginTurn(context);
+    const { executor } = createWritePlanTool(store, () => context);
     const result = await executor({ content: '# Plan\nDo X' });
     expect(result).toMatch(/Plan written/);
-    expect(store.getCurrent()?.content).toContain('# Plan');
+    expect(store.getActive(context)?.content).toContain('# Plan');
   });
 
   it('空 content 返回 Error', async () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    const { executor } = createWritePlanTool(store, () => 'sess-1');
+    const { executor } = createWritePlanTool(store, () => context);
     const result = await executor({ content: '' });
     expect(result).toMatch(/Error/i);
   });
 });
 
 describe('read_plan_file 工具', () => {
+  const context = { sessionId: 'sess-1', turnId: 'turn-1' };
   it('definition 字段正确', () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    const { definition } = createReadPlanTool(store);
+    const { definition } = createReadPlanTool(store, () => context);
     expect(definition.name).toBe('read_plan_file');
     expect(definition.parameters.required).toEqual([]);
   });
 
   it('executor 返回剥离 frontmatter 的计划正文', async () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    store.write('sess-1', '# Plan\nDo X');
-    const { executor } = createReadPlanTool(store);
+    store.beginTurn(context);
+    store.write(context, '# Plan\nDo X');
+    const { executor } = createReadPlanTool(store, () => context);
     const result = await executor({});
     // 正文保留，frontmatter 被剥离
     expect(result).toContain('# Plan');
@@ -217,7 +244,7 @@ describe('read_plan_file 工具', () => {
 
   it('无计划时返回 Error', async () => {
     const store = new PlanStore(join(tempDir, 'micode'));
-    const { executor } = createReadPlanTool(store);
+    const { executor } = createReadPlanTool(store, () => context);
     const result = await executor({});
     expect(result).toMatch(/Error/i);
     expect(result).toMatch(/write_plan_file/);
@@ -240,14 +267,17 @@ describe('exit_plan_mode 工具', () => {
 
   function createReadyTool(usagePercent = 22) {
     const store = new PlanStore(join(tempDir, 'micode'));
-    store.write('sess-1', 'plan body');
+    const context = { sessionId: 'sess-1', turnId: 'turn-1' };
+    store.beginTurn(context);
+    store.write(context, 'plan body');
     const { manager, ui } = makeManager();
     const onApprove = vi.fn<(mode: 'auto' | 'build', clearContext: boolean) => void>();
     const tool = createExitPlanModeTool(manager, store, {
       getUsagePercent: () => usagePercent,
       onApprove,
+      getPlanContext: () => context,
     });
-    return { store, ui, onApprove, tool };
+    return { store, context, ui, onApprove, tool };
   }
 
   function settle(
@@ -264,6 +294,7 @@ describe('exit_plan_mode 工具', () => {
     const { definition } = createExitPlanModeTool(manager, store, {
       getUsagePercent: () => 0,
       onApprove: () => {},
+      getPlanContext: () => ({ sessionId: 'sess-1', turnId: 'turn-1' }),
     });
     expect(definition.name).toBe('exit_plan_mode');
   });
@@ -274,6 +305,7 @@ describe('exit_plan_mode 工具', () => {
     const { executor } = createExitPlanModeTool(manager, store, {
       getUsagePercent: () => 0,
       onApprove: () => {},
+      getPlanContext: () => ({ sessionId: 'sess-1', turnId: 'turn-1' }),
     });
     const result = await executor({});
     expect(result).toMatch(/Error/i);
@@ -328,7 +360,7 @@ describe('exit_plan_mode 工具', () => {
     { label: BUILD_KEEP, mode: 'build' as const, clearContext: false },
   ])('approves $label before resolving and maps it to $mode/$clearContext', async ({ label, mode, clearContext }) => {
     const events: string[] = [];
-    const { store, ui, onApprove, tool } = createReadyTool();
+    const { store, context, ui, onApprove, tool } = createReadyTool();
     onApprove.mockImplementation(() => { events.push('approved'); });
     const outcome: AskQuestionOutcome = {
       kind: 'submitted',
@@ -347,7 +379,7 @@ describe('exit_plan_mode 工具', () => {
     expect(onApprove).toHaveBeenCalledOnce();
     expect(onApprove).toHaveBeenCalledWith(mode, clearContext);
     expect(events).toEqual(['approved', 'resolved']);
-    expect(store.getCurrent()!.content).toContain('status: approved');
+    expect(store.recoverLatestForSession(context.sessionId)!.content).toContain('status: approved');
   });
 
   it.each([
@@ -367,13 +399,95 @@ describe('exit_plan_mode 工具', () => {
       expected: 'I need to clarify the plan.',
     },
   ])('leaves the plan pending for $name and returns standard serialization', async ({ outcome, expected }) => {
-    const { store, ui, onApprove, tool } = createReadyTool();
+    const { store, context, ui, onApprove, tool } = createReadyTool();
 
     const resultPromise = tool.executor({});
     settle(ui, outcome);
 
     await expect(resultPromise).resolves.toBe(expected);
     expect(onApprove).not.toHaveBeenCalled();
-    expect(store.getCurrent()!.content).toContain('status: pending');
+    expect(store.getActive(context)!.content).toContain('status: pending');
+  });
+});
+
+describe('current turn plan isolation', () => {
+  it('does not open approval for an old plan when the current turn has not written one', async () => {
+    const store = new PlanStore(join(tempDir, 'micode'));
+    const oldContext = { sessionId: 'old-session', turnId: 'old-turn' };
+    const currentContext = { sessionId: 'current-session', turnId: 'current-turn' };
+    store.beginTurn(oldContext);
+    store.write(oldContext, 'old plan that must stay private');
+    store.beginTurn(currentContext);
+    const ui = {
+      open: vi.fn<(id: string, request: AskQuestionRequest, done: AskQuestionOutcomeCallback) => void>(),
+      close: vi.fn<(id: string) => void>(),
+    };
+    const manager = new AskUserManager(ui);
+    const deps = {
+      getUsagePercent: () => 0,
+      onApprove: () => {},
+      getPlanContext: () => currentContext,
+    };
+    const { executor } = createExitPlanModeTool(manager, store, deps);
+    const execution = executor({});
+    const call = ui.open.mock.calls[0];
+    if (call) {
+      const [id, , done] = call;
+      done(id, { kind: 'cancelled' });
+    }
+
+    expect(ui.open).not.toHaveBeenCalled();
+    await expect(execution).resolves.toBe(
+      'Error: No plan was written in the current turn. Call write_plan_file first.',
+    );
+  });
+
+  it('exit_plan_mode presents only the pending plan written in its current turn', async () => {
+    const store = new PlanStore(join(tempDir, 'micode'));
+    const oldContext = { sessionId: 'session', turnId: 'old-turn' };
+    const currentContext = { sessionId: 'session', turnId: 'current-turn' };
+    store.beginTurn(oldContext);
+    store.write(oldContext, 'old plan');
+    store.beginTurn(currentContext);
+    store.write(currentContext, 'current plan');
+    const ui = {
+      open: vi.fn<(id: string, request: AskQuestionRequest, done: AskQuestionOutcomeCallback) => void>(),
+      close: vi.fn<(id: string) => void>(),
+    };
+    const tool = createExitPlanModeTool(new AskUserManager(ui), store, {
+      getUsagePercent: () => 0,
+      onApprove: () => {},
+      getPlanContext: () => currentContext,
+    });
+
+    const pending = tool.executor({});
+    expect(ui.open.mock.calls[0]![1].presentation?.content).toBe('current plan\n');
+    ui.open.mock.calls[0]![2](ui.open.mock.calls[0]![0], { kind: 'cancelled' });
+    await pending;
+  });
+
+  it('marks the captured plan after approval rotates the session context', async () => {
+    const store = new PlanStore(join(tempDir, 'micode'));
+    const writtenContext = { sessionId: 'session', turnId: 'turn' };
+    let context = writtenContext;
+    store.beginTurn(context);
+    store.write(context, 'plan to approve');
+    const ui = {
+      open: vi.fn<(id: string, request: AskQuestionRequest, done: AskQuestionOutcomeCallback) => void>(),
+      close: vi.fn<(id: string) => void>(),
+    };
+    const tool = createExitPlanModeTool(new AskUserManager(ui), store, {
+      getUsagePercent: () => 0,
+      getPlanContext: () => context,
+      onApprove: () => { context = { sessionId: 'rotated', turnId: 'next-turn' }; },
+    });
+
+    const pending = tool.executor({});
+    ui.open.mock.calls[0]![2](ui.open.mock.calls[0]![0], {
+      kind: 'submitted',
+      answers: { 'Claude 已拟定执行方案，是否继续？': '确认执行，使用自动模式' },
+    });
+    await pending;
+    expect(store.recoverLatestForSession(writtenContext.sessionId)!.content).toContain('status: approved');
   });
 });

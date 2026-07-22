@@ -5,7 +5,7 @@
 // - exit_plan_mode  = 把图纸递给业主，通过 AskUserManager 问卷等待审批结果
 
 import type { ToolDefinition, ToolExecutor } from '../types.js';
-import type { PlanStore } from '../../plan/plan-store.js';
+import type { PlanContext, PlanStore } from '../../plan/plan-store.js';
 import type { AskUserManager } from '../ask-user-manager.js';
 import type { AskQuestionRequest } from '../ask-user-types.js';
 import { serializeAskQuestionOutcome } from '../ask-user-serialization.js';
@@ -19,7 +19,7 @@ import { stripPlanFrontmatter } from '../../plan/plan-presentation.js';
  */
 export function createWritePlanTool(
   planStore: PlanStore,
-  getSessionId: () => string,
+  getPlanContext: () => PlanContext | null,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
   return {
     definition: {
@@ -46,8 +46,14 @@ export function createWritePlanTool(
       if (!content) {
         return 'Error: content is required';
       }
-      const filePath = planStore.write(getSessionId(), content);
-      return `Plan written to ${filePath}`;
+      const context = getPlanContext();
+      if (!context) return 'Error: No active plan context for the current turn.';
+      try {
+        const filePath = planStore.write(context, content);
+        return `Plan written to ${filePath}`;
+      } catch (error) {
+        return `Error: ${error instanceof Error ? error.message : String(error)}`;
+      }
     },
   };
 }
@@ -58,6 +64,7 @@ export function createWritePlanTool(
  */
 export function createReadPlanTool(
   planStore: PlanStore,
+  getPlanContext: () => PlanContext | null,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
   return {
     definition: {
@@ -70,7 +77,8 @@ export function createReadPlanTool(
       },
     },
     executor: async () => {
-      const plan = planStore.getCurrent();
+      const context = getPlanContext();
+      const plan = context ? planStore.getActive(context) : null;
       if (!plan) {
         return 'Error: no plan written yet. Call write_plan_file first.';
       }
@@ -82,6 +90,7 @@ export function createReadPlanTool(
 export interface ExitPlanModeDeps {
   getUsagePercent: () => number;
   onApprove: (mode: 'auto' | 'build', clearContext: boolean) => void;
+  getPlanContext: () => PlanContext | null;
 }
 
 const PLAN_APPROVAL_QUESTION = 'Claude 已拟定执行方案，是否继续？';
@@ -108,10 +117,12 @@ export function createExitPlanModeTool(
       },
     },
     executor: async (_input) => {
-      const plan = planStore.getCurrent();
+      const context = deps.getPlanContext();
+      const plan = context ? planStore.getActive(context) : null;
       if (!plan) {
-        return 'Error: no plan written. Call write_plan_file first.';
+        return 'Error: No plan was written in the current turn. Call write_plan_file first.';
       }
+      const approvalContext = context!;
 
       const request: AskQuestionRequest = {
         questions: [{
@@ -146,13 +157,13 @@ export function createExitPlanModeTool(
         const answer = outcome.answers[PLAN_APPROVAL_QUESTION];
         if (answer === AUTO_CLEAR_LABEL) {
           deps.onApprove('auto', true);
-          planStore.setStatus('approved');
+          planStore.setStatus(approvalContext, 'approved');
         } else if (answer === AUTO_KEEP_LABEL) {
           deps.onApprove('auto', false);
-          planStore.setStatus('approved');
+          planStore.setStatus(approvalContext, 'approved');
         } else if (answer === BUILD_KEEP_LABEL) {
           deps.onApprove('build', false);
-          planStore.setStatus('approved');
+          planStore.setStatus(approvalContext, 'approved');
         }
       }
 
