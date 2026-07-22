@@ -1,7 +1,7 @@
 # 临时 Thinking 与子代理完成摘要设计
 
 **日期：** 2026-07-23
-**状态：** 待用户复核
+**状态：** 已纳入第一轮设计审查，待最终复核
 **范围：** TUI 消息生命周期与展示格式；不改变模型调用、工具执行或子代理结果语义
 
 ## 背景
@@ -93,7 +93,7 @@ thinking-progress 的不变量：
 idle
   │ thinking_start
   ▼
-announced
+awaitingContent
   │ first non-empty thinking_delta
   ▼
 visible
@@ -107,22 +107,26 @@ idle
 
 ### 空 thinking block
 
-为保证 UI 诚实，`thinking_start` 只初始化 pipeline 状态，不立即显示。收到首个非空 `thinking_delta` 后才创建 thinking-progress。
+为保证 UI 诚实，`thinking_start` 只初始化 pipeline 状态，不立即显示。内部状态名为 `awaitingContent`，表示已收到 start、尚未观察到实际内容；收到首个 `content.trim().length > 0` 的 `thinking_delta` 后才创建 thinking-progress 并进入 `visible`。
 
-如果 `thinking_end` 到来前没有非空 delta：
+如果 `thinking_end` 到来前始终没有非空 delta：
 
 - 不显示临时 `Thinking…`。
 - 不生成误导性的 Thought 摘要。
 - 清空内部状态并回到 idle。
 
+是否生成摘要以“是否曾进入 `visible`、即是否创建过 thinking-progress”为唯一判据，而不是在结束时重新检查 buffer。只要用户实际看见过闪烁的 `Thinking…`，结束时就必须生成对应摘要；纯空白 block 从未进入 visible，因此不生成。
+
 ### 正常完成
 
-1. `thinking_start` 记录开始时间并进入 announced。
+1. `thinking_start` 记录开始时间并进入 `awaitingContent`。
 2. 首个非空 delta 创建 thinking-progress；后续 delta 只追加到 `thinkingBuffer`。
-3. `thinking_end` 删除 thinking-progress。
-4. 将完整 buffer 注册为 expandable block。
+3. `thinking_end` 先从 buffer 构造完整内容并注册 expandable block。
+4. 删除 thinking-progress。
 5. 追加永久 Thought 摘要。
 6. 清空 buffer 和活动状态。
+
+操作顺序必须是 `registerExpandable → eraseThinkingProgress → appendSummary → clearBuffer`。即使 UI 删除或摘要追加失败，完整 thinking 内容也不能因为提前清空 buffer 而丢失。
 
 ### 异常和中止
 
@@ -135,6 +139,14 @@ idle
 - 新 turn 开始时发现旧状态残留。
 
 如果已经收到非空 delta，可以生成带已耗时的 Thought 摘要；如果没有实际 delta，只删除状态。不得留下 pending thinking 行。
+
+thinking duration 始终按实际 `thinking_start → thinking_end/cleanup` 时间如实显示，不设五分钟等人为上限；长时间网络停顿属于真实观测时间。只需防御负数、`NaN` 和时钟倒退。
+
+### 与 tool_call 的事件顺序
+
+当前 Anthropic 适配器按 SSE 顺序逐个 yield：thinking 的 `content_block_stop` 先进入 `index.ts` 并触发 `thinking_end`；tool_use 只有在自己的 block stop 生成 AssistantMessage 后，`streamingQuery` 才发出 `tool_call`。因此正常路径不会出现 tool-progress 先于 thinking_end。
+
+第三方兼容流或未来 adapter 仍可能乱序。防御规则是：收到任何 `tool_call` 时，如果 thinking 仍处于 `awaitingContent` 或 `visible`，先通过统一入口完成/清理 thinking，再创建 pending tool。一次状态提交中必须保持这个逻辑顺序，不允许留下同时可见的 thinking-progress 和由同一模型阶段产生的 tool-progress。
 
 ## PendingThinkingMessage
 
@@ -231,7 +243,13 @@ unverified → Agent "…" unverified · 16s
 error      → Agent "…" failed · 16s
 ```
 
-名称优先取明确的 description；当前 `spawn_agent` 没有 description 参数，因此第一版从 `prompt` 提取首个非空行并按终端列宽截断。不得让模型生成额外标题。
+为避免从长 prompt 猜测标题，给 `spawn_agent` 增加可选 `description` 展示字段，不改变既有必填参数或执行语义。名称提取顺序：
+
+1. 非空 `description`。
+2. `prompt` 的首个非空、非纯标点、且不是 JSON 容器开头的行；有效性使用 Unicode 字母/数字判断，不使用 ASCII-only 正则。
+3. 兜底名称 `Agent`。
+
+最终名称使用终端列宽截断函数处理，不能按 UTF-8 字节或 JavaScript code unit 生硬切片；中文、emoji 和组合字符不得被截成损坏文本。不得让模型额外生成标题。
 
 完整 `SubagentResult` 保持原样：
 
@@ -254,6 +272,8 @@ error      → Agent "…" failed · 16s
 
 这是现有架构限制；实现完整 Claude Code transcript 切换属于独立功能。
 
+当一个 turn 留下多个 Thought 摘要时，较早摘要仍保留，但 `Ctrl+O` 只能打开最近注册的 expandable block。此限制必须写入用户文档和回归测试。当前不添加 `(1/2)` 编号：编号会暗示用户可以选择第一个块，而现有交互并不支持该能力。
+
 ## 错误处理与防御边界
 
 - 重复 `thinking_start`：保持单例，不创建第二条 pending。
@@ -261,9 +281,11 @@ error      → Agent "…" failed · 16s
 - 重复 `thinking_end`：第二次为空操作，不追加第二条摘要。
 - 清理目标不在消息列表：幂等返回，不删除相邻 assistant/tool 消息。
 - pending thinking 与 pending tool 同时存在：按独立 kind 定位，禁止使用“删除最后一条未固化消息”的宽泛逻辑。
-- 子代理结果解析失败：保留通用工具结果展示，不能伪造 completed。
+- 子代理结果解析失败：完全降级到当前通用 `tool_result` finalized 格式，即原始输出前四行加现有截断提示；不应用 Agent 专用模板，不能伪造 completed。
 - 缺少 duration：使用安全兜底，不显示 `NaN` 或负数。
 - 窄终端和中文双宽 prompt：摘要必须单行截断，不能改变 footer 坐标。
+
+当 thinking 与多个并行 pending agent 同时存在时，活动区按真实行数增长。在高度很小的终端中可能占用大部分可视区；本次不增加隐藏、分页或折叠活跃任务的策略，以免用户失去正在运行任务的可见性。这是已知 UX 限制，不是行数计算错误。
 
 ## 测试策略
 
@@ -272,6 +294,7 @@ error      → Agent "…" failed · 16s
 - 600ms glyph 周期。
 - `Thought` 时间和文件数格式。
 - 子代理状态解析与标题提取。
+- description 优先级、空首行、纯标点、JSON prompt 和 `Agent` 兜底。
 - 中文双宽文本截断。
 
 ### Store 单元测试
@@ -279,6 +302,7 @@ error      → Agent "…" failed · 16s
 - 首个非空 delta 后只有一个 thinking-progress。
 - 删除 thinking 只按 kind/ID 定位，不误删 pending tool。
 - 重复 start/end 幂等。
+- buffer 只有空白字符时保持 awaitingContent，不创建摘要。
 - abort/error/loop-end 后没有 pending thinking。
 - 子代理完成时同一 toolUseId 原位转换为 finalized 摘要。
 
@@ -286,8 +310,11 @@ error      → Agent "…" failed · 16s
 
 - `thinking_start → delta → end`：临时行消失，永久摘要出现一次。
 - 空 thinking block：无临时行、无摘要。
+- 正常 provider 顺序下 thinking_end 先于 tool_call；模拟乱序 tool_call 时先清理/完成 thinking，再创建工具行，中间状态无双 pending。
 - `thinking → spawn_agent → thinking → final`：两个 Thought 摘要、一个子代理完成摘要，无残留 Thinking。
 - 完整 thinking 和子代理内容仍进入 expandable store。
+- 多个 thinking block 后 `Ctrl+O` 只指向最后一个，较早摘要仍可见；验证这是已记录限制。
+- 畸形 SubagentResult 降级为现有通用四行预览，不生成 Agent finished。
 - 完整子代理结果仍交付主 Agent。
 
 ### Ink 渲染测试
@@ -295,7 +322,7 @@ error      → Agent "…" failed · 16s
 - Thinking glyph 闪烁时正文列和总行数不变。
 - pending thinking、四个 pending agents 和 footer 同时存在时布局稳定。
 - thinking 完成帧不存在临时与永久两份内容。
-- 中文和窄终端不换行、不闪烁、不留下空白区域。
+- 中文和窄终端（包括 `cols < 30`）不换行、不闪烁、不留下空白区域。
 
 ### Provider 回归测试
 
