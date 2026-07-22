@@ -361,10 +361,7 @@ export async function* streamingQuery(
           continue;
         }
         try {
-          // AUTO-0025:传统串行执行路径也透传 context(含 toolUseId),与流式路径行为一致。
-          const output = await registry.execute(block.name, block.input, {
-            toolUseId: block.id,
-          });
+          const output = await registry.execute(block.name, block.input);
           const result: ToolResultBlock = {
             type: 'tool_result',
             tool_use_id: block.id,

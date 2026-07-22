@@ -34,16 +34,6 @@ export interface TuiMessage {
   /** 仅 assistant 流式：当前累积全文（StreamingMarkdown 据此增量渲染）。
    *  非 assistant 或已固化时为 undefined。 */
   streamingText?: string;
-  /**
-   * AUTO-0025 Task 3：pending tool 消息的原始 call 行快照。
-   *
-   * 物理本质:appendPendingTool 时记下"● spawn_agent(...)" 这几行原貌,
-   * 之后子代理进度到来时用「原 call 行 + 当前进度快照」重建 lines,
-   * 避免每次更新都把原 call 行重新追加一遍导致行数爆炸。
-   * resolvePendingTool 时此字段被清掉(最终结果自带完整 call+result)。
-   * 仅 kind='tool-progress' 的 pending 消息使用。
-   */
-  originalCallLines?: FormattedLine[];
 }
 
 /** Ink <Text> 的样式 props（从语义 token 映射） */

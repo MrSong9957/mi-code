@@ -251,47 +251,33 @@ describe('subagent final summary turn (AUTO-0025 Task 4)', () => {
 });
 
 // ════════════════════════════════════════════════════════════════════
-// AUTO-0025 Task 2 Step 3: 子代理内部工具进度通过 onProgress 携带 parentToolUseId 转发
+// AUTO-0025-stable Task 3:子代理内部工具活动对结果统计可见,但不进入主消息正文。
 //
-// 物理本质:子代理在干活(读文件、跑 bash)时,这些活动应该实时浮上来,
-// 让父 pending 消息看到"● spawn_agent → 子代理正在 read_file"。
-// 转发必须携带 parentToolUseId,父 UI 才能正确把进度挂到对应那一次 spawn 调用。
+// 物理本质:子代理跑了 N 个工具(read_file/run_bash),这些活动保留在
+// SubagentResult.evidence 里(让主 agent 知道子代理干了多少活),
+// 但不再通过进度桥接写到父 pending 消息的 lines(那会导致活动区行数抖动、闪烁)。
+// 父消息始终只有一行 ● spawn_agent(...),由稳定指示器渲染。
 // ════════════════════════════════════════════════════════════════════
 
-describe('subagent child progress forwarding (AUTO-0025 Task 2)', () => {
-  it('onProgress 收到 tool_call/tool_result 且都携带 parentToolUseId', async () => {
+describe('subagent hidden child progress (AUTO-0025-stable Task 3)', () => {
+  it('子代理跑 3 个工具,evidence 计数=3,但无 UI 进度回调泄露', async () => {
+    // 3 轮工具 + 1 轮总结(maxSteps=4, final turn 是第 4 轮)
     const client = new ScriptedStreamClient([
-      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } }],
-      [{ type: 'text', text: 'Verified skills: code-review, git-workflow' }],
+      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'a' } }],
+      [{ type: 'tool_use', id: 'read-2', name: 'read_file', input: { path: 'b' } }],
+      [{ type: 'tool_use', id: 'read-3', name: 'read_file', input: { path: 'c' } }],
+      [{ type: 'text', text: 'Verified 3 files' }],
     ]);
 
-    const events: Array<{ kind: string; parentToolUseId?: string; name?: string }> = [];
-    const result = await runSubagent('list skills', makeReadRegistry(), {
-      role: 'explore',
-      client,
-      maxSteps: 5,
-      parentToolUseId: 'spawn-1',
-      onProgress: (event) => { events.push(event); },
+    const result = await runSubagent('inspect 3 files', makeReadRegistry(), {
+      role: 'explore', client, maxSteps: 4,
     });
 
+    // evidence 仍正确计数内部工具活动(3 个成功的 read_file)
+    expect(result.evidence.toolCallCount).toBe(3);
+    expect(result.evidence.successfulToolResultCount).toBe(3);
+    // 最终总结基于工具结果
     expect(result.status).toBe('completed');
-    expect(events.map(event => event.kind)).toEqual(['tool_call', 'tool_result']);
-    expect(events[0]).toMatchObject({ parentToolUseId: 'spawn-1', name: 'read_file' });
-    expect(events[1]).toMatchObject({ parentToolUseId: 'spawn-1', name: 'read_file' });
-  });
-
-  it('不传 onProgress 时不影响子代理正常执行', async () => {
-    const client = new ScriptedStreamClient([
-      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } }],
-      [{ type: 'text', text: 'verified' }],
-    ]);
-
-    const result = await runSubagent('list skills', makeReadRegistry(), {
-      role: 'explore', client, maxSteps: 5,
-      parentToolUseId: 'spawn-2',
-    });
-
-    expect(result.status).toBe('completed');
-    expect(result.text).toBe('verified');
+    expect(result.text).toBe('Verified 3 files');
   });
 });

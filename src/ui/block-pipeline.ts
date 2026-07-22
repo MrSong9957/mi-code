@@ -43,11 +43,6 @@ export interface PipelineRenderer {
   startToolCall?(toolUseId: string, lines: FormattedLine[]): void;
   finishToolCall?(toolUseId: string, lines: FormattedLine[]): boolean;
   appendToolHook?(toolUseId: string, lines: FormattedLine[]): boolean;
-  /**
-   * AUTO-0025 Task 3:按 parentToolUseId 原地更新 pending 工具消息的瞬态进度行。
-   * 返回是否找到了匹配的 pending 消息(用于诊断)。
-   */
-  updateToolProgress?(parentToolUseId: string, progressLines: FormattedLine[]): boolean;
   flushNow(): void;
   clearMessages(): void;
 }
@@ -125,15 +120,6 @@ export class BlockPipeline {
   private expandable = new ExpandableBlockStore();
   /** 块 id 计数器（生成唯一 id） */
   private idCounter = 0;
-  /**
-   * AUTO-0025 Task 3:每个父 spawn 的子工具进度状态。
-   *
-   * 物理本质:每个并行 spawn_agent 一格抽屉,抽屉里按 childToolUseId 存
-   * "当前这一条子工具在哪个阶段(running/done)"。flush 时按 childToolUseId 顺序
-   * 拼成完整的进度行列表,推给 updateToolProgress 重建父消息。
-   * 同一 childToolUseId 的 done 替换 running,避免同一工具既显示 running 又显示 done。
-   */
-  private subagentProgress = new Map<string, Map<string, FormattedLine>>();
 
   constructor(renderer: PipelineRenderer) {
     this.renderer = renderer;
@@ -291,28 +277,6 @@ export class BlockPipeline {
         break;
       }
 
-      case 'subagent_tool_progress': {
-        // AUTO-0025 Task 3:子代理内部工具进度路由到对应父 pending 消息。
-        //
-        // 物理本质:子代理在工地上的每个动作(read_file / run_bash)实时回传到
-        // 项目经理办公室的对应那张派工单(parentToolUseId)。不创建新的顶级消息。
-        // 同一 childToolUseId 的 done 覆盖 running,避免堆积。
-        if (!this.renderer.updateToolProgress) break;
-        const parent = block.parentToolUseId;
-        let bucket = this.subagentProgress.get(parent);
-        if (!bucket) {
-          bucket = new Map<string, FormattedLine>();
-          this.subagentProgress.set(parent, bucket);
-        }
-        // 格式化这一条子工具的进度行(running / done 两种文案)
-        const line = formatSubagentProgressLine(block.name, block.phase, block.output);
-        bucket.set(block.childToolUseId, line);
-        // 按插入顺序(子工具触发的时序)拼成进度行列表,推给 renderer 重建父消息
-        const progressLines = Array.from(bucket.values());
-        this.renderer.updateToolProgress(parent, progressLines);
-        break;
-      }
-
       default: {
         const _exhaustive: never = block;
         void _exhaustive;
@@ -444,7 +408,6 @@ export class BlockPipeline {
     this.thinkingActive = false;
     this.thinkingBuffer = '';
     this.lastFinishedToolUseId = undefined;
-    this.subagentProgress.clear();
     this.expandable.clear();
     this.renderer.clearMessages();
   }
@@ -459,50 +422,7 @@ export class BlockPipeline {
     this.flushAllPending();
     this.thinkingBuffer = '';
     this.lastFinishedToolUseId = undefined;
-    this.subagentProgress.clear();
     this.expandable.clear();
     // hasContent 保持 true（屏幕上仍有历史内容，新块前要加空行）
   }
-}
-
-/**
- * AUTO-0025 Task 3:格式化子代理工具进度行。
- *
- * running:  ⎿ <name> running      (灰色 dim,缩进 nested)
- * done:     ⎿ <name>: <output>    (灰色 dim,缩进 nested)
- *
- * 物理本质:子代理工地上每个动作的进度回执单格式。用 dim + 缩进表达
- * "这是父 spawn 调用内部的嵌套活动,不是顶级工具调用"。
- */
-function formatSubagentProgressLine(
-  name: string,
-  phase: 'running' | 'done',
-  output?: string,
-): FormattedLine {
-  if (phase === 'done') {
-    const summary = output && output.length > 0 ? summarizeSingleLine(output) : '(no output)';
-    return {
-      content: `⎿ ${name}: ${summary}`,
-      style: BLOCK_STYLES.dim,
-      indent: INDENT.nested,
-      raw: true,
-    };
-  }
-  return {
-    content: `⎿ ${name} running`,
-    style: BLOCK_STYLES.dim,
-    indent: INDENT.nested,
-    raw: true,
-  };
-}
-
-/**
- * 把多行输出压缩成单行摘要(取首行 + 截断标记)。
- * 子代理进度行只展示"这个工具产出了什么"的概要,完整结果不在这层铺开。
- */
-function summarizeSingleLine(output: string): string {
-  const firstLine = output.split('\n')[0] ?? '';
-  const MAX = 60;
-  if (firstLine.length <= MAX) return firstLine;
-  return firstLine.slice(0, MAX) + '…';
 }
