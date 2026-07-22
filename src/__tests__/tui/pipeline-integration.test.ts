@@ -10,6 +10,64 @@ import { BlockPipeline } from '../../ui/block-pipeline.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { PipelineToStoreAdapter } from '../../tui/state/pipeline-adapter.js';
 
+describe('tool lifecycle visibility', () => {
+  it('\u8c03\u7528\u4e8b\u4ef6\u5355\u72ec\u5230\u8fbe\u65f6\u7acb\u5373\u663e\u793a pending tool', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: { task: 'inspect' }, toolUseId: 't1' });
+
+    expect(store.getState().messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'tool-progress',
+        toolUseId: 't1',
+        finalized: false,
+        lines: expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining('spawn_agent') })]),
+      }),
+    ]));
+  });
+
+  it('\u4e24\u4e2a pending tool \u7ed3\u679c\u5012\u5e8f\u5230\u8fbe\u4ecd\u4fdd\u6301\u8c03\u7528\u987a\u5e8f', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'one.ts' }, toolUseId: 't1' });
+    pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'two.ts' }, toolUseId: 't2' });
+    pipeline.emit({ kind: 'tool_result', name: 'read_file', output: 'two-result', toolUseId: 't2' });
+    pipeline.emit({ kind: 'tool_result', name: 'read_file', output: 'one-result', toolUseId: 't1' });
+
+    const tools = store.getState().messages.filter(message => message.kind === 'tool-progress');
+    expect(tools.map(message => message.toolUseId)).toEqual(['t1', 't2']);
+    expect(tools).toHaveLength(2);
+    expect(tools.every(message => message.finalized)).toBe(true);
+  });
+
+  it('clearTurnState \u4f1a\u5b8c\u6210\u672a\u8fd4\u56de\u7684 pending tool', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'orphan.ts' }, toolUseId: 't1' });
+    pipeline.clearTurnState();
+
+    expect(store.getState().messages.find(message => message.toolUseId === 't1')).toMatchObject({ finalized: true });
+  });
+
+  it('hook \u9644\u7740\u5230\u5bf9\u5e94\u7684\u7ed3\u679c\uff0c\u4e0d\u4e71\u5e8f\u53e6\u4e00\u4e2a pending tool', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'one.ts' }, toolUseId: 't1' });
+    pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'two.ts' }, toolUseId: 't2' });
+    pipeline.emit({ kind: 'tool_result', name: 'read_file', output: 'one-result', toolUseId: 't1' });
+    pipeline.emit({ kind: 'hook', text: '[Hook] one complete' });
+
+    const tools = store.getState().messages.filter(message => message.kind === 'tool-progress');
+    expect(tools.map(message => message.toolUseId)).toEqual(['t1', 't2']);
+    expect(tools[0]!.lines.some(line => line.content.includes('[Hook] one complete'))).toBe(true);
+    expect(tools[1]!.lines.some(line => line.content.includes('[Hook] one complete'))).toBe(false);
+  });
+
+  it('\u663e\u5f0f\u672a\u77e5 toolUseId \u4e0d\u56de\u9000 FIFO \u5b8c\u6210\u5176\u4ed6 pending tool', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'one.ts' }, toolUseId: 't1' });
+    pipeline.emit({ kind: 'tool_result', name: 'read_file', output: 'wrong-result', toolUseId: 'missing' });
+
+    expect(store.getState().messages.find(message => message.toolUseId === 't1')).toMatchObject({ finalized: false });
+  });
+});
+
 function setup(): { pipeline: BlockPipeline; store: ReturnType<typeof createMessagesStore> } {
   const store = createMessagesStore();
   const adapter = new PipelineToStoreAdapter(store);

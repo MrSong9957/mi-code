@@ -115,6 +115,18 @@ export class PipelineToStoreAdapter implements PipelineRenderer {
     // 保留方法以满足 PipelineRenderer 接口契约。
   }
 
+  startToolCall(toolUseId: string, lines: FormattedLine[]): void {
+    this.store.getState().appendPendingTool(toolUseId, lines);
+  }
+
+  finishToolCall(toolUseId: string, lines: FormattedLine[]): boolean {
+    return this.store.getState().resolvePendingTool(toolUseId, lines);
+  }
+
+  appendToolHook(toolUseId: string, lines: FormattedLine[]): boolean {
+    return this.store.getState().appendToolHook(toolUseId, lines);
+  }
+
   appendStreamingThinking(text: string): void {
     // 流式 thinking：首次 startStreamingThinking，后续 updateStreamingThinking
     const msgs = this.store.getState().messages;

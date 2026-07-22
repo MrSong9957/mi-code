@@ -6,7 +6,7 @@ import { BlockPipeline } from '../../ui/block-pipeline.js';
 
 /** mock 的 Renderer：记录所有 printMessage / appendStreamingMarkdown 调用 */
 function mockRenderer() {
-  const prints: { text: string; role?: string; style?: Record<string, unknown> }[] = [];
+  const prints: { text: string; role?: string; style?: Record<string, unknown>; toolUseId?: string }[] = [];
   const streamMarks: { text: string; isFinal: boolean }[] = [];
   const renderer = {
     printMessage: vi.fn((text: string, role?: string, style?: Record<string, unknown>) => {
@@ -18,6 +18,23 @@ function mockRenderer() {
     appendStreamingThinking: vi.fn(),
     eraseStreamingThinking: vi.fn(),
     sealStreaming: vi.fn(),
+    startToolCall: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[]) => {
+      for (const line of lines) prints.push({ text: line.content, role: 'tool', style: line.style, toolUseId });
+    }),
+    finishToolCall: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[]) => {
+      const index = prints.map(print => print.toolUseId).lastIndexOf(toolUseId);
+      prints.splice(index + 1, 0, ...lines.slice(1).map(line => ({
+        text: line.content, role: 'tool', style: line.style, toolUseId,
+      })));
+      return true;
+    }),
+    appendToolHook: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[]) => {
+      const index = prints.map(print => print.toolUseId).lastIndexOf(toolUseId);
+      prints.splice(index + 1, 0, ...lines.map(line => ({
+        text: line.content, role: 'tool', style: line.style, toolUseId,
+      })));
+      return true;
+    }),
     finalizeStreaming: vi.fn(),
     appendStreaming: vi.fn(),
     flushNow: vi.fn(),

@@ -43,6 +43,12 @@ export interface MessagesState {
   appendLine: (role: MessageRole, line: FormattedLine) => void;
   /** 追加一条独立的固化完成时长消息 */
   appendTurnDurationMessage: (durationMs: number) => void;
+  /** \u8ffd\u52a0\u53ef\u89c1\u7684\u5f85\u5b8c\u6210\u5de5\u5177\u6d88\u606f\uff0c\u8fd4\u56de\u5176 uuid */
+  appendPendingTool: (toolUseId: string, lines: FormattedLine[]) => string;
+  /** \u53ea\u5b8c\u6210\u5339\u914d\u7684 pending \u5de5\u5177\u6d88\u606f */
+  resolvePendingTool: (toolUseId: string, lines: FormattedLine[]) => boolean;
+  /** \u5c06 hook \u9644\u5230\u5df2\u5b8c\u6210\u7684\u5de5\u5177\u6d88\u606f */
+  appendToolHook: (toolUseId: string, lines: FormattedLine[]) => boolean;
   /** 开一条流式 assistant（finalized=false, streamingText=initialText） */
   startStreaming: (initialText: string) => void;
   /** 开一条流式 thinking（role='thinking', 灰色 dim） */
@@ -110,6 +116,58 @@ export function createMessagesStore(): MessagesStore {
       });
       return { _idCounter: id, messages: [...s.messages, message] };
     }),
+
+    appendPendingTool: (toolUseId, lines) => {
+      let uuid = '';
+      set((s) => {
+        const id = s._idCounter + 1;
+        uuid = `msg-${id}`;
+        return {
+          _idCounter: id,
+          messages: [...s.messages, {
+            uuid,
+            role: 'tool',
+            kind: 'tool-progress',
+            toolUseId,
+            lines,
+            finalized: false,
+          }],
+        };
+      });
+      return uuid;
+    },
+
+    resolvePendingTool: (toolUseId, lines) => {
+      let resolved = false;
+      set((s) => {
+        const index = s.messages.findIndex(message =>
+          message.kind === 'tool-progress'
+          && message.toolUseId === toolUseId
+          && !message.finalized,
+        );
+        if (index < 0) return s;
+        resolved = true;
+        const message = s.messages[index]!;
+        const updated: TuiMessage = { ...message, lines, finalized: true };
+        return { messages: [...s.messages.slice(0, index), updated, ...s.messages.slice(index + 1)] };
+      });
+      return resolved;
+    },
+
+    appendToolHook: (toolUseId, lines) => {
+      let appended = false;
+      set((s) => {
+        const index = s.messages.findIndex(message =>
+          message.kind === 'tool-progress' && message.toolUseId === toolUseId,
+        );
+        if (index < 0) return s;
+        appended = true;
+        const message = s.messages[index]!;
+        const updated: TuiMessage = { ...message, lines: [...message.lines, ...lines] };
+        return { messages: [...s.messages.slice(0, index), updated, ...s.messages.slice(index + 1)] };
+      });
+      return appended;
+    },
 
     startStreaming: (initialText) => set((s) => {
       const id = s._idCounter + 1;

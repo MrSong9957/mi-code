@@ -40,6 +40,9 @@ export interface PipelineRenderer {
   eraseStreamingThinking(): void;
   /** 封口流式（插分隔符，不强制 flushNow）——比 finalizeStreaming 温和 */
   sealStreaming(): void;
+  startToolCall?(toolUseId: string, lines: FormattedLine[]): void;
+  finishToolCall?(toolUseId: string, lines: FormattedLine[]): boolean;
+  appendToolHook?(toolUseId: string, lines: FormattedLine[]): boolean;
   flushNow(): void;
   clearMessages(): void;
 }
@@ -110,6 +113,7 @@ export class BlockPipeline {
    * 缓冲吸收这个时序，等配对再 flush，保证 call→result→call→result 交替。
    */
   private toolBuffer: BufferedTool[] = [];
+  private lastFinishedToolUseId: string | undefined;
   /** thinking 文本只在内存中累积，供 ctrl+o 展开；不写入默认可见消息区。 */
   private thinkingBuffer = '';
   /** 可折叠块存储（thinking + tool_result 的 summary/full）——ctrl+o 临时 alt screen 覆盖层渲染用 */
@@ -195,6 +199,8 @@ export class BlockPipeline {
           toolName: block.name,
           toolInput: block.input,
         });
+        this.openModelBlock();
+        this.renderer.startToolCall?.(toolUseId, callLines);
         this.toolBuffer.push({
           toolUseId,
           name: block.name,
@@ -212,8 +218,7 @@ export class BlockPipeline {
         let idx = -1;
         if (block.toolUseId) {
           idx = this.toolBuffer.findIndex(t => t.toolUseId === block.toolUseId);
-        }
-        if (idx < 0) {
+        } else {
           // FIFO：第一个还没 result 的项
           idx = this.toolBuffer.findIndex(t => t.resultLines === undefined);
         }
@@ -253,7 +258,7 @@ export class BlockPipeline {
         }
 
         // 配对完成 → 立即 flush 该项
-        this.flushTool(idx);
+        this.finishTool(idx);
         break;
       }
 
@@ -265,7 +270,9 @@ export class BlockPipeline {
         // 屏幕底部就是它的 result 行——hook 立即 print 自然紧跟其后。
         // 不另加块间空行（result→hook 是同一工具的附属，视觉上紧贴）。
         const hookLines = [{ content: block.text, style: BLOCK_STYLES.dim, indent: INDENT.nested }];
-        this.print(hookLines, 'tool');
+        if (!this.lastFinishedToolUseId || !this.renderer.appendToolHook?.(this.lastFinishedToolUseId, hookLines)) {
+          this.print(hookLines, 'tool');
+        }
         break;
       }
 
@@ -334,9 +341,24 @@ export class BlockPipeline {
    * 物理：从货架上取下这个配对完成的包裹，按"call→result→hook"顺序摆上交付台。
    * 落屏后从缓冲区移除（已交付）。
    */
-  private flushTool(idx: number): void {
+  private finishTool(idx: number): void {
     const item = this.toolBuffer[idx];
     if (!item) return;
+    if (this.renderer.finishToolCall) {
+      const lines = item.resultLines ? [...item.callLines, ...item.resultLines] : item.callLines;
+      this.renderer.finishToolCall(item.toolUseId, lines);
+      if (item.resultLines && item.hasExpandable && item.expandableId && item.expandableFullLines) {
+        this.expandable.add({
+          id: item.expandableId,
+          kind: 'tool_result',
+          summaryLines: item.resultLines,
+          fullLines: item.expandableFullLines,
+        });
+      }
+      this.lastFinishedToolUseId = item.toolUseId;
+      this.toolBuffer.splice(idx, 1);
+      return;
+    }
     // 块间空行：首个工具前由 openModelBlock 处理（与 thinking/assistant_text 之间也加空行）
     this.openModelBlock();
     // call 行（● Read(...)）
@@ -366,7 +388,7 @@ export class BlockPipeline {
   private flushAllPending(): void {
     // 按 call 到达顺序（缓冲区顺序）逐个 flush；没 result 的项只渲染 call 行
     while (this.toolBuffer.length > 0) {
-      this.flushTool(0);
+      this.finishTool(0);
     }
   }
 
@@ -383,6 +405,7 @@ export class BlockPipeline {
     this.assistantGapApplied = false;
     this.thinkingActive = false;
     this.thinkingBuffer = '';
+    this.lastFinishedToolUseId = undefined;
     this.expandable.clear();
     this.renderer.clearMessages();
   }
@@ -396,6 +419,7 @@ export class BlockPipeline {
     // flush 未交付的工具块（防丢失）
     this.flushAllPending();
     this.thinkingBuffer = '';
+    this.lastFinishedToolUseId = undefined;
     this.expandable.clear();
     // hasContent 保持 true（屏幕上仍有历史内容，新块前要加空行）
   }
