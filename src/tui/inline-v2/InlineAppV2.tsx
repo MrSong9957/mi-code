@@ -164,9 +164,12 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
   // AUTO-0025-transient:thinking 临时行固定占一物理行(0 或 1)。
   const thinkingRowCount = pendingThinking ? 1 : 0;
 
+  // 有 pending 活动时,pending 区与 spinner 间留一空行分隔(视觉间距)。
+  const pendingGapRowCount = (pendingThinking || pendingToolsRowCount > 0) ? 1 : 0;
+
   // inputRowY(活动区内坐标,<Static> 不占活动区):
-  //   流式文本 + thinking 行 + pending 工具行 + spinner 行 + 上边框 1 行
-  const inputRowY = streamingRowCount + thinkingRowCount + pendingToolsRowCount + spinnerRowCount + 1;
+  //   流式文本 + thinking 行 + pending 工具行 + pending/spinner 间距 + spinner 行 + 上边框 1 行
+  const inputRowY = streamingRowCount + thinkingRowCount + pendingToolsRowCount + pendingGapRowCount + spinnerRowCount + 1;
 
   // <Static> items:logo 作为首项(只写一次进 scrollback)+ 已固化消息。
   // 用 discriminator 字段区分 logo item 和 message item。
@@ -229,6 +232,13 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
             spinnerStore={stores.spinnerStore}
           />
         ))}
+        {/* 有 pending 活动(thinking 或工具)时,与 spinner 留一行空行分隔,
+            避免 spawn_agent 紧贴 spinner 动画行。 */}
+        {(pendingThinking || pendingTools.length > 0) && (
+          <Box height={1}>
+            <Text>{' '}</Text>
+          </Box>
+        )}
         {askQuestionVisible ? (
           askPresentationKind === 'plan-approval' ? (
             <ExitPlanModeOverlayV2 store={stores.askQuestionStore} cols={cols} />
