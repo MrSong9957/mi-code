@@ -7,11 +7,14 @@
 // 关键：后台启动（不 await）。WORK/IDLE 循环默认最长 60s，若 executor 直接 await，
 // 会冻结整个 streamingQuery 主循环（用户按键、流式渲染全部卡死）。
 // 所以 executor 立刻返回回执，长工在后台自己跑。
-import type { ToolDefinition, ToolExecutor } from '../types.js';
+import type { ToolDefinition, ToolExecutor, StreamingLLMClient } from '../types.js';
 import type { ToolRegistry } from '../tool-registry.js';
 import type { TodoManager } from '../todo.js';
 import type { InboxManager } from '../inbox.js';
 import { runSelfOrganizingSubagent, type SelfOrganizingOptions } from '../self-organizing.js';
+
+/** 创建自组织子代理 LLM client 的工厂（多 provider 支持） */
+export type SubagentClientProvider = () => StreamingLLMClient;
 
 /** 自组织子代理执行器类型（用于依赖注入，便于测试） */
 type SelfOrganizingRunner = (
@@ -27,6 +30,10 @@ type SelfOrganizingRunner = (
 export interface SpawnSelfOrganizingToolOptions extends SelfOrganizingOptions {
   /** 依赖注入：测试时传入 mock，生产路径留空走真实 runSelfOrganizingSubagent */
   runFn?: SelfOrganizingRunner;
+  /** 创建子代理 LLM client 的工厂（多 provider 支持） */
+  clientProvider?: SubagentClientProvider;
+  /** 权限检查器（透传给子代理） */
+  permissionChecker?: import('../../permission/checker.js').PermissionChecker;
 }
 
 export function createSpawnSelfOrganizingTool(
@@ -35,7 +42,7 @@ export function createSpawnSelfOrganizingTool(
   inboxManager: InboxManager,
   options: SpawnSelfOrganizingToolOptions = {},
 ): { definition: ToolDefinition; executor: ToolExecutor } {
-  const { runFn = runSelfOrganizingSubagent, ...selfOrgOptions } = options;
+  const { runFn = runSelfOrganizingSubagent, clientProvider, permissionChecker, ...selfOrgOptions } = options;
 
   return {
     definition: {
@@ -82,6 +89,8 @@ export function createSpawnSelfOrganizingTool(
       // 错误必须本地捕获，否则变成 unhandledRejection 让进程不稳。
       runFn(name, role, identityWithTask, childTools, todoManager, inboxManager, {
         ...selfOrgOptions,
+        client: clientProvider ? clientProvider() : undefined,
+        permissionChecker,
       }).catch((err: unknown) => {
         // 后台子代理失败不影响主循环，仅记录到 stderr
         const msg = err instanceof Error ? err.message : String(err);

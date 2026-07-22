@@ -116,10 +116,6 @@ function createStreamClient(provider: string, apiKey: string, model: string, bas
   }
 }
 
-// 子代理工具用的 small model(启动快照,工具接口暂不支持 getter)。
-// 主对话模型已动态化(currentModel),子代理 small model 留后续。
-const SMALL_MODEL_SNAPSHOT = currentSmallModel();
-
 const todoManager = new TodoManager();
 const skillRegistry = new SkillRegistry();
 skillRegistry.loadFromDir('skills');
@@ -175,23 +171,27 @@ const SHORT_DIR = getShortDir();
 
 const childToolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, backgroundManager, taskBoard, worktreeManager);
 const toolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, backgroundManager, taskBoard, worktreeManager);
-const taskTool = createTaskTool(childToolRegistry, worktreeManager, SMALL_MODEL_SNAPSHOT);
+// task / spawn_self_organizing / spawn_agent 都用同一个 clientProvider 闭包：
+// 每次 spawn 时读取当前 provider 配置，让子代理走主 agent 的多 provider 路径
+// （streamingQuery），支持 OpenAI/MiMo 等非 Anthropic provider。
+const subagentClientProvider = () => {
+  const provider = currentProvider();
+  const apiKey = configStore.getApiKey(provider);
+  const baseUrl = configStore.getProvider(provider)?.baseUrl;
+  return createStreamClient(provider, apiKey ?? '', currentSmallModel(), baseUrl);
+};
+const taskTool = createTaskTool(childToolRegistry, worktreeManager, subagentClientProvider);
 toolRegistry.register(taskTool.definition, taskTool.executor);
-const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, { model: SMALL_MODEL_SNAPSHOT });
+const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, {
+  clientProvider: subagentClientProvider,
+  permissionChecker,
+});
 toolRegistry.register(spawnSoTool.definition, spawnSoTool.executor);
 // spawn_agent：派角色化子代理（explore/plan/general）
 // 透传 permissionChecker：让子代理也受 plan 模式约束（读 allow / 写 deny）
-// clientProvider：每次 spawn 时读取当前 provider 配置，让子代理走主 agent 的多 provider
-// 路径（streamingQuery），从而支持 OpenAI/MiMo 等非 Anthropic provider（修复子代理写死
-// Anthropic 的 bug）。闭包形式支持运行时 /provider 切换。
 const spawnAgentTool = createSpawnAgentTool(
   childToolRegistry,
-  () => {
-    const provider = currentProvider();
-    const apiKey = configStore.getApiKey(provider);
-    const baseUrl = configStore.getProvider(provider)?.baseUrl;
-    return createStreamClient(provider, apiKey ?? '', currentSmallModel(), baseUrl);
-  },
+  subagentClientProvider,
   permissionChecker,
 );
 toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
