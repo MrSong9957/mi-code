@@ -295,15 +295,15 @@ Expected: all PASS。
 
 - [ ] **Step 2: 运行静态检查**
 
-Run: `npm.cmd run typecheck`  
+Run: `npm.cmd run typecheck`
 Expected: exit 0。
 
-Run: `npm.cmd run lint`  
+Run: `npm.cmd run lint`
 Expected: exit 0；若项目没有 lint script，记录真实输出，不伪造成功。
 
 - [ ] **Step 3: 运行完整测试**
 
-Run: `npm.cmd test`  
+Run: `npm.cmd test`
 Expected: exit 0，记录测试文件数和测试数。
 
 - [ ] **Step 4: 手工复测用户场景**
