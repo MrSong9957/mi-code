@@ -3,6 +3,22 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { BlockPipeline } from '../../ui/block-pipeline.js';
+describe('finishToolCall fallback', () => {
+  it('prints the complete tool exchange once when in-place update is declined', () => {
+    const { renderer, prints } = mockRenderer();
+    renderer.startToolCall = vi.fn();
+    renderer.finishToolCall = vi.fn(() => false);
+    const pipeline = new BlockPipeline(renderer);
+
+    pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'fallback.ts' }, toolUseId: 'fallback-1' });
+    pipeline.emit({ kind: 'tool_result', name: 'read_file', output: 'fallback result', toolUseId: 'fallback-1' });
+    pipeline.clearTurnState();
+
+    const contentTexts = prints.filter(print => print.text !== '').map(print => print.text);
+    expect(contentTexts.filter(text => text.includes('fallback.ts'))).toHaveLength(1);
+    expect(contentTexts.filter(text => text.includes('fallback result'))).toHaveLength(1);
+  });
+});
 
 /** mock 的 Renderer：记录所有 printMessage / appendStreamingMarkdown 调用 */
 function mockRenderer() {

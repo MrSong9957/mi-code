@@ -12,7 +12,7 @@ export interface PlanEntry {
   content: string;
   createdAt: string;
   sessionId: string;
-  turnId: string;
+  turnId: string | null;
   status: 'pending' | 'approved' | 'rejected';
 }
 
@@ -94,7 +94,7 @@ export class PlanStore {
     return true;
   }
 
-  private contextMatches(a: PlanContext | null, b: PlanContext): boolean {
+  private contextMatches(a: PlanEntry | PlanContext | null, b: PlanContext): boolean {
     return a?.sessionId === b.sessionId && a.turnId === b.turnId;
   }
 
@@ -117,9 +117,9 @@ export class PlanStore {
     const turnId = field('turn');
     const createdAt = field('created');
     const status = field('status');
-    if (!sessionId || !turnId || !createdAt || (status !== 'pending' && status !== 'approved' && status !== 'rejected')) {
+    if (!sessionId || !createdAt || (status !== 'pending' && status !== 'approved' && status !== 'rejected')) {
       return null;
     }
-    return { filePath, content, sessionId, turnId, createdAt, status };
+    return { filePath, content, sessionId, turnId: turnId ?? null, createdAt, status };
   }
 }

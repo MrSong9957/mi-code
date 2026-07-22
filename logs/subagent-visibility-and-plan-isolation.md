@@ -41,3 +41,13 @@
 - Project lint remains red on the pre-existing baseline: 54 errors and 68 warnings
   across unrelated files. Scoped lint for every changed production/test file passed;
   the generated planner file retains one existing unused-disable warning.
+
+## Final review recovery safeguards
+
+- Legacy plans without `turn` remain recoverable historical entries with `turnId: null`.
+  They never populate the in-memory active plan, so they cannot regain current-turn
+  read or exit approval capability.
+- When a renderer declines `finishToolCall`, the pipeline falls back to ordinary
+  message rendering for the complete call and result, then removes the buffer item.
+  A successful in-place finish still returns before fallback and does not duplicate it.
+- TDD: both regressions were observed RED before the minimal fixes, then GREEN.

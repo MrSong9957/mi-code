@@ -170,6 +170,29 @@ describe('PlanStore', () => {
     expect(store2.getActive({ sessionId: 's1', turnId: 'new-turn' })).toBeNull();
   });
 
+  it('recovers a legacy plan only as historical data, never as an active current-turn plan', () => {
+    const store = new PlanStore(join(tempDir, 'micode'));
+    const legacyPath = join(store.getPlansDir(), 'legacy-plan.md');
+    writeFileSync(
+      legacyPath,
+      '---\nsession: sess-1\ncreated: 2026-07-22T00:00:00.000Z\nstatus: pending\n---\n\nlegacy plan body\n',
+      'utf8',
+    );
+
+    const recovered = store.recoverLatestForSession(currentContext.sessionId);
+
+    expect(recovered).toMatchObject({
+      filePath: legacyPath,
+      sessionId: currentContext.sessionId,
+      turnId: null,
+      createdAt: '2026-07-22T00:00:00.000Z',
+      status: 'pending',
+    });
+    expect(recovered!.content).toContain('legacy plan body');
+    store.beginTurn(currentContext);
+    expect(store.getActive(currentContext)).toBeNull();
+  });
+
   it('plansDirOverride：绝对路径覆盖默认 plans 目录', () => {
     const custom = join(tempDir, 'custom-plans');
     const store = new PlanStore(join(tempDir, 'micode'), custom);

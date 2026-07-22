@@ -347,18 +347,19 @@ export class BlockPipeline {
     if (!item) return;
     if (this.renderer.finishToolCall) {
       const lines = item.resultLines ? [...item.callLines, ...item.resultLines] : item.callLines;
-      this.renderer.finishToolCall(item.toolUseId, lines);
-      if (item.resultLines && item.hasExpandable && item.expandableId && item.expandableFullLines) {
-        this.expandable.add({
-          id: item.expandableId,
-          kind: 'tool_result',
-          summaryLines: item.resultLines,
-          fullLines: item.expandableFullLines,
-        });
+      if (this.renderer.finishToolCall(item.toolUseId, lines)) {
+        if (item.resultLines && item.hasExpandable && item.expandableId && item.expandableFullLines) {
+          this.expandable.add({
+            id: item.expandableId,
+            kind: 'tool_result',
+            summaryLines: item.resultLines,
+            fullLines: item.expandableFullLines,
+          });
+        }
+        this.lastFinishedToolUseId = item.toolUseId;
+        this.toolBuffer.splice(idx, 1);
+        return;
       }
-      this.lastFinishedToolUseId = item.toolUseId;
-      this.toolBuffer.splice(idx, 1);
-      return;
     }
     // 块间空行：首个工具前由 openModelBlock 处理（与 thinking/assistant_text 之间也加空行）
     this.openModelBlock();
