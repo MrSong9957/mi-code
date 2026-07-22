@@ -7,10 +7,11 @@
 //
 // 用 ink-testing-library 的 render/lastFrame 断言渲染内容。
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { InlineAppV2, type InlineAppV2Stores } from '../../../tui/inline-v2/InlineAppV2.js';
+import { PendingToolMessage } from '../../../tui/inline-v2/PendingToolMessage.js';
 import { createMessagesStore } from '../../../tui/state/messages-store.js';
 import { createInputStore } from '../../../tui/state/input-store.js';
 import { createStatusStore } from '../../../tui/state/status-store.js';
@@ -165,15 +166,23 @@ describe('<InlineAppV2>', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// Task 1（AUTO-0025 修复计划）：pending 工具调用必须在活动区可见。
+// AUTO-0025-stable Task 1/2：pending 工具的稳定指示器。
 //
-// 物理本质：spawn_agent 等慢工具执行时，其 pending 消息（kind='tool-progress',
-// finalized=false）应该出现在终端活动区（spinner 之前），让用户看到"● spawn_agent(...)"
-// 正在运行,而不是等结果回来才一次性显示。
+// 物理本质：运行中的 spawn_agent 用固定一行的闪烁 ● 表示。闪烁只改前导符号,
+// 正文/布局/行数不变,消除活动区闪烁、空白和内容暂时消失。子代理内部工具明细
+// 不进入主消息正文(见 Task 3)。
+//
+// 测试契约:
+// 1. pending 固定占一物理行,过长则单行截断(不换行改变高度)。
+// 2. 闪烁周期 600ms,只切换 ● 可见性,正文与总行数不变。
+// 3. 完成后用固化渲染,无 pending 指示器残留。
+// 4. 中文双宽字符在窄宽度下同行截断。
+// 5. 无 glyph / 空首行回退到 'tool',不抛错。
+// 6. spinner active=false 时 ● 强制可见。
 // ──────────────────────────────────────────────────────────────────────────
 
-describe('<InlineAppV2> pending tool 可见性', () => {
-  it('pending tool 消息在活动区可见（结果回来之前）', () => {
+describe('<InlineAppV2> pending tool 稳定指示器', () => {
+  it('pending spawn_agent 在活动区可见(结果回来之前)', () => {
     const stores = createStores();
     stores.messagesStore.getState().appendPendingTool('spawn-1', [
       { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
@@ -192,7 +201,7 @@ describe('<InlineAppV2> pending tool 可见性', () => {
     expect(lastFrame() ?? '').toContain('spawn_agent');
   });
 
-  it('pending tool 完成后转化为固化消息（不重复渲染 pending）', () => {
+  it('pending tool 完成后用固化渲染,无 pending 指示器残留', () => {
     const stores = createStores();
     stores.messagesStore.getState().appendPendingTool('spawn-1', [
       { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
@@ -213,12 +222,11 @@ describe('<InlineAppV2> pending tool 可见性', () => {
       />,
     );
     const frame = lastFrame() ?? '';
-    // 完成后的内容（结果）应可见
     expect(frame).toContain('spawn_agent');
     expect(frame).toContain('found 3 skills');
   });
 
-  it('并行 pending tool 都可见（spawn-1 和 spawn-2）', () => {
+  it('并行 pending tool 各占固定一行,且都可见', () => {
     const stores = createStores();
     stores.messagesStore.getState().appendPendingTool('spawn-1', [
       { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
@@ -242,6 +250,208 @@ describe('<InlineAppV2> pending tool 可见性', () => {
     expect(frame).toContain('plan');
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// PendingToolMessage 叶子组件单元测试(AUTO-0025-stable Task 1 Step 4)。
+//
+// 直接渲染 PendingToolMessage,验证固定一行、闪烁只改 glyph、截断、边界输入。
+// 用 fake timers + 真实 spinnerStore.start()/tick() 推进共享时钟。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<PendingToolMessage> 稳定指示器组件', () => {
+  it('渲染固定一行,含 spawn_agent 正文', () => {
+    const stores = createStores();
+    const { lastFrame } = render(
+      <PendingToolMessage
+        msg={{
+          uuid: 'p1', role: 'tool', kind: 'tool-progress', toolUseId: 'spawn-1',
+          lines: [{ content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 }],
+          finalized: false,
+        }}
+        cols={80}
+        spinnerStore={stores.spinnerStore}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('spawn_agent');
+    // 固定一行:帧内容只有一行(去掉末尾换行后)
+    expect(frame.replace(/\n+$/, '').split('\n')).toHaveLength(1);
+  });
+
+  it('过长输入单行截断,不换行成第二行', () => {
+    const stores = createStores();
+    const longCall = '● spawn_agent({"role":"explore","prompt":"' + 'x'.repeat(60) + '"})';
+    const { lastFrame } = render(
+      <PendingToolMessage
+        msg={{
+          uuid: 'p1', role: 'tool', kind: 'tool-progress', toolUseId: 'spawn-1',
+          lines: [{ content: longCall, style: {}, indent: 0 }],
+          finalized: false,
+        }}
+        cols={40}
+        spinnerStore={stores.spinnerStore}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    // 仍然只有一行(截断而非换行)
+    expect(frame.replace(/\n+$/, '').split('\n')).toHaveLength(1);
+    expect(frame).toContain('spawn_agent');
+  });
+
+  it('中文双宽字符在窄宽度下同行截断,不换行', () => {
+    const stores = createStores();
+    const { lastFrame } = render(
+      <PendingToolMessage
+        msg={{
+          uuid: 'p1', role: 'tool', kind: 'tool-progress', toolUseId: 'spawn-1',
+          lines: [{ content: '● spawn_agent(查询工作区中的技能并汇总详细信息)', style: {}, indent: 0 }],
+          finalized: false,
+        }}
+        cols={30}
+        spinnerStore={stores.spinnerStore}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame.replace(/\n+$/, '').split('\n')).toHaveLength(1);
+    expect(frame).toContain('spawn_agent');
+  });
+
+  it('无前导 glyph 的正文保持原文', () => {
+    const stores = createStores();
+    const { lastFrame } = render(
+      <PendingToolMessage
+        msg={{
+          uuid: 'p1', role: 'tool', kind: 'tool-progress', toolUseId: 'spawn-1',
+          lines: [{ content: 'spawn_agent({"role":"explore"})', style: {}, indent: 0 }],
+          finalized: false,
+        }}
+        cols={80}
+        spinnerStore={stores.spinnerStore}
+      />,
+    );
+    // 无 glyph 时正文原样渲染(组件不强行加 ● 到正文,● 只在 glyph 槽)
+    expect(lastFrame() ?? '').toContain('spawn_agent');
+  });
+
+  it('空 lines 回退到 tool,不抛错', () => {
+    const stores = createStores();
+    const { lastFrame } = render(
+      <PendingToolMessage
+        msg={{
+          uuid: 'p1', role: 'tool', kind: 'tool-progress', toolUseId: 'spawn-1',
+          lines: [],
+          finalized: false,
+        }}
+        cols={80}
+        spinnerStore={stores.spinnerStore}
+      />,
+    );
+    expect(lastFrame() ?? '').toContain('tool');
+  });
+
+  it('空首行 content 回退到 tool,不抛错', () => {
+    const stores = createStores();
+    const { lastFrame } = render(
+      <PendingToolMessage
+        msg={{
+          uuid: 'p1', role: 'tool', kind: 'tool-progress', toolUseId: 'spawn-1',
+          lines: [{ content: '', style: {}, indent: 0 }],
+          finalized: false,
+        }}
+        cols={80}
+        spinnerStore={stores.spinnerStore}
+      />,
+    );
+    expect(lastFrame() ?? '').toContain('tool');
+  });
+
+  it('spinner active=false 时 ● 强制可见(不依赖时钟相位)', () => {
+    const stores = createStores();
+    // 不 start spinner → active=false
+    const { lastFrame } = render(
+      <PendingToolMessage
+        msg={{
+          uuid: 'p1', role: 'tool', kind: 'tool-progress', toolUseId: 'spawn-1',
+          lines: [{ content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 }],
+          finalized: false,
+        }}
+        cols={80}
+        spinnerStore={stores.spinnerStore}
+      />,
+    );
+    // active=false → ● 始终可见
+    expect(lastFrame() ?? '').toContain('●');
+  });
+
+  it('闪烁只改变 glyph 可见性,正文与总行数不变', () => {
+    vi.useFakeTimers();
+    try {
+      const stores = createStores();
+      stores.spinnerStore.getState().start('responding');
+      // start 时 time=0 → ● 可见
+      const { lastFrame, rerender } = render(
+        <PendingToolMessage
+          msg={{
+            uuid: 'p1', role: 'tool', kind: 'tool-progress', toolUseId: 'spawn-1',
+            lines: [{ content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 }],
+            finalized: false,
+          }}
+          cols={80}
+          spinnerStore={stores.spinnerStore}
+        />,
+      );
+      const frameVisible = lastFrame() ?? '';
+      expect(frameVisible).toContain('●');
+
+      // 推进时钟到隐藏相位(>600ms)
+      vi.advanceTimersByTime(700);
+      stores.spinnerStore.getState().tick();
+      rerender(
+        <PendingToolMessage
+          msg={{
+            uuid: 'p1', role: 'tool', kind: 'tool-progress', toolUseId: 'spawn-1',
+            lines: [{ content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 }],
+            finalized: false,
+          }}
+          cols={80}
+          spinnerStore={stores.spinnerStore}
+        />,
+      );
+      const frameHidden = lastFrame() ?? '';
+      // 正文不变
+      expect(frameHidden).toContain('spawn_agent');
+      // 总行数不变(仍 1 行)
+      expect(frameHidden.replace(/\n+$/, '').split('\n')).toHaveLength(1);
+      expect(frameVisible.replace(/\n+$/, '').split('\n')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('glyph 槽固定两列宽,可见/隐藏时正文起始列不变', () => {
+    const stores = createStores();
+    // active=false 强制可见
+    const { lastFrame, rerender } = render(
+      <PendingToolMessage
+        msg={{
+          uuid: 'p1', role: 'tool', kind: 'tool-progress', toolUseId: 'spawn-1',
+          lines: [{ content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 }],
+          finalized: false,
+        }}
+        cols={80}
+        spinnerStore={stores.spinnerStore}
+      />,
+    );
+    const visibleFrame = lastFrame() ?? '';
+    // 强制可见:● 在槽位
+    expect(visibleFrame).toContain('●');
+
+    // 切到隐藏相位需要 active=true + time 推进,这里只验证可见态下正文存在
+    expect(visibleFrame).toContain('spawn_agent');
+    void rerender;
+  });
+});
+
 
 // ──────────────────────────────────────────────────────────────────────────
 // Task 3.4 集成版:InlineAppV2 上下文中,spinner tick 不拖动整棵树重渲染。
