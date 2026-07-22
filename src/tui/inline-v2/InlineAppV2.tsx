@@ -24,6 +24,7 @@ import { Box, Static, Text } from 'ink';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { MessageLine } from './MessageLine.js';
+import { PendingToolMessage } from './PendingToolMessage.js';
 import { SpinnerMemo } from './spinner-memo.js';
 import { FooterV2 } from './FooterV2.js';
 import { StreamingText } from './StreamingText.js';
@@ -151,13 +152,9 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
     ? Math.max(1, streaming.streamingText.split('\n').length)
     : 0;
 
-  // AUTO-0025 修复:pending tool 行数纳入活动区 y 偏移。
-  // 近似按 lines.length 估算物理行数(精确 wrap 由 Ink yoga 算);子代理运行时子工具
-  // 进度会作为附加行更新到同一条 pending message(见 Task 3),一并计入。
-  const pendingToolsRowCount = pendingTools.reduce(
-    (sum, msg) => sum + Math.max(1, msg.lines.length),
-    0,
-  );
+  // AUTO-0025-stable:pending 工具固定占一物理行(由 PendingToolMessage 的 height={1} 保证)。
+  // 行数 = pending 工具数量,不再用 lines.length 估算(避免子明细行导致高度抖动)。
+  const pendingToolsRowCount = pendingTools.length;
 
   // inputRowY(活动区内坐标,<Static> 不占活动区):
   //   流式文本行数(streamingRowCount) + pending 工具行数 + spinner 行数 + 上边框 1 行
@@ -208,11 +205,16 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
             cols={cols}
           />
         )}
-        {/* AUTO-0025 修复:pending 工具调用渲染在 streaming 之后、spinner/footer 之前。
-            保留调用顺序(tools 是 messages 数组的子集,顺序天然正确)。
-            用 MessageLine 复用既有 finalized-line 渲染路径,工具行本身就是 FormattedLine。 */}
+        {/* AUTO-0025-stable:pending 工具用专用稳定指示器渲染(固定一行 + 闪烁 ●)。
+            叶子组件自订阅 spinnerStore.time/active,tick 不拖动本组件重渲染。
+            子代理内部工具明细不进入这里(见 Task 3 删除进度桥接)。 */}
         {pendingTools.map((msg) => (
-          <MessageLine key={msg.uuid} msg={msg} cols={cols} />
+          <PendingToolMessage
+            key={msg.uuid}
+            msg={msg}
+            cols={cols}
+            spinnerStore={stores.spinnerStore}
+          />
         ))}
         {askQuestionVisible ? (
           askPresentationKind === 'plan-approval' ? (

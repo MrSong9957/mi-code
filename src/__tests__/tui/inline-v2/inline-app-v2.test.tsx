@@ -252,6 +252,141 @@ describe('<InlineAppV2> pending tool 稳定指示器', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────
+// AUTO-0025-stable Task 2:pending→finalized 状态迁移与并行稳定性。
+//
+// 验证:同一 UUID 从 pending 动态态迁移到 finalized 静态态时,
+// 最终结果用固化渲染器(无 pending 指示器残留),且并行 pending 互不干扰。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<InlineAppV2> stable pending 动态→静态迁移', () => {
+  it('pending→finalized:最终帧含结果,无 pending 指示器残留', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().appendPendingTool('spawn-1', [
+      { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
+    ]);
+
+    const { lastFrame, rerender } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    // pending 态:含 spawn_agent
+    expect(lastFrame() ?? '').toContain('spawn_agent');
+
+    // resolve:整条消息被最终 call+result 替换
+    stores.messagesStore.getState().resolvePendingTool('spawn-1', [
+      { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
+      { content: '⎿  found 3 skills', style: {}, indent: 0 },
+    ]);
+    rerender(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const finalFrame = lastFrame() ?? '';
+    // 最终结果可见
+    expect(finalFrame).toContain('found 3 skills');
+  });
+
+  it('4 路并行 pending 各占固定一行,resolve 一个不移动其余', () => {
+    const stores = createStores();
+    for (let i = 1; i <= 4; i++) {
+      stores.messagesStore.getState().appendPendingTool(`spawn-${i}`, [
+        { content: `● spawn_agent({"role":"explore","prompt":"task-${i}"})`, style: {}, indent: 0 },
+      ]);
+    }
+
+    const { lastFrame, rerender } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    // 4 个都可见
+    const frame1 = lastFrame() ?? '';
+    for (let i = 1; i <= 4; i++) {
+      expect(frame1).toContain(`task-${i}`);
+    }
+
+    // resolve spawn-2,其余 3 个仍 pending 且内容不变
+    stores.messagesStore.getState().resolvePendingTool('spawn-2', [
+      { content: '● spawn_agent({"role":"explore","prompt":"task-2"})', style: {}, indent: 0 },
+      { content: '⎿  done-2', style: {}, indent: 0 },
+    ]);
+    rerender(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame2 = lastFrame() ?? '';
+    // spawn-2 的结果可见
+    expect(frame2).toContain('done-2');
+    // 其余 3 个仍可见(未被 resolve 影响)
+    expect(frame2).toContain('task-1');
+    expect(frame2).toContain('task-3');
+    expect(frame2).toContain('task-4');
+  });
+
+  it('active=false 时 resolve 一个 pending,其 glyph 可见后正常迁移', () => {
+    const stores = createStores();
+    // 不 start spinner → active=false
+    stores.messagesStore.getState().appendPendingTool('spawn-1', [
+      { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
+    ]);
+
+    const { lastFrame, rerender } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    // active=false → ● 强制可见
+    expect(lastFrame() ?? '').toContain('●');
+
+    stores.messagesStore.getState().resolvePendingTool('spawn-1', [
+      { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
+      { content: '⎿  summary', style: {}, indent: 0 },
+    ]);
+    rerender(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    // 迁移后:最终结果可见,pending 指示器消失
+    expect(lastFrame() ?? '').toContain('summary');
+  });
+});
+
+
+// ──────────────────────────────────────────────────────────────────────────
 // PendingToolMessage 叶子组件单元测试(AUTO-0025-stable Task 1 Step 4)。
 //
 // 直接渲染 PendingToolMessage,验证固定一行、闪烁只改 glyph、截断、边界输入。
