@@ -42,4 +42,19 @@ describe('formatSpinnerMetrics — Claude Code 样式', () => {
     expect(formatSpinnerMetrics(-500, -10, NaN, 'responding')).toBe('(1s)');
     expect(formatSpinnerMetrics(5_000, NaN, NaN, 'responding')).toBe('(5s)');
   });
+
+  it('token ≥ 1000 用 k 单位（1 位小数）', () => {
+    // 3909 tokens → 3.9k
+    expect(formatSpinnerMetrics(259_000, 3909, 0, 'responding'))
+      .toBe('(4m 19s · ↓ 3.9k tokens)');
+    // 1000 tokens → 1k（去掉 .0）
+    expect(formatSpinnerMetrics(5_000, 1000, 0, 'responding'))
+      .toBe('(5s · ↓ 1k tokens)');
+    // 1200 tokens → 1.2k
+    expect(formatSpinnerMetrics(5_000, 1200, 0, 'responding'))
+      .toBe('(5s · ↓ 1.2k tokens)');
+    // 999 tokens → 原样（不加 k）
+    expect(formatSpinnerMetrics(5_000, 999, 0, 'responding'))
+      .toBe('(5s · ↓ 999 tokens)');
+  });
 });

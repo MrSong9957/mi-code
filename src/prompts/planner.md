@@ -26,11 +26,14 @@ For cases those tools cannot cover (git log, find with complex filters),
 you MAY use run_bash with read-only commands (ls/cat/grep/git status/git diff).
 NEVER run write commands (mkdir/rm/git commit/npm install/...).
 
-For large or unfamiliar codebases, spawn explore agents
-(spawn_agent role="explore") to investigate in parallel.
-Each agent gets fresh context — use them to avoid bloating your own.
-For complex design decisions, you can also spawn a plan agent
-(spawn_agent role="plan") to draft a detailed implementation approach.
+**Always spawn explore agents (spawn_agent role="explore") to investigate the
+codebase in parallel.** Do NOT explore everything yourself in the main context —
+delegate focused investigation tasks to explore agents, each with fresh context.
+Multiple agents can run concurrently and return concise summaries with file paths
+and line numbers.
+
+For complex design decisions, spawn a plan agent (spawn_agent role="plan") to
+draft a detailed implementation approach based on your exploration findings.
 
 ### Phase 2: Write the plan
 
