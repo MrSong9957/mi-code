@@ -78,7 +78,47 @@ export interface SubagentOptions {
    * 由主 agent 通过 skillRegistry.describeAvailable() 生成，spawn-agent-tool 透传。
    */
   skillsDescription?: string;
+  /**
+   * AUTO-0025 Task 2：父调用的 toolUseId（即外层 spawn_agent 这次调用的 id）。
+   *
+   * 物理本质：子代理工具进度的"挂号牌"。子代理内部 emit 的 tool_call/tool_result
+   * 必须打上这个父 ID,外层 UI 才能把进度精确挂到对应那一条 pending 父消息,
+   * 不被另一个并行 spawn 调用误匹配。
+   */
+  parentToolUseId?: string;
+  /**
+   * AUTO-0025 Task 2：子代理进度回调。
+   *
+   * 子代理内部工具调用开始/结束时,通过此回调把进度转发给外层。
+   * 用于把"● spawn_agent → 子代理正在 read_file"的嵌套活动实时显示在父 pending 消息里。
+   * 不传则子代理正常执行,只是没有实时进度上报。
+   */
+  onProgress?: (event: SubagentProgressEvent) => void;
 }
+
+/**
+ * AUTO-0025 Task 2：子代理进度事件。
+ *
+ * 子代理内部工具调用产生的事件,经 runSubagent 的 onProgress 回调转发给外层。
+ * parentToolUseId 标识外层 spawn_agent 那次调用,让 UI 精确挂载到对应父消息。
+ */
+export type SubagentProgressEvent =
+  | {
+      kind: 'tool_call';
+      parentToolUseId: string;
+      childToolUseId: string;
+      name: string;
+      input: Record<string, unknown>;
+      startTime: number;
+    }
+  | {
+      kind: 'tool_result';
+      parentToolUseId: string;
+      childToolUseId: string;
+      name: string;
+      output: string;
+      duration: number;
+    };
 
 export type SubagentStatus = 'completed' | 'incomplete' | 'unverified' | 'background';
 
@@ -168,6 +208,41 @@ async function runSubagentWithClient(
   const onLoopEnd = ({ reason }: { reason: string }) => { terminationReason = reason; };
   eventBus.onLoopEnd(onLoopEnd);
 
+  // AUTO-0025 Task 2:把子代理内部 tool_call/tool_result 转发给外层 onProgress 回调。
+  // 物理本质:子代理私有的"工地摄像头"——把工地上的活动实时回传到项目经理办公室。
+  // 必须打上 parentToolUseId,外层 UI 才能把进度挂到对应那一条父 pending 消息。
+  // 没传 parentToolUseId 或 onProgress 时,订阅照常挂上但回调为空操作,不影响执行。
+  const parentToolUseId = options.parentToolUseId;
+  const onProgress = options.onProgress;
+  const onChildToolCall = (data: { toolUseId: string; name: string; input: Record<string, unknown>; startTime: number }) => {
+    if (parentToolUseId && onProgress) {
+      onProgress({
+        kind: 'tool_call',
+        parentToolUseId,
+        childToolUseId: data.toolUseId,
+        name: data.name,
+        input: data.input,
+        startTime: data.startTime,
+      });
+    }
+  };
+  const onChildToolResult = (data: { toolUseId: string; name: string; output: string; duration: number }) => {
+    if (parentToolUseId && onProgress) {
+      onProgress({
+        kind: 'tool_result',
+        parentToolUseId,
+        childToolUseId: data.toolUseId,
+        name: data.name,
+        output: data.output,
+        duration: data.duration,
+      });
+    }
+  };
+  if (parentToolUseId && onProgress) {
+    eventBus.onToolCall(onChildToolCall);
+    eventBus.onToolResult(onChildToolResult);
+  }
+
   try {
     for await (const message of streamingQuery(client, subRegistry, prompt, {
     systemPrompt: system,
@@ -210,6 +285,9 @@ async function runSubagentWithClient(
   }
   } finally {
     eventBus.offLoopEnd(onLoopEnd);
+    // AUTO-0025:同步清理子代理进度监听器,防止事件总线泄漏(尤其后台执行路径)。
+    eventBus.offToolCall(onChildToolCall);
+    eventBus.offToolResult(onChildToolResult);
   }
   // 模型可能只调工具不输出文字（某些 GLM/MiMo 行为），用工具调用信息兜底
   if (!resultText && toolCallNames.length > 0) {

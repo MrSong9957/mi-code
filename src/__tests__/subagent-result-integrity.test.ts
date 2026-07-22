@@ -139,3 +139,49 @@ describe('subagent result integrity', () => {
     expect(result.text).toContain('Now let me check the test files...');
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// AUTO-0025 Task 2 Step 3: 子代理内部工具进度通过 onProgress 携带 parentToolUseId 转发
+//
+// 物理本质:子代理在干活(读文件、跑 bash)时,这些活动应该实时浮上来,
+// 让父 pending 消息看到"● spawn_agent → 子代理正在 read_file"。
+// 转发必须携带 parentToolUseId,父 UI 才能正确把进度挂到对应那一次 spawn 调用。
+// ════════════════════════════════════════════════════════════════════
+
+describe('subagent child progress forwarding (AUTO-0025 Task 2)', () => {
+  it('onProgress 收到 tool_call/tool_result 且都携带 parentToolUseId', async () => {
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } }],
+      [{ type: 'text', text: 'Verified skills: code-review, git-workflow' }],
+    ]);
+
+    const events: Array<{ kind: string; parentToolUseId?: string; name?: string }> = [];
+    const result = await runSubagent('list skills', makeReadRegistry(), {
+      role: 'explore',
+      client,
+      maxSteps: 5,
+      parentToolUseId: 'spawn-1',
+      onProgress: (event) => { events.push(event); },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(events.map(event => event.kind)).toEqual(['tool_call', 'tool_result']);
+    expect(events[0]).toMatchObject({ parentToolUseId: 'spawn-1', name: 'read_file' });
+    expect(events[1]).toMatchObject({ parentToolUseId: 'spawn-1', name: 'read_file' });
+  });
+
+  it('不传 onProgress 时不影响子代理正常执行', async () => {
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } }],
+      [{ type: 'text', text: 'verified' }],
+    ]);
+
+    const result = await runSubagent('list skills', makeReadRegistry(), {
+      role: 'explore', client, maxSteps: 5,
+      parentToolUseId: 'spawn-2',
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.text).toBe('verified');
+  });
+});

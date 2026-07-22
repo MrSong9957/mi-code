@@ -129,7 +129,10 @@ export class StreamingToolExecutor {
         }
       }
 
-      const output = await this.registry.execute(tool.block.name, tool.block.input);
+      const output = await this.registry.execute(tool.block.name, tool.block.input, {
+        // AUTO-0025:把当前 toolUseId 透传给 executor,spawn_agent 用它桥接子代理进度到父消息。
+        toolUseId: tool.block.id,
+      });
       tool.results = [{ type: 'text', text: output }];
       tool.status = 'completed';
     } catch (error) {

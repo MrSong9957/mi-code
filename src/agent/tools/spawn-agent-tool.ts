@@ -10,10 +10,10 @@
 // 与现有 task 工具的区别：task 是 general 的别名；spawn_agent 显式选 role，
 // 工具集按角色裁剪，模型/轮数也按角色分配。
 
-import type { ToolDefinition, ToolExecutor, StreamingLLMClient } from '../types.js';
+import type { ToolDefinition, ToolExecutor, StreamingLLMClient, ToolExecutionContext } from '../types.js';
 import type { ToolRegistry } from '../tool-registry.js';
 import { runSubagent } from '../subagent.js';
-import type { SubagentOptions, SubagentResult } from '../subagent.js';
+import type { SubagentOptions, SubagentResult, SubagentProgressEvent } from '../subagent.js';
 import { ROLE_REGISTRY, type Role, type SubagentModel } from '../roles.js';
 import type { PermissionChecker } from '../../permission/checker.js';
 
@@ -23,6 +23,24 @@ type SubagentRunner = (
   tools: ToolRegistry,
   options: SubagentOptions,
 ) => Promise<SubagentResult>;
+
+/**
+ * AUTO-0025 Task 2/3：子代理进度桥接回调工厂。
+ *
+ * spawn_agent 工具执行时,从 context.toolUseId 知道"我是哪一次外层调用",
+ * 然后调用此工厂拿到一个 onProgress 回调,把子代理内部进度转发到外层 pipeline。
+ *
+ * 物理本质:派工窗口的"进度回执单打印机"——给临时工配一个对讲机频道,
+ * 他干活的每个动作都通过对讲机回传给项目经理。
+ * 不传此工厂时,子代理正常执行,只是进度不上报(向后兼容)。
+ *
+ * 工厂模式(而非直接传回调)的原因:回调需要闭包捕获"当前的 pipeline",
+ * 而 pipeline 在 index.ts 是 bootstrap 后才赋值的变量。工厂让回调在执行时
+ * 才读取 live pipeline,避免捕获到初始化时的 no-op。
+ */
+export type SubagentProgressBridge = (parentToolUseId: string) =>
+  | ((event: SubagentProgressEvent) => void)
+  | undefined;
 
 /**
  * 子代理 LLM 客户端工厂。
@@ -51,6 +69,13 @@ export function createSpawnAgentTool(
   skillsDescription?: string,
   /** 获取主 agent 当前 system prompt（fork 模式用） */
   getParentSystemPrompt?: () => string,
+  /**
+   * AUTO-0025 Task 2/3：子代理进度桥接工厂。
+   * 传入后,spawn_agent 会把 context.toolUseId 作为 parentToolUseId 透传给 runner,
+   * 并把此工厂返回的 onProgress 回调挂上,让子代理内部工具进度实时转发到外层 pipeline。
+   * 不传则不转发进度(向后兼容)。
+   */
+  progressBridge?: SubagentProgressBridge,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
   // 动态生成工具描述：从 ROLE_REGISTRY 的 whenToUse 字段拼装
   const roleLines = (['explore', 'plan', 'general'] as Role[])
@@ -85,7 +110,7 @@ export function createSpawnAgentTool(
         required: ['role', 'prompt'],
       },
     },
-    executor: async (input) => {
+    executor: async (input, context?: ToolExecutionContext) => {
       const role = input.role as string;
       const prompt = (input.prompt as string)?.trim();
 
@@ -97,6 +122,14 @@ export function createSpawnAgentTool(
       }
 
       const fork = input.fork === true;
+
+      // AUTO-0025 Task 2/3:从执行上下文取出父调用 ID,并按需挂上进度桥接回调。
+      // 物理本质:派工时把"项目经理的对讲机频道号"(parentToolUseId)给临时工,
+      // 让他干活时的每个动作回传到正确的那一条父 pending 消息。
+      const parentToolUseId = context?.toolUseId;
+      const onProgress = parentToolUseId && progressBridge
+        ? progressBridge(parentToolUseId)
+        : undefined;
 
       if (fork) {
         if (!getParentSystemPrompt) {
@@ -110,6 +143,8 @@ export function createSpawnAgentTool(
           skillsDescription,
           forkMode: true,
           parentSystem: getParentSystemPrompt(),
+          parentToolUseId,
+          onProgress,
           // role 不传（undefined）→ filterToolsByRole 返回全量减黑名单
         });
         return result.text;
@@ -127,6 +162,8 @@ export function createSpawnAgentTool(
         permissionChecker,
         maxSteps,
         skillsDescription,
+        parentToolUseId,
+        onProgress,
       });
       return result.text;
     },

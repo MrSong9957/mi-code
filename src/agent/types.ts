@@ -66,7 +66,24 @@ export interface ToolDefinition {
 }
 
 /** 工具执行函数 */
-export type ToolExecutor = (input: Record<string, unknown>) => Promise<string>;
+export type ToolExecutor = (input: Record<string, unknown>, context?: ToolExecutionContext) => Promise<string>;
+
+/**
+ * 工具执行上下文（AUTO-0025）。
+ *
+ * 物理本质:工具执行时它的"工牌"——告诉工具自己属于哪一次调用(toolUseId)。
+ * 由 streamingQuery 在执行分支传给 ToolRegistry.execute,再透传到 executor。
+ *
+ * 用途:spawn_agent 工具需要拿到自己的 toolUseId 才能把子代理的实时进度
+ * 回传给正确的父 pending 消息(见 Task 3 subagent_tool_progress 桥接)。
+ *
+ * context 设为可选,保证不关心它的旧式 executor 与直调 ToolRegistry 的单元测试
+ * 保持源码兼容(参数列表不变,只新增一个可选尾参)。
+ */
+export interface ToolExecutionContext {
+  /** 当前工具调用的唯一 ID(模型 tool_use 块的 id) */
+  toolUseId: string;
+}
 
 /** 注册的工具 */
 export interface RegisteredTool {
