@@ -18,6 +18,14 @@ import type { Block, FormattedLine, UIMessageStyle } from './types.js';
 import { INDENT, BLOCK_STYLES, buildToolResultBlock, summarizeOutput } from './block-format.js';
 import { MessageFormatter } from './message-formatter.js';
 import { ExpandableBlockStore } from './expandable-store.js';
+import { buildSubagentCompletionPresentation } from './subagent-presentation.js';
+
+/**
+ * AUTO-0025-transient Task 3:工具完成消息的专用 kind。
+ * - 'tool-progress':通用工具消息(默认)
+ * - 'agent-completion':子代理完成单行展示
+ */
+export type FinalToolMessageKind = 'tool-progress' | 'agent-completion';
 
 /**
  * PipelineRenderer：pipeline 依赖的下游渲染/投递接口（最小接口，便于 mock）。
@@ -41,7 +49,12 @@ export interface PipelineRenderer {
   /** 封口流式（插分隔符，不强制 flushNow）——比 finalizeStreaming 温和 */
   sealStreaming(): void;
   startToolCall?(toolUseId: string, lines: FormattedLine[]): void;
-  finishToolCall?(toolUseId: string, lines: FormattedLine[]): boolean;
+  /**
+   * AUTO-0025-transient Task 3:完成工具调用。finalKind 决定固化消息的专用 kind。
+   * - 'tool-progress'(默认):通用工具消息
+   * - 'agent-completion':子代理完成单行展示
+   */
+  finishToolCall?(toolUseId: string, lines: FormattedLine[], finalKind?: FinalToolMessageKind): boolean;
   appendToolHook?(toolUseId: string, lines: FormattedLine[]): boolean;
   flushNow(): void;
   clearMessages(): void;
@@ -84,6 +97,8 @@ interface BufferedTool {
   hasExpandable?: boolean;
   /** hook 行（PostToolUse 日志，跟在 result 后） */
   hookLines?: FormattedLine[];
+  /** AUTO-0025-transient Task 3:完成消息的专用 kind(agent-completion 走单行展示) */
+  finalKind?: FinalToolMessageKind;
 }
 
 /**
@@ -256,6 +271,36 @@ export class BlockPipeline {
         const item = this.toolBuffer[idx]!;
         // input 优先级：result 自带 > 配对 call 缓存的 input
         const input = block.input ?? item.input;
+
+        // AUTO-0025-transient Task 3:spawn_agent 完成专用展示。
+        // 成功解析 envelope 时,用单行 ● Agent "..." finished · Ns 替换通用结果行,
+        // 注册 envelope 剥离后的正文为 expandable(Ctrl+O),finalKind 标 agent-completion。
+        // 失败(null)走通用降级,不注册 expandable。
+        if (item.name === 'spawn_agent') {
+          const presentation = buildSubagentCompletionPresentation(input, block.output, block.durationMs ?? 0);
+          if (presentation) {
+            item.resultLines = [{
+              content: presentation.line,
+              style: BLOCK_STYLES.magenta,
+              indent: 0,
+            }];
+            item.finalKind = 'agent-completion';
+            // 注册 expandable:full=子代理正文(无 envelope),供 Ctrl+O 展开
+            const id = `agent-${++this.idCounter}`;
+            const fullLines = presentation.fullOutput.split('\n').map((l, i) => ({
+              content: `${i === 0 ? '⎿  ' : '   '}${l}`,
+              style: BLOCK_STYLES.dim,
+              indent: INDENT.nested,
+              raw: true,
+            }));
+            item.expandableId = id;
+            item.expandableFullLines = fullLines;
+            item.hasExpandable = true;
+            this.finishTool(idx);
+            break;
+          }
+        }
+
         const meta = buildToolResultBlock(block.name, input, block.output);
         const summaryLines = MessageFormatter.format('tool_result', meta);
         item.resultLines = summaryLines;
@@ -365,8 +410,13 @@ export class BlockPipeline {
     const item = this.toolBuffer[idx];
     if (!item) return;
     if (this.renderer.finishToolCall) {
-      const lines = item.resultLines ? [...item.callLines, ...item.resultLines] : item.callLines;
-      if (this.renderer.finishToolCall(item.toolUseId, lines)) {
+      // AUTO-0025-transient Task 3:agent-completion 只用 resultLines(单行),
+      // 不拼 callLines(避免 pending 的 ● spawn_agent 行残留)。其余拼 call+result。
+      const isAgentCompletion = item.finalKind === 'agent-completion';
+      const lines = isAgentCompletion
+        ? (item.resultLines ?? item.callLines)
+        : (item.resultLines ? [...item.callLines, ...item.resultLines] : item.callLines);
+      if (this.renderer.finishToolCall(item.toolUseId, lines, item.finalKind)) {
         if (item.resultLines && item.hasExpandable && item.expandableId && item.expandableFullLines) {
           this.expandable.add({
             id: item.expandableId,

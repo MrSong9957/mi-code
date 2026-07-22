@@ -111,6 +111,10 @@ export function createSpawnAgentTool(
             type: 'string',
             description: 'The task description for the subagent. Be specific about what to find or design.',
           },
+          description: {
+            type: 'string',
+            description: 'Short user-facing label for this delegated task.',
+          },
           fork: {
             type: 'boolean',
             description: 'Set to true for a subagent that inherits your full system prompt. Use when you need a worker with your exact capabilities for an independent parallel subtask.',

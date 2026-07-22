@@ -681,7 +681,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   eventBus.onToolResult(d => {
     activeToolIds.delete(d.toolUseId);
     tuiHandle?.setSpinnerHasActiveTools(activeToolIds.size > 0);
-    pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId });
+    // AUTO-0025-transient Task 3:传 durationMs,供 spawn_agent 完成展示用。
+    pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId, durationMs: d.duration });
     refreshSpinnerContext();
   });
   eventBus.onLoopEnd(() => {

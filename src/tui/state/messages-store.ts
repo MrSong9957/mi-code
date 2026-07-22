@@ -45,8 +45,9 @@ export interface MessagesState {
   appendTurnDurationMessage: (durationMs: number) => void;
   /** \u8ffd\u52a0\u53ef\u89c1\u7684\u5f85\u5b8c\u6210\u5de5\u5177\u6d88\u606f\uff0c\u8fd4\u56de\u5176 uuid */
   appendPendingTool: (toolUseId: string, lines: FormattedLine[]) => string;
-  /** \u53ea\u5b8c\u6210\u5339\u914d\u7684 pending \u5de5\u5177\u6d88\u606f */
-  resolvePendingTool: (toolUseId: string, lines: FormattedLine[]) => boolean;
+  /** \u53ea\u5b8c\u6210\u5339\u914d\u7684 pending \u5de5\u5177\u6d88\u606f\u3002
+   *  AUTO-0025-transient:finalKind 决定固化消息的专用 kind(默认 tool-progress)。 */
+  resolvePendingTool: (toolUseId: string, lines: FormattedLine[], finalKind?: 'tool-progress' | 'agent-completion') => boolean;
   /** \u5c06 hook \u9644\u5230\u5df2\u5b8c\u6210\u7684\u5de5\u5177\u6d88\u606f */
   appendToolHook: (toolUseId: string, lines: FormattedLine[]) => boolean;
   /** 开一条流式 assistant（finalized=false, streamingText=initialText） */
@@ -139,7 +140,7 @@ export function createMessagesStore(): MessagesStore {
       return uuid;
     },
 
-    resolvePendingTool: (toolUseId, lines) => {
+    resolvePendingTool: (toolUseId, lines, finalKind = 'tool-progress') => {
       let resolved = false;
       set((s) => {
         const index = s.messages.findIndex(message =>
@@ -150,7 +151,8 @@ export function createMessagesStore(): MessagesStore {
         if (index < 0) return s;
         resolved = true;
         const message = s.messages[index]!;
-        const updated: TuiMessage = { ...message, lines, finalized: true };
+        // AUTO-0025-transient:finalKind 决定固化后的 kind(agent-completion 走单行展示渲染)。
+        const updated: TuiMessage = { ...message, lines, finalized: true, kind: finalKind };
         return { messages: [...s.messages.slice(0, index), updated, ...s.messages.slice(index + 1)] };
       });
       return resolved;

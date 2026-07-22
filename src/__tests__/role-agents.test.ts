@@ -158,6 +158,25 @@ describe('createSpawnAgentTool', () => {
     expect(definition.parameters.required).toEqual(['role', 'prompt']);
   });
 
+  it('schema 含可选 description 字段(AUTO-0025-transient Task 3)', () => {
+    const registry = makeRegistry();
+    const { definition } = createSpawnAgentTool(registry);
+    expect(definition.parameters.properties).toHaveProperty('description');
+    // description 不在 required(向后兼容)
+    expect(definition.parameters.required).not.toContain('description');
+  });
+
+  it('不带 description 的既有调用仍正常执行(向后兼容)', async () => {
+    const registry = makeRegistry();
+    const mockRunner = vi.fn(async (): Promise<SubagentResult> => ({
+      text: 'ok', isBackground: false, status: 'completed',
+      terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 },
+    }));
+    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+    const result = await executor({ role: 'explore', prompt: 'task' });
+    expect(result).toContain('[Subagent status=completed]');
+  });
+
   it('executor 调 runSubagentFn 并传 role', async () => {
     const registry = makeRegistry();
     const calls: { prompt: string; role?: string }[] = [];

@@ -1020,3 +1020,59 @@ describe('<InlineAppV2> thinking-progress 活动行集成', () => {
     expect(frame).toContain('❯');
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// AUTO-0025-transient Task 3:agent-completion 单行展示。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<InlineAppV2> agent-completion 单行展示', () => {
+  it('完成的子代理渲染为单行 ● Agent "..." finished', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().appendPendingTool('a1', [
+      { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
+    ]);
+    stores.messagesStore.getState().resolvePendingTool('a1', [
+      { content: '● Agent "查找实现" finished · 5s', style: {}, indent: 0 },
+    ], 'agent-completion');
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Agent "查找实现" finished · 5s');
+    // 不含 pending 的 spawn_agent 行(已被替换)
+    expect(frame).not.toContain('spawn_agent({"role"');
+  });
+
+  it('长中文标签截断为单行,不换行', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().appendPendingTool('a1', [
+      { content: '● spawn_agent', style: {}, indent: 0 },
+    ]);
+    const longLabel = '这是一个非常长的子代理任务描述用于测试截断'.repeat(2);
+    stores.messagesStore.getState().resolvePendingTool('a1', [
+      { content: `● Agent "${longLabel}" finished · 5s`, style: {}, indent: 0 },
+    ], 'agent-completion');
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={24}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    // 含 Agent 前缀(截断后仍保留开头)
+    expect(frame).toContain('Agent');
+  });
+});

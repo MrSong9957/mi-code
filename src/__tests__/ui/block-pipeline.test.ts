@@ -37,11 +37,20 @@ function mockRenderer() {
     startToolCall: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[]) => {
       for (const line of lines) prints.push({ text: line.content, role: 'tool', style: line.style, toolUseId });
     }),
-    finishToolCall: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[]) => {
+    finishToolCall: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[], finalKind?: string) => {
       const index = prints.map(print => print.toolUseId).lastIndexOf(toolUseId);
-      prints.splice(index + 1, 0, ...lines.slice(1).map(line => ({
-        text: line.content, role: 'tool', style: line.style, toolUseId,
-      })));
+      if (finalKind === 'agent-completion') {
+        // AUTO-0025-transient:agent-completion 替换整个 pending 消息为单行(不保留 call 行)
+        if (index >= 0) {
+          prints[index] = { text: lines[0]?.content ?? '', role: 'tool', style: lines[0]?.style, toolUseId };
+        } else {
+          prints.push({ text: lines[0]?.content ?? '', role: 'tool', style: lines[0]?.style, toolUseId });
+        }
+      } else {
+        prints.splice(index + 1, 0, ...lines.slice(1).map(line => ({
+          text: line.content, role: 'tool', style: line.style, toolUseId,
+        })));
+      }
       return true;
     }),
     appendToolHook: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[]) => {
@@ -458,6 +467,92 @@ describe('BlockPipeline', () => {
       // 即使没 result，call 行也得渲染出来（不能因缓冲而丢失）
       expect(contentTexts.some(t => t.includes('orphan.ts')), '未配对 call 不应丢失').toBe(true);
     });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// AUTO-0025-transient Task 3:spawn_agent 完成展示。
+//
+// 验证:完成的 spawn_agent 渲染为单行 ● Agent "..." finished · Ns,
+// 完整输出注册为 expandable 供 Ctrl+O。malformed 输出走通用降级。
+// ────────────────────────────────────────────────────────────────────
+
+describe('BlockPipeline spawn_agent 完成展示 (AUTO-0025-transient Task 3)', () => {
+  it('正常结果:单行 ● Agent "..." finished · duration', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
+      input: { role: 'explore', description: '查找实现', prompt: '...' },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a1', durationMs: 147_000,
+      output: '[Subagent status=completed]\nfull child result',
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    expect(contentTexts.some(t => t.includes('Agent "查找实现" finished · 2m 27s'))).toBe(true);
+  });
+
+  it('正常结果:Ctrl+O full lines 含完整子代理正文(无 envelope)', () => {
+    const { renderer } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
+      input: { role: 'explore', prompt: '...' },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a1', durationMs: 5_000,
+      output: '[Subagent status=completed]\nfull child result body',
+    });
+    const expandable = pipeline.getLastExpandableFullLines();
+    expect(expandable).not.toBeNull();
+    expect(expandable!.lines.map(l => l.content).join('\n')).toContain('full child result body');
+    expect(expandable!.lines.map(l => l.content).join('\n')).not.toContain('[Subagent status=');
+  });
+
+  it('malformed 输出(无 envelope):走通用降级,含 call 行 + 原始预览', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
+      input: { role: 'explore', prompt: '...' },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a1', durationMs: 1_000,
+      output: 'malformed output',
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    // 含 spawn_agent call 行(通用降级)
+    expect(contentTexts.some(t => t.includes('spawn_agent'))).toBe(true);
+    // 不含 Agent finished 专用行
+    expect(contentTexts.some(t => t.includes('Agent "'))).toBe(false);
+    // 无 expandable(通用降级不注册)
+    expect(pipeline.getLastExpandableFullLines()).toBeNull();
+  });
+
+  it('并行 spawn_agent 结果乱序到达:各自独立 finalize', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
+      input: { role: 'explore', description: '任务一', prompt: 'p1' },
+    });
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a2',
+      input: { role: 'plan', description: '任务二', prompt: 'p2' },
+    });
+    // 结果乱序:a2 先到
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a2', durationMs: 3_000,
+      output: '[Subagent status=completed]\nresult two',
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a1', durationMs: 5_000,
+      output: '[Subagent status=completed]\nresult one',
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    expect(contentTexts.some(t => t.includes('任务一'))).toBe(true);
+    expect(contentTexts.some(t => t.includes('任务二'))).toBe(true);
   });
 });
 

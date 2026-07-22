@@ -10,7 +10,7 @@
 // 这里返回真正的 React 元素,交给 Ink reconciler + <Static> 管理写入时机。
 
 import React from 'react';
-import { Text } from 'ink';
+import { Box, Text } from 'ink';
 import { renderFinalizedLine } from '../inline/text-layout.js';
 import type { TuiMessage } from '../types.js';
 
@@ -20,6 +20,16 @@ export interface MessageLineProps {
 }
 
 export function MessageLine({ msg, cols }: MessageLineProps): React.ReactElement {
+  // AUTO-0025-transient Task 3:agent-completion 固定单行渲染(truncate,不换行)。
+  // 物理本质:完成的子代理只展示一行 ● Agent "..." finished · Ns,过长截断。
+  if (msg.kind === 'agent-completion') {
+    const line = msg.lines[0];
+    return (
+      <Box height={1} width={cols}>
+        <Text wrap="truncate-end">{line?.content ?? '● Agent finished'}</Text>
+      </Box>
+    );
+  }
   return (
     <Text>
       {msg.lines.flatMap((line, lineIdx) =>

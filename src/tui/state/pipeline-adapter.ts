@@ -119,8 +119,8 @@ export class PipelineToStoreAdapter implements PipelineRenderer {
     this.store.getState().appendPendingTool(toolUseId, lines);
   }
 
-  finishToolCall(toolUseId: string, lines: FormattedLine[]): boolean {
-    return this.store.getState().resolvePendingTool(toolUseId, lines);
+  finishToolCall(toolUseId: string, lines: FormattedLine[], finalKind?: 'tool-progress' | 'agent-completion'): boolean {
+    return this.store.getState().resolvePendingTool(toolUseId, lines, finalKind);
   }
 
   appendToolHook(toolUseId: string, lines: FormattedLine[]): boolean {

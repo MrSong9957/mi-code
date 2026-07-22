@@ -73,7 +73,7 @@ export type Block =
   | { kind: 'thinking_end'; durationSec: number; filesRead: number }
   | { kind: 'assistant_text'; text: string; isFinal: boolean }  // 流式 markdown
   | { kind: 'tool_call'; name: string; input: Record<string, unknown>; toolUseId?: string }
-  | { kind: 'tool_result'; name: string; input?: Record<string, unknown>; output: string; toolUseId?: string }
+  | { kind: 'tool_result'; name: string; input?: Record<string, unknown>; output: string; toolUseId?: string; durationMs?: number }
   | { kind: 'hook'; text: string };  // PostToolUse 等 hook 日志（紧跟 tool_result，同步渲染）
 
 /** 终端尺寸 */
