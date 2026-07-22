@@ -74,31 +74,36 @@ describe('BlockPipeline', () => {
       expect(prints[0].style).toMatchObject({ fg: 'success', bold: true });
     });
 
-    it('thinking_start → printMessage("● Thinking…", magenta)；首个模型块前有空行', () => {
+    it('thinking_start → awaitingContent,不立即固化标题行(AUTO-0025-transient)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
-      // 第一个模型块前强制有空行（前面有 banner/用户输入）
-      expect(prints[0].text).toBe('');
-      const content = firstContent(prints);
-      expect(content!.text).toBe('● Thinking…');
+      // 新行为:start 不固化,不产生任何 printMessage
+      expect(prints.length).toBe(0);
+      expect(renderer.appendStreamingThinking).not.toHaveBeenCalled();
     });
 
-    it('thinking_delta → 不渲染（折叠），仅累积', () => {
+    it('thinking_delta 纯空白 → 不渲染;首个非空 → appendStreamingThinking(AUTO-0025-transient)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
+      p.emit({ kind: 'thinking_start' });
+      p.emit({ kind: 'thinking_delta', content: '   ' });
+      expect(renderer.appendStreamingThinking).not.toHaveBeenCalled();
       p.emit({ kind: 'thinking_delta', content: '用户问...' });
-      expect(prints.length).toBe(0); // 不产生任何输出
+      // 首个非空 delta 显示临时行
+      expect(renderer.appendStreamingThinking).toHaveBeenCalledWith('Thinking…');
+      expect(renderer.appendStreamingThinking).toHaveBeenCalledTimes(1);
     });
 
-    it('thinking_end → printMessage("  thought for Ns...", dim)，需先 thinking_start', () => {
+    it('thinking_end → printMessage("  Thought for Ns...", dim),需先 visible(AUTO-0025-transient)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
+      p.emit({ kind: 'thinking_delta', content: '实质内容' });
       p.emit({ kind: 'thinking_end', durationSec: 5, filesRead: 2 });
-      const summary = prints.find(p => p.text.includes('thought for'));
+      const summary = prints.find(p => p.text.includes('Thought for'));
       expect(summary).toBeDefined();
-      expect(summary!.text).toBe('  thought for 5s, read 2 files (ctrl+o to expand)');
+      expect(summary!.text).toBe('  Thought for 5s, read 2 files (ctrl+o to expand)');
       expect(summary!.style).toMatchObject({ dim: true });
     });
 
@@ -174,14 +179,17 @@ describe('BlockPipeline', () => {
   });
 
   describe('块间空行（集中化）', () => {
-    it('首个模型块前有空行（前面总有 banner/用户输入）', () => {
+    it('首个模型块前有空行（AUTO-0025-transient:用 tool_call 触发,thinking_start 不产输出）', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
+      // thinking_start 不产生输出(AUTO-0025-transient awaitingContent)
       p.emit({ kind: 'thinking_start' });
-      // 第一个模型块：强制加空行（pipeline 假设前面有非模型内容）
-      expect(prints[0].text).toBe('');
+      // tool_call 是第一个产出内容的模型块:强制加空行
+      p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' }, toolUseId: 't1' });
+      p.emit({ kind: 'tool_result', name: 'run_bash', output: 'done', toolUseId: 't1' });
+      expect(prints[0].text).toBe(''); // 首个模型块前空行
       const content = firstContent(prints);
-      expect(content!.text).toBe('● Thinking…');
+      expect(content!.text).toBe('● Bash(ls)');
     });
 
     it('第二个块前加空行（tool_call 在 thinking_end 之后）', () => {
@@ -197,15 +205,17 @@ describe('BlockPipeline', () => {
       expect(toolIdx).toBeGreaterThan(0);
     });
 
-    it('assistant_text 多次 delta 只加一次空行', () => {
+    it('assistant_text 多次 delta 只加一次空行(AUTO-0025-transient)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'thinking_start' }); // 建立块 1（含首块空行）
+      // 用 thinking visible 建立首块(thinking_start + 非空 delta)
+      p.emit({ kind: 'thinking_start' });
+      p.emit({ kind: 'thinking_delta', content: '实质内容' }); // → visible,openModelBlock 加首空行
       // assistant 流式块
       p.emit({ kind: 'assistant_text', text: 'a', isFinal: false });
       p.emit({ kind: 'assistant_text', text: 'ab', isFinal: false });
       p.emit({ kind: 'assistant_text', text: 'abc', isFinal: true });
-      // 空行数：首块 1（thinking 前）+ thinking→assistant 间 1 = 2
+      // 空行数:thinking visible 首 1 + thinking→assistant 间 1 = 2
       const emptyCount = prints.filter(p => p.text === '').length;
       expect(emptyCount).toBe(2);
     });
@@ -244,8 +254,8 @@ describe('BlockPipeline', () => {
       p.emit({ kind: 'thinking_start' });
       p.emit({ kind: 'thinking_delta', content: '完整思考内容' });
       p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
-      // 折叠态（主屏）：应含 thought for 摘要
-      expect(prints.some(p => p.text.includes('thought for'))).toBe(true);
+      // 折叠态（主屏）：应含 Thought for 摘要(AUTO-0025-transient 大写)
+      expect(prints.some(p => p.text.includes('Thought for'))).toBe(true);
     });
 
     it('getLastExpandableFullLines 返回 thinking 完整内容（覆盖层渲染用）', () => {

@@ -94,11 +94,19 @@ interface BufferedTool {
  * - thinkingActive：thinking 块是否进行中（决定 thinking_end 是否输出摘要）
  * - 所有 ●/⎿ 前缀、缩进、样式都从这里产出（调 MessageFormatter + block-format）
  */
+/**
+ * AUTO-0025-transient:thinking 状态机三态。
+ * - idle:无 thinking 活动
+ * - awaitingContent:收到 thinking_start 但还没非空 delta(不显示临时行)
+ * - visible:首个非空 delta 已显示临时闪烁行(appendStreamingThinking 已调用)
+ */
+type ThinkingPhase = 'idle' | 'awaitingContent' | 'visible';
+
 export class BlockPipeline {
   private renderer: PipelineRenderer;
   private hasContent = false;
   private assistantGapApplied = false;
-  private thinkingActive = false;
+  private thinkingPhase: ThinkingPhase = 'idle';
   /**
    * 工具块缓冲区（方案 C：视觉位置修复）。
    *
@@ -136,27 +144,36 @@ export class BlockPipeline {
         break;
 
       case 'thinking_start':
-        // 固化 ● Thinking… 标题行。原始思考仅缓存，结束后打印摘要行。
-        this.openModelBlock();
-        this.print(MessageFormatter.format('thinking', {}, 'Thinking…'), 'thinking_header');
-        this.thinkingActive = true;
+        // AUTO-0025-transient:不立即固化标题行。进入 awaitingContent,等首个非空 delta。
+        // 物理本质:thinking_start 只是"准备态",真正显示要等模型吐出实质内容。
+        if (this.thinkingPhase === 'idle') {
+          this.thinkingPhase = 'awaitingContent';
+          this.thinkingBuffer = '';
+        }
         break;
 
-      case 'thinking_delta':
-        // 仅累积供 ctrl+o 展开，禁止把原始推理流写进默认可见消息区。
+      case 'thinking_delta': {
+        // 累积供 Ctrl+O 展开。首个非空 delta 才显示临时闪烁行。
+        if (this.thinkingPhase === 'idle') this.thinkingPhase = 'awaitingContent';
         this.thinkingBuffer += block.content;
+        if (this.thinkingPhase === 'awaitingContent' && this.thinkingBuffer.trim().length > 0) {
+          // awaitingContent → visible:插模型块分隔符(仅这一次),显示临时行。
+          this.openModelBlock();
+          this.renderer.appendStreamingThinking('Thinking…');
+          this.thinkingPhase = 'visible';
+        }
         break;
+      }
 
       case 'thinking_end': {
-        // thinking 结束：擦除流式草稿 → 注册可折叠块 → 打印摘要行（折叠）
-        if (this.thinkingActive) {
-          // 先擦除流式思考草稿区，让摘要行替代它
-          this.renderer.eraseStreamingThinking();
+        // AUTO-0025-transient:完成顺序 registerExpandable → eraseThinkingProgress → appendSummary → clearBuffer。
+        // 只有 visible 态才产生摘要(纯空白的 awaitingContent 只重置状态)。
+        if (this.thinkingPhase === 'visible') {
           const summaryLines = MessageFormatter.format('thinking_end', {
             duration: block.durationSec,
             filesRead: block.filesRead,
           });
-          // 注册可折叠块：summary=摘要行，full=完整思考文本（按行拆分 + dim 缩进）
+          // 先注册可折叠块:summary=摘要行,full=完整思考文本(按行拆分 + dim 缩进)
           const id = `thinking-${++this.idCounter}`;
           const fullLines = this.thinkingBuffer
             ? this.thinkingBuffer.split('\n').map(l => ({
@@ -164,14 +181,16 @@ export class BlockPipeline {
                 style: BLOCK_STYLES.dim,
                 indent: INDENT.nested,
               }))
-            : summaryLines; // 无思考内容时 full = summary
+            : summaryLines;
           this.expandable.add({ id, kind: 'thinking', summaryLines, fullLines });
-          // 摘要用 'thinking_summary' role（非 assistant），强制 messages-store 新建消息，
-          // 避免 appendLine 续接到已固化的 ● Thinking… 消息导致渲染层跳过渲染。
+          // 再擦除临时行(让摘要行替代闪烁的 Thinking…)
+          this.renderer.eraseStreamingThinking();
+          // 摘要用 'thinking_summary' role(非 assistant),强制 messages-store 新建消息,
+          // 避免 appendLine 续接已固化消息导致渲染层跳过。
           this.print(summaryLines, 'thinking_summary');
         }
+        this.thinkingPhase = 'idle';
         this.thinkingBuffer = '';
-        this.thinkingActive = false;
         break;
       }
 
@@ -399,14 +418,27 @@ export class BlockPipeline {
     this.renderer.flushNow();
   }
 
+  /**
+   * AUTO-0025-transient:重置 thinking 状态。
+   * eraseVisible=true 且当前 visible 时,先擦除临时行(用于 clearTurnState 保留历史消息场景)。
+   * eraseVisible=false 时(clear 已会 clearMessages 物理清屏)只重置 phase 和 buffer。
+   */
+  private resetThinkingState(eraseVisible: boolean): void {
+    if (eraseVisible && this.thinkingPhase === 'visible') {
+      this.renderer.eraseStreamingThinking();
+    }
+    this.thinkingPhase = 'idle';
+    this.thinkingBuffer = '';
+  }
+
   /** 清空（新 turn 开始时） */
   clear(): void {
     // 先把未交付的工具块 flush 出去，避免丢失
     this.flushAllPending();
     this.hasContent = false;
     this.assistantGapApplied = false;
-    this.thinkingActive = false;
-    this.thinkingBuffer = '';
+    // clear 会 clearMessages 物理清屏,临时行随之消失,只需重置 phase/buffer。
+    this.resetThinkingState(false);
     this.lastFinishedToolUseId = undefined;
     this.expandable.clear();
     this.renderer.clearMessages();
@@ -420,7 +452,8 @@ export class BlockPipeline {
   clearTurnState(): void {
     // flush 未交付的工具块（防丢失）
     this.flushAllPending();
-    this.thinkingBuffer = '';
+    // clearTurnState 保留历史消息,visible 临时行需显式擦除。
+    this.resetThinkingState(true);
     this.lastFinishedToolUseId = undefined;
     this.expandable.clear();
     // hasContent 保持 true（屏幕上仍有历史内容，新块前要加空行）

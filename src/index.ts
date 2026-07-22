@@ -26,7 +26,7 @@ import { BlockPipeline } from './ui/block-pipeline.js';
 import { bootstrap, type BootstrapHandle } from './tui/bootstrap.js';
 import { readSpinnerContext } from './tui/spinner-context.js';
 import { EMPTY_SPINNER_CONTEXT } from './tui/state/spinner-store.js';
-import { finalizeTurnLifecycle, handleTurnLoopEnd } from './tui/turn-lifecycle.js';
+import { finalizeTurnLifecycle, handleTurnLoopEnd, startTurnThinking, finishTurnThinking, idleTurnThinking, type TurnThinkingState } from './tui/turn-lifecycle.js';
 import { writeResumeHint } from './cli/resume-hint.js';
 import { ConfigStore, SUPPORTED_PROVIDERS } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
@@ -633,8 +633,6 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   lastSystemPrompt = systemPrompt;
 
   isProcessing = true;
-  let thinkingContent = '';
-  let thinkingStart = Date.now();
 
   // 动态读 provider/apiKey/model(支持运行时 /model /provider 切换)。
   // createStreamClient 工厂按 provider 分发(anthropic/openai)。
@@ -654,6 +652,10 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const compactClient = createStreamClient(provider, apiKey, currentSmallModel(), baseUrl);
   const eventBus = new StreamEventBus();
   const activeToolIds = new Set<string>();
+  // AUTO-0025-transient:用不可变 TurnThinkingState 替换原始 thinkingActive/thinkingContent/thinkingStart。
+  // 所有退出路径(content_block_stop thinking、首个 assistant text、onToolCall、loop-end、finally)
+  // 统一走 finishTurnThinking,幂等保证只 emit 一次 thinking_end。
+  let thinking: TurnThinkingState = idleTurnThinking();
   const turnLifecycle = {
     activeToolIds,
     setSpinnerHasActiveTools: (hasActiveTools: boolean) => {
@@ -668,13 +670,13 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     now: Date.now,
   };
   eventBus.onToolCall(d => {
+    // AUTO-0025-transient:工具乱序兼容——thinking 仍 active 时,先幂等结束 thinking,
+    // 再创建工具行。多个并行 tool_call 只 emit 一次 thinking_end(第二次 finish 因 active=false 跳过)。
+    thinking = finishTurnThinking(turnLifecycle, thinking);
+    tuiHandle?.setSpinnerMode('tool-use');
     activeToolIds.add(d.toolUseId);
     tuiHandle?.setSpinnerHasActiveTools(true);
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
-    tuiHandle?.setSpinnerMode('tool-use');
-    // 不再 setLabel('Running xxx')：避免一次 turn 内多次工具调用时 spinner 文字反复切换闪烁。
-    // 工具调用信息已通过 tool_call block 进入消息流（pipeline.emit），用户在正文区可见。
-    // spinner 保持显示 verb（Working/Cogitated…），仅靠 mode='tool-use' 的 shimmer/呼吸灯表达活跃。
   });
   eventBus.onToolResult(d => {
     activeToolIds.delete(d.toolUseId);
@@ -705,7 +707,6 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   let assistantText = '';
   let persistedCount = sessionMessages.length;
   const blockTypes = new Map<number, string>();
-  let thinkingActive = false; // 收到 content_block_start(thinking) 时设 true
   // Spinner 立即启动(label="Connecting..."),收到第一个 event 后切到正常 verb。
   // 兼顾"用户有即时反馈"和"状态准确"。
   let spinnerStarted = false;
@@ -741,19 +742,15 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       if ('type' in msg && msg.type === 'content_block_start') {
         const cbs = msg as { type: 'content_block_start'; index: number; blockType: string };
         blockTypes.set(cbs.index, cbs.blockType);
-        if (cbs.blockType === 'thinking' && !thinkingActive) {
+        if (cbs.blockType === 'thinking' && !thinking.active) {
+          thinking = startTurnThinking(thinking, Date.now());
           pipeline.emit({ kind: 'thinking_start' });
-          thinkingStart = Date.now();
-          thinkingActive = true;
           tuiHandle?.setSpinnerMode('thinking');
         }
       } else if ('type' in msg && msg.type === 'content_block_stop') {
         const cstop = msg as { type: 'content_block_stop'; index: number };
-        if (blockTypes.get(cstop.index) === 'thinking' && thinkingActive) {
-          const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-          pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
-          thinkingContent = '';
-          thinkingActive = false;
+        if (blockTypes.get(cstop.index) === 'thinking' && thinking.active) {
+          thinking = finishTurnThinking(turnLifecycle, thinking);
           tuiHandle?.setSpinnerMode('responding');
         }
       } else if ('type' in msg && msg.type === 'content_block_delta') {
@@ -761,17 +758,18 @@ async function handleUserSubmit(rawText: string): Promise<void> {
         if (delta.content) tuiHandle?.spinnerOnToken(delta.content.length);
         if (delta.deltaType === 'text' && delta.content) {
           gotAnyResponse = true;
-          if (assistantText === '' && thinkingContent) {
-            const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-            pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
-            thinkingContent = '';
-            thinkingActive = false;
+          if (assistantText === '' && thinking.active) {
+            thinking = finishTurnThinking(turnLifecycle, thinking);
             tuiHandle?.setSpinnerMode('responding');
           }
           assistantText += delta.content;
           pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: false });
         } else if (delta.deltaType === 'thinking' && delta.content) {
-          thinkingContent += delta.content;
+          // 无 start 的隐式 delta(防御):先 start 再 emit delta
+          if (!thinking.active) {
+            thinking = startTurnThinking(thinking, Date.now());
+            pipeline.emit({ kind: 'thinking_start' });
+          }
           pipeline.emit({ kind: 'thinking_delta', content: delta.content });
         }
       } else if ('type' in msg && msg.type === 'message_start') {
@@ -823,13 +821,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
     }
   } finally {
-    const finalizedThinking = finalizeTurnLifecycle(turnLifecycle, {
-      thinkingActive,
-      thinkingContent,
-      thinkingStart,
-    });
-    thinkingActive = finalizedThinking.thinkingActive;
-    thinkingContent = finalizedThinking.thinkingContent;
+    // AUTO-0025-transient:统一退出路径——finalizeTurnLifecycle 幂等结束 thinking + stop spinner。
+    thinking = finalizeTurnLifecycle(turnLifecycle, thinking);
     isProcessing = false;
     currentAbortController = null;
     // lastSubmittedAgentText 在 turn 结束时清空。
