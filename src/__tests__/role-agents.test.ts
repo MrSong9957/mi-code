@@ -221,6 +221,56 @@ describe('createSpawnAgentTool', () => {
     await executor({ role: 'explore', prompt: 'x' });
     expect(capturedChecker).toBe(checker);
   });
+
+  /** 构造捕获 runner：把每次调用的 options 存入 captured.options */
+  function makeFakeRunner(captured: { options: SubagentOptions | null }) {
+    return async (_p: string, _t: ToolRegistry, opts: SubagentOptions): Promise<SubagentResult> => {
+      captured.options = opts;
+      return { text: 'fork summary', isBackground: false };
+    };
+  }
+
+  it('fork=true 时传 forkMode + parentSystem + maxSteps=50', async () => {
+    const fakeRegistry = makeRegistry();
+    const captured = { options: null as SubagentOptions | null };
+    const tool = createSpawnAgentTool(
+      fakeRegistry,
+      undefined,          // clientProvider
+      undefined,          // permissionChecker
+      makeFakeRunner(captured),
+      undefined,          // skillsDescription
+      () => 'parent system prompt',  // getParentSystemPrompt
+    );
+    await tool.executor({ role: 'general', prompt: 'do something', fork: true });
+    expect(captured.options?.forkMode).toBe(true);
+    expect(captured.options?.parentSystem).toBe('parent system prompt');
+    expect(captured.options?.maxSteps).toBe(50);
+    // fork 模式不传 role
+    expect(captured.options?.role).toBeUndefined();
+  });
+
+  it('fork 省略时不传 forkMode', async () => {
+    const fakeRegistry = makeRegistry();
+    const captured = { options: null as SubagentOptions | null };
+    const tool = createSpawnAgentTool(
+      fakeRegistry,
+      undefined,
+      undefined,
+      makeFakeRunner(captured),
+      undefined,
+      () => 'parent system prompt',
+    );
+    await tool.executor({ role: 'general', prompt: 'do something' });
+    expect(captured.options?.forkMode).toBeFalsy();
+    expect(captured.options?.parentSystem).toBeUndefined();
+  });
+
+  it('fork=true 但无 getParentSystemPrompt 时返回 Error', async () => {
+    const fakeRegistry = makeRegistry();
+    const tool = createSpawnAgentTool(fakeRegistry);
+    const result = await tool.executor({ role: 'general', prompt: 'do something', fork: true });
+    expect(result).toContain('Error');
+  });
 });
 
 describe('enhanceSubagentSystemPrompt', () => {

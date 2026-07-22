@@ -170,6 +170,9 @@ function getShortDir(): string {
 const GIT_BRANCH = getGitBranch();
 const SHORT_DIR = getShortDir();
 
+/** 主 agent 最近一轮的 system prompt（供 fork 子代理继承） */
+let lastSystemPrompt = '';
+
 const childToolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, backgroundManager, taskBoard, worktreeManager);
 const toolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, backgroundManager, taskBoard, worktreeManager);
 // task / spawn_self_organizing / spawn_agent 都用同一个 clientProvider 闭包：
@@ -204,6 +207,7 @@ const spawnAgentTool = createSpawnAgentTool(
   permissionChecker,
   runSubagent,
   truncateSkillsDescription(skillRegistry.describeAvailable()),
+  () => lastSystemPrompt,  // getParentSystemPrompt
 );
 toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 const loadSkillTool = createLoadSkillTool(skillRegistry);
@@ -613,6 +617,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     reminder ? `\n${reminder}` : '',
     planModeInstruction,
   ].join('\n');
+
+  // 记录最近一轮的 system prompt，供 fork 子代理继承
+  lastSystemPrompt = systemPrompt;
 
   isProcessing = true;
   let thinkingContent = '';

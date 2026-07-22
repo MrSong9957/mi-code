@@ -49,6 +49,8 @@ export function createSpawnAgentTool(
   runSubagentFn: SubagentRunner = runSubagent,
   /** 可用技能描述（注入子代理 system prompt，让子代理发现/调用技能） */
   skillsDescription?: string,
+  /** 获取主 agent 当前 system prompt（fork 模式用） */
+  getParentSystemPrompt?: () => string,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
   // 动态生成工具描述：从 ROLE_REGISTRY 的 whenToUse 字段拼装
   const roleLines = (['explore', 'plan', 'general'] as Role[])
@@ -62,6 +64,7 @@ export function createSpawnAgentTool(
         'Spawn a role-specialized subagent with fresh context to handle a subtask.',
         roleLines,
         'Returns the subagent\'s summary text. The subagent cannot see your conversation history.',
+        '- fork=true: inherit your full system prompt (a worker with your exact capabilities, for independent parallel subtasks).',
       ].join('\n'),
       parameters: {
         type: 'object',
@@ -73,6 +76,10 @@ export function createSpawnAgentTool(
           prompt: {
             type: 'string',
             description: 'The task description for the subagent. Be specific about what to find or design.',
+          },
+          fork: {
+            type: 'boolean',
+            description: 'Set to true for a subagent that inherits your full system prompt. Use when you need a worker with your exact capabilities for an independent parallel subtask.',
           },
         },
         required: ['role', 'prompt'],
@@ -89,6 +96,26 @@ export function createSpawnAgentTool(
         return 'Error: prompt is required';
       }
 
+      const fork = input.fork === true;
+
+      if (fork) {
+        if (!getParentSystemPrompt) {
+          return 'Error: fork mode is not available (no parent system prompt access).';
+        }
+        // fork 模式：继承主 agent system prompt，不走角色白名单
+        const result = await runSubagentFn(prompt, childTools, {
+          client: clientProvider ? clientProvider('inherit') : undefined,
+          permissionChecker,
+          maxSteps: 50,  // fork 用于长任务
+          skillsDescription,
+          forkMode: true,
+          parentSystem: getParentSystemPrompt(),
+          // role 不传（undefined）→ filterToolsByRole 返回全量减黑名单
+        });
+        return result.text;
+      }
+
+      // 正常角色派发（现有逻辑不变）
       // 从角色配置读 model 和 maxTurns（对齐 CC 的 per-role model/maxTurns）
       const roleConfig = ROLE_REGISTRY[role as Role];
       const modelChoice = roleConfig?.model ?? 'small';
