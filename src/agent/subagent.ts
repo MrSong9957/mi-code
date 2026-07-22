@@ -13,6 +13,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { runWithVercelAI } from './llm-vercel.js';
 import { streamingQuery } from './streaming-query.js';
+import { StreamEventBus } from './stream-event-bus.js';
 import { ToolRegistry } from './tool-registry.js';
 import type { RegisteredTool, StreamingLLMClient } from './types.js';
 import { ROLE_REGISTRY, filterToolsByRole, type Role } from './roles.js';
@@ -148,7 +149,7 @@ async function runSubagentWithClient(
   prompt: string,
   system: string,
   options: SubagentOptions,
-): Promise<{ text: string; toolCallCount: number; successfulToolResultCount: number }> {
+): Promise<{ text: string; toolCallCount: number; successfulToolResultCount: number; terminationReason: string }> {
   const controller = new AbortController();
   // 子代理作为有限步循环：显式 maxSteps 作为安全网（默认 10，对齐 Vercel 回退路径）
   const maxTurns = options.maxSteps || 10;
@@ -160,13 +161,22 @@ async function runSubagentWithClient(
   const toolCallNames: string[] = [];
   let toolCallCount = 0;
   let successfulToolResultCount = 0;
-  for await (const message of streamingQuery(client, subRegistry, prompt, {
+
+  // 用 StreamEventBus 捕获真实终止原因（end_turn / max_turns / user_abort / error）
+  const eventBus = new StreamEventBus();
+  let terminationReason = 'unknown';
+  const onLoopEnd = ({ reason }: { reason: string }) => { terminationReason = reason; };
+  eventBus.onLoopEnd(onLoopEnd);
+
+  try {
+    for await (const message of streamingQuery(client, subRegistry, prompt, {
     systemPrompt: system,
     tools: Array.from(toolSubset.values()).map(t => t.definition),
     signal: controller.signal,
     maxTurns,
     permissionChecker: options.permissionChecker,
     model: options.model,
+    eventBus,
   })) {
     if (message !== null && typeof message === 'object' && 'type' in message) {
       if (message.type === 'assistant') {
@@ -198,6 +208,9 @@ async function runSubagentWithClient(
       }
     }
   }
+  } finally {
+    eventBus.offLoopEnd(onLoopEnd);
+  }
   // 模型可能只调工具不输出文字（某些 GLM/MiMo 行为），用工具调用信息兜底
   if (!resultText && toolCallNames.length > 0) {
     const counts: Record<string, number> = {};
@@ -207,9 +220,10 @@ async function runSubagentWithClient(
       text: `Sub-agent completed ${toolCallNames.length} tool call(s) [${summary}] — no explicit text summary produced.`,
       toolCallCount,
       successfulToolResultCount,
+      terminationReason,
     };
   }
-  return { text: resultText || '(no summary)', toolCallCount, successfulToolResultCount };
+  return { text: resultText || '(no summary)', toolCallCount, successfulToolResultCount, terminationReason };
 }
 
 /**
@@ -225,6 +239,21 @@ function finalizeSubagentExecution(
 
   if (isBackground) {
     return { text: '[Subagent launched in background]', ...base, status: 'background', terminationReason: 'background' };
+  }
+
+  // max_turns / user_abort / error 优先于 explore 证据门槛
+  if (execution.terminationReason !== 'end_turn') {
+    const reasonLabel = execution.terminationReason === 'max_turns'
+      ? `reached max turns`
+      : execution.terminationReason === 'user_abort'
+        ? 'aborted by user'
+        : `terminated: ${execution.terminationReason}`;
+    return {
+      text: `[Subagent incomplete: ${reasonLabel}] ${text || '(no final text)'}`,
+      ...base,
+      status: 'incomplete',
+      terminationReason: execution.terminationReason,
+    };
   }
 
   if (role === 'explore' && execution.successfulToolResultCount === 0) {
@@ -283,12 +312,14 @@ export async function runSubagent(
     let text: string;
     let toolCallCount = 0;
     let successfulToolResultCount = 0;
+    let terminationReason = 'end_turn';
     if (options.client) {
       // 多 provider 路径：走主 agent 的 streamingQuery，支持 OpenAI/MiMo 等
       const exec = await runSubagentWithClient(options.client, toolSubset, prompt, effectiveSystem, options);
       text = exec.text;
       toolCallCount = exec.toolCallCount;
       successfulToolResultCount = exec.successfulToolResultCount;
+      terminationReason = exec.terminationReason;
     } else {
       // 回退：Vercel AI SDK（仅 Anthropic；测试路径/向后兼容）
       const result = await runWithVercelAI(prompt, toolSubset, {
@@ -310,7 +341,7 @@ export async function runSubagent(
     return finalizeSubagentExecution(text, false, options.role, {
       toolCallCount,
       successfulToolResultCount,
-      terminationReason: 'end_turn',
+      terminationReason,
     });
   } finally {
     if (prevCwd) process.chdir(prevCwd);

@@ -123,4 +123,19 @@ describe('subagent result integrity', () => {
     expect(result.evidence.successfulToolResultCount).toBe(1);
     expect(result.text).toBe('Verified modules: agent, tui, ui');
   });
+
+  it('达到 maxTurns 时不把最后一句过程文本当成完整结果', async () => {
+    const client = new ScriptedStreamClient([[
+      { type: 'text', text: 'Now let me check the test files...' },
+      { type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } },
+    ]]);
+    const result = await runSubagent('inspect tests', makeReadRegistry(), {
+      role: 'explore', client, maxSteps: 1,
+    });
+
+    expect(result.status).toBe('incomplete');
+    expect(result.terminationReason).toBe('max_turns');
+    expect(result.text).toContain('[Subagent incomplete: reached max turns');
+    expect(result.text).toContain('Now let me check the test files...');
+  });
 });
