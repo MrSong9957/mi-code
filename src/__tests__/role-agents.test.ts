@@ -146,7 +146,7 @@ describe('createSpawnAgentTool', () => {
     const calls: { prompt: string; role?: string }[] = [];
     const mockRunner = vi.fn(async (prompt: string, _tools: ToolRegistry, opts: SubagentOptions): Promise<SubagentResult> => {
       calls.push({ prompt, role: opts.role });
-      return { text: 'subagent summary', isBackground: false };
+      return { text: 'subagent summary', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     });
     const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
 
@@ -161,7 +161,7 @@ describe('createSpawnAgentTool', () => {
     const calls: { role?: string }[] = [];
     const mockRunner = vi.fn(async (_p: string, _t: ToolRegistry, opts: SubagentOptions): Promise<SubagentResult> => {
       calls.push({ role: opts.role });
-      return { text: 'plan summary', isBackground: false };
+      return { text: 'plan summary', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     });
     const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
     await executor({ role: 'plan', prompt: 'design api' });
@@ -189,7 +189,7 @@ describe('createSpawnAgentTool', () => {
     const fakeClient = { stream: async function* () { /* mock client */ } };
     const mockRunner = vi.fn(async (_p: string, _t: ToolRegistry, opts: SubagentOptions): Promise<SubagentResult> => {
       capturedClient = opts.client;
-      return { text: 'ok', isBackground: false };
+      return { text: 'ok', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     });
     const { executor } = createSpawnAgentTool(registry, () => fakeClient, undefined, mockRunner);
     await executor({ role: 'general', prompt: 'x' });
@@ -202,7 +202,7 @@ describe('createSpawnAgentTool', () => {
     let capturedClient: unknown = 'sentinel';
     const mockRunner = vi.fn(async (_p: string, _t: ToolRegistry, opts: SubagentOptions): Promise<SubagentResult> => {
       capturedClient = opts.client;
-      return { text: 'ok', isBackground: false };
+      return { text: 'ok', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     });
     const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
     await executor({ role: 'general', prompt: 'x' });
@@ -215,7 +215,7 @@ describe('createSpawnAgentTool', () => {
     let capturedChecker: PermissionChecker | undefined;
     const mockRunner = vi.fn(async (_p: string, _t: ToolRegistry, opts: SubagentOptions): Promise<SubagentResult> => {
       capturedChecker = opts.permissionChecker;
-      return { text: 'ok', isBackground: false };
+      return { text: 'ok', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     });
     const { executor } = createSpawnAgentTool(registry, undefined, checker, mockRunner);
     await executor({ role: 'explore', prompt: 'x' });
@@ -226,7 +226,7 @@ describe('createSpawnAgentTool', () => {
   function makeFakeRunner(captured: { options: SubagentOptions | null }) {
     return async (_p: string, _t: ToolRegistry, opts: SubagentOptions): Promise<SubagentResult> => {
       captured.options = opts;
-      return { text: 'fork summary', isBackground: false };
+      return { text: 'fork summary', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     };
   }
 

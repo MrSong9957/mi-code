@@ -79,9 +79,28 @@ export interface SubagentOptions {
   skillsDescription?: string;
 }
 
+export type SubagentStatus = 'completed' | 'incomplete' | 'unverified' | 'background';
+
+export interface SubagentEvidence {
+  toolCallCount: number;
+  successfulToolResultCount: number;
+}
+
 export interface SubagentResult {
   text: string;
   isBackground: boolean;
+  status: SubagentStatus;
+  terminationReason: string;
+  evidence: SubagentEvidence;
+}
+
+const EVIDENCE_TOOLS = new Set([
+  'read_file', 'run_bash', 'memory_read', 'memory_list', 'read_plan_file',
+]);
+
+function isSuccessfulEvidence(name: string, output: string): boolean {
+  return EVIDENCE_TOOLS.has(name)
+    && !/^\s*(?:\[Tool Error\]|\[Blocked|Error:)/i.test(output);
 }
 
 /** 共享的文件读取状态（跨子代理） */
@@ -129,7 +148,7 @@ async function runSubagentWithClient(
   prompt: string,
   system: string,
   options: SubagentOptions,
-): Promise<string> {
+): Promise<{ text: string; toolCallCount: number; successfulToolResultCount: number }> {
   const controller = new AbortController();
   // 子代理作为有限步循环：显式 maxSteps 作为安全网（默认 10，对齐 Vercel 回退路径）
   const maxTurns = options.maxSteps || 10;
@@ -139,6 +158,8 @@ async function runSubagentWithClient(
   let resultText = '';
   // 收集工具调用信息，用于 maxTurns 耗尽且无文本输出时的 fallback 摘要
   const toolCallNames: string[] = [];
+  let toolCallCount = 0;
+  let successfulToolResultCount = 0;
   for await (const message of streamingQuery(client, subRegistry, prompt, {
     systemPrompt: system,
     tools: Array.from(toolSubset.values()).map(t => t.definition),
@@ -147,28 +168,33 @@ async function runSubagentWithClient(
     permissionChecker: options.permissionChecker,
     model: options.model,
   })) {
-    // AssistantMessage（NormalizedMessage.type === 'assistant'）含最终文本
-    if (message !== null && typeof message === 'object' && 'type' in message && message.type === 'assistant') {
-      const content = (message as { content?: unknown }).content;
-      if (Array.isArray(content)) {
-        // 每轮 assistant 消息：提取本轮的 text 块和 tool_use 块。
-        // 只保留最后一轮的 text（而非累加所有轮次），因为中间轮次的 text
-        // 通常是过渡性叙述（"Let me check..."），最后的 text 才是总结。
-        let turnText = '';
-        for (const block of content) {
-          if (block !== null && typeof block === 'object' && 'type' in block) {
-            const bt = (block as { type: string }).type;
-            if (bt === 'text') {
-              const text = (block as { text?: string }).text;
-              if (text) turnText += text;
-            } else if (bt === 'tool_use') {
-              const name = (block as { name?: string }).name;
-              if (name) toolCallNames.push(name);
+    if (message !== null && typeof message === 'object' && 'type' in message) {
+      if (message.type === 'assistant') {
+        const content = (message as { content?: unknown }).content;
+        if (Array.isArray(content)) {
+          let turnText = '';
+          for (const block of content) {
+            if (block !== null && typeof block === 'object' && 'type' in block) {
+              const bt = (block as { type: string }).type;
+              if (bt === 'text') {
+                const text = (block as { text?: string }).text;
+                if (text) turnText += text;
+              } else if (bt === 'tool_use') {
+                const name = (block as { name?: string }).name;
+                if (name) {
+                  toolCallNames.push(name);
+                  toolCallCount++;
+                }
+              }
             }
           }
+          if (turnText.trim()) resultText = turnText;
         }
-        // 最后一轮的 text 覆盖之前的（最后一轮通常含最终总结）
-        if (turnText.trim()) resultText = turnText;
+      } else if (message.type === 'tool_result') {
+        const tr = message as { name?: string; output?: string };
+        if (tr.name && tr.output && isSuccessfulEvidence(tr.name, tr.output)) {
+          successfulToolResultCount++;
+        }
       }
     }
   }
@@ -177,9 +203,40 @@ async function runSubagentWithClient(
     const counts: Record<string, number> = {};
     for (const n of toolCallNames) counts[n] = (counts[n] ?? 0) + 1;
     const summary = Object.entries(counts).map(([n, c]) => `${n}${c > 1 ? `×${c}` : ''}`).join(', ');
-    return `Sub-agent completed ${toolCallNames.length} tool call(s) [${summary}] — no explicit text summary produced.`;
+    return {
+      text: `Sub-agent completed ${toolCallNames.length} tool call(s) [${summary}] — no explicit text summary produced.`,
+      toolCallCount,
+      successfulToolResultCount,
+    };
   }
-  return resultText || '(no summary)';
+  return { text: resultText || '(no summary)', toolCallCount, successfulToolResultCount };
+}
+
+/**
+ * 根据执行证据和终止原因，判定子代理最终状态并格式化安全返回值。
+ */
+function finalizeSubagentExecution(
+  text: string,
+  isBackground: boolean,
+  role: Role | undefined,
+  execution: { toolCallCount: number; successfulToolResultCount: number; terminationReason: string },
+): SubagentResult {
+  const base = { isBackground, evidence: { toolCallCount: execution.toolCallCount, successfulToolResultCount: execution.successfulToolResultCount } };
+
+  if (isBackground) {
+    return { text: '[Subagent launched in background]', ...base, status: 'background', terminationReason: 'background' };
+  }
+
+  if (role === 'explore' && execution.successfulToolResultCount === 0) {
+    return {
+      text: '[Subagent unverified] Explore agent produced no successful evidence tool result. Retry with read_file or read-only run_bash.',
+      ...base,
+      status: 'unverified',
+      terminationReason: execution.terminationReason,
+    };
+  }
+
+  return { text, ...base, status: 'completed', terminationReason: execution.terminationReason };
 }
 
 /**
@@ -210,7 +267,13 @@ export async function runSubagent(
   // 异步后台执行
   if (options.runInBackground) {
     runSubagentBackground(prompt, toolSubset, options, effectiveSystem);
-    return { text: '[Subagent launched in background]', isBackground: true };
+    return {
+      text: '[Subagent launched in background]',
+      isBackground: true,
+      status: 'background',
+      terminationReason: 'background',
+      evidence: { toolCallCount: 0, successfulToolResultCount: 0 },
+    };
   }
 
   // 同步执行（在指定 cwd 下运行，结束后恢复）
@@ -218,9 +281,14 @@ export async function runSubagent(
   if (options.cwd) process.chdir(options.cwd);
   try {
     let text: string;
+    let toolCallCount = 0;
+    let successfulToolResultCount = 0;
     if (options.client) {
       // 多 provider 路径：走主 agent 的 streamingQuery，支持 OpenAI/MiMo 等
-      text = await runSubagentWithClient(options.client, toolSubset, prompt, effectiveSystem, options);
+      const exec = await runSubagentWithClient(options.client, toolSubset, prompt, effectiveSystem, options);
+      text = exec.text;
+      toolCallCount = exec.toolCallCount;
+      successfulToolResultCount = exec.successfulToolResultCount;
     } else {
       // 回退：Vercel AI SDK（仅 Anthropic；测试路径/向后兼容）
       const result = await runWithVercelAI(prompt, toolSubset, {
@@ -239,7 +307,11 @@ export async function runSubagent(
       }
     }
 
-    return { text, isBackground: false };
+    return finalizeSubagentExecution(text, false, options.role, {
+      toolCallCount,
+      successfulToolResultCount,
+      terminationReason: 'end_turn',
+    });
   } finally {
     if (prevCwd) process.chdir(prevCwd);
   }

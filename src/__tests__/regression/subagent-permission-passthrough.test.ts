@@ -1,4 +1,4 @@
-﻿// 回归测试：子代理权限透传（task / spawn_self_organizing / spawn_agent）
+// 回归测试：子代理权限透传（task / spawn_self_organizing / spawn_agent）
 //
 // 物理本质：总公司给外包团队配"门禁卡"。
 // spawn_agent（正确）：派工时把门禁卡（PermissionChecker）交给外包，他刷卡进对应区域。
@@ -31,7 +31,7 @@ function makeFakeRunner(capture: { options: SubagentOptions | null }) {
   return vi.fn(
     async (_prompt: string, _tools: ToolRegistry, options: SubagentOptions): Promise<SubagentResult> => {
       capture.options = options;
-      return { text: 'done', isBackground: false };
+      return { text: 'done', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     },
   );
 }
