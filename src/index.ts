@@ -341,13 +341,11 @@ toolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
 // read_plan_file：只读工具，plan 模式下自然可见（不在 WRITE_TOOLS）
 const readPlanTool = createReadPlanTool(planStore);
 toolRegistry.register(readPlanTool.definition, readPlanTool.executor);
-// 同时注册到 childToolRegistry：plan/explore 角色子代理需要这两个工具（白名单由 roles.ts 控制）
+// 同时注册到 childToolRegistry：plan/explore 角色子代理需要这些工具（白名单由 roles.ts 控制）
 childToolRegistry.register(writePlanTool.definition, writePlanTool.executor);
-childToolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
 childToolRegistry.register(readPlanTool.definition, readPlanTool.executor);
-// ask_user_question 同样需要给子代理（plan 角色白名单含此工具）
-const askToolChild = createAskUserTool(askManager);
-childToolRegistry.register(askToolChild.definition, askToolChild.executor);
+// 注意：exit_plan_mode 和 ask_user_question 不注册到 childToolRegistry，
+// 子代理不能直接与用户交互（由 SUBAGENT_DISALLOWED_TOOLS 兜底）
 
 /**
  * TAB 行为（对标 Claude Code）：

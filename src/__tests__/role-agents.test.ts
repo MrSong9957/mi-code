@@ -9,7 +9,6 @@ import type { ToolDefinition, ToolExecutor, RegisteredTool } from '../agent/type
 import type { SubagentOptions, SubagentResult } from '../agent/subagent.js';
 import { enhanceSubagentSystemPrompt } from '../agent/subagent.js';
 import { PermissionChecker } from '../permission/checker.js';
-import { plannerPrompt } from '../prompts/index.js';
 
 describe('ROLE_REGISTRY 角色注册表', () => {
   it('三个角色都有 systemPrompt 与 tools', () => {
@@ -32,24 +31,21 @@ describe('ROLE_REGISTRY 角色注册表', () => {
     expect(tools).toContain('read_plan_file');
   });
 
-  it('plan 白名单含 write_plan_file + exit_plan_mode + ask_user_question + read_plan_file', () => {
+  it('plan 白名单含 write_plan_file + read_plan_file，不含 exit_plan_mode/ask_user_question', () => {
     const tools = ROLE_REGISTRY.plan.tools;
     if (tools === '*') throw new Error('plan 不应是 *');
     expect(tools).toContain('write_plan_file');
-    expect(tools).toContain('exit_plan_mode');
-    expect(tools).toContain('ask_user_question');
     expect(tools).toContain('read_plan_file');
     expect(tools).toContain('read_file');
-    // plan 角色仍不应有通用 write_file（只能写 plan 文件）
+    // exit_plan_mode 和 ask_user_question 在白名单中但被全局黑名单移除
     expect(tools).not.toContain('write_file');
   });
 
-  it('plan 角色 systemPrompt 使用共享的 plannerPrompt（单源真理）', () => {
-    expect(ROLE_REGISTRY.plan.systemPrompt).toBe(plannerPrompt);
-    // 关键指令必须存在于 planner 提示词内容中
-    expect(plannerPrompt).toMatch(/plan mode/i);
-    expect(plannerPrompt).toContain('write_plan_file');
-    expect(plannerPrompt).toContain('exit_plan_mode');
+  it('plan 角色 systemPrompt 包含子代理专用指令', () => {
+    const prompt = ROLE_REGISTRY.plan.systemPrompt;
+    // 子代理专用 prompt 不应包含要求调用 exit_plan_mode 的指令
+    expect(prompt).toContain('write_plan_file');
+    expect(prompt).toContain('cannot interact');
   });
 
   it('general 用 "*" 表示全量工具', () => {
@@ -58,7 +54,7 @@ describe('ROLE_REGISTRY 角色注册表', () => {
 });
 
 describe('filterToolsByRole 工具过滤', () => {
-  /** 构造测试用 Map：含 6 个虚拟工具 */
+  /** 构造测试用 Map：含 8 个虚拟工具（含交互和递归工具） */
   function makeTools(): Map<string, RegisteredTool> {
     const m = new Map<string, RegisteredTool>();
     const mk = (name: string): RegisteredTool => ({
@@ -71,13 +67,17 @@ describe('filterToolsByRole 工具过滤', () => {
     m.set('run_bash', mk('run_bash'));
     m.set('exit_plan_mode', mk('exit_plan_mode'));
     m.set('read_plan_file', mk('read_plan_file'));
+    m.set('ask_user_question', mk('ask_user_question'));
+    m.set('spawn_agent', mk('spawn_agent'));
     return m;
   }
 
-  it('role=undefined：返回全量（向后兼容）', () => {
+  it('role=undefined：返回全量减去全局黑名单（向后兼容）', () => {
     const all = makeTools();
     const result = filterToolsByRole(all, undefined);
-    expect(result.size).toBe(6);
+    // 8 tools - 2 disallowed (ask_user_question, spawn_agent) = 6
+    // exit_plan_mode also removed by new blacklist
+    expect(result.size).toBe(5);
   });
 
   it('role=explore：只读子集（无 write_file / write_plan_file）', () => {
@@ -91,12 +91,12 @@ describe('filterToolsByRole 工具过滤', () => {
     expect(result.has('exit_plan_mode')).toBe(false);
   });
 
-  it('role=plan：含 plan 类工具（含 exit_plan_mode），不含通用 write', () => {
+  it('role=plan：含 plan 类工具，不含 exit_plan_mode（被全局黑名单移除）', () => {
     const all = makeTools();
     const result = filterToolsByRole(all, 'plan');
     expect(result.has('read_file')).toBe(true);
     expect(result.has('write_plan_file')).toBe(true);
-    expect(result.has('exit_plan_mode')).toBe(true);
+    expect(result.has('exit_plan_mode')).toBe(false);
     expect(result.has('read_plan_file')).toBe(true);
     expect(result.has('write_file')).toBe(false);
   });
@@ -104,8 +104,8 @@ describe('filterToolsByRole 工具过滤', () => {
   it('role=general：返回全量减去防递归黑名单（spawn_agent/task 等）', () => {
     const all = makeTools();
     const result = filterToolsByRole(all, 'general');
-    // makeTools 的 6 个工具都不在 SUBAGENT_DISALLOWED_TOOLS（spawn_agent/task/spawn_self_organizing）里
-    expect(result.size).toBe(6);
+    // 8 tools - 3 disallowed (spawn_agent, ask_user_question, exit_plan_mode) = 5
+    expect(result.size).toBe(5);
   });
 
   it('不修改原 Map', () => {
@@ -122,6 +122,23 @@ describe('filterToolsByRole 工具过滤', () => {
     expect(result.has('memory_read')).toBe(false);
     // 但 read_file 仍在
     expect(result.has('read_file')).toBe(true);
+  });
+
+  it.each(['explore', 'plan', 'general'] as const)(
+    'role=%s 不暴露用户交互或递归工具',
+    (role) => {
+      const result = filterToolsByRole(makeTools(), role);
+      expect(result.has('ask_user_question')).toBe(false);
+      expect(result.has('exit_plan_mode')).toBe(false);
+      expect(result.has('spawn_agent')).toBe(false);
+    },
+  );
+
+  it('fork 使用 role=undefined 时也应用全局子代理黑名单', () => {
+    const result = filterToolsByRole(makeTools(), undefined);
+    expect(result.has('ask_user_question')).toBe(false);
+    expect(result.has('exit_plan_mode')).toBe(false);
+    expect(result.has('spawn_agent')).toBe(false);
   });
 });
 
