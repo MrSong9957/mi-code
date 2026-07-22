@@ -164,3 +164,78 @@
 - Manual scenario ("用子代理告诉我你能看到哪些技能"): pending real LLM run in an
   interactive terminal; automated coverage (pending visibility, nested progress,
   final summary, status prefix) is green via the suites above.
+
+## AUTO-0025-stable: stable running indicator (Tasks 1-4)
+
+### Root cause of flicker
+
+The live-progress bridge (Tasks 2-3 of the first AUTO-0025 round) appended every
+child tool event to the parent pending message's `lines`. Each new child tool added
+a row, so Ink had to clear and redraw the whole activity region. `pendingToolsRowCount`
+estimated height from `lines.length`, but `MessageLine` wraps by terminal width, so
+logical and physical line counts diverged and the footer offset went wrong. Message
+updates and spinner ticks coincided, expanding the clear/redraw blast radius.
+
+### Task 1: fixed-height blinking pending tool component
+
+- Created `pending-tool-indicator.ts` with `isPendingToolGlyphVisible(timeMs)` (600ms
+  cycle, NaN/negative guarded to 0) and `PendingToolMessage.tsx` (`height={1}`,
+  2-column glyph slot, `wrap="truncate-end"`, leaf subscription to spinnerStore).
+- `stripLeadingToolGlyph` handles canonical `● spawn_agent(...)`, no-glyph, empty and
+  blank-first-line inputs (fallback `tool`). The component never reads `lines.slice(1)`,
+  structurally guaranteeing child details cannot affect height.
+- TDD: blink test RED (module missing) -> GREEN (4 tests); component tests cover
+  single row, truncation, Chinese double-width, no-glyph, empty, active=false forced
+  visible, and blink-changes-only-glyph.
+
+### Task 2: stable indicator wired into Inline V2
+
+- Replaced `<MessageLine>` for pending tools with `<PendingToolMessage>`.
+- Row accounting changed to `pendingToolsRowCount = pendingTools.length` (exact
+  invariant; no more `lines.length` estimate).
+- Audit confirmed `flatten-messages.ts` / `row-text-map.ts` skip `!finalized`, so
+  pending height no longer leaks into selection row mapping.
+- TDD: dynamic->static migration, 4-way parallel, mid-blink resolve, active=false
+  resolve all green (33 inline-app-v2 tests); spinner clock isolation unchanged.
+
+### Task 3: removed child tool details from the main pipeline
+
+- Deleted the entire live-progress bridge introduced in the first round:
+  `SubagentProgressEvent`, `SubagentProgressBridge`, `subagent_tool_progress` block,
+  `BlockPipeline.subagentProgress`, `formatSubagentProgressLine`, `summarizeSingleLine`,
+  `PipelineRenderer.updateToolProgress`, `MessagesState.updatePendingToolProgress`,
+  `TuiMessage.originalCallLines`, `parentToolUseId`/`onProgress` options, and the
+  UI-only `ToolExecutionContext` (executor signature restored to `(input) => Promise<string>`).
+- Preserved: outer `tool_call/tool_result` lifecycle, `resolvePendingTool()`,
+  `formatSubagentResult()` status prefix, reserved final summary turn, explicit
+  delegation prompt rule.
+- `ToolExecutionContext` consumer audit (Step 0) confirmed only UI-progress readers;
+  post-deletion grep found zero dangling references to any removed symbol.
+- Net: -680 lines of bridge code; +53 lines of stable-indicator code.
+- TDD: "hidden child progress" suite asserts evidence counts (3 tools) stay correct
+  while no `read_file/run_bash` appears in the pending message; pipeline integration
+  re-locked to outer pending lifecycle only.
+
+### Task 4: verification
+
+- Affected suite: 11 files, 168 tests passed (pending indicator, inline-app-v2,
+  spinner clock, messages-store, pipeline-integration, block-pipeline,
+  subagent-result-integrity, role-agents, streaming-query, explicit-delegation,
+  pipeline-adapter).
+- TypeScript: `npm run typecheck` passed.
+- Full suite: 1866 passed, 7 failed, 2 skipped. All 7 failures are baseline or flaky:
+  - `layout.test.tsx` (2): pre-existing ANSI/status-bar assertions (confirmed on
+    `28454f7`, the commit before this round).
+  - `task-tool.test.ts` (2): pre-existing fixture `clientProvider is not a function`
+    (confirmed on `28454f7`).
+  - `history.test.ts` (2): flaky file-I/O race (29/29 pass when run in isolation).
+  - `incremental-rendering.test.tsx` (1): flaky spinner-tick timing (6/6 pass in
+    isolation).
+- Lint: project baseline red (54 errors / 68 warnings in unrelated files). Scoped
+  ESLint over all 15 changed source files reports only the 3 pre-existing issues
+  (`COMMAND_NAMES`, `overlayVisible`, one unused eslint-disable) — none introduced.
+- Build source: `D:/Files/Projects/mi-code/.worktrees/auto-0025`, branch
+  `codex/auto-0025`, HEAD `5ed7723` (after Task 3 commit).
+- Manual terminal scenario: pending real interactive LLM run; automated coverage
+  (fixed one row, blink glyph only, no child details, finalized cleanup) is green
+  via the suites above.
