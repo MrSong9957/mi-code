@@ -85,7 +85,7 @@
 **Interfaces:**
 - Produces: `TuiMessage.kind === 'thinking-progress'` for one non-finalized activity row.
 - Produces: `isPendingGlyphVisible(timeMs, intervalMs?)` while retaining `isPendingToolGlyphVisible` compatibility.
-- Produces: `PendingThinkingMessage({ msg, cols, spinnerStore })`.
+- Produces: `PendingThinkingMessage({ cols, spinnerStore })`. It intentionally has no unused `msg` prop: the row text is fixed, and speculative interface symmetry is not a requirement.
 - Preserves: existing pending tool rendering and finalized message behavior.
 
 - [ ] **Step 1: Write failing store tests for dedicated thinking progress**
@@ -170,6 +170,8 @@ removeStreamingThinking: () => {
 },
 ```
 
+Keep the UUID return intentionally for stable message identity and parity with pending-tool insertion, even though the first consumer removes the singleton by `kind` rather than UUID.
+
 Do not use “last unfinalized message” as the deletion criterion.
 
 - [ ] **Step 4: Generalize the existing blink helper without breaking imports**
@@ -192,19 +194,14 @@ Update `PendingToolMessage` to import `isPendingGlyphVisible`; retain the alias 
 
 - [ ] **Step 5: Write failing Ink tests for blinking Thinking and stable layout**
 
-Add tests that construct a `thinking-progress` message and render at `cols=24`:
+Render the leaf component directly at `cols=24`; it deliberately does not consume a message object:
 
 ```tsx
-const thinking = {
-  uuid: 'thinking-1', role: 'thinking' as const, kind: 'thinking-progress' as const,
-  lines: [], finalized: false, streamingText: 'Thinking…',
-};
-
 it('renders one blinking Thinking row with a fixed glyph slot', () => {
   const stores = createStores();
   stores.spinnerStore.getState().start('thinking');
   const { lastFrame } = render(
-    <PendingThinkingMessage msg={thinking} cols={24} spinnerStore={stores.spinnerStore} />,
+    <PendingThinkingMessage cols={24} spinnerStore={stores.spinnerStore} />,
   );
   const visible = lastFrame() ?? '';
   expect(visible.replace(/\n+$/, '').split('\n')).toHaveLength(1);
@@ -318,7 +315,11 @@ Add separate tests for:
 
 - no-start non-empty delta creates one visible phase;
 - pure whitespace block produces neither temporary row nor summary;
-- duplicate start and duplicate end remain idempotent;
+- duplicate start remains idempotent in both `awaitingContent` and `visible`, and duplicate end remains idempotent;
+- `formatThinkingSummary(0, 0)` still renders `Thought for 1s`; this protects the existing `Math.max(1, Math.round(sec))` clamp from regression;
+- the first non-empty delta calls `openModelBlock()` exactly once before the temporary row, while later deltas add no extra separator;
+- after a visible phase, `clear()` resets phase and buffer so a later `thinking_end` creates neither a summary nor expandable content;
+- `clearTurnState()` erases a visible temporary row, resets phase and buffer, and preserves already-finalized messages;
 - two thinking blocks leave two permanent summaries while Ctrl+O returns only the second full content.
 
 - [ ] **Step 2: Run RED**
@@ -362,7 +363,9 @@ case 'thinking_delta': {
 
 For `thinking_end`, first build and add full content, then erase, append summary, and clear. Use `thinkingPhase === 'visible'` as the summary predicate. Empty `awaitingContent` only resets state.
 
-Change `formatThinkingSummary()` to start with uppercase `Thought`. Keep real elapsed duration and `filesRead=0`.
+`openModelBlock()` is required here because it inserts the model-block separator before the first visible activity row. Call it only on the single `awaitingContent → visible` transition; never on start or later deltas.
+
+Change `formatThinkingSummary()` to start with uppercase `Thought`. Preserve its existing minimum-one-second clamp, update the stale comment that claims zero is possible, keep real elapsed duration with no upper cap, and keep `filesRead=0`.
 
 Add one private reset helper and use it from both `clear()` and `clearTurnState()`:
 
@@ -392,6 +395,8 @@ expect(state).toEqual(idleTurnThinking());
 ```
 
 Add a no-start delta test that calls `startTurnThinking(idle, now)` before emitting the implicit pipeline delta, and a loop-end/finally double-cleanup test that asserts one summary and one spinner completion.
+
+Add an integration-order assertion for the adapter edge case: with thinking still active, the first of two parallel `tool_call` events emits exactly one `thinking_end` before that tool call is created; the second tool call observes idle state and emits no second cleanup. Reuse the same cleanup entry point used by ESC, abort, error, and loop-end rather than duplicating logic in the tool-call branch.
 
 - [ ] **Step 5: Run the lifecycle tests and observe RED**
 
@@ -507,7 +512,7 @@ expect(buildSubagentCompletionPresentation(
   147_000,
 )).toEqual({
   line: '● Agent "查找 AgentTool 实现" finished · 2m 27s',
-  fullOutput: '[Subagent status=completed]\n完整结果',
+  fullOutput: '完整结果',
 });
 
 expect(buildSubagentCompletionPresentation(
@@ -521,7 +526,7 @@ expect(buildSubagentCompletionPresentation(
 )).toBeNull();
 ```
 
-Also cover `unverified`, negative/NaN duration, Chinese, emoji and combining characters. Pure helpers must not truncate by UTF-8 byte or JavaScript code unit; visual truncation belongs to Ink.
+Also cover `unverified`, negative/NaN duration, Chinese, an explicit emoji-bearing description such as `🔎 查找实现`, and combining characters. Pure helpers must not truncate by UTF-8 byte or JavaScript code unit; visual truncation belongs to Ink.
 
 - [ ] **Step 2: Run RED**
 
@@ -551,6 +556,8 @@ function meaningfulLine(value: unknown): string | null {
 ```
 
 Label priority is description → prompt → `Agent`. Status words are exactly `finished/incomplete/unverified`. Duration formatter clamps invalid or negative input to 0 and displays at least `1s`.
+
+Return regex capture group 2 as `fullOutput`: Ctrl+O shows only the child result body, without the structural `[Subagent status=...]` envelope. This presentation cleanup must not mutate the original tool output forwarded to the main Agent.
 
 - [ ] **Step 4: Add and test the optional schema field**
 
@@ -582,7 +589,9 @@ pipeline.emit({
 
 Assert the finalized message contains only `● Agent "查找实现" finished · 2m 27s`, is `kind='agent-completion'`, and Ctrl+O full lines contain `full child result`.
 
-Test malformed output with the same call and assert it retains the existing call line plus generic raw-output preview and does not contain `Agent "..." finished`.
+Test malformed output with the same call and assert it retains the existing call line plus generic raw-output preview, does not contain `Agent "..." finished`, and leaves `pipeline.getLastExpandableFullLines()` as `null`.
+
+Test two concurrent `spawn_agent` calls (`a1`, `a2`) whose results arrive in reverse order. Assert each `toolUseId` is finalized with its own description and duration, with neither summary nor expandable content overwriting the other pending entry.
 
 - [ ] **Step 6: Run RED**
 
@@ -593,6 +602,14 @@ npx.cmd vitest run src/__tests__/ui/block-pipeline.test.ts src/__tests__/tui/pip
 Expected: FAIL because duration and completion presentation are not propagated.
 
 - [ ] **Step 7: Propagate duration and specialized finalization metadata**
+
+Before changing the interface, audit every caller:
+
+```powershell
+Get-ChildItem -Path src -Recurse -File | Select-String -Pattern '\bresolvePendingTool\b'
+```
+
+Expected current result: the store definition/implementation plus a single production caller in `pipeline-adapter.ts`; remaining hits are tests. If another production caller exists by implementation time, explicitly decide whether it needs the new `finalKind` rather than relying on the default silently.
 
 Extend the UI block:
 
@@ -621,7 +638,7 @@ resolvePendingTool(
 ): boolean;
 ```
 
-When `buildSubagentCompletionPresentation()` succeeds, set final lines to the single Agent line, set final kind to `agent-completion`, and register the unmodified output as expandable full lines before finalizing. Do not prepend `item.callLines`. When it returns `null`, execute the existing generic path unchanged.
+When `buildSubagentCompletionPresentation()` succeeds, set final lines to the single Agent line, set final kind to `agent-completion`, and register `presentation.fullOutput` (the envelope-stripped child body) as expandable full lines before finalizing. Keep the original tool output unchanged on the model-facing path. Do not prepend `item.callLines`. When the helper returns `null`, execute the existing generic path unchanged and do not register an expandable block.
 
 - [ ] **Step 8: Guarantee one physical finalized row**
 
@@ -727,7 +744,7 @@ git commit -m "test(tui): verify transient thinking lifecycle"
 ## Plan Self-Review
 
 - Spec coverage: transient visibility, non-empty delta gate, uppercase permanent summary, operation order, implicit start, 乱序 tool cleanup, multiple parallel calls, duration truthfulness, optional description, Unicode fallback, malformed-result downgrade, full-result preservation and Ctrl+O limitation each map to an explicit task and test.
-- Placeholder scan: clean; every mutation step names exact files, interfaces and code shape.
+- Incomplete-marker scan: clean; every mutation step names exact files, interfaces and code shape.
 - Type consistency: `thinking-progress` is introduced in Task 1 before consumption; `agent-completion` and `FinalToolMessageKind` are introduced together in Task 3; duration remains milliseconds end-to-end until formatting.
 - Scope: no provider configuration changes, no agent-loop rewrite, no progress bridge restoration, no filesRead guesswork and no expandable history UI.
 - Safety: store removals use kind/ID rather than last-message position; malformed subagent envelopes fall back to current behavior; all cleanup entry points share one idempotent helper.
