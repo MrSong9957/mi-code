@@ -39,20 +39,22 @@ export interface RoleConfig {
 }
 
 /**
- * 所有子代理都禁用的工具（对齐 Claude Code ALL_AGENT_DISALLOWED_TOOLS）。
+ * 所有子代理都禁用的工具（对齐 Claude Code 防递归机制）。
  *
- * 这些工具控制 plan 审批流程 / 用户交互，只有主 agent 应该使用。
- * 子代理（包括 plan 角色）的职责是调研+设计，产出返回给主 agent。
- * 主 agent 综合子代理结果后决定提交审批或问用户。
+ * 白名单模式已经精确控制了 explore/plan 角色的工具可见性。
+ * 这个黑名单只针对 general 角色（tools: '*'）做兜底：
  *
- * - ask_user_question: 子代理不能直接问用户——结果返回主 agent 决策
- * - exit_plan_mode: 子代理不能提交计划审批——只有主 agent 控制 plan 流程
- * - enter_plan_mode: 同上
+ * - spawn_agent / task / spawn_self_organizing: 防递归——子代理不能再 spawn 子代理
+ *   （CC 通过 ALL_AGENT_DISALLOWED_TOOLS 移除 Agent 工具实现同样效果）
+ *
+ * 注意：exit_plan_mode 和 ask_user_question **不在此列表**。
+ * plan 角色需要 exit_plan_mode 提交审批、ask_user_question 澄清需求
+ * （对齐 CC 在 plan 模式下特判放行 ExitPlanMode 的设计）。
  */
 export const SUBAGENT_DISALLOWED_TOOLS: ReadonlySet<string> = new Set([
-  'ask_user_question',
-  'exit_plan_mode',
-  'enter_plan_mode',
+  'spawn_agent',
+  'task',
+  'spawn_self_organizing',
 ]);
 
 /**
@@ -84,11 +86,9 @@ export const ROLE_REGISTRY: Record<Role, RoleConfig> = {
     systemPrompt: plannerPrompt,
     tools: [
       'read_file', 'run_bash', 'load_skill', 'memory_read', 'memory_list',
-      'read_plan_file', 'write_plan_file',
-      // exit_plan_mode 和 ask_user_question 由 SUBAGENT_DISALLOWED_TOOLS 全局禁用：
-      // 子代理写好计划返回摘要，由主 agent 决定是否提交审批或问用户。
+      'read_plan_file', 'write_plan_file', 'exit_plan_mode', 'ask_user_question',
     ],
-    whenToUse: 'design implementation plans — explores code, writes a plan file, returns a summary for the main agent to submit',
+    whenToUse: 'design implementation plans — explores code, writes a plan file, and submits for user approval via exit_plan_mode',
     model: 'inherit',
     maxTurns: 15,
   },
