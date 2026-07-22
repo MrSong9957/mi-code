@@ -2,19 +2,19 @@
 //
 // 物理本质：项目经理（主代理）从中介叫临时工（子代理），指定工种（role）和任务（prompt）。
 // 临时工在自己的笔记本（独立 context）里干活，干完写一份摘要报告回来。
-// 不同工种配不同的工具箱（roles.ts 白名单）：
-//   - explore：只读探索（不污染主上下文，主代理只看摘要）
-//   - plan：写 plan + 提交审批
+// 不同工种配不同的工具箱（roles.ts 白名单）+ 模型（small/inherit）+ 最大轮数：
+//   - explore：只读探索，用小模型省钱，25 步
+//   - plan：写 plan，用主模型保证质量，15 步
 //   - general：通用救火（等价于 task 工具）
 //
 // 与现有 task 工具的区别：task 是 general 的别名；spawn_agent 显式选 role，
-// 工具集按角色裁剪，权限更细。
+// 工具集按角色裁剪，模型/轮数也按角色分配。
 
 import type { ToolDefinition, ToolExecutor, StreamingLLMClient } from '../types.js';
 import type { ToolRegistry } from '../tool-registry.js';
 import { runSubagent } from '../subagent.js';
 import type { SubagentOptions, SubagentResult } from '../subagent.js';
-import type { Role } from '../roles.js';
+import { ROLE_REGISTRY, type Role, type SubagentModel } from '../roles.js';
 import type { PermissionChecker } from '../../permission/checker.js';
 
 /** 子代理执行器类型（用于依赖注入，便于测试） */
@@ -30,8 +30,10 @@ type SubagentRunner = (
  * 每次 spawn 时调用，读取当前 provider 配置并创建对应的流式客户端，
  * 让子代理走主 agent 的多 provider 路径（修复子代理写死 Anthropic 的 bug）。
  * 物理本质：派工时按当前门禁系统（provider）给临时工发对应门禁卡。
+ *
+ * modelChoice 参数让不同角色用不同模型（explore=small, plan=inherit）。
  */
-export type SubagentClientProvider = () => StreamingLLMClient;
+export type SubagentClientProvider = (modelChoice?: SubagentModel) => StreamingLLMClient;
 
 export function createSpawnAgentTool(
   childTools: ToolRegistry,
@@ -46,16 +48,19 @@ export function createSpawnAgentTool(
   /** 依赖注入：测试时传 mock，生产路径走真实 runSubagent */
   runSubagentFn: SubagentRunner = runSubagent,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
+  // 动态生成工具描述：从 ROLE_REGISTRY 的 whenToUse 字段拼装
+  const roleLines = (['explore', 'plan', 'general'] as Role[])
+    .map(r => `- role="${r}": ${ROLE_REGISTRY[r].whenToUse}`)
+    .join('\n');
+
   return {
     definition: {
       name: 'spawn_agent',
       description: [
         'Spawn a role-specialized subagent with fresh context to handle a subtask.',
-        '- role="explore": read-only investigation (use for codebase exploration that would bloat your context).',
-        '- role="plan": designs an implementation plan, writes it via write_plan_file, and submits for user approval.',
-        '- role="general": generic subtask execution (equivalent to the task tool).',
+        roleLines,
         'Returns the subagent\'s summary text. The subagent cannot see your conversation history.',
-      ].join(' '),
+      ].join('\n'),
       parameters: {
         type: 'object',
         properties: {
@@ -82,12 +87,14 @@ export function createSpawnAgentTool(
         return 'Error: prompt is required';
       }
 
-      // explore 角色需要更多工具调用轮次（读多个文件、搜索、分析）
-      const maxSteps = role === 'explore' ? 25 : 15;
+      // 从角色配置读 model 和 maxTurns（对齐 CC 的 per-role model/maxTurns）
+      const roleConfig = ROLE_REGISTRY[role as Role];
+      const modelChoice = roleConfig?.model ?? 'small';
+      const maxSteps = roleConfig?.maxTurns ?? (role === 'explore' ? 25 : 15);
 
       const result = await runSubagentFn(prompt, childTools, {
         role: role as Role,
-        client: clientProvider ? clientProvider() : undefined,
+        client: clientProvider ? clientProvider(modelChoice) : undefined,
         permissionChecker,
         maxSteps,
       });

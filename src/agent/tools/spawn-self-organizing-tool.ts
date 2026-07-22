@@ -12,9 +12,10 @@ import type { ToolRegistry } from '../tool-registry.js';
 import type { TodoManager } from '../todo.js';
 import type { InboxManager } from '../inbox.js';
 import { runSelfOrganizingSubagent, type SelfOrganizingOptions } from '../self-organizing.js';
+import type { SubagentModel } from '../roles.js';
 
 /** 创建自组织子代理 LLM client 的工厂（多 provider 支持） */
-export type SubagentClientProvider = () => StreamingLLMClient;
+export type SubagentClientProvider = (modelChoice?: SubagentModel) => StreamingLLMClient;
 
 /** 自组织子代理执行器类型（用于依赖注入，便于测试） */
 type SelfOrganizingRunner = (
@@ -89,7 +90,7 @@ export function createSpawnSelfOrganizingTool(
       // 错误必须本地捕获，否则变成 unhandledRejection 让进程不稳。
       runFn(name, role, identityWithTask, childTools, todoManager, inboxManager, {
         ...selfOrgOptions,
-        client: clientProvider ? clientProvider() : undefined,
+        client: clientProvider ? clientProvider('inherit') : undefined,
         permissionChecker,
       }).catch((err: unknown) => {
         // 后台子代理失败不影响主循环，仅记录到 stderr

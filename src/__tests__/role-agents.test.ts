@@ -31,14 +31,16 @@ describe('ROLE_REGISTRY 角色注册表', () => {
     expect(tools).toContain('read_plan_file');
   });
 
-  it('plan 白名单含 write_plan_file + exit_plan_mode + ask_user_question + read_plan_file', () => {
+  it('plan 白名单含 write_plan_file + read_plan_file，不含 exit_plan_mode/ask_user_question（全局黑名单）', () => {
     const tools = ROLE_REGISTRY.plan.tools;
     if (tools === '*') throw new Error('plan 不应是 *');
     expect(tools).toContain('write_plan_file');
-    expect(tools).toContain('exit_plan_mode');
-    expect(tools).toContain('ask_user_question');
     expect(tools).toContain('read_plan_file');
     expect(tools).toContain('read_file');
+    // exit_plan_mode / ask_user_question 由 SUBAGENT_DISALLOWED_TOOLS 全局禁用：
+    // 子代理写好计划返回摘要，由主 agent 决定提交审批
+    expect(tools).not.toContain('exit_plan_mode');
+    expect(tools).not.toContain('ask_user_question');
     // plan 角色仍不应有通用 write_file（只能写 plan 文件）
     expect(tools).not.toContain('write_file');
   });
@@ -90,20 +92,23 @@ describe('filterToolsByRole 工具过滤', () => {
     expect(result.has('exit_plan_mode')).toBe(false);
   });
 
-  it('role=plan：含 plan 类工具但不含通用 write', () => {
+  it('role=plan：含 plan 类工具但不含通用 write，exit_plan_mode/ask_user_question 被全局黑名单禁用', () => {
     const all = makeTools();
     const result = filterToolsByRole(all, 'plan');
     expect(result.has('read_file')).toBe(true);
     expect(result.has('write_plan_file')).toBe(true);
-    expect(result.has('exit_plan_mode')).toBe(true);
     expect(result.has('read_plan_file')).toBe(true);
     expect(result.has('write_file')).toBe(false);
+    // SUBAGENT_DISALLOWED_TOOLS：子代理不能控制 plan 审批流程
+    expect(result.has('exit_plan_mode')).toBe(false);
   });
 
-  it('role=general：返回全量', () => {
+  it('role=general：返回全量减去全局黑名单（exit_plan_mode 被禁）', () => {
     const all = makeTools();
     const result = filterToolsByRole(all, 'general');
-    expect(result.size).toBe(6);
+    // 6 个工具 - 1 个黑名单(exit_plan_mode) = 5
+    expect(result.size).toBe(5);
+    expect(result.has('exit_plan_mode')).toBe(false);
   });
 
   it('不修改原 Map', () => {

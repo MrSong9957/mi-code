@@ -174,11 +174,13 @@ const toolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, ba
 // task / spawn_self_organizing / spawn_agent 都用同一个 clientProvider 闭包：
 // 每次 spawn 时读取当前 provider 配置，让子代理走主 agent 的多 provider 路径
 // （streamingQuery），支持 OpenAI/MiMo 等非 Anthropic provider。
-const subagentClientProvider = () => {
+// modelChoice 让不同角色用不同模型（explore=small 便宜, plan/inherit=主模型）。
+const subagentClientProvider = (modelChoice?: 'small' | 'inherit') => {
   const provider = currentProvider();
   const apiKey = configStore.getApiKey(provider);
   const baseUrl = configStore.getProvider(provider)?.baseUrl;
-  return createStreamClient(provider, apiKey ?? '', currentSmallModel(), baseUrl);
+  const model = modelChoice === 'inherit' ? currentModel() : currentSmallModel();
+  return createStreamClient(provider, apiKey ?? '', model, baseUrl);
 };
 const taskTool = createTaskTool(childToolRegistry, worktreeManager, subagentClientProvider);
 toolRegistry.register(taskTool.definition, taskTool.executor);

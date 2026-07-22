@@ -9,6 +9,7 @@ import type { ToolDefinition, ToolExecutor, StreamingLLMClient } from '../types.
 import type { ToolRegistry } from '../tool-registry.js';
 import { runSubagent } from '../subagent.js';
 import type { SubagentOptions, SubagentResult } from '../subagent.js';
+import type { SubagentModel } from '../roles.js';
 import type { WorktreeManager } from '../../worktree/worktree-manager.js';
 
 /** 子代理执行器类型（用于依赖注入，便于测试） */
@@ -18,8 +19,8 @@ type SubagentRunner = (
   options: SubagentOptions,
 ) => Promise<SubagentResult>;
 
-/** 创建子代理 LLM client 的工厂（每次调用读取当前 provider 配置） */
-export type SubagentClientProvider = () => StreamingLLMClient;
+/** 创建子代理 LLM client 的工厂（多 provider 支持，modelChoice 控制模型选择） */
+export type SubagentClientProvider = (modelChoice?: SubagentModel) => StreamingLLMClient;
 
 export function createTaskTool(
   childTools: ToolRegistry,
@@ -69,7 +70,8 @@ export function createTaskTool(
 
       const result = await runSubagentFn(prompt, childTools, {
         cwd,
-        client: clientProvider ? clientProvider() : undefined,
+        // task 用 general 角色（继承主模型），传 'inherit' 让 clientProvider 选主模型
+        client: clientProvider ? clientProvider('inherit') : undefined,
       });
       return result.text;
     },

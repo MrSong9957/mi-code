@@ -81,6 +81,25 @@ export interface SubagentResult {
 const sharedFileState = new Map<string, string>();
 
 /**
+ * 在角色 system prompt 后追加环境信息 + 行为约束（对齐 CC enhanceSystemPromptWithEnvDetails）。
+ *
+ * CC 追加：绝对路径要求、emoji 禁令、tool call 前不用冒号、CWD/平台。
+ * 这些约束让子代理输出更规范（绝对路径方便主 agent 定位文件）。
+ */
+function enhanceSubagentSystemPrompt(baseSystem: string): string {
+  return [
+    baseSystem,
+    '',
+    'Notes:',
+    '- Use absolute file paths in your responses.',
+    '- Do not use emojis.',
+    '- Do not use a colon before tool calls.',
+    `- Working directory: ${process.cwd()}`,
+    `- Platform: ${process.platform}`,
+  ].join('\n');
+}
+
+/**
  * 用流式客户端（streamingQuery）执行子代理。
  *
  * 复用主 agent 的 streamingQuery 路径，从而支持 OpenAI/Google/MiMo 等非 Anthropic provider。
@@ -164,9 +183,11 @@ export async function runSubagent(
   const toolSubset: Map<string, RegisteredTool> = filterToolsByRole(tools.tools, options.role);
 
   // Fork 模式：使用父代理的 system 触发 prompt cache
-  const effectiveSystem = options.forkMode && options.parentSystem
+  const baseSystem = options.forkMode && options.parentSystem
     ? options.parentSystem
     : system;
+  // 追加环境信息 + 行为约束（对齐 CC enhanceSystemPromptWithEnvDetails）
+  const effectiveSystem = enhanceSubagentSystemPrompt(baseSystem);
 
   // 异步后台执行
   if (options.runInBackground) {
