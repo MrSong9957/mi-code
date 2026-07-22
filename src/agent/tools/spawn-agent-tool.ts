@@ -47,6 +47,8 @@ export function createSpawnAgentTool(
   permissionChecker?: PermissionChecker,
   /** 依赖注入：测试时传 mock，生产路径走真实 runSubagent */
   runSubagentFn: SubagentRunner = runSubagent,
+  /** 可用技能描述（注入子代理 system prompt，让子代理发现/调用技能） */
+  skillsDescription?: string,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
   // 动态生成工具描述：从 ROLE_REGISTRY 的 whenToUse 字段拼装
   const roleLines = (['explore', 'plan', 'general'] as Role[])
@@ -97,6 +99,7 @@ export function createSpawnAgentTool(
         client: clientProvider ? clientProvider(modelChoice) : undefined,
         permissionChecker,
         maxSteps,
+        skillsDescription,
       });
       return result.text;
     },

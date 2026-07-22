@@ -7,6 +7,7 @@ import { createSpawnAgentTool } from '../agent/tools/spawn-agent-tool.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
 import type { ToolDefinition, ToolExecutor, RegisteredTool } from '../agent/types.js';
 import type { SubagentOptions, SubagentResult } from '../agent/subagent.js';
+import { enhanceSubagentSystemPrompt } from '../agent/subagent.js';
 import { PermissionChecker } from '../permission/checker.js';
 import { plannerPrompt } from '../prompts/index.js';
 
@@ -219,5 +220,25 @@ describe('createSpawnAgentTool', () => {
     const { executor } = createSpawnAgentTool(registry, undefined, checker, mockRunner);
     await executor({ role: 'explore', prompt: 'x' });
     expect(capturedChecker).toBe(checker);
+  });
+});
+
+describe('enhanceSubagentSystemPrompt', () => {
+  it('含 git 仓库检测和 Shell 信息', () => {
+    const result = enhanceSubagentSystemPrompt('base');
+    expect(result).toContain('Platform:');
+    expect(result).toContain('Shell:');
+    expect(result).toContain('git repository');
+  });
+
+  it('追加技能描述', () => {
+    const result = enhanceSubagentSystemPrompt('base', { skillsDescription: 'test-skill: description' });
+    expect(result).toContain('test-skill');
+    expect(result).toContain('Available skills');
+  });
+
+  it('无技能描述时不追加', () => {
+    const result = enhanceSubagentSystemPrompt('base');
+    expect(result).not.toContain('Available skills');
   });
 });

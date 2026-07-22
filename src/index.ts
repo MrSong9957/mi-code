@@ -36,6 +36,7 @@ import { TodoManager } from './agent/todo.js';
 import { createTaskTool } from './agent/tools/task-tool.js';
 import { createSpawnAgentTool } from './agent/tools/spawn-agent-tool.js';
 import { createSpawnSelfOrganizingTool } from './agent/tools/spawn-self-organizing-tool.js';
+import { runSubagent } from './agent/subagent.js';
 import { plannerPrompt } from './prompts/index.js';
 import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
@@ -191,10 +192,18 @@ const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager
 toolRegistry.register(spawnSoTool.definition, spawnSoTool.executor);
 // spawn_agent：派角色化子代理（explore/plan/general）
 // 透传 permissionChecker：让子代理也受 plan 模式约束（读 allow / 写 deny）
+// 透传技能目录：让子代理 system prompt 含技能发现信息（对齐 CC skill discovery）
+function truncateSkillsDescription(desc: string, maxLines = 20): string {
+  const lines = desc.split('\n');
+  if (lines.length <= maxLines) return desc;
+  return lines.slice(0, maxLines).join('\n') + `\n... and ${lines.length - maxLines} more skills`;
+}
 const spawnAgentTool = createSpawnAgentTool(
   childToolRegistry,
   subagentClientProvider,
   permissionChecker,
+  runSubagent,
+  truncateSkillsDescription(skillRegistry.describeAvailable()),
 );
 toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 const loadSkillTool = createLoadSkillTool(skillRegistry);

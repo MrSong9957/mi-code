@@ -9,6 +9,8 @@
 // 2. 上下文克隆：继承父代理的文件读取状态
 // 3. 异步后台执行：run_in_background 支持
 
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { runWithVercelAI } from './llm-vercel.js';
 import { streamingQuery } from './streaming-query.js';
 import { ToolRegistry } from './tool-registry.js';
@@ -70,6 +72,11 @@ export interface SubagentOptions {
    * 不传时回退到 runWithVercelAI（向后兼容，仅 Anthropic，测试路径用）。
    */
   client?: StreamingLLMClient;
+  /**
+   * 可用技能描述（注入 system prompt，让子代理发现/调用技能）。
+   * 由主 agent 通过 skillRegistry.describeAvailable() 生成，spawn-agent-tool 透传。
+   */
+  skillsDescription?: string;
 }
 
 export interface SubagentResult {
@@ -83,11 +90,14 @@ const sharedFileState = new Map<string, string>();
 /**
  * 在角色 system prompt 后追加环境信息 + 行为约束（对齐 CC enhanceSystemPromptWithEnvDetails）。
  *
- * CC 追加：绝对路径要求、emoji 禁令、tool call 前不用冒号、CWD/平台。
+ * CC 追加：绝对路径要求、emoji 禁令、tool call 前不用冒号、CWD/平台/Shell/git 仓库检测。
  * 这些约束让子代理输出更规范（绝对路径方便主 agent 定位文件）。
  */
-function enhanceSubagentSystemPrompt(baseSystem: string): string {
-  return [
+export function enhanceSubagentSystemPrompt(
+  baseSystem: string,
+  options?: { skillsDescription?: string },
+): string {
+  const lines = [
     baseSystem,
     '',
     'Notes:',
@@ -96,7 +106,13 @@ function enhanceSubagentSystemPrompt(baseSystem: string): string {
     '- Do not use a colon before tool calls.',
     `- Working directory: ${process.cwd()}`,
     `- Platform: ${process.platform}`,
-  ].join('\n');
+    `- Shell: ${process.env.SHELL ?? process.env.ComSpec ?? 'unknown'}`,
+    `- Is a git repository: ${existsSync(join(process.cwd(), '.git'))}`,
+  ];
+  if (options?.skillsDescription) {
+    lines.push('', `Available skills:\n${options.skillsDescription}`);
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -187,7 +203,9 @@ export async function runSubagent(
     ? options.parentSystem
     : system;
   // 追加环境信息 + 行为约束（对齐 CC enhanceSystemPromptWithEnvDetails）
-  const effectiveSystem = enhanceSubagentSystemPrompt(baseSystem);
+  const effectiveSystem = enhanceSubagentSystemPrompt(baseSystem, {
+    skillsDescription: options.skillsDescription,
+  });
 
   // 异步后台执行
   if (options.runInBackground) {
