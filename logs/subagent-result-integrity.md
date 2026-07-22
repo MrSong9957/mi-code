@@ -26,13 +26,10 @@ explore 子代理可能返回未经工具验证的虚构正文（如"我看到 s
 - GREEN: plan 子代理使用专用 prompt（`cannot interact`），不再引用主 agent 的 plannerPrompt
 - GREEN: childToolRegistry 不再注册 exit_plan_mode 和 ask_user_question executor
 
-### 受影响测试
+## 最终验证
 
-- `subagent-result-integrity.test.ts`: 3 tests PASS
-- `role-agents.test.ts`: 29 tests PASS
-- `ask-user.test.ts`: 8 tests PASS
-- `plan-mode-filter.test.ts`: 14 tests PASS
-- `plan-mode-streaming.test.ts`: 4 tests PASS
-- `streaming-query.test.ts`: 7 tests PASS
-- `regression/subagent-permission-passthrough.test.ts`: 5 tests PASS
-- `task-tool.test.ts`: 1 PASS, 2 pre-existing failures (clientProvider is not a function)
+- `npm run typecheck`: exit 0，无 TypeScript error
+- `npm run lint`: exit 0，无 lint error
+- `npm test`: 1817 passed, 7 pre-existing failures, 2 skipped
+  - 预存失败：3 background.test.ts timeout 竞态、2 task-tool.test.ts clientProvider、2 layout.test.tsx StatusBar 格式
+  - 本次修改未引入任何新失败

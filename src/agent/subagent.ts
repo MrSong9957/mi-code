@@ -361,7 +361,8 @@ async function runSubagentBackground(
     let text: string;
     if (options.client) {
       // 多 provider 路径（后台执行同样支持 OpenAI/MiMo 等）
-      text = await runSubagentWithClient(options.client, toolSubset, prompt, system, options);
+      const exec = await runSubagentWithClient(options.client, toolSubset, prompt, system, options);
+      text = exec.text;
     } else {
       const result = await runWithVercelAI(prompt, toolSubset, {
         model: options.model,
