@@ -165,6 +165,85 @@ describe('<InlineAppV2>', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────
+// Task 1（AUTO-0025 修复计划）：pending 工具调用必须在活动区可见。
+//
+// 物理本质：spawn_agent 等慢工具执行时，其 pending 消息（kind='tool-progress',
+// finalized=false）应该出现在终端活动区（spinner 之前），让用户看到"● spawn_agent(...)"
+// 正在运行,而不是等结果回来才一次性显示。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<InlineAppV2> pending tool 可见性', () => {
+  it('pending tool 消息在活动区可见（结果回来之前）', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().appendPendingTool('spawn-1', [
+      { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
+    ]);
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    expect(lastFrame() ?? '').toContain('spawn_agent');
+  });
+
+  it('pending tool 完成后转化为固化消息（不重复渲染 pending）', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().appendPendingTool('spawn-1', [
+      { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
+    ]);
+    stores.messagesStore.getState().resolvePendingTool('spawn-1', [
+      { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
+      { content: '⎿  found 3 skills', style: {}, indent: 0 },
+    ]);
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    // 完成后的内容（结果）应可见
+    expect(frame).toContain('spawn_agent');
+    expect(frame).toContain('found 3 skills');
+  });
+
+  it('并行 pending tool 都可见（spawn-1 和 spawn-2）', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().appendPendingTool('spawn-1', [
+      { content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 },
+    ]);
+    stores.messagesStore.getState().appendPendingTool('spawn-2', [
+      { content: '● spawn_agent({"role":"plan"})', style: {}, indent: 0 },
+    ]);
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('explore');
+    expect(frame).toContain('plan');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
 // Task 3.4 集成版:InlineAppV2 上下文中,spinner tick 不拖动整棵树重渲染。
 //
 // 这是 Stage 3 核心保证:spinner tick 的爆炸范围严格限制在 <SpinnerMemo> 内部。

@@ -86,6 +86,12 @@ export interface InlineAppV2Props {
 export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props): React.ReactElement {
   const finalized = messages.filter((m) => m.finalized);
 
+  // AUTO-0025 修复:pending 工具调用(未拿到结果、kind='tool-progress')必须在活动区可见。
+  // 物理本质:慢工具(spawn_agent / read_file 等)执行时,其 call 行应立即出现在终端,
+  // 让用户看到"● spawn_agent(...) 正在运行",而不是等结果回来才一次性显示。
+  // 不写入 <Static> —— 否则结果到达后无法原地更新(resolvePendingTool 需要可变 pending 消息)。
+  const pendingTools = messages.filter((m) => !m.finalized && m.kind === 'tool-progress');
+
   // 订阅末条未固化消息的 streamingText + role(流式 token 到达触发重渲染——必要)。
   // 找到末条 finalized=false 的消息(流式中草稿)。
   // 用 useShallow 让 selector 输出引用稳定(浅比较相等时返回同一对象),
@@ -145,9 +151,17 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
     ? Math.max(1, streaming.streamingText.split('\n').length)
     : 0;
 
+  // AUTO-0025 修复:pending tool 行数纳入活动区 y 偏移。
+  // 近似按 lines.length 估算物理行数(精确 wrap 由 Ink yoga 算);子代理运行时子工具
+  // 进度会作为附加行更新到同一条 pending message(见 Task 3),一并计入。
+  const pendingToolsRowCount = pendingTools.reduce(
+    (sum, msg) => sum + Math.max(1, msg.lines.length),
+    0,
+  );
+
   // inputRowY(活动区内坐标,<Static> 不占活动区):
-  //   流式文本行数(streamingRowCount) + spinner 行数(spinnerRowCount,0 或 1+) + 上边框 1 行
-  const inputRowY = streamingRowCount + spinnerRowCount + 1;
+  //   流式文本行数(streamingRowCount) + pending 工具行数 + spinner 行数 + 上边框 1 行
+  const inputRowY = streamingRowCount + pendingToolsRowCount + spinnerRowCount + 1;
 
   // <Static> items:logo 作为首项(只写一次进 scrollback)+ 已固化消息。
   // 用 discriminator 字段区分 logo item 和 message item。
@@ -194,6 +208,12 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
             cols={cols}
           />
         )}
+        {/* AUTO-0025 修复:pending 工具调用渲染在 streaming 之后、spinner/footer 之前。
+            保留调用顺序(tools 是 messages 数组的子集,顺序天然正确)。
+            用 MessageLine 复用既有 finalized-line 渲染路径,工具行本身就是 FormattedLine。 */}
+        {pendingTools.map((msg) => (
+          <MessageLine key={msg.uuid} msg={msg} cols={cols} />
+        ))}
         {askQuestionVisible ? (
           askPresentationKind === 'plan-approval' ? (
             <ExitPlanModeOverlayV2 store={stores.askQuestionStore} cols={cols} />
