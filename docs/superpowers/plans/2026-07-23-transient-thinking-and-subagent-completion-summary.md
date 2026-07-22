@@ -316,7 +316,7 @@ Add separate tests for:
 - no-start non-empty delta creates one visible phase;
 - pure whitespace block produces neither temporary row nor summary;
 - duplicate start remains idempotent in both `awaitingContent` and `visible`, and duplicate end remains idempotent;
-- `formatThinkingSummary(0, 0)` still renders `Thought for 1s`; this protects the existing `Math.max(1, Math.round(sec))` clamp from regression;
+- `formatThinkingSummary(0, 0)` still renders `Thought for 1s`; this protects the formatter's existing `Math.max(1, Math.round(sec))` minimum from regression;
 - the first non-empty delta calls `openModelBlock()` exactly once before the temporary row, while later deltas add no extra separator;
 - after a visible phase, `clear()` resets phase and buffer so a later `thinking_end` creates neither a summary nor expandable content;
 - `clearTurnState()` erases a visible temporary row, resets phase and buffer, and preserves already-finalized messages;
@@ -396,6 +396,8 @@ expect(state).toEqual(idleTurnThinking());
 
 Add a no-start delta test that calls `startTurnThinking(idle, now)` before emitting the implicit pipeline delta, and a loop-end/finally double-cleanup test that asserts one summary and one spinner completion.
 
+Add a duration-boundary test with `startedAtMs=0` and `now()=1_500`: `finishTurnThinking()` must emit `thinking_end:1`, and the rendered summary must be `Thought for 1s`. This locks the intentional conservative policy: lifecycle conversion floors elapsed milliseconds to whole seconds so displayed time never exceeds measured elapsed time; the formatter's `Math.round` then receives an integer and only supplies the minimum-one-second defense.
+
 Add an integration-order assertion for the adapter edge case: with thinking still active, the first of two parallel `tool_call` events emits exactly one `thinking_end` before that tool call is created; the second tool call observes idle state and emits no second cleanup. Reuse the same cleanup entry point used by ESC, abort, error, and loop-end rather than duplicating logic in the tool-call branch.
 
 - [ ] **Step 5: Run the lifecycle tests and observe RED**
@@ -439,6 +441,8 @@ export function finishTurnThinking(
 ```
 
 Make `finalizeTurnLifecycle()` call `finishTurnThinking()` and then stop the spinner. Keep `handleTurnLoopEnd()` responsible for clearing tool IDs.
+
+Keep the two-stage duration policy explicit: `finishTurnThinking()` uses `Math.floor(elapsedMs / 1000)` to avoid overstating elapsed time, while `formatThinkingSummary()` retains `Math.round(sec)` for its standalone numeric input contract and the `Math.max(1, ...)` display minimum. Because the lifecycle supplies whole seconds, these operations do not conflict.
 
 - [ ] **Step 7: Route every index.ts exit through the shared helper**
 
