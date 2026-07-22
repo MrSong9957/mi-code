@@ -33,7 +33,7 @@
 
 ## Final verification
 
-- Impacted suite: 6 files, 107 tests passed.
+- Impacted suite on final HEAD: 6 files, 109 tests passed.
 - TypeScript: `npm.cmd run typecheck` passed.
 - Full suite: completed with 15 failures, the same count and categories observed
   before implementation (background timeout race, ANSI layout assertions,
