@@ -9,6 +9,9 @@ import { describe, it, expect } from 'vitest';
 import { streamingQuery } from '../agent/streaming-query.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
 import { PermissionChecker } from '../permission/checker.js';
+import { plannerPrompt } from '../prompts/index.js';
+import { createAskUserTool } from '../agent/tools/ask-user-tool.js';
+import type { AskUserManager } from '../agent/ask-user-manager.js';
 import type {
   StreamingLLMClient,
   Message,
@@ -216,5 +219,38 @@ describe('Plan 模式流式拦截', () => {
     expect(results.length).toBe(1);
     expect(results[0]!.output).toBe('wrote foo.txt');
     expect(spy.count).toBe(1);
+  });
+});
+
+describe('planner control flow', () => {
+  it('allows non-planning turns to end normally and reserves Ask and Exit for their conditions', () => {
+    const askDescription = createAskUserTool(
+      undefined as unknown as AskUserManager,
+    ).definition.description;
+
+    expect(plannerPrompt).toContain(
+      'For informational or read-only requests, answer directly and end the turn.',
+    );
+    expect(plannerPrompt).toContain(
+      'Use ask_user_question only when an unresolved choice blocks the current planning task.',
+    );
+    expect(plannerPrompt).toContain(
+      'Never ask a generic "anything else?" question after completing the request.',
+    );
+    expect(plannerPrompt).toContain(
+      'Call exit_plan_mode only after write_plan_file succeeded in this user turn.',
+    );
+    expect(plannerPrompt).toContain(
+      'If the user says there is no other task, end the turn.',
+    );
+    expect(plannerPrompt).not.toContain(
+      'Every turn MUST end with either ask_user_question or exit_plan_mode.',
+    );
+    expect(askDescription).toContain(
+      'Use this only when an unresolved choice blocks the current task.',
+    );
+    expect(askDescription).toContain(
+      'Do not ask generic follow-up questions after completing the request.',
+    );
   });
 });

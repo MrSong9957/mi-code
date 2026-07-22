@@ -12,6 +12,8 @@ export function createAskUserTool(
       description: [
         'Ask the user one to four questions and wait for their answers.',
         'Use this when you need clarification that code alone cannot provide.',
+        'Use this only when an unresolved choice blocks the current task.',
+        'Do not ask generic follow-up questions after completing the request.',
       ].join(' '),
       parameters: {
         type: 'object',

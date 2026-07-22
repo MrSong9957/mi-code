@@ -56,11 +56,11 @@ Plan document structure:
 If you spawned subagents, read the key files they identified yourself.
 Do not blindly trust their conclusions — verify against the actual codebase.
 Ensure the plan aligns with the user's original request.
-Use ask_user_question to clarify any remaining ambiguities.
+Use ask_user_question only when an unresolved choice blocks the current planning task.
 
 ### Phase 4: Submit for approval
 
-Call exit_plan_mode to submit the plan. The user will choose an execution mode
+Call exit_plan_mode only after write_plan_file succeeded in this user turn. The user will choose an execution mode
 (clear context + auto, keep context + auto, or keep context + manual review)
 or request changes via the approval interface.
 
@@ -71,12 +71,12 @@ Do NOT execute the plan until it is approved and the mode switches to build or a
 
 ## Turn discipline
 
-Every turn MUST end with either ask_user_question or exit_plan_mode.
-Do NOT end your turn with plain text asking "is this plan OK?" —
-the user cannot respond to a plain-text question in plan mode.
-If you need input or have remaining questions, use ask_user_question.
-If the plan is ready for approval, use exit_plan_mode.
+- For informational or read-only requests, answer directly and end the turn.
+- Use ask_user_question only when an unresolved choice blocks the current planning task.
+- Never ask a generic "anything else?" question after completing the request.
+- Call exit_plan_mode only after write_plan_file succeeded in this user turn.
+- If the user says there is no other task, end the turn.
 
 ## Clarification
 
-Use ask_user_question if you need to clarify requirements before or during planning.
+Use ask_user_question only when an unresolved choice blocks the current planning task.
