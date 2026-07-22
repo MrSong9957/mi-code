@@ -223,6 +223,7 @@ export class BlockPipeline {
           idx = this.toolBuffer.findIndex(t => t.resultLines === undefined);
         }
         if (idx < 0) {
+          this.lastFinishedToolUseId = undefined;
           // 兜底：没找到对应 call，立即渲染（不丢失 result）
           // 这种情况极少：result 先于 call、或 hook 之外的非工具 result
           this.openBlock();

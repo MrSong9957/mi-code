@@ -36,6 +36,8 @@ describe('tool lifecycle visibility', () => {
     expect(tools.map(message => message.toolUseId)).toEqual(['t1', 't2']);
     expect(tools).toHaveLength(2);
     expect(tools.every(message => message.finalized)).toBe(true);
+    expect(tools[0]!.lines.some(line => line.content.includes('one-result'))).toBe(true);
+    expect(tools[1]!.lines.some(line => line.content.includes('two-result'))).toBe(true);
   });
 
   it('clearTurnState \u4f1a\u5b8c\u6210\u672a\u8fd4\u56de\u7684 pending tool', () => {
@@ -65,6 +67,21 @@ describe('tool lifecycle visibility', () => {
     pipeline.emit({ kind: 'tool_result', name: 'read_file', output: 'wrong-result', toolUseId: 'missing' });
 
     expect(store.getState().messages.find(message => message.toolUseId === 't1')).toMatchObject({ finalized: false });
+  });
+
+  it('孤儿 result 后 hook 不污染上一条完成工具消息', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'one.ts' }, toolUseId: 't1' });
+    pipeline.emit({ kind: 'tool_result', name: 'read_file', output: 'one-result', toolUseId: 't1' });
+    pipeline.emit({ kind: 'tool_result', name: 'read_file', output: 'orphan-result', toolUseId: 'missing' });
+    pipeline.emit({ kind: 'hook', text: '[Hook] orphan complete' });
+
+    const completed = store.getState().messages.find(message => message.toolUseId === 't1');
+    expect(completed!.lines.some(line => line.content.includes('[Hook] orphan complete'))).toBe(false);
+    expect(store.getState().messages.some(message =>
+      message.toolUseId === undefined
+      && message.lines.some(line => line.content.includes('[Hook] orphan complete')),
+    )).toBe(true);
   });
 });
 
