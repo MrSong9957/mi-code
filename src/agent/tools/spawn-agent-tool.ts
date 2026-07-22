@@ -43,6 +43,37 @@ export type SubagentProgressBridge = (parentToolUseId: string) =>
   | undefined;
 
 /**
+ * AUTO-0025 Task 5:把 SubagentResult 序列化为带结构化 status 前缀的字符串。
+ *
+ * 物理本质:派工单回执上的"工单状态戳"。主 agent 看到戳就能区分:
+ * - status=completed → 子代理成功,直接用后面的 summary 文本
+ * - status=incomplete reason=xxx → 子代理未完成,不要静默用自己的工具重做(显式委派场景)
+ * - status=unverified → 子代理没拿到证据,结果不可信
+ *
+ * 格式:
+ *   [Subagent status=completed]
+ *   <summary>
+ *
+ *   [Subagent status=incomplete reason=max_turns]
+ *   <partial or diagnostic text>
+ *
+ * reason 仅在非 completed 时附加(从 terminationReason 映射)。
+ */
+export function formatSubagentResult(result: SubagentResult): string {
+  const status = result.status;
+  if (status === 'background') {
+    // background 不加 status 戳(它不是最终结果,只是"已派发"通知)
+    return result.text;
+  }
+  // reason 仅在 incomplete 时附加:incomplete 的诊断价值在于"为什么没完成"(max_turns/user_abort/error)。
+  // unverified 是独立状态(无证据),end_turn 对它无诊断意义,不加 reason 避免噪音。
+  const reasonPart = status === 'incomplete' && result.terminationReason
+    ? ` reason=${result.terminationReason}`
+    : '';
+  return `[Subagent status=${status}${reasonPart}]\n${result.text}`;
+}
+
+/**
  * 子代理 LLM 客户端工厂。
  *
  * 每次 spawn 时调用，读取当前 provider 配置并创建对应的流式客户端，
@@ -147,7 +178,8 @@ export function createSpawnAgentTool(
           onProgress,
           // role 不传（undefined）→ filterToolsByRole 返回全量减黑名单
         });
-        return result.text;
+        // AUTO-0025 Task 5:输出携带结构化 status 前缀
+        return formatSubagentResult(result);
       }
 
       // 正常角色派发（现有逻辑不变）
@@ -165,7 +197,8 @@ export function createSpawnAgentTool(
         parentToolUseId,
         onProgress,
       });
-      return result.text;
+      // AUTO-0025 Task 5:输出携带结构化 status 前缀
+      return formatSubagentResult(result);
     },
   };
 }

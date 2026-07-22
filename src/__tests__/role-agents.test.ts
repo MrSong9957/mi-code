@@ -168,9 +168,60 @@ describe('createSpawnAgentTool', () => {
     const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
 
     const result = await executor({ role: 'explore', prompt: 'find auth code' });
-    expect(result).toBe('subagent summary');
+    // AUTO-0025 Task 5:输出携带结构化 status 前缀,让主 agent 能区分成功/失败
+    expect(result).toContain('[Subagent status=completed]');
+    expect(result).toContain('subagent summary');
     expect(mockRunner).toHaveBeenCalledTimes(1);
     expect(calls[0]).toEqual({ prompt: 'find auth code', role: 'explore' });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // AUTO-0025 Task 5:spawn_agent 输出携带结构化 status,让主 agent 区分成功/失败。
+  //
+  // 物理本质:派工单回执上的"工单状态戳"。主 agent 看到戳就知道:
+  // - status=completed → 子代理成功,直接用 summary
+  // - status=incomplete/error → 子代理失败,不要静默用自己的工具重做(显式委派场景)
+  // ────────────────────────────────────────────────────────────────────
+
+  it('输出携带 [Subagent status=completed] 前缀(completed)', async () => {
+    const registry = makeRegistry();
+    const mockRunner = vi.fn(async (): Promise<SubagentResult> => ({
+      text: 'found 3 skills', isBackground: false, status: 'completed',
+      terminationReason: 'end_turn', evidence: { toolCallCount: 2, successfulToolResultCount: 2 },
+    }));
+    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+
+    const result = await executor({ role: 'explore', prompt: 'list skills' });
+    expect(result).toContain('[Subagent status=completed]');
+    expect(result).toContain('found 3 skills');
+  });
+
+  it('输出携带 [Subagent status=incomplete reason=max_turns] 前缀(incomplete)', async () => {
+    const registry = makeRegistry();
+    const mockRunner = vi.fn(async (): Promise<SubagentResult> => ({
+      text: '[Subagent incomplete: reached max turns] partial findings',
+      isBackground: false, status: 'incomplete',
+      terminationReason: 'max_turns', evidence: { toolCallCount: 3, successfulToolResultCount: 1 },
+    }));
+    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+
+    const result = await executor({ role: 'explore', prompt: 'deep search' });
+    expect(result).toContain('[Subagent status=incomplete');
+    expect(result).toContain('reason=max_turns');
+    expect(result).toContain('partial findings');
+  });
+
+  it('输出携带 [Subagent status=unverified] 前缀(unverified)', async () => {
+    const registry = makeRegistry();
+    const mockRunner = vi.fn(async (): Promise<SubagentResult> => ({
+      text: '[Subagent unverified] no evidence',
+      isBackground: false, status: 'unverified',
+      terminationReason: 'end_turn', evidence: { toolCallCount: 0, successfulToolResultCount: 0 },
+    }));
+    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+
+    const result = await executor({ role: 'explore', prompt: 'check' });
+    expect(result).toContain('[Subagent status=unverified]');
   });
 
   it('plan 角色也能正确传递', async () => {

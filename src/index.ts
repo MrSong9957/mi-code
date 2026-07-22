@@ -640,6 +640,15 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     'sub-agents (spawn_agent role="explore") to investigate in parallel FIRST, before reading files',
     'yourself. Each sub-agent returns a summary you can synthesize — this keeps your context focused.',
     '',
+    // AUTO-0025 Task 5:显式委派约束。
+    // 当用户明确要求"用子代理/spawn agent"时,主 agent 不能在子代理失败后静默用自己的工具重做。
+    // 子代理输出携带 [Subagent status=...] 前缀,主 agent 据此判断成功/失败。
+    // 注意:此约束仅限用户显式要求子代理的场景;主 agent 自己选择的自动委派失败后仍可容错。
+    'When the user explicitly requires a subagent (e.g. "用子代理", "use a subagent", "spawn an agent"),',
+    'do not replace an incomplete or failed subagent run with your own filesystem/tool investigation.',
+    'Report the subagent status (from the [Subagent status=...] prefix) and available partial result.',
+    'This restriction does not apply to automatic delegation that you selected yourself.',
+    '',
     skillsDescription,
     reminder ? `\n${reminder}` : '',
     planModeInstruction,
