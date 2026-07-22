@@ -116,19 +116,24 @@ async function runSubagentWithClient(
     if (message !== null && typeof message === 'object' && 'type' in message && message.type === 'assistant') {
       const content = (message as { content?: unknown }).content;
       if (Array.isArray(content)) {
+        // 每轮 assistant 消息：提取本轮的 text 块和 tool_use 块。
+        // 只保留最后一轮的 text（而非累加所有轮次），因为中间轮次的 text
+        // 通常是过渡性叙述（"Let me check..."），最后的 text 才是总结。
+        let turnText = '';
         for (const block of content) {
           if (block !== null && typeof block === 'object' && 'type' in block) {
             const bt = (block as { type: string }).type;
             if (bt === 'text') {
               const text = (block as { text?: string }).text;
-              if (text) resultText += text;
+              if (text) turnText += text;
             } else if (bt === 'tool_use') {
-              // 记录工具名用于 fallback
               const name = (block as { name?: string }).name;
               if (name) toolCallNames.push(name);
             }
           }
         }
+        // 最后一轮的 text 覆盖之前的（最后一轮通常含最终总结）
+        if (turnText.trim()) resultText = turnText;
       }
     }
   }

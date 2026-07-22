@@ -82,10 +82,14 @@ export function createSpawnAgentTool(
         return 'Error: prompt is required';
       }
 
+      // explore 角色需要更多工具调用轮次（读多个文件、搜索、分析）
+      const maxSteps = role === 'explore' ? 25 : 15;
+
       const result = await runSubagentFn(prompt, childTools, {
         role: role as Role,
         client: clientProvider ? clientProvider() : undefined,
         permissionChecker,
+        maxSteps,
       });
       return result.text;
     },
