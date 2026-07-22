@@ -48,6 +48,8 @@ describe('bootstrap spinner completion message', () => {
 
       spinnerStore.getState().start('thinking');
       pipeline.emit({ kind: 'thinking_start' });
+      // AUTO-0025-transient:加非空 delta 让 thinking 进 visible 态(否则不产摘要)
+      pipeline.emit({ kind: 'thinking_delta', content: '实质思考' });
       pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
       vi.setSystemTime(9_000);
       stopSpinnerAndAppendCompletion(spinnerStore, messagesStore);
@@ -60,7 +62,7 @@ describe('bootstrap spinner completion message', () => {
         '', '✻ Cooked for 9s',
       ]);
       const allLines = messages.flatMap(message => message.lines);
-      expect(allLines.findIndex(line => line.content.includes('thought for 1s')))
+      expect(allLines.findIndex(line => line.content.includes('Thought for 1s')))
         .toBeLessThan(allLines.findIndex(line => line.content === '✻ Cooked for 9s'));
       expect(completion[0]!.lines[1]!.style).toMatchObject({ dim: true });
     } finally {

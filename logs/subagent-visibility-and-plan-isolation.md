@@ -239,3 +239,65 @@ updates and spinner ticks coincided, expanding the clear/redraw blast radius.
 - Manual terminal scenario: pending real interactive LLM run; automated coverage
   (fixed one row, blink glyph only, no child details, finalized cleanup) is green
   via the suites above.
+
+## AUTO-0025-transient: transient thinking + subagent completion summary (Tasks 1-4)
+
+### Task 1: fixed-height transient thinking row
+
+- Added `TuiMessage.kind === 'thinking-progress'` (singleton). `startStreamingThinking`
+  is now idempotent (returns existing uuid) and `removeStreamingThinking` removes by
+  kind (returns boolean), not by last-message position.
+- Generalized the blink helper to `isPendingGlyphVisible` (alias `isPendingToolGlyphVisible`
+  kept for compatibility). Created `PendingThinkingMessage` (height=1, fixed "Thinking…"
+  text, leaf subscription). Wired into InlineAppV2 before pending tools; streaming
+  selector restricted to `role === 'assistant'` so thinking-progress never reaches
+  StreamingText.
+- TDD: store singleton/removal RED -> GREEN; PendingThinkingMessage one-row/blink/active=false
+  tests; InlineAppV2 thinking+tools layout integration.
+
+### Task 2: thinking state machine and unified cleanup
+
+- Replaced boolean `thinkingActive` with `ThinkingPhase = 'idle'|'awaitingContent'|'visible'`.
+  `thinking_start` -> awaitingContent (no immediate header); first non-empty delta ->
+  visible (one `appendStreamingThinking('Thinking…')` + `openModelBlock`); pure whitespace
+  never becomes visible; `thinking_end` only summarizes from visible.
+- Completion order: registerExpandable -> eraseStreamingThinking -> appendSummary -> clearBuffer.
+- `resetThinkingState(eraseVisible)` shared by `clear()` (no erase, clearMessages handles it)
+  and `clearTurnState()` (erase visible row, preserve history).
+- `formatThinkingSummary` now `Thought for` (uppercase T). Two-stage duration:
+  lifecycle `Math.floor(elapsedMs/1000)` (never overstates), formatter `Math.max(1, round)`.
+- `TurnThinkingState {active, startedAtMs}` immutable helpers; `finishTurnThinking` idempotent.
+  index.ts routes all exits (content_block_stop, first assistant text, onToolCall, loop-end,
+  finally) through `finishTurnThinking`. onToolCall finishes thinking before tool_call emit.
+- TDD: thinking-stream state-machine suite (13); turn-lifecycle pure + integration (6).
+
+### Task 3: completed subagent one-line summary
+
+- `buildSubagentCompletionPresentation(input, output, durationMs)` parses the
+  `[Subagent status=...]` envelope, picks label (description > meaningful prompt line >
+  "Agent"), maps status words (completed->finished), formats duration, returns
+  envelope-stripped fullOutput. Returns null on malformed output (generic fallback).
+- Optional `spawn_agent.description` schema property (not in required).
+- `Block.tool_result` gained `durationMs`; `FinalToolMessageKind` ('tool-progress'|
+  'agent-completion') threaded through finishToolCall -> resolvePendingTool. agent-completion
+  finalizes with single result line only (no callLines), registers fullOutput as expandable.
+- `MessageLine` renders agent-completion as fixed height=1 truncate row.
+- TDD: pure presentation (10); pipeline replacement/fallback/parallel (4); role-agents
+  schema (2); InlineAppV2 single-row (2). Tool output to model unchanged.
+
+### Task 4: verification
+
+- Focused suite: 12 files, 204 tests passed.
+- TypeScript: `npm run typecheck` passed.
+- Full suite: 1908 passed, 4 failed, 2 skipped. All 4 failures are baseline
+  (`task-tool.test.ts` x2 fixture, `layout.test.tsx` x2 status-bar ANSI), confirmed
+  pre-existing on `c437006` and prior rounds. Zero new failures.
+- 8 thinking-contract tests (block-format, message-formatter, thinking-gap-regression,
+  bootstrap-spinner-completion) updated for the intentional `thought`->`Thought` casing
+  and the visible-phase requirement; all pass.
+- Lint: scoped ESLint over 15 changed files reports only the 3 pre-existing baseline
+  issues (`COMMAND_NAMES`, `overlayVisible`, block-format `name` arg).
+- Build source: `codex/auto-0025`, HEAD `6e3d394` (after Task 3 commit).
+- Manual TTY scenario: pending real interactive run; automated coverage (empty envelope
+  no row, blink Thinking, Thought summary, stable spawn_agent, Agent finished line,
+  Ctrl+O most-recent) is green via the suites above.

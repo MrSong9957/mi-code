@@ -15,14 +15,14 @@ describe('MessageFormatter', () => {
 
     it('thinking_end → 委托 block-format.formatThinkingSummary（2 空格缩进烤进 content）', () => {
       const lines = MessageFormatter.format('thinking_end', { duration: 17, filesRead: 2 });
-      expect(lines[0].content).toBe('  thought for 17s, read 2 files (ctrl+o to expand)');
+      expect(lines[0].content).toBe('  Thought for 17s, read 2 files (ctrl+o to expand)');
       expect(lines[0].style.dim).toBe(true);
       expect(lines[0].indent).toBe(2);
     });
 
     it('thinking_end 无 filesRead', () => {
       const lines = MessageFormatter.format('thinking_end', { duration: 5 });
-      expect(lines[0].content).toBe('  thought for 5s (ctrl+o to expand)');
+      expect(lines[0].content).toBe('  Thought for 5s (ctrl+o to expand)');
     });
 
     it('assistant → ● + content (magenta)', () => {
