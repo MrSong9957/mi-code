@@ -49,6 +49,15 @@ export interface MessagesState {
   resolvePendingTool: (toolUseId: string, lines: FormattedLine[]) => boolean;
   /** \u5c06 hook \u9644\u5230\u5df2\u5b8c\u6210\u7684\u5de5\u5177\u6d88\u606f */
   appendToolHook: (toolUseId: string, lines: FormattedLine[]) => boolean;
+  /**
+   * AUTO-0025 Task 3:按 parentToolUseId 原地更新 pending 工具消息的瞬态进度行。
+   *
+   * 物理本质:把子代理内部的工具活动(正在 read_file / 已 run_bash)实时挂到对应的
+   * 父 spawn 消息。每次更新用「原 call 行 + 当前进度快照」重建,不堆积历史进度行。
+   *
+   * @returns 是否找到了匹配的 pending 消息并更新。未知 parentToolUseId 返回 false。
+   */
+  updatePendingToolProgress: (parentToolUseId: string, progressLines: FormattedLine[]) => boolean;
   /** 开一条流式 assistant（finalized=false, streamingText=initialText） */
   startStreaming: (initialText: string) => void;
   /** 开一条流式 thinking（role='thinking', 灰色 dim） */
@@ -130,6 +139,8 @@ export function createMessagesStore(): MessagesStore {
             kind: 'tool-progress',
             toolUseId,
             lines,
+            // AUTO-0025 Task 3:记下原 call 行快照,供 updatePendingToolProgress 重建使用。
+            originalCallLines: lines,
             finalized: false,
           }],
         };
@@ -148,7 +159,11 @@ export function createMessagesStore(): MessagesStore {
         if (index < 0) return s;
         resolved = true;
         const message = s.messages[index]!;
-        const updated: TuiMessage = { ...message, lines, finalized: true };
+        // AUTO-0025 Task 3:finalized 时丢弃 originalCallLines —— 最终 lines 自带完整 call+result,
+        // 不再需要骨架字段(否则序列化/快照里会留冗余)。
+        const { originalCallLines: _drop, ...rest } = message;
+        void _drop;
+        const updated: TuiMessage = { ...rest, lines, finalized: true };
         return { messages: [...s.messages.slice(0, index), updated, ...s.messages.slice(index + 1)] };
       });
       return resolved;
@@ -167,6 +182,31 @@ export function createMessagesStore(): MessagesStore {
         return { messages: [...s.messages.slice(0, index), updated, ...s.messages.slice(index + 1)] };
       });
       return appended;
+    },
+
+    updatePendingToolProgress: (parentToolUseId, progressLines) => {
+      let updated = false;
+      set((s) => {
+        const index = s.messages.findIndex(message =>
+          message.kind === 'tool-progress'
+          && message.toolUseId === parentToolUseId
+          && !message.finalized,
+        );
+        if (index < 0) return s;
+        updated = true;
+        const message = s.messages[index]!;
+        // AUTO-0025 Task 3:用「原 call 行 + 当前进度快照」重建 lines。
+        // 物理本质:pending 消息的"骨架"是原 call 行(● spawn_agent(...)),
+        // 子代理进度(⎿ read_file running)是挂在骨架上的瞬态肉。
+        // 每次更新用骨架 + 最新进度快照重建,旧的瞬态进度被替换,不堆积历史。
+        const callLines = message.originalCallLines ?? message.lines;
+        const rebuilt: TuiMessage = {
+          ...message,
+          lines: [...callLines, ...progressLines],
+        };
+        return { messages: [...s.messages.slice(0, index), rebuilt, ...s.messages.slice(index + 1)] };
+      });
+      return updated;
     },
 
     startStreaming: (initialText) => set((s) => {

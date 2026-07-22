@@ -74,6 +74,19 @@ export type Block =
   | { kind: 'assistant_text'; text: string; isFinal: boolean }  // 流式 markdown
   | { kind: 'tool_call'; name: string; input: Record<string, unknown>; toolUseId?: string }
   | { kind: 'tool_result'; name: string; input?: Record<string, unknown>; output: string; toolUseId?: string }
+  | {
+      kind: 'subagent_tool_progress';
+      /** 外层 spawn_agent 这次调用的 toolUseId,用于精确挂到对应父 pending 消息 */
+      parentToolUseId: string;
+      /** 子代理内部那次工具调用的 toolUseId,用于同一父消息内多个子工具的状态替换 */
+      childToolUseId: string;
+      /** 子代理工具名 */
+      name: string;
+      /** 阶段:'running' 表示进行中,'done' 表示完成(此时 output 是结果摘要) */
+      phase: 'running' | 'done';
+      /** phase='done' 时的结果摘要(可选,running 时省略) */
+      output?: string;
+    }
   | { kind: 'hook'; text: string };  // PostToolUse 等 hook 日志（紧跟 tool_result，同步渲染）
 
 /** 终端尺寸 */

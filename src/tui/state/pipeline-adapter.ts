@@ -127,6 +127,12 @@ export class PipelineToStoreAdapter implements PipelineRenderer {
     return this.store.getState().appendToolHook(toolUseId, lines);
   }
 
+  updateToolProgress(parentToolUseId: string, progressLines: FormattedLine[]): boolean {
+    // AUTO-0025 Task 3:转发到 store 的 updatePendingToolProgress。
+    // store 按 parentToolUseId 精确匹配,重建 pending 消息的 lines = 原 call 行 + 进度快照。
+    return this.store.getState().updatePendingToolProgress(parentToolUseId, progressLines);
+  }
+
   appendStreamingThinking(text: string): void {
     // 流式 thinking：首次 startStreamingThinking，后续 updateStreamingThinking
     const msgs = this.store.getState().messages;

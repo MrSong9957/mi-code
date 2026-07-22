@@ -236,6 +236,86 @@ describe('messages-store', () => {
       { toolUseId: 't2', finalized: false, lines: [{ content: '\u25cf second' }] },
     ]);
   });
+
+  // ────────────────────────────────────────────────────────────────────
+  // AUTO-0025 Task 3：子代理进度按 parentToolUseId 原地更新到对应 pending 消息。
+  //
+  // 物理本质:并行 spawn_agent 时,每个子代理内部工具进度必须精确挂到自己的父调用,
+  // 不能 FIFO 误挂到另一个并行的 spawn。updatePendingToolProgress(parentId, lines)
+  // 只更新原 call 行 + 当前瞬态进度,不重复追加累积进度(避免行数爆炸)。
+  // ────────────────────────────────────────────────────────────────────
+
+  it('subagent progress: updatePendingToolProgress 只更新匹配的父消息', () => {
+    const store = createMessagesStore();
+    store.getState().appendPendingTool('spawn-1', [LINE('● spawn_agent(explore)')]);
+    store.getState().appendPendingTool('spawn-2', [LINE('● spawn_agent(plan)')]);
+
+    // 只更新 spawn-2 的进度
+    const updated = store.getState().updatePendingToolProgress('spawn-2', [
+      LINE('  ⎿ read_file running', 'dim'),
+    ]);
+
+    expect(updated).toBe(true);
+    const msgs = store.getState().messages;
+    // spawn-1 不含 read_file
+    const spawn1 = msgs.find(m => m.toolUseId === 'spawn-1')!;
+    expect(spawn1.lines.map(l => l.content)).not.toContain('  ⎿ read_file running');
+    // spawn-2 含 read_file 进度
+    const spawn2 = msgs.find(m => m.toolUseId === 'spawn-2')!;
+    expect(spawn2.lines.some(l => l.content.includes('read_file running'))).toBe(true);
+  });
+
+  it('subagent progress: 未知 parentToolUseId 返回 false 不修改任何消息', () => {
+    const store = createMessagesStore();
+    store.getState().appendPendingTool('spawn-1', [LINE('● spawn_agent(explore)')]);
+
+    const updated = store.getState().updatePendingToolProgress('missing', [
+      LINE('  ⎿ read_file', 'dim'),
+    ]);
+
+    expect(updated).toBe(false);
+    expect(store.getState().messages[0]!.lines).toHaveLength(1);
+  });
+
+  it('subagent progress: 多次更新不重复追加原 call 行', () => {
+    const store = createMessagesStore();
+    store.getState().appendPendingTool('spawn-1', [LINE('● spawn_agent(explore)')]);
+
+    // 模拟子代理连续触发两个工具(read_file 然后 run_bash)
+    store.getState().updatePendingToolProgress('spawn-1', [
+      LINE('  ⎿ read_file running', 'dim'),
+    ]);
+    store.getState().updatePendingToolProgress('spawn-1', [
+      LINE('  ⎿ read_file done', 'dim'),
+      LINE('  ⎿ run_bash running', 'dim'),
+    ]);
+
+    const msg = store.getState().messages[0]!;
+    // 原 call 行只出现一次(不被重复追加)
+    expect(msg.lines.filter(l => l.content.includes('spawn_agent(explore)'))).toHaveLength(1);
+    // 最新的进度快照替换旧的(不堆积历史)
+    expect(msg.lines.some(l => l.content.includes('read_file done'))).toBe(true);
+    expect(msg.lines.some(l => l.content.includes('run_bash running'))).toBe(true);
+    expect(msg.lines.some(l => l.content.includes('read_file running'))).toBe(false);
+  });
+
+  it('subagent progress: resolvePendingTool 后进度行被最终结果替换', () => {
+    const store = createMessagesStore();
+    store.getState().appendPendingTool('spawn-1', [LINE('● spawn_agent(explore)')]);
+    store.getState().updatePendingToolProgress('spawn-1', [LINE('  ⎿ read_file', 'dim')]);
+
+    // 外层 spawn 结果到达:整个 pending 消息被最终 call+result 替换
+    store.getState().resolvePendingTool('spawn-1', [
+      LINE('● spawn_agent(explore)'),
+      LINE('⎿  found 3 skills'),
+    ]);
+
+    const msg = store.getState().messages[0]!;
+    expect(msg.finalized).toBe(true);
+    // 瞬态进度行被替换掉
+    expect(msg.lines.some(l => l.content.includes('read_file'))).toBe(false);
+    expect(msg.lines.some(l => l.content.includes('found 3 skills'))).toBe(true);
+  });
 });
 
 describe('isAppendableMessage', () => {

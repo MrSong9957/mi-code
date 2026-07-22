@@ -209,6 +209,31 @@ const spawnAgentTool = createSpawnAgentTool(
   runSubagent,
   truncateSkillsDescription(skillRegistry.describeAvailable()),
   () => lastSystemPrompt,  // getParentSystemPrompt
+  // AUTO-0025 Task 3:子代理进度桥接工厂。
+  // 物理本质:工厂闭包不捕获初始 no-op pipeline,而是每次执行时读 live pipeline,
+  // 把子代理 tool_call/tool_result 事件 emit 成 subagent_tool_progress 块,
+  // BlockPipeline 路由到对应父 pending 消息。
+  // spawn_agent 执行时才调用此工厂,此时 pipeline 必已 bootstrap 完成赋值。
+  (parentToolUseId: string) => (event) => {
+    if (event.kind === 'tool_call') {
+      pipeline.emit({
+        kind: 'subagent_tool_progress',
+        parentToolUseId,
+        childToolUseId: event.childToolUseId,
+        name: event.name,
+        phase: 'running',
+      });
+    } else {
+      pipeline.emit({
+        kind: 'subagent_tool_progress',
+        parentToolUseId,
+        childToolUseId: event.childToolUseId,
+        name: event.name,
+        phase: 'done',
+        output: event.output,
+      });
+    }
+  },
 );
 toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 const loadSkillTool = createLoadSkillTool(skillRegistry);

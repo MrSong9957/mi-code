@@ -69,6 +69,125 @@ describe('tool lifecycle visibility', () => {
     expect(store.getState().messages.find(message => message.toolUseId === 't1')).toMatchObject({ finalized: false });
   });
 
+  // ────────────────────────────────────────────────────────────────────
+  // AUTO-0025 Task 3：subagent_tool_progress 块路由到匹配的父 pending 消息。
+  //
+  // 物理本质:子代理内部工具(read_file / run_bash)的实时活动,作为嵌套进度行
+  // 挂到外层 spawn_agent 的 pending 消息上,不创建第二条顶级工具消息。
+  // 并行 spawn 时,每个子代理进度按 parentToolUseId 精确挂载,不串台。
+  // ────────────────────────────────────────────────────────────────────
+
+  it('subagent_tool_progress 嵌入对应父 pending 消息,不新建顶级消息', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: { role: 'explore' }, toolUseId: 'spawn-1' });
+    pipeline.emit({
+      kind: 'subagent_tool_progress',
+      parentToolUseId: 'spawn-1',
+      childToolUseId: 'read-1',
+      name: 'read_file',
+      phase: 'running',
+    });
+
+    const msgs = store.getState().messages;
+    // 没有创建第二条顶级 tool-progress 消息
+    const spawnMessages = msgs.filter(m => m.kind === 'tool-progress');
+    expect(spawnMessages).toHaveLength(1);
+    expect(spawnMessages[0]!.toolUseId).toBe('spawn-1');
+    // 父消息内嵌入了 read_file 进度行
+    expect(spawnMessages[0]!.lines.some(l => l.content.includes('read_file'))).toBe(true);
+  });
+
+  it('并行 spawn 时 subagent_tool_progress 按 parentToolUseId 精确挂载', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: { role: 'explore' }, toolUseId: 'spawn-1' });
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: { role: 'plan' }, toolUseId: 'spawn-2' });
+
+    // 交错进度:spawn-2 先报 read_file,spawn-1 后报 run_bash
+    pipeline.emit({
+      kind: 'subagent_tool_progress',
+      parentToolUseId: 'spawn-2',
+      childToolUseId: 'read-2a',
+      name: 'read_file',
+      phase: 'running',
+    });
+    pipeline.emit({
+      kind: 'subagent_tool_progress',
+      parentToolUseId: 'spawn-1',
+      childToolUseId: 'bash-1a',
+      name: 'run_bash',
+      phase: 'running',
+    });
+
+    const spawn1 = store.getState().messages.find(m => m.toolUseId === 'spawn-1')!;
+    const spawn2 = store.getState().messages.find(m => m.toolUseId === 'spawn-2')!;
+    // 精确隔离:spawn-1 只含 run_bash,spawn-2 只含 read_file
+    expect(spawn1.lines.some(l => l.content.includes('run_bash'))).toBe(true);
+    expect(spawn1.lines.some(l => l.content.includes('read_file'))).toBe(false);
+    expect(spawn2.lines.some(l => l.content.includes('read_file'))).toBe(true);
+    expect(spawn2.lines.some(l => l.content.includes('run_bash'))).toBe(false);
+  });
+
+  it('subagent_tool_progress 完成态把 running 行替换为结果摘要', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'spawn-1' });
+    pipeline.emit({
+      kind: 'subagent_tool_progress',
+      parentToolUseId: 'spawn-1',
+      childToolUseId: 'read-1',
+      name: 'read_file',
+      phase: 'running',
+    });
+    pipeline.emit({
+      kind: 'subagent_tool_progress',
+      parentToolUseId: 'spawn-1',
+      childToolUseId: 'read-1',
+      name: 'read_file',
+      phase: 'done',
+      output: '3 skills found',
+    });
+
+    const spawn1 = store.getState().messages.find(m => m.toolUseId === 'spawn-1')!;
+    // running 行被 done 摘要替换
+    expect(spawn1.lines.some(l => l.content.includes('running') && l.content.includes('read_file'))).toBe(false);
+    expect(spawn1.lines.some(l => l.content.includes('3 skills found'))).toBe(true);
+  });
+
+  it('外层 spawn_agent 结果到达后,瞬态进度被最终 call+result 替换', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'spawn-1' });
+    pipeline.emit({
+      kind: 'subagent_tool_progress',
+      parentToolUseId: 'spawn-1',
+      childToolUseId: 'read-1',
+      name: 'read_file',
+      phase: 'running',
+    });
+    // 外层 spawn 完成
+    pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'subagent summary', toolUseId: 'spawn-1' });
+
+    const spawn1 = store.getState().messages.find(m => m.toolUseId === 'spawn-1')!;
+    expect(spawn1.finalized).toBe(true);
+    // 瞬态 read_file 进度消失,被最终 subagent summary 替换
+    expect(spawn1.lines.some(l => l.content.includes('read_file'))).toBe(false);
+    expect(spawn1.lines.some(l => l.content.includes('subagent summary'))).toBe(true);
+  });
+
+  it('未知 parentToolUseId 的 subagent_tool_progress 不影响任何消息', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'spawn-1' });
+    pipeline.emit({
+      kind: 'subagent_tool_progress',
+      parentToolUseId: 'missing',
+      childToolUseId: 'read-x',
+      name: 'read_file',
+      phase: 'running',
+    });
+
+    const spawn1 = store.getState().messages.find(m => m.toolUseId === 'spawn-1')!;
+    // spawn-1 的 lines 仍是原 call 行,没有 read_file
+    expect(spawn1.lines.some(l => l.content.includes('read_file'))).toBe(false);
+  });
+
   it('孤儿 result 后 hook 不污染上一条完成工具消息', () => {
     const { pipeline, store } = setup();
     pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'one.ts' }, toolUseId: 't1' });
