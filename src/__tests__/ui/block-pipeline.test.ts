@@ -83,28 +83,27 @@ describe('BlockPipeline', () => {
       expect(prints[0].style).toMatchObject({ fg: 'success', bold: true });
     });
 
-    it('thinking_start → awaitingContent,不立即固化标题行(AUTO-0025-transient)', () => {
+    it('thinking_start → 立即显示闪烁行(idle→active,AUTO-0025-transient 修正)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
-      // 新行为:start 不固化,不产生任何 printMessage
-      expect(prints.length).toBe(0);
-      expect(renderer.appendStreamingThinking).not.toHaveBeenCalled();
+      // start 立即触发 appendStreamingThinking + openModelBlock(首块空行)
+      expect(renderer.appendStreamingThinking).toHaveBeenCalledWith('Thinking…');
+      expect(prints[0].text).toBe(''); // openModelBlock 的首块空行
     });
 
-    it('thinking_delta 纯空白 → 不渲染;首个非空 → appendStreamingThinking(AUTO-0025-transient)', () => {
-      const { renderer, prints } = mockRenderer();
+    it('thinking_delta 在 active 态只累积,不额外触发显示(AUTO-0025-transient 修正)', () => {
+      const { renderer } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
-      p.emit({ kind: 'thinking_delta', content: '   ' });
-      expect(renderer.appendStreamingThinking).not.toHaveBeenCalled();
+      // start 已触发一次
+      expect(renderer.appendStreamingThinking).toHaveBeenCalledTimes(1);
       p.emit({ kind: 'thinking_delta', content: '用户问...' });
-      // 首个非空 delta 显示临时行
-      expect(renderer.appendStreamingThinking).toHaveBeenCalledWith('Thinking…');
+      // delta 不再额外触发显示(只累积 buffer)
       expect(renderer.appendStreamingThinking).toHaveBeenCalledTimes(1);
     });
 
-    it('thinking_end → printMessage("  Thought for Ns...", dim),需先 visible(AUTO-0025-transient)', () => {
+    it('thinking_end → printMessage("  Thought for Ns...", dim),需先 active(AUTO-0025-transient 修正)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
@@ -188,17 +187,12 @@ describe('BlockPipeline', () => {
   });
 
   describe('块间空行（集中化）', () => {
-    it('首个模型块前有空行（AUTO-0025-transient:用 tool_call 触发,thinking_start 不产输出）', () => {
+    it('首个模型块前有空行(AUTO-0025-transient:thinking_start 即 active,触发 openModelBlock)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
-      // thinking_start 不产生输出(AUTO-0025-transient awaitingContent)
+      // thinking_start 现在立即 active,openModelBlock 产生首块空行
       p.emit({ kind: 'thinking_start' });
-      // tool_call 是第一个产出内容的模型块:强制加空行
-      p.emit({ kind: 'tool_call', name: 'run_bash', input: { command: 'ls' }, toolUseId: 't1' });
-      p.emit({ kind: 'tool_result', name: 'run_bash', output: 'done', toolUseId: 't1' });
       expect(prints[0].text).toBe(''); // 首个模型块前空行
-      const content = firstContent(prints);
-      expect(content!.text).toBe('● Bash(ls)');
     });
 
     it('第二个块前加空行（tool_call 在 thinking_end 之后）', () => {
@@ -217,9 +211,8 @@ describe('BlockPipeline', () => {
     it('assistant_text 多次 delta 只加一次空行(AUTO-0025-transient)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
-      // 用 thinking visible 建立首块(thinking_start + 非空 delta)
+      // thinking_start 即 active,openModelBlock 加首空行
       p.emit({ kind: 'thinking_start' });
-      p.emit({ kind: 'thinking_delta', content: '实质内容' }); // → visible,openModelBlock 加首空行
       // assistant 流式块
       p.emit({ kind: 'assistant_text', text: 'a', isFinal: false });
       p.emit({ kind: 'assistant_text', text: 'ab', isFinal: false });

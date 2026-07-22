@@ -149,13 +149,14 @@ describe('BlockPipeline → store 端到端', () => {
     expect(last.lines.some(l => l.content.includes('❯') && l.content.includes('你好'))).toBe(true);
   });
 
-  it('thinking_start + thinking_end → store 含 Thought 摘要(AUTO-0025-transient:无 ● Thinking… 固化行)', () => {
+  it('thinking_start + thinking_end → store 含 Thought 摘要(AUTO-0025-transient:start 即 active,无 ● Thinking… 固化行)', () => {
     const { pipeline, store } = setup();
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_delta', content: '思考内容' });
     pipeline.emit({ kind: 'thinking_end', durationSec: 5, filesRead: 2 });
     const allLines = store.getState().messages.flatMap(m => m.lines.map(l => l.content));
-    // AUTO-0025-transient:不再固化 ● Thinking… 标题行(start 只进 awaitingContent)
+    // AUTO-0025-transient:thinking 临时行(thinking-progress kind)不固化进 Static,
+    // 完成后只留下 Thought 摘要。
     expect(allLines.some(t => t === '● Thinking…')).toBe(false);
     // 完成后留下大写 Thought 摘要
     expect(allLines.some(t => t.includes('Thought for 5s'))).toBe(true);

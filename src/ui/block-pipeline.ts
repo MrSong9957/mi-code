@@ -110,12 +110,19 @@ interface BufferedTool {
  * - 所有 ●/⎿ 前缀、缩进、样式都从这里产出（调 MessageFormatter + block-format）
  */
 /**
- * AUTO-0025-transient:thinking 状态机三态。
- * - idle:无 thinking 活动
- * - awaitingContent:收到 thinking_start 但还没非空 delta(不显示临时行)
- * - visible:首个非空 delta 已显示临时闪烁行(appendStreamingThinking 已调用)
+ * AUTO-0025-transient:thinking 协议生命周期状态机(两态)。
+ *
+ * 状态语义区分"协议生命周期"和"UI 呈现":
+ * - idle:无 thinking block 进行中。不变量:buffer 为空,无活动计时,无临时闪烁行。
+ * - active:thinking block 已开始(content_block_start thinking)。不变量:已显示临时闪烁行,
+ *   允许累积 delta 到 buffer。
+ *
+ * 设计决策(审查修正):thinking_start 是 thinking block 生命周期开始的权威协议事件,
+ * 足以驱动"正在思考"的 UI 状态。它不保证该 block 最终包含非空、可展开的 thinking 文本——
+ * 某些 provider(MiMo 兼容端点)的 thinking_delta 内容为空或纯空白。旧三态(visible 门控)
+ * 错误地用"是否收到非空文本"推断"thinking 生命周期是否存在",导致空 delta provider 不显示。
  */
-type ThinkingPhase = 'idle' | 'awaitingContent' | 'visible';
+type ThinkingPhase = 'idle' | 'active';
 
 export class BlockPipeline {
   private renderer: PipelineRenderer;
@@ -158,45 +165,36 @@ export class BlockPipeline {
         this.print(MessageFormatter.format('input', {}, block.text), 'user');
         break;
 
-      case 'thinking_start':
-        // AUTO-0025-transient:不立即固化标题行。进入 awaitingContent,等首个非空 delta。
-        // 物理本质:thinking_start 只是"准备态",真正显示要等模型吐出实质内容。
-        if (this.thinkingPhase === 'idle') {
-          this.thinkingPhase = 'awaitingContent';
-          this.thinkingBuffer = '';
-        }
+      case 'thinking_start': {
+        // AUTO-0025-transient:thinking block 生命周期开始 → 立即显示闪烁行。
+        // 重复 start 完全无副作用(幂等):不清空 buffer,不重置计时,不二次显示。
+        if (this.thinkingPhase === 'active') break;
+        this.thinkingPhase = 'active';
+        this.thinkingBuffer = '';
+        // idle → active 的真实迁移:插模型块分隔符(仅这一次),显示临时闪烁行。
+        this.openModelBlock();
+        this.renderer.appendStreamingThinking('Thinking…');
         break;
+      }
 
       case 'thinking_delta': {
-        // 累积供 Ctrl+O 展开。首个非空 delta 才显示临时闪烁行。
-        if (this.thinkingPhase === 'idle') this.thinkingPhase = 'awaitingContent';
+        // 只在 active 态累积 buffer(供 Ctrl+O 展开)。idle 时完全忽略——
+        // 维持 idle ⇒ buffer 为空 不变量,防止孤立 delta 污染下一个 thinking block。
+        if (this.thinkingPhase !== 'active') break;
         this.thinkingBuffer += block.content;
-        if (this.thinkingPhase === 'awaitingContent' && this.thinkingBuffer.trim().length > 0) {
-          // awaitingContent → visible:插模型块分隔符(仅这一次),显示临时行。
-          this.openModelBlock();
-          this.renderer.appendStreamingThinking('Thinking…');
-          this.thinkingPhase = 'visible';
-        }
         break;
       }
 
       case 'thinking_end': {
-        // AUTO-0025-transient:完成顺序 registerExpandable → eraseThinkingProgress → appendSummary → clearBuffer。
-        // 只有 visible 态才产生摘要(纯空白的 awaitingContent 只重置状态)。
-        if (this.thinkingPhase === 'visible') {
+        // active 态才产生摘要;idle 时(end 无 start)完全无害,只确保回到 idle。
+        if (this.thinkingPhase === 'active') {
           const summaryLines = MessageFormatter.format('thinking_end', {
             duration: block.durationSec,
             filesRead: block.filesRead,
           });
-          // 先注册可折叠块:summary=摘要行,full=完整思考文本(按行拆分 + dim 缩进)
+          // 注册可折叠块:summary=摘要行,full=完整思考文本或 placeholder(空 buffer 时)。
           const id = `thinking-${++this.idCounter}`;
-          const fullLines = this.thinkingBuffer
-            ? this.thinkingBuffer.split('\n').map(l => ({
-                content: `  ${l}`,
-                style: BLOCK_STYLES.dim,
-                indent: INDENT.nested,
-              }))
-            : summaryLines;
+          const fullLines = this.buildThinkingFullLines();
           this.expandable.add({ id, kind: 'thinking', summaryLines, fullLines });
           // 再擦除临时行(让摘要行替代闪烁的 Thinking…)
           this.renderer.eraseStreamingThinking();
@@ -469,12 +467,36 @@ export class BlockPipeline {
   }
 
   /**
-   * AUTO-0025-transient:重置 thinking 状态。
-   * eraseVisible=true 且当前 visible 时,先擦除临时行(用于 clearTurnState 保留历史消息场景)。
-   * eraseVisible=false 时(clear 已会 clearMessages 物理清屏)只重置 phase 和 buffer。
+   * AUTO-0025-transient:构建 thinking 可折叠块的完整展开行。
+   *
+   * - 有实质内容(trim 非空):按行拆分 + dim 缩进,供 Ctrl+O 展开真实推理。
+   * - 无实质内容:显示明确 placeholder,不用摘要兜底(避免误导用户以为摘要就是完整 thinking)。
+   *   placeholder 文案用 "received"(陈述客户端事实)而非 "provided by model"(归因可能不准)。
    */
-  private resetThinkingState(eraseVisible: boolean): void {
-    if (eraseVisible && this.thinkingPhase === 'visible') {
+  private buildThinkingFullLines(): FormattedLine[] {
+    const hasContent = this.thinkingBuffer.trim().length > 0;
+    if (hasContent) {
+      return this.thinkingBuffer.split('\n').map(l => ({
+        content: `  ${l}`,
+        style: BLOCK_STYLES.dim,
+        indent: INDENT.nested,
+      }));
+    }
+    return [{
+      content: '  (No thinking content received)',
+      style: BLOCK_STYLES.dim,
+      indent: INDENT.nested,
+      raw: true,
+    }];
+  }
+
+  /**
+   * AUTO-0025-transient:重置 thinking 状态。
+   * eraseIfActive=true 且当前 active 时,先擦除临时行(用于 clearTurnState 保留历史消息场景)。
+   * eraseIfActive=false 时(clear 已会 clearMessages 物理清屏)只重置 phase 和 buffer。
+   */
+  private resetThinkingState(eraseIfActive: boolean): void {
+    if (eraseIfActive && this.thinkingPhase === 'active') {
       this.renderer.eraseStreamingThinking();
     }
     this.thinkingPhase = 'idle';
