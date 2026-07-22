@@ -51,14 +51,16 @@ export interface MessagesState {
   appendToolHook: (toolUseId: string, lines: FormattedLine[]) => boolean;
   /** 开一条流式 assistant（finalized=false, streamingText=initialText） */
   startStreaming: (initialText: string) => void;
-  /** 开一条流式 thinking（role='thinking', 灰色 dim） */
-  startStreamingThinking: (initialText: string) => void;
+  /** 开一条流式 thinking（role='thinking', 灰色 dim）。
+   *  AUTO-0025-transient:kind='thinking-progress' 单例,重复调用幂等,返回 uuid。 */
+  startStreamingThinking: (initialText: string) => string;
   /** 更新末条流式 assistant 的 streamingText（累加全文） */
   updateStreaming: (text: string) => void;
   /** 更新末条流式 thinking 的 streamingText */
   updateStreamingThinking: (text: string) => void;
-  /** 移除末条流式 thinking 消息（折叠为摘要时调用） */
-  removeStreamingThinking: () => void;
+  /** 移除 thinking-progress 消息（按 kind,不依赖末条位置）。
+   *  AUTO-0025-transient:返回是否实际移除了一条消息(幂等,无则 false)。 */
+  removeStreamingThinking: () => boolean;
   /** 固化末条流式（finalized=true，固化 lines，清 streamingText） */
   finalizeStreaming: (lines: FormattedLine[]) => void;
   /** 清空所有消息 */
@@ -183,20 +185,35 @@ export function createMessagesStore(): MessagesStore {
       };
     }),
 
-    /** 开一条流式 thinking 消息（灰色 dim，role='thinking'） */
-    startStreamingThinking: (initialText) => set((s) => {
-      const id = s._idCounter + 1;
-      return {
-        _idCounter: id,
-        messages: [...s.messages, {
-          uuid: `msg-${id}`,
-          role: 'thinking',
-          lines: [],
-          finalized: false,
-          streamingText: initialText,
-        }],
-      };
-    }),
+    /** 开一条流式 thinking 消息（灰色 dim，role='thinking'）。
+     *  AUTO-0025-transient:kind='thinking-progress' 单例——已存在未固化 thinking-progress
+     *  时幂等返回其 uuid,不重复创建。 */
+    startStreamingThinking: (initialText) => {
+      let uuid = '';
+      set((s) => {
+        const existing = s.messages.find(message =>
+          message.kind === 'thinking-progress' && !message.finalized,
+        );
+        if (existing) {
+          uuid = existing.uuid;
+          return s;
+        }
+        const id = s._idCounter + 1;
+        uuid = `msg-${id}`;
+        return {
+          _idCounter: id,
+          messages: [...s.messages, {
+            uuid,
+            role: 'thinking',
+            kind: 'thinking-progress',
+            lines: [],
+            finalized: false,
+            streamingText: initialText,
+          }],
+        };
+      });
+      return uuid;
+    },
 
     updateStreaming: (text) => set((s) => {
       const last = s.messages[s.messages.length - 1];
@@ -213,12 +230,20 @@ export function createMessagesStore(): MessagesStore {
       return { messages: [...s.messages.slice(0, -1), updated] };
     }),
 
-    /** 移除末条流式 thinking 消息（折叠为摘要时调用，摘要由 printMessage 追加） */
-    removeStreamingThinking: () => set((s) => {
-      const last = s.messages[s.messages.length - 1];
-      if (!last || last.finalized || last.role !== 'thinking') return s;
-      return { messages: s.messages.slice(0, -1) };
-    }),
+    /** 移除 thinking-progress 消息（按 kind,不依赖末条位置）。
+     *  AUTO-0025-transient:返回是否实际移除了一条消息(幂等,无则 false)。 */
+    removeStreamingThinking: () => {
+      let removed = false;
+      set((s) => {
+        const index = s.messages.findIndex(message =>
+          message.kind === 'thinking-progress' && !message.finalized,
+        );
+        if (index < 0) return s;
+        removed = true;
+        return { messages: [...s.messages.slice(0, index), ...s.messages.slice(index + 1)] };
+      });
+      return removed;
+    },
 
     finalizeStreaming: (lines) => set((s) => {
       const last = s.messages[s.messages.length - 1];

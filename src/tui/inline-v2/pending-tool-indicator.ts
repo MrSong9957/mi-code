@@ -12,19 +12,22 @@
 export const PENDING_TOOL_BLINK_INTERVAL_MS = 600;
 
 /**
- * 判断给定时间戳下 pending 工具的 ● 是否可见。
+ * 判断给定时间戳下 pending 元素(工具或 thinking)的 ● 是否可见。
  *
  * 周期语义:每个 intervalMs 区间内,偶数区间可见(0~599ms、1200~1799ms...),
- * 奇数区间隐藏(600~1199ms、1800~2399ms...)。所有 pending 工具用同一时间戳,
+ * 奇数区间隐藏(600~1199ms、1800~2399ms...)。所有 pending 元素用同一时间戳,
  * 保证并行时同步闪烁(in-phase)。
  *
  * 防御边界:负数/NaN/Infinity 时间戳按 0 处理,落在首个可见窗口——
  * 避免 pending 刚创建时因时钟未初始化而显示空白。
  */
-export function isPendingToolGlyphVisible(
+export function isPendingGlyphVisible(
   timeMs: number,
   intervalMs: number = PENDING_TOOL_BLINK_INTERVAL_MS,
 ): boolean {
   const safeTime = Number.isFinite(timeMs) ? Math.max(0, timeMs) : 0;
   return Math.floor(safeTime / intervalMs) % 2 === 0;
 }
+
+/** 兼容别名:pending 工具仍可用旧名,内部指向同一实现。 */
+export const isPendingToolGlyphVisible = isPendingGlyphVisible;

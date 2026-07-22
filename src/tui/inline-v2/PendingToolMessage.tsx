@@ -16,7 +16,7 @@ import { Box, Text } from 'ink';
 import { useStore } from 'zustand/react';
 import type { SpinnerStore } from '../state/spinner-store.js';
 import type { TuiMessage } from '../types.js';
-import { isPendingToolGlyphVisible } from './pending-tool-indicator.js';
+import { isPendingGlyphVisible } from './pending-tool-indicator.js';
 
 export interface PendingToolMessageProps {
   msg: TuiMessage;
@@ -62,7 +62,7 @@ export const PendingToolMessage = React.memo(function PendingToolMessage({
   // 叶子订阅:tick 只触发本组件重渲染,不冒泡到 InlineAppV2。
   const time = useStore(spinnerStore, (state) => state.time);
   const active = useStore(spinnerStore, (state) => state.active);
-  const visible = !active || isPendingToolGlyphVisible(time);
+  const visible = !active || isPendingGlyphVisible(time);
   const callText = stripLeadingToolGlyph(msg.lines[0]?.content);
 
   return (

@@ -236,6 +236,26 @@ describe('messages-store', () => {
       { toolUseId: 't2', finalized: false, lines: [{ content: '\u25cf second' }] },
     ]);
   });
+
+  // ────────────────────────────────────────────────────────────────────
+  // AUTO-0025-transient Task 1:thinking 临时行是单例,按 kind 移除。
+  //
+  // 物理本质:任意时刻最多一条 thinking-progress 活动行。重复 start 幂等,
+  // remove 按 kind 移除(不依赖末条位置),不影响 pending 工具消息。
+  // ────────────────────────────────────────────────────────────────────
+
+  it('thinking progress is unique and removed by kind without touching pending tools', () => {
+    const store = createMessagesStore();
+    store.getState().appendPendingTool('tool-1', [LINE('● spawn_agent')]);
+    store.getState().startStreamingThinking('Thinking…');
+    store.getState().startStreamingThinking('Thinking…');
+
+    expect(store.getState().messages.filter(m => m.kind === 'thinking-progress')).toHaveLength(1);
+    expect(store.getState().removeStreamingThinking()).toBe(true);
+    expect(store.getState().messages.some(m => m.kind === 'thinking-progress')).toBe(false);
+    expect(store.getState().messages.some(m => m.toolUseId === 'tool-1')).toBe(true);
+    expect(store.getState().removeStreamingThinking()).toBe(false);
+  });
 });
 
 describe('isAppendableMessage', () => {

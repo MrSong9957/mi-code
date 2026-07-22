@@ -25,6 +25,7 @@ import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { MessageLine } from './MessageLine.js';
 import { PendingToolMessage } from './PendingToolMessage.js';
+import { PendingThinkingMessage } from './PendingThinkingMessage.js';
 import { SpinnerMemo } from './spinner-memo.js';
 import { FooterV2 } from './FooterV2.js';
 import { StreamingText } from './StreamingText.js';
@@ -93,13 +94,17 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
   // 不写入 <Static> —— 否则结果到达后无法原地更新(resolvePendingTool 需要可变 pending 消息)。
   const pendingTools = messages.filter((m) => !m.finalized && m.kind === 'tool-progress');
 
-  // 订阅末条未固化消息的 streamingText + role(流式 token 到达触发重渲染——必要)。
-  // 找到末条 finalized=false 的消息(流式中草稿)。
+  // AUTO-0025-transient:thinking 临时行(最多一条)。单例由 messages-store 保证。
+  const pendingThinking = messages.find((m) => !m.finalized && m.kind === 'thinking-progress');
+
+  // 订阅末条未固化 assistant 消息的 streamingText + role(流式 token 到达触发重渲染——必要)。
+  // AUTO-0025-transient:限制为 role === 'assistant'——thinking-progress 也是未固化末条消息,
+  // 但它的渲染走 PendingThinkingMessage(固定文本),不能进 StreamingText。
   // 用 useShallow 让 selector 输出引用稳定(浅比较相等时返回同一对象),
   // 避免每次都返回新对象触发 React "getSnapshot should be cached" 警告。
   const streaming = useStore(stores.messagesStore, useShallow((s) => {
     const last = s.messages[s.messages.length - 1];
-    if (!last || last.finalized) return null;
+    if (!last || last.finalized || last.role !== 'assistant') return null;
     return { uuid: last.uuid, streamingText: last.streamingText, role: last.role };
   }));
 
@@ -156,9 +161,12 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
   // 行数 = pending 工具数量,不再用 lines.length 估算(避免子明细行导致高度抖动)。
   const pendingToolsRowCount = pendingTools.length;
 
+  // AUTO-0025-transient:thinking 临时行固定占一物理行(0 或 1)。
+  const thinkingRowCount = pendingThinking ? 1 : 0;
+
   // inputRowY(活动区内坐标,<Static> 不占活动区):
-  //   流式文本行数(streamingRowCount) + pending 工具行数 + spinner 行数 + 上边框 1 行
-  const inputRowY = streamingRowCount + pendingToolsRowCount + spinnerRowCount + 1;
+  //   流式文本 + thinking 行 + pending 工具行 + spinner 行 + 上边框 1 行
+  const inputRowY = streamingRowCount + thinkingRowCount + pendingToolsRowCount + spinnerRowCount + 1;
 
   // <Static> items:logo 作为首项(只写一次进 scrollback)+ 已固化消息。
   // 用 discriminator 字段区分 logo item 和 message item。
@@ -201,9 +209,14 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
         {streaming && (
           <StreamingText
             text={streaming.streamingText}
-            role={streaming.role === 'thinking' ? 'thinking' : 'assistant'}
+            role="assistant"
             cols={cols}
           />
+        )}
+        {/* AUTO-0025-transient:thinking 临时行(闪烁 ● Thinking…)。
+            单例,固定一行,在 pending 工具之前渲染。 */}
+        {pendingThinking && (
+          <PendingThinkingMessage cols={cols} spinnerStore={stores.spinnerStore} />
         )}
         {/* AUTO-0025-stable:pending 工具用专用稳定指示器渲染(固定一行 + 闪烁 ●)。
             叶子组件自订阅 spinnerStore.time/active,tick 不拖动本组件重渲染。

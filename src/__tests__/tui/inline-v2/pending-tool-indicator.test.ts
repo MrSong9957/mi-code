@@ -7,7 +7,7 @@
 // 这是纯函数(输入时间戳,输出可见性),便于单元测试锁定周期边界。
 
 import { describe, expect, it } from 'vitest';
-import { isPendingToolGlyphVisible, PENDING_TOOL_BLINK_INTERVAL_MS } from '../../../tui/inline-v2/pending-tool-indicator.js';
+import { isPendingToolGlyphVisible, isPendingGlyphVisible, PENDING_TOOL_BLINK_INTERVAL_MS } from '../../../tui/inline-v2/pending-tool-indicator.js';
 
 describe('isPendingToolGlyphVisible', () => {
   it('toggles every 600ms', () => {
@@ -34,5 +34,14 @@ describe('isPendingToolGlyphVisible', () => {
     expect(isPendingToolGlyphVisible(100, 100)).toBe(false);
     expect(isPendingToolGlyphVisible(199, 100)).toBe(false);
     expect(isPendingToolGlyphVisible(200, 100)).toBe(true);
+  });
+});
+
+// AUTO-0025-transient:通用名 isPendingGlyphVisible 是别名,行为与 tool 版一致。
+describe('isPendingGlyphVisible (通用别名)', () => {
+  it('与 isPendingToolGlyphVisible 行为完全一致', () => {
+    for (const t of [0, 599, 600, 1199, 1200, -1]) {
+      expect(isPendingGlyphVisible(t)).toBe(isPendingToolGlyphVisible(t));
+    }
   });
 });

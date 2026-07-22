@@ -12,6 +12,7 @@ import { render } from 'ink-testing-library';
 import React from 'react';
 import { InlineAppV2, type InlineAppV2Stores } from '../../../tui/inline-v2/InlineAppV2.js';
 import { PendingToolMessage } from '../../../tui/inline-v2/PendingToolMessage.js';
+import { PendingThinkingMessage } from '../../../tui/inline-v2/PendingThinkingMessage.js';
 import { createMessagesStore } from '../../../tui/state/messages-store.js';
 import { createInputStore } from '../../../tui/state/input-store.js';
 import { createStatusStore } from '../../../tui/state/status-store.js';
@@ -750,7 +751,9 @@ describe('<InlineAppV2> 流式文本接入', () => {
     expect(frame).toContain('final line');
   });
 
-  it('thinking 消息走 thinking 渲染路径(dim)', () => {
+  it('thinking 消息走临时 thinking 渲染路径(固定 Thinking… 文本)', () => {
+    // AUTO-0025-transient:thinking 临时行文本固定 "Thinking…",
+    // 原始推理内容(pondering deeply)不显示在活动区(只缓存供 Ctrl+O 展开)。
     const stores = createStores();
     stores.messagesStore.getState().startStreamingThinking('pondering deeply\n');
 
@@ -764,7 +767,11 @@ describe('<InlineAppV2> 流式文本接入', () => {
         rows={24}
       />,
     );
-    expect(lastFrame()).toContain('pondering');
+    const frame = lastFrame() ?? '';
+    // 固定文本可见
+    expect(frame).toContain('Thinking…');
+    // 原始推理内容不在活动区
+    expect(frame).not.toContain('pondering');
   });
 });
 
@@ -904,5 +911,112 @@ describe('<InlineAppV2> Overlay (Ctrl+O) 接入', () => {
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('sonnet');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// AUTO-0025-transient Task 1:PendingThinkingMessage 闪烁 thinking 行。
+//
+// 物理本质:模型思考时显示一条固定高度的闪烁 ● Thinking… 活动行,
+// 完成后消失留下永久 Thought 摘要。组件不消费 msg(文本固定 "Thinking…")。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<PendingThinkingMessage> 闪烁 thinking 行', () => {
+  it('renders one blinking Thinking row with a fixed glyph slot', () => {
+    const stores = createStores();
+    stores.spinnerStore.getState().start('thinking');
+    const { lastFrame } = render(
+      <PendingThinkingMessage cols={24} spinnerStore={stores.spinnerStore} />,
+    );
+    const visible = lastFrame() ?? '';
+    expect(visible.replace(/\n+$/, '').split('\n')).toHaveLength(1);
+    expect(visible).toContain('● Thinking…');
+  });
+
+  it('hidden 相位时 glyph 变空格,正文不变,仍一行', () => {
+    const stores = createStores();
+    stores.spinnerStore.getState().start('thinking');
+    const { lastFrame } = render(
+      <PendingThinkingMessage cols={24} spinnerStore={stores.spinnerStore} />,
+    );
+    // 推进到隐藏相位
+    vi.useFakeTimers();
+    try {
+      vi.advanceTimersByTime(700);
+      stores.spinnerStore.getState().tick();
+    } finally {
+      vi.useRealTimers();
+    }
+    const hidden = lastFrame() ?? '';
+    expect(hidden.replace(/\n+$/, '').split('\n')).toHaveLength(1);
+    expect(hidden).toContain('Thinking…');
+  });
+
+  it('active=false 时 ● 强制可见', () => {
+    const stores = createStores();
+    // 不 start → active=false
+    const { lastFrame } = render(
+      <PendingThinkingMessage cols={24} spinnerStore={stores.spinnerStore} />,
+    );
+    expect(lastFrame() ?? '').toContain('● Thinking…');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// InlineAppV2 集成:thinking-progress + 多 tool-progress 活动行。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<InlineAppV2> thinking-progress 活动行集成', () => {
+  it('thinking-progress 占一行,4 个 tool-progress 各占一行,布局稳定', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().startStreamingThinking('Thinking…');
+    for (let i = 1; i <= 4; i++) {
+      stores.messagesStore.getState().appendPendingTool(`t-${i}`, [
+        { content: `● spawn_agent(task-${i})`, style: {}, indent: 0 },
+      ]);
+    }
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={28}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    // thinking 行 + 4 个 tool 行都可见
+    expect(frame).toContain('Thinking…');
+    for (let i = 1; i <= 4; i++) {
+      expect(frame).toContain(`task-${i}`);
+    }
+    // Thinking… 不被换行(仍是单行的文本片段)
+    expect(frame).toContain('Thinking…');
+  });
+
+  it('thinking-progress 和 tool-progress 都存在时 inputRowY 含两者', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().startStreamingThinking('Thinking…');
+    stores.messagesStore.getState().appendPendingTool('t-1', [
+      { content: '● spawn_agent', style: {}, indent: 0 },
+    ]);
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={40}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Thinking…');
+    expect(frame).toContain('spawn_agent');
+    // footer 仍可见(说明 inputRowY 计算正确,没把 footer 推出视口)
+    expect(frame).toContain('❯');
   });
 });
