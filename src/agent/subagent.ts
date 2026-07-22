@@ -10,10 +10,25 @@
 // 3. 异步后台执行：run_in_background 支持
 
 import { runWithVercelAI } from './llm-vercel.js';
-import type { ToolRegistry } from './tool-registry.js';
-import type { RegisteredTool } from './types.js';
+import { streamingQuery } from './streaming-query.js';
+import { ToolRegistry } from './tool-registry.js';
+import type { RegisteredTool, StreamingLLMClient } from './types.js';
 import { ROLE_REGISTRY, filterToolsByRole, type Role } from './roles.js';
 import type { PermissionChecker } from '../permission/checker.js';
+
+/**
+ * 用工具子集构建一个新的 ToolRegistry（streamingQuery 需要 registry.execute）。
+ *
+ * streamingQuery 走主 agent 路径，对工具的并发分区/执行依赖 ToolRegistry 完整接口，
+ * 而非原始 Map。这里把角色过滤后的工具重新注册进一个干净的 registry。
+ */
+function buildSubRegistry(toolSubset: Map<string, RegisteredTool>): ToolRegistry {
+  const registry = new ToolRegistry();
+  for (const { definition, executor } of toolSubset.values()) {
+    registry.register(definition, executor);
+  }
+  return registry;
+}
 
 export interface SubagentOptions {
   model?: string;
@@ -45,6 +60,16 @@ export interface SubagentOptions {
    * 不传则子代理工具调用裸跑（向后兼容，但不推荐生产用）。
    */
   permissionChecker?: PermissionChecker;
+  /**
+   * 流式 LLM 客户端（多 provider 支持）。
+   *
+   * 物理本质：子代理的"工作证件"。主 agent 按 provider 配置分发到 anthropic/openai/google
+   * 等流式客户端；子代理复用同一套 client，从而支持 OpenAI 兼容的 MiMo 等非 Anthropic provider。
+   *
+   * 传入时走主 agent 的 streamingQuery 路径（多 provider，修复子代理写死 Anthropic 的 bug）；
+   * 不传时回退到 runWithVercelAI（向后兼容，仅 Anthropic，测试路径用）。
+   */
+  client?: StreamingLLMClient;
 }
 
 export interface SubagentResult {
@@ -54,6 +79,52 @@ export interface SubagentResult {
 
 /** 共享的文件读取状态（跨子代理） */
 const sharedFileState = new Map<string, string>();
+
+/**
+ * 用流式客户端（streamingQuery）执行子代理。
+ *
+ * 复用主 agent 的 streamingQuery 路径，从而支持 OpenAI/Google/MiMo 等非 Anthropic provider。
+ * 返回子代理输出的最终文本（累加所有 assistant 文本块，行为对齐 runWithVercelAI 的 .text）。
+ *
+ * 物理本质：临时工走正门，和正式员工用同一套门禁（provider 分发）。
+ */
+async function runSubagentWithClient(
+  client: StreamingLLMClient,
+  toolSubset: Map<string, RegisteredTool>,
+  prompt: string,
+  system: string,
+  options: SubagentOptions,
+): Promise<string> {
+  const controller = new AbortController();
+  // 子代理作为有限步循环：显式 maxSteps 作为安全网（默认 10，对齐 Vercel 回退路径）
+  const maxTurns = options.maxSteps || 10;
+
+  const subRegistry = buildSubRegistry(toolSubset);
+
+  let resultText = '';
+  for await (const message of streamingQuery(client, subRegistry, prompt, {
+    systemPrompt: system,
+    tools: Array.from(toolSubset.values()).map(t => t.definition),
+    signal: controller.signal,
+    maxTurns,
+    permissionChecker: options.permissionChecker,
+    model: options.model,
+  })) {
+    // AssistantMessage（NormalizedMessage.type === 'assistant'）含最终文本
+    if (message !== null && typeof message === 'object' && 'type' in message && message.type === 'assistant') {
+      const content = (message as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block !== null && typeof block === 'object' && 'type' in block && (block as { type: string }).type === 'text') {
+            const text = (block as { text?: string }).text;
+            if (text) resultText += text;
+          }
+        }
+      }
+    }
+  }
+  return resultText || '(no summary)';
+}
 
 /**
  * 运行子代理
@@ -86,12 +157,20 @@ export async function runSubagent(
   const prevCwd = options.cwd ? process.cwd() : null;
   if (options.cwd) process.chdir(options.cwd);
   try {
-    const result = await runWithVercelAI(prompt, toolSubset, {
-      model: options.model,
-      maxSteps: options.maxSteps || 10,
-      system: effectiveSystem,
-      permissionChecker: options.permissionChecker,
-    });
+    let text: string;
+    if (options.client) {
+      // 多 provider 路径：走主 agent 的 streamingQuery，支持 OpenAI/MiMo 等
+      text = await runSubagentWithClient(options.client, toolSubset, prompt, effectiveSystem, options);
+    } else {
+      // 回退：Vercel AI SDK（仅 Anthropic；测试路径/向后兼容）
+      const result = await runWithVercelAI(prompt, toolSubset, {
+        model: options.model,
+        maxSteps: options.maxSteps || 10,
+        system: effectiveSystem,
+        permissionChecker: options.permissionChecker,
+      });
+      text = result.text || '(no summary)';
+    }
 
     // 克隆文件读取状态到共享池
     if (options.readFileState) {
@@ -100,7 +179,7 @@ export async function runSubagent(
       }
     }
 
-    return { text: result.text || '(no summary)', isBackground: false };
+    return { text, isBackground: false };
   } finally {
     if (prevCwd) process.chdir(prevCwd);
   }
@@ -116,14 +195,21 @@ async function runSubagentBackground(
   system: string,
 ): Promise<void> {
   try {
-    const result = await runWithVercelAI(prompt, toolSubset, {
-      model: options.model,
-      maxSteps: options.maxSteps || 10,
-      system,
-      permissionChecker: options.permissionChecker,
-    });
+    let text: string;
+    if (options.client) {
+      // 多 provider 路径（后台执行同样支持 OpenAI/MiMo 等）
+      text = await runSubagentWithClient(options.client, toolSubset, prompt, system, options);
+    } else {
+      const result = await runWithVercelAI(prompt, toolSubset, {
+        model: options.model,
+        maxSteps: options.maxSteps || 10,
+        system,
+        permissionChecker: options.permissionChecker,
+      });
+      text = result.text || '(no summary)';
+    }
     if (options.onBackgroundComplete) {
-      options.onBackgroundComplete(result.text || '(no summary)');
+      options.onBackgroundComplete(text);
     }
   } catch (err) {
     if (options.onBackgroundComplete) {

@@ -181,7 +181,19 @@ const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager
 toolRegistry.register(spawnSoTool.definition, spawnSoTool.executor);
 // spawn_agent：派角色化子代理（explore/plan/general）
 // 透传 permissionChecker：让子代理也受 plan 模式约束（读 allow / 写 deny）
-const spawnAgentTool = createSpawnAgentTool(childToolRegistry, SMALL_MODEL_SNAPSHOT, permissionChecker);
+// clientProvider：每次 spawn 时读取当前 provider 配置，让子代理走主 agent 的多 provider
+// 路径（streamingQuery），从而支持 OpenAI/MiMo 等非 Anthropic provider（修复子代理写死
+// Anthropic 的 bug）。闭包形式支持运行时 /provider 切换。
+const spawnAgentTool = createSpawnAgentTool(
+  childToolRegistry,
+  () => {
+    const provider = currentProvider();
+    const apiKey = configStore.getApiKey(provider);
+    const baseUrl = configStore.getProvider(provider)?.baseUrl;
+    return createStreamClient(provider, apiKey ?? '', currentSmallModel(), baseUrl);
+  },
+  permissionChecker,
+);
 toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 const loadSkillTool = createLoadSkillTool(skillRegistry);
 toolRegistry.register(loadSkillTool.definition, loadSkillTool.executor);

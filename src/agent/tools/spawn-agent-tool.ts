@@ -10,7 +10,7 @@
 // 与现有 task 工具的区别：task 是 general 的别名；spawn_agent 显式选 role，
 // 工具集按角色裁剪，权限更细。
 
-import type { ToolDefinition, ToolExecutor } from '../types.js';
+import type { ToolDefinition, ToolExecutor, StreamingLLMClient } from '../types.js';
 import type { ToolRegistry } from '../tool-registry.js';
 import { runSubagent } from '../subagent.js';
 import type { SubagentOptions, SubagentResult } from '../subagent.js';
@@ -24,9 +24,23 @@ type SubagentRunner = (
   options: SubagentOptions,
 ) => Promise<SubagentResult>;
 
+/**
+ * 子代理 LLM 客户端工厂。
+ *
+ * 每次 spawn 时调用，读取当前 provider 配置并创建对应的流式客户端，
+ * 让子代理走主 agent 的多 provider 路径（修复子代理写死 Anthropic 的 bug）。
+ * 物理本质：派工时按当前门禁系统（provider）给临时工发对应门禁卡。
+ */
+export type SubagentClientProvider = () => StreamingLLMClient;
+
 export function createSpawnAgentTool(
   childTools: ToolRegistry,
-  smallModel?: string,
+  /**
+   * 创建子代理用的流式 LLM 客户端（每次 spawn 时调用）。
+   * 传入时子代理走 streamingQuery（多 provider，支持 OpenAI/MiMo 等）。
+   * 不传则回退 runWithVercelAI（仅 Anthropic，测试/向后兼容用）。
+   */
+  clientProvider?: SubagentClientProvider,
   /** 透传给子代理，让子代理工具调用也受 PermissionChecker 约束 */
   permissionChecker?: PermissionChecker,
   /** 依赖注入：测试时传 mock，生产路径走真实 runSubagent */
@@ -70,7 +84,7 @@ export function createSpawnAgentTool(
 
       const result = await runSubagentFn(prompt, childTools, {
         role: role as Role,
-        model: smallModel,
+        client: clientProvider ? clientProvider() : undefined,
         permissionChecker,
       });
       return result.text;

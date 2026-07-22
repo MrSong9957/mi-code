@@ -181,16 +181,30 @@ describe('createSpawnAgentTool', () => {
     expect(result).toMatch(/Error/i);
   });
 
-  it('传递 smallModel 给 runner', async () => {
+  it('传递 clientProvider 的结果给 runner（多 provider 支持）', async () => {
     const registry = makeRegistry();
-    let capturedModel: string | undefined;
+    let capturedClient: unknown;
+    const fakeClient = { stream: async function* () { /* mock client */ } };
     const mockRunner = vi.fn(async (_p: string, _t: ToolRegistry, opts: SubagentOptions): Promise<SubagentResult> => {
-      capturedModel = opts.model;
+      capturedClient = opts.client;
       return { text: 'ok', isBackground: false };
     });
-    const { executor } = createSpawnAgentTool(registry, 'claude-haiku', undefined, mockRunner);
+    const { executor } = createSpawnAgentTool(registry, () => fakeClient, undefined, mockRunner);
     await executor({ role: 'general', prompt: 'x' });
-    expect(capturedModel).toBe('claude-haiku');
+    // clientProvider 被调用，产物作为 opts.client 传入 runner
+    expect(capturedClient).toBe(fakeClient);
+  });
+
+  it('未传 clientProvider 时 opts.client 为 undefined（回退 Vercel 路径）', async () => {
+    const registry = makeRegistry();
+    let capturedClient: unknown = 'sentinel';
+    const mockRunner = vi.fn(async (_p: string, _t: ToolRegistry, opts: SubagentOptions): Promise<SubagentResult> => {
+      capturedClient = opts.client;
+      return { text: 'ok', isBackground: false };
+    });
+    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+    await executor({ role: 'general', prompt: 'x' });
+    expect(capturedClient).toBeUndefined();
   });
 
   it('透传 permissionChecker 给 runner', async () => {
