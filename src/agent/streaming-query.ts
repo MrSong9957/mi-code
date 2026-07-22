@@ -91,6 +91,17 @@ export interface StreamingQueryOptions {
    * 与 checkPermissionOrBlock 的实现一致，与 streaming-executor.ts 的 deny 拦截一致。
    */
   permissionChecker?: PermissionChecker;
+  /**
+   * AUTO-0025 Task 4:保留一个"无工具的最终总结轮"。
+   *
+   * 物理本质:maxTurns 边界前,最后一轮强制不暴露工具,让模型只能用已有工具结果
+   * 产出基于证据的总结,避免"Now let me check..."等过程句被当成最终结果。
+   *
+   * 启用条件:reserveFinalTextTurn=true 且 maxTurns 已定义。
+   * 仅在 runSubagentWithClient 启用;主 agent 行为不变(默认 undefined)。
+   * 最后一轮计入 maxTurns 边界,不通过无限增加轮次规避问题。
+   */
+  reserveFinalTextTurn?: boolean;
 }
 
 /**
@@ -128,6 +139,7 @@ export async function* streamingQuery(
     initialMessages,
     onMessages,
     permissionChecker,
+    reserveFinalTextTurn = false,
   } = options;
 
   const engine = new QueryEngine(client);
@@ -171,9 +183,28 @@ export async function* streamingQuery(
       ? new StreamingToolExecutor(registry, permissionChecker)
       : null;
 
+    // AUTO-0025 Task 4:判断本轮是否是"无工具的最终总结轮"。
+    //
+    // 物理语义:循环顶部已检查 turnCount >= maxTurns → return,所以走到这里时
+    // turnCount(maxTurns 内的最大值,刚 ++ 完)正是最后一次允许的模型调用。
+    // 判断条件:turnCount === maxTurns 且 maxTurns >= 2。
+    //
+    // maxTurns >= 2 的要求:至少留 1 轮给工具收集证据 + 1 轮给总结。
+    // maxTurns=1 时没空间留总结轮,不启用(否则第 1 轮就被强制无工具,子代理无法收集证据)。
+    //
+    // 例如 maxTurns=2:第 1 轮(turnCount=1)正常调工具,第 2 轮(turnCount=2)是 final,
+    // 强制 tools=[] + 注入"基于证据总结"指令,模型只能用第 1 轮的工具结果产出总结。
+    // 这一轮计入 maxTurns 边界,不通过无限增加轮次规避问题。
+    const finalTextTurn = reserveFinalTextTurn
+      && maxTurns !== undefined
+      && maxTurns >= 2
+      && turnCount === maxTurns;
+
     const queryOptions: QueryEngineOptions = {
-      systemPrompt,
-      tools,
+      systemPrompt: finalTextTurn
+        ? `${systemPrompt}\n\nFinal turn: do not call tools. Return a concise factual summary based only on tool results already present in the conversation.`
+        : systemPrompt,
+      tools: finalTextTurn ? [] : tools,
       signal,
       maxTokens: recoveryState.maxTokens,
     };

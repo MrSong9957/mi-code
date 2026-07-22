@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { runSubagent, type SubagentOptions } from '../agent/subagent.js';
+import { streamingQuery } from '../agent/streaming-query.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
 import type {
   StreamingLLMClient,
@@ -137,6 +138,115 @@ describe('subagent result integrity', () => {
     expect(result.terminationReason).toBe('max_turns');
     expect(result.text).toContain('[Subagent incomplete: reached max turns');
     expect(result.text).toContain('Now let me check the test files...');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// AUTO-0025 Task 4:保留一个"无工具的最终总结轮"。
+//
+// 物理本质:子代理 maxTurns 耗尽前,最后一轮强制不暴露工具,让模型只能用已有
+// 工具结果产出基于证据的总结,避免把"Now let me check..."这种过程句当成最终输出。
+// 这一轮计入 maxTurns 边界,不通过无限增加轮次规避问题。
+// ════════════════════════════════════════════════════════════════════
+
+/** 捕获每轮传给模型的工具名列表(用于断言 final turn tools=[]) */
+class ToolCapturingClient implements StreamingLLMClient {
+  private callCount = 0;
+  readonly toolsPerTurn: ToolDefinition[][] = [];
+  constructor(private scripts: ScriptBlock[][]) {}
+
+  async *stream(
+    _messages: Message[],
+    tools: ToolDefinition[],
+    _options: StreamOptions,
+  ): AsyncGenerator<StreamEvent | AssistantMessage> {
+    this.toolsPerTurn.push(tools);
+    const blocks = this.scripts[this.callCount++] ?? [];
+    yield { type: 'message_start', messageId: `msg_${this.callCount}`, model: 'fake', inputTokens: 1 };
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i] as ContentBlock | { type: 'thinking'; thinking: string };
+      if (block.type === 'text') {
+        yield { type: 'content_block_start', index: i, blockType: 'text' };
+        yield { type: 'content_block_delta', index: i, deltaType: 'text', content: block.text };
+        yield { type: 'content_block_stop', index: i };
+      } else if (block.type === 'tool_use') {
+        yield { type: 'content_block_start', index: i, blockType: 'tool_use', blockId: block.id };
+        const json = JSON.stringify(block.input);
+        yield { type: 'content_block_delta', index: i, deltaType: 'input_json', content: json };
+        yield { type: 'content_block_stop', index: i };
+      }
+    }
+    yield { type: 'message_delta', stopReason: blocks.some(b => b.type === 'tool_use') ? 'tool_use' : 'end_turn', outputTokens: blocks.length };
+    yield { type: 'message_stop' };
+    const contentBlocks = blocks.filter((b): b is ContentBlock => b.type !== 'thinking');
+    yield {
+      type: 'assistant',
+      content: contentBlocks,
+      usage: { input_tokens: 1, output_tokens: blocks.length },
+      stopReason: blocks.some(b => b.type === 'tool_use') ? 'tool_use' : 'end_turn',
+      uuid: `asst_${this.callCount}`,
+      timestamp: new Date().toISOString(),
+    };
+  }
+}
+
+describe('subagent final summary turn (AUTO-0025 Task 4)', () => {
+  it('final turn 不暴露工具,模型产出基于证据的总结', async () => {
+    // 两轮剧本:maxTurns=2 → 第 1 轮调 read_file,第 2 轮(=maxTurns)应是 final text turn
+    const client = new ToolCapturingClient([
+      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } }],
+      [{ type: 'text', text: 'Verified skills: code-review, git-workflow' }],
+    ]);
+    const result = await runSubagent('list skills', makeReadRegistry(), {
+      role: 'explore', client, maxSteps: 2,
+    });
+
+    // 第 1 轮:工具列表含 read_file
+    expect(client.toolsPerTurn[0]!.map(t => t.name)).toContain('read_file');
+    // 第 2 轮(final):工具列表为空
+    expect(client.toolsPerTurn[1]).toEqual([]);
+    // 最终结果是模型第 2 轮的文本(基于工具证据)
+    expect(result.text).toBe('Verified skills: code-review, git-workflow');
+    expect(result.status).toBe('completed');
+    expect(result.terminationReason).toBe('end_turn');
+  });
+
+  it('final turn 模型仍不输出文本时,incomplete 标记 (no final text)', async () => {
+    // 第 2 轮(final)模型不产出任何文本 → 结果是 incomplete,无过程句泄漏
+    const client = new ToolCapturingClient([
+      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } }],
+      // 第 2 轮空内容(既无 text 也无 tool_use)
+      [],
+    ]);
+    const result = await runSubagent('list skills', makeReadRegistry(), {
+      role: 'explore', client, maxSteps: 2,
+    });
+
+    expect(result.status).toBe('incomplete');
+    expect(result.terminationReason).toBe('max_turns');
+    // 不含"Now let me check..."等过程句
+    expect(result.text).not.toMatch(/let me check/i);
+    expect(result.text).toContain('(no final text)');
+  });
+
+  it('主 agent 路径不受 reserveFinalTextTurn 影响(默认关闭)', async () => {
+    // reserveFinalTextTurn 只在 runSubagentWithClient 启用,主 agent streamingQuery 不受影响。
+    // 验证:不传 reserveFinalTextTurn 时,最后一轮仍暴露工具。
+    const client = new ToolCapturingClient([
+      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } }],
+      [{ type: 'text', text: 'done' }],
+    ]);
+    const ac = new AbortController();
+    const registry = makeReadRegistry();
+    // 直接调 streamingQuery,不传 reserveFinalTextTurn
+    for await (const _ of streamingQuery(client, registry, 'do thing', {
+      systemPrompt: 'sys', tools: registry.getDefinitions(), signal: ac.signal,
+      maxTurns: 2, enableStreamingExecution: false,
+    })) {
+      void _;
+    }
+    // 第 2 轮工具列表仍含 read_file(主 agent 行为不变)
+    expect(client.toolsPerTurn[1]!.map(t => t.name)).toContain('read_file');
   });
 });
 

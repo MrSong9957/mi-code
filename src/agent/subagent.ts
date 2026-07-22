@@ -189,7 +189,7 @@ async function runSubagentWithClient(
   prompt: string,
   system: string,
   options: SubagentOptions,
-): Promise<{ text: string; toolCallCount: number; successfulToolResultCount: number; terminationReason: string }> {
+): Promise<{ text: string; toolCallCount: number; successfulToolResultCount: number; terminationReason: string; finalTurnSynthesized?: boolean }> {
   const controller = new AbortController();
   // 子代理作为有限步循环：显式 maxSteps 作为安全网（默认 10，对齐 Vercel 回退路径）
   const maxTurns = options.maxSteps || 10;
@@ -201,6 +201,10 @@ async function runSubagentWithClient(
   const toolCallNames: string[] = [];
   let toolCallCount = 0;
   let successfulToolResultCount = 0;
+  // AUTO-0025 Task 4:子代理默认启用"无工具最终总结轮"(仅在 maxTurns 已定义时生效)。
+  // 物理本质:让临时工在工时耗尽前,用已收集的证据写一份正式总结,
+  // 而不是把"Now let me check..."这种过程句当成交付物。
+  const reserveFinalTextTurn = true;
 
   // 用 StreamEventBus 捕获真实终止原因（end_turn / max_turns / user_abort / error）
   const eventBus = new StreamEventBus();
@@ -252,6 +256,7 @@ async function runSubagentWithClient(
     permissionChecker: options.permissionChecker,
     model: options.model,
     eventBus,
+    reserveFinalTextTurn,
   })) {
     if (message !== null && typeof message === 'object' && 'type' in message) {
       if (message.type === 'assistant') {
@@ -289,8 +294,24 @@ async function runSubagentWithClient(
     eventBus.offToolCall(onChildToolCall);
     eventBus.offToolResult(onChildToolResult);
   }
-  // 模型可能只调工具不输出文字（某些 GLM/MiMo 行为），用工具调用信息兜底
-  if (!resultText && toolCallNames.length > 0) {
+  // AUTO-0025 Task 4:判断 final turn 是否真的产出了基于证据的总结。
+  //
+  // 物理语义:end_turn 退出 + resultText 非空 = 模型在 final turn 用工具结果写了总结。
+  // 若 end_turn 但 resultText 空,说明 final turn 模型"交白卷"——标记为未合成,
+  // 让 finalizeSubagentExecution 判为 incomplete(不再用旧的工具调用兜底摘要冒充结果)。
+  //
+  // 关键边界:只有当 maxTurns >= 2(reserveFinalTextTurn 有机会生效)时,
+  // finalTurnSynthesized 才参与判定。maxTurns < 2 时根本没机会进入 final turn,
+  // 此时 finalTurnSynthesized 为 undefined,不影响既有的 terminationReason 判定。
+  const finalTurnWasActive = reserveFinalTextTurn && maxTurns >= 2;
+  const finalTurnSynthesized = finalTurnWasActive
+    ? (terminationReason === 'end_turn' && resultText.trim().length > 0)
+    : undefined;
+
+  // 模型可能只调工具不输出文字（某些 GLM/MiMo 行为），用工具调用信息兜底。
+  // 但 reserveFinalTextTurn 启用时,若 final turn 没产出文本,不走此兜底——
+  // 否则会把"模型交白卷"伪装成"已完成 N 个工具调用",与 final summary 语义冲突。
+  if (!resultText && toolCallNames.length > 0 && !reserveFinalTextTurn) {
     const counts: Record<string, number> = {};
     for (const n of toolCallNames) counts[n] = (counts[n] ?? 0) + 1;
     const summary = Object.entries(counts).map(([n, c]) => `${n}${c > 1 ? `×${c}` : ''}`).join(', ');
@@ -299,9 +320,10 @@ async function runSubagentWithClient(
       toolCallCount,
       successfulToolResultCount,
       terminationReason,
+      finalTurnSynthesized,
     };
   }
-  return { text: resultText || '(no summary)', toolCallCount, successfulToolResultCount, terminationReason };
+  return { text: resultText || '(no final text)', toolCallCount, successfulToolResultCount, terminationReason, finalTurnSynthesized };
 }
 
 /**
@@ -311,12 +333,25 @@ function finalizeSubagentExecution(
   text: string,
   isBackground: boolean,
   role: Role | undefined,
-  execution: { toolCallCount: number; successfulToolResultCount: number; terminationReason: string },
+  execution: { toolCallCount: number; successfulToolResultCount: number; terminationReason: string; finalTurnSynthesized?: boolean },
 ): SubagentResult {
   const base = { isBackground, evidence: { toolCallCount: execution.toolCallCount, successfulToolResultCount: execution.successfulToolResultCount } };
 
   if (isBackground) {
     return { text: '[Subagent launched in background]', ...base, status: 'background', terminationReason: 'background' };
+  }
+
+  // AUTO-0025 Task 4:reserveFinalTextTurn 启用但 final turn 没合成文本 → incomplete。
+  // 物理本质:工时耗尽前给了临时工"写总结"的机会,但他交了白卷——不算完成。
+  // 即使 terminationReason 是 end_turn(模型自主结束了),没有总结文本就是没交付。
+  if (execution.finalTurnSynthesized === false) {
+    return {
+      text: `[Subagent incomplete: no final summary] ${text || '(no final text)'}`,
+      ...base,
+      status: 'incomplete',
+      // 用 max_turns 表达"轮次耗尽且未产出总结"——比 end_turn 更准确反映未完成
+      terminationReason: 'max_turns',
+    };
   }
 
   // max_turns / user_abort / error 优先于 explore 证据门槛
@@ -391,6 +426,8 @@ export async function runSubagent(
     let toolCallCount = 0;
     let successfulToolResultCount = 0;
     let terminationReason = 'end_turn';
+    // AUTO-0025 Task 4:仅 client 路径会设置 finalTurnSynthesized;Vercel 回退路径不设置(undefined)。
+    let finalTurnSynthesized: boolean | undefined;
     if (options.client) {
       // 多 provider 路径：走主 agent 的 streamingQuery，支持 OpenAI/MiMo 等
       const exec = await runSubagentWithClient(options.client, toolSubset, prompt, effectiveSystem, options);
@@ -398,6 +435,7 @@ export async function runSubagent(
       toolCallCount = exec.toolCallCount;
       successfulToolResultCount = exec.successfulToolResultCount;
       terminationReason = exec.terminationReason;
+      finalTurnSynthesized = exec.finalTurnSynthesized;
     } else {
       // 回退：Vercel AI SDK（仅 Anthropic；测试路径/向后兼容）
       const result = await runWithVercelAI(prompt, toolSubset, {
@@ -420,6 +458,7 @@ export async function runSubagent(
       toolCallCount,
       successfulToolResultCount,
       terminationReason,
+      finalTurnSynthesized,
     });
   } finally {
     if (prevCwd) process.chdir(prevCwd);
