@@ -301,8 +301,11 @@ export class BlockPipeline {
         }
 
         // AUTO-0025 Phase B (Task 13):ask_user_question 结构化展示。
-        // 物理本质:把回答提交后的 tool_result 从"Bash 折叠"改为结构化展示。
-        // 折叠态:⎿ Answered N questions;展开态(Ctrl+O):header → answer 配对。
+        // 物理本质:把回答提交后的 tool_result 从"Bash 折叠"改为父子结构化展示。
+        // 主消息区默认渲染(非 Ctrl+O 展开):
+        //   ● Answered N questions          ← 父标题(magenta,顶层块)
+        //     ⎿ Q1 → A1                     ← 子项(dim,⎿ 前缀 + indent:2)
+        //     ⎿ Q2 → A2
         // 仅当 block.structuredOutcome 存在(UI 通道携带)时走此路径,
         // 否则 fall through 到通用 rawOutput 逻辑(向后兼容)。
         if (item.name === 'ask_user_question' && block.structuredOutcome) {
@@ -320,25 +323,25 @@ export class BlockPipeline {
             // presentation 保持 null,落到下面的通用 rawOutput 逻辑
           }
           if (presentation) {
-            item.resultLines = [{
-              content: `⎿ ${presentation.summary}`,
-              style: BLOCK_STYLES.magenta,
-              indent: 0,
-            }];
-            // 复用 agent-completion:跳过 callLines,只渲染结果摘要(见 Step 0 决策)。
-            // ask 的结构化摘要(⎿ Answered N questions)就是结果展示,不需要保留 ● ask_user_question(...) call 行。
-            item.finalKind = 'agent-completion';
-            // 注册 Ctrl+O 展开内容:header → answer 配对列表
-            const id = `ask-${++this.idCounter}`;
-            const fullLines = presentation.lines.map((l, i) => ({
+            // 父标题行:● 前缀(顶层块标记),与 message-formatter 的 ● Tool(...) 同级语义。
+            // 子项行:首行 ⎿  (⎿+两空格),续行    (三空格)对齐,与 formatToolResult 的
+            //   ⎿ 结果行约定一致(message-formatter.ts:148-149)。
+            // indent 双设:block/nested(Ink ScrollBox 消费)+ content 内前缀(Legacy ANSI 兼容)。
+            const childLines: FormattedLine[] = presentation.lines.map((l, i) => ({
               content: `${i === 0 ? '⎿  ' : '   '}${l}`,
               style: BLOCK_STYLES.dim,
               indent: INDENT.nested,
               raw: true,
             }));
-            item.expandableId = id;
-            item.expandableFullLines = fullLines;
-            item.hasExpandable = true;
+            item.resultLines = [
+              { content: `● ${presentation.summary}`, style: BLOCK_STYLES.magenta, indent: INDENT.block },
+              ...childLines,
+            ];
+            // 复用 agent-completion:finishTool 只用 resultLines(父标题+子项),
+            // 不拼 callLines(避免 ● ask_user_question(...) call 行残留)。
+            item.finalKind = 'agent-completion';
+            // 不注册 expandable:子项已在主消息区默认展示。
+            // Ctrl+O 保持现有机制(取最后一个 expandable,ask 不再特判)。
             this.finishTool(idx);
             break;
           }

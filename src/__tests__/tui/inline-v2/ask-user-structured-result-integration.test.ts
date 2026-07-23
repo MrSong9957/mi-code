@@ -76,31 +76,29 @@ describe('AUTO-0025 Phase B (Task 16b):ask_user_question structured result e2e',
       structuredOutcome: structured,
     });
 
-    // ── 必断 1:折叠态(可见区 prints)含 "Answered"(证明走结构化路径,非 Bash 折叠)
+    // ── 必断 1:主消息区(prints)含父标题 ● Answered(证明走结构化路径,非 Bash 折叠)
     const allText = prints.map(p => p.text).join('\n');
     expect(allText).toContain('Answered');
 
-    // ── 必断 2:折叠态不含 question 全文(证明走 summary,非 raw answers)
+    // ── 必断 2:子项 header → answer 配对默认显示在主消息区(非 Ctrl+O 展开)
+    expect(allText).toContain('Auth → OAuth');
+    expect(allText).toContain('Lib → A, B');
+
+    // ── 必断 3:不含 question 全文(证明走 header 配对,非 raw answers)
     expect(allText).not.toContain('Which auth method?');
 
-    // ── 必断 3:finishToolCall 用了 agent-completion(跳过 call 行)
+    // ── 必断 4:finishToolCall 用了 agent-completion(跳过 call 行)
     expect(finishToolCalls).toHaveLength(1);
     expect(finishToolCalls[0]?.finalKind).toBe('agent-completion');
-    // agent-completion 的 lines 只有 resultLines(不含 ● ask_user_question call 行)
+    // agent-completion 的 lines 是 [父标题, 子项...] (不含 ● ask_user_question call 行)
     const resultLineContents = finishToolCalls[0]!.lines.map(l => l.content).join('\n');
     expect(resultLineContents).not.toContain('ask_user_question');
 
-    // ── 必断 4:展开态(Ctrl+O,expandable store)含 header → answer 配对,不含 question 全文
-    // 注意:展开态行不进 prints(延迟到 Ctrl+O 才渲染),用 getLastExpandableFullLines 访问。
-    const expandable = pipeline.getLastExpandableFullLines();
-    expect(expandable).not.toBeNull();
-    const fullText = expandable!.lines.map(l => l.content).join('\n');
-    expect(fullText).toContain('Auth → OAuth');
-    expect(fullText).toContain('Lib → A, B');
-    expect(fullText).not.toContain('Which auth method?');
+    // ── 必断 5:不再注册 Ctrl+O expandable(子项已在主消息区默认展示)
+    expect(pipeline.getLastExpandableFullLines()).toBeNull();
   });
 
-  it('cancelled outcome 渲染 Declined', () => {
+  it('cancelled outcome 渲染 ● Declined(父标题)', () => {
     const { renderer, prints } = mockRenderer();
     const pipeline = new BlockPipeline(renderer);
     pipeline.emit({
@@ -117,6 +115,8 @@ describe('AUTO-0025 Phase B (Task 16b):ask_user_question structured result e2e',
       },
     });
     const allText = prints.map(p => p.text).join('\n');
+    // cancelled 无子项,只有父标题行(● 前缀)
+    expect(allText).toContain('● ');
     expect(allText.toLowerCase()).toContain('declined');
   });
 
@@ -140,15 +140,10 @@ describe('AUTO-0025 Phase B (Task 16b):ask_user_question structured result e2e',
       },
     });
     const allText = prints.map(p => p.text).join('\n');
-    // UI 渲染走结构化:折叠态含结构化摘要,不含 API 字符串原文
+    // UI 渲染走结构化:主消息区含父标题 + 子项配对,不含 API 字符串原文
     expect(allText).toContain('Answered');
+    expect(allText).toContain('Cfg → A');
     expect(allText).not.toContain(apiString);
     expect(allText).not.toContain('You can now continue');
-    // 展开态含 header → answer 配对(UI 通道数据),不含 API 字符串
-    const expandable = pipeline.getLastExpandableFullLines();
-    expect(expandable).not.toBeNull();
-    const fullText = expandable!.lines.map(l => l.content).join('\n');
-    expect(fullText).toContain('Cfg → A');
-    expect(fullText).not.toContain(apiString);
   });
 });
