@@ -31,6 +31,7 @@ import {
   FailureInbox,
 } from './recovery.js';
 import { jitteredBackoff, sleep } from './backoff.js';
+import type { StructuredAskResult } from './ask-user-types.js';
 
 /**
  * 流式路径下的权限预检：返回是否被拦截及回写给模型的输出文本。
@@ -57,7 +58,8 @@ function checkPermissionOrBlock(
 export type StreamMessage =
   | NormalizedMessage
   | StreamEvent
-  | { type: 'tool_result'; toolUseId: string; name: string; output: string };
+  // AUTO-0025 Phase B (Task 10):structuredOutcome 走 UI 通道(仅 ask_user_question 有)。
+  | { type: 'tool_result'; toolUseId: string; name: string; output: string; structuredOutcome?: StructuredAskResult };
 
 /** 流式查询选项 */
 export interface StreamingQueryOptions {

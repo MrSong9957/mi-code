@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'events';
 import type { StreamEvent, AssistantMessage } from './types.js';
+import type { StructuredAskResult } from './ask-user-types.js';
 
 /** 流式事件类型 */
 export type StreamEventType =
@@ -31,6 +32,11 @@ export interface ToolResultEvent {
   name: string;
   output: string;
   duration: number;
+  /**
+   * AUTO-0025 Phase B (Task 10):结构化问卷结果(仅 ask_user_question 有,走 UI 通道)。
+   * undefined 表示该工具无结构化 outcome(绝大多数工具),走通用 Bash 折叠展示。
+   */
+  structuredOutcome?: StructuredAskResult;
 }
 
 /** 错误事件数据 */
