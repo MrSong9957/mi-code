@@ -162,6 +162,42 @@ describe('BlockPipeline → store 端到端', () => {
     expect(allLines.some(t => t.includes('Thought for 5s'))).toBe(true);
   });
 
+  // AUTO-0025 回归守护:summary 必须作为独立 finalized message 存在,
+  // 不能被 appendLine 续接进 thinking_start 时 openModelBlock() 输出的 system 空行分隔符消息。
+  // 历史 bug:thinking_summary 经 mapRole→'system'→appendLine,合并进空行 message,
+  // summary 沉到该空白块第 2 行,肉眼不可见。
+  // 本测试守护修复(appendMessage 独立路径),防止未来回退到 appendLine。
+  it('thinking_end → summary 是独立 finalized message(防 appendLine 回退)', () => {
+    const { pipeline, store } = setup();
+    // 真实时序:thinking_start 触发 openModelBlock 产生 system 空行分隔符
+    pipeline.emit({ kind: 'thinking_start' });
+    pipeline.emit({ kind: 'thinking_delta', content: '内部推理' });
+    pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
+
+    const msgs = store.getState().messages;
+    // 找到含 summary 文本的 message
+    const summaryMsg = msgs.find(m =>
+      m.lines.some(l => l.content.includes('Thought for 1s')),
+    );
+    expect(summaryMsg).toBeDefined();
+
+    // 契约 1:summary message 只含 summary 行,不含空行(证明没被续接进空行块)
+    const summaryLines = summaryMsg!.lines;
+    expect(summaryLines.every(l => l.content.includes('Thought for'))).toBe(true);
+    expect(summaryLines.some(l => l.content === '')).toBe(false);
+
+    // 契约 2:没有任何 finalized message 的 lines 同时包含空行和 summary
+    // (若被续接,会出现 lines: ['', 'summary'] 的混合 message)
+    const mixedMsg = msgs.find(m =>
+      m.lines.some(l => l.content === '')
+      && m.lines.some(l => l.content.includes('Thought for')),
+    );
+    expect(mixedMsg).toBeUndefined();
+
+    // 契约 3:summary message 的 role 是 system(经 mapRole,渲染走 MessageLine 通用路径)
+    expect(summaryMsg!.role).toBe('system');
+  });
+
   it('thinking_delta 只缓存供展开，不把原始推理写入可见消息', () => {
     const { pipeline, store } = setup();
     const privateReasoning = '内部推理不应直接铺满终端';
