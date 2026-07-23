@@ -163,10 +163,12 @@ describe('BlockPipeline → store 端到端', () => {
   });
 
   // AUTO-0025 回归守护:summary 必须作为独立 finalized message 存在,
-  // 不能被 appendLine 续接进 thinking_start 时 openModelBlock() 输出的 system 空行分隔符消息。
-  // 历史 bug:thinking_summary 经 mapRole→'system'→appendLine,合并进空行 message,
-  // summary 沉到该空白块第 2 行,肉眼不可见。
+  // 不能被 appendLine 续接进其他 system 消息。
+  // 历史 bug:thinking_summary 经 mapRole→'system'→appendLine,合并进已有 system message,
+  // summary 沉到该块内部,肉眼不可见。
   // 本测试守护修复(appendMessage 独立路径),防止未来回退到 appendLine。
+  // (注:空 system 布局行现已被 adapter 拦截不进 store,本测试验证的是即便有
+  // 其他非空 system 消息在前,summary 仍独立。)
   it('thinking_end → summary 是独立 finalized message(防 appendLine 回退)', () => {
     const { pipeline, store } = setup();
     // 真实时序:thinking_start 触发 openModelBlock 产生 system 空行分隔符

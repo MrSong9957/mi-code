@@ -49,6 +49,17 @@ export class PipelineToStoreAdapter implements PipelineRenderer {
     style?: Record<string, unknown>,
     _raw?: boolean,
   ): void {
+    // AUTO-0025 空消息修复:拦截 block-pipeline 产出的纯布局空行。
+    // openModelBlock()/ensureGap() 会调 printMessage('', 'system') 在块间插物理空行,
+    // 这是 ANSI renderer 时代的布局机制(那时直接写 stdout,只能靠空行控间距)。
+    // 在 message-based store + <Static> 模型下,空字符串行会被渲染成真实空白行,
+    // 造成 thinking summary 与 assistant 间出现多余空白。adapter 是"旧输出模型→新
+    // message 模型"的边界层,在此拦截:空 system 行不创建 message,间距交给渲染层。
+    // 范围严格限定 text==='' && role==='system',不影响其他 system 文本或非 system 角色。
+    if (text === '' && role === 'system') {
+      return;
+    }
+
     const line: FormattedLine = {
       content: text,
       style: (style ?? {}) as UIMessageStyle,
