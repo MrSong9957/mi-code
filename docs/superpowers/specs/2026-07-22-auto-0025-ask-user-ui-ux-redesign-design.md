@@ -499,6 +499,45 @@ executor(input) ──返回 string──┬── API 通道: ToolResultBlock.c
 
 但本次改造触及 API 请求生成链路附近的代码（`ToolExecutor` ctx 扩展、`registry.execute` 签名、`streaming-query` 调用点），存在调用顺序/await 时序/error handling 变化的潜在风险。**不宣称"100% 不影响 API"**，而是通过 Phase B 验收里的「API diff 验证」确保请求语义不变（见 15.2 Phase B 验收）。
 
+#### 数据流全景图（供实施参照）
+
+```
+Anthropic 返回 tool_use (含 tool_use_id)
+    │
+    ▼
+streaming-query 阶段1: 收到 tool_use → streamingExecutor.addTool
+    │
+    ▼
+StreamingToolExecutor.executeTool (streaming-executor.ts:132)
+    │  registry.execute(name, input, { toolUseId: tool.block.id })   ← 点2/点3
+    ▼
+registry.execute (tool-registry.ts:41)
+    │  tool.executor(input, ctx)                                     ← 点1
+    ▼
+ask-user-tool executor
+    │  outcome = await mgr.ask(input)
+    │  askOutcomeStore.set(ctx.toolUseId, { version:1, outcome })    ← 点4/点5
+    │  return serialize(outcome)            // string，不变
+    ▼
+registry.execute 返回 string
+    │
+    ▼
+streaming-query 阶段3 (streaming-query.ts:313-345)
+    │  structuredResult = askOutcomeStore.take(id)   // 一次性消费 ← 点6
+    │  ├─ API 分叉: ToolResultBlock.content = output (string)  // 不变
+    │  └─ UI 分叉:  emitToolResult / yield { ..., structuredOutcome }
+    ▼
+index.ts onToolResult handler
+    │  pipeline.emit({ kind:'tool_result', ..., structuredOutcome })
+    ▼
+block-pipeline.ts:245 case 'tool_result'
+    │  if (name==='ask_user_question' && structuredOutcome)          ← 点7
+    │      buildAskUserPresentation(structuredOutcome)
+    │  else 原逻辑
+    ▼
+MessageFormatter 渲染: ⎿ Answered N questions (折叠) / Q→A (展开)
+```
+
 #### 改造链路（7 个点）
 
 **点 1：ToolExecutor 类型扩展（types.ts）**
@@ -653,6 +692,11 @@ interface StructuredAskResult {
 - **fallback 规则**：`buildAskUserPresentation` 检查 `version`，非支持的版本（或字段缺失/损坏）时回退原 `rawOutput` Bash 风格折叠，与 Rollback 条件（15.2 Phase B Rollback）共用降级路径。
 - **version 由谁写入**：executor 在 `askOutcomeStore.set` 时包装为 `{ version: 1, outcome }`；`streaming-query` take 后原样透传。
 - **不是 feature flag**：当前不引入 `enableStructuredAskResult` 运行时开关（YAGNI）；版本号是 schema 演进的防御性设计，不是动态启停机制。
+- **失败行为（避免静默失败）**：version 不支持 / 字段缺失 / 渲染抛错时：
+  1. 记录 debug log（含 toolUseId、实际 version、错误原因），便于排查；
+  2. 回退 `rawOutput` Bash 风格折叠；
+  3. **不中断 tool_result pipeline**，不抛错到上层。
+  即用户最坏看到旧版折叠形态，不会看到崩溃或空白。
 
 #### Phase B 硬约束（写入验收）
 
@@ -742,14 +786,34 @@ return buildToolResultBlock(item.name, input, item.output);
 - writing-plans 阶段把 Phase 1b 拆成独立子任务，每个子系统单独 TDD + 验收，**不要作为一个大 PR**。
 - 建议拆分粒度（每个独立成 PR，互不阻塞）：
   - **1b-1 焦点边界**：首尾停止替代循环（状态机问题，参考第 8 节表）
-  - **1b-2 Other 草稿模型**：草稿与已提交答案分离，按题恢复（状态机问题，参考第 9 节）
   - **1b-3 visible window**：可见控件窗口推导（布局算法问题，参考第 10 节，`computeVisibleWindow` 纯函数可独立 TDD）
+  - **1b-2 Other 草稿模型**：草稿与已提交答案分离，按题恢复（状态机问题，参考第 9 节）
   - **1b-4 多选 submit flow**：多选 Next/Submit 控件与 Esc policy（交互流问题，参考第 8.2、9.1 节）
+- **实施顺序调整（审查建议）**：`1b-1 → 1b-3 → 1b-2 → 1b-4`。原因：visible window 依赖 focus index 和 control model，而 Other draft 不依赖布局。先稳定 focus model + render model，再处理状态扩展。
 - 拆分原则：visible window 是布局算法，Other draft 是状态机，两者不要混合；任何一个失败不阻塞其他。
 - 心智模型对照：Phase 1a = UI 基础；Phase 1b = 交互状态机（大功能）；Phase 2 = 真实光标（大功能，含 renderer spike）。
 - 实施时不要因 Phase 编号连续而低估 1b/2 的工作量。
 
 本提醒不改变原设计第 5、13 节的 Phase 定义和验收顺序，仅作为 writing-plans 的输入。
+
+### 15.6 PR 边界与实施顺序总表（写入执行计划）
+
+> **硬约束**：Agent 执行时必须按下表边界分 PR，禁止合并。Phase 1b 禁止作为一个任务执行；Phase B 必须保持独立链路。
+
+| 顺序 | PR | 范围 | 依赖 | 风险 |
+|------|-----|------|------|------|
+| 1 | **Phase 1a** | `AskQuestionOverlayV2` 渲染层：圆角边框 + suggestion 色 + radio/checkbox 符号 + `computeTabLayout` | 无 | 局部（纯渲染） |
+| 2 | **Phase B** | `structuredOutcome` pipeline：ToolExecutor ctx → registry → streaming-query → block-pipeline → `buildAskUserPresentation` | 无（与 1a 解耦） | 跨链路（数据透传） |
+| 3 | **Phase 1b-1** | 焦点边界停止 | Phase 1a | 状态机 |
+| 4 | **Phase 1b-3** | visible window（`computeVisibleWindow`） | 1b-1 | 布局算法 |
+| 5 | **Phase 1b-2** | Other 草稿模型 | 1b-1 | 状态机 |
+| 6 | **Phase 1b-4** | 多选 submit flow + Esc policy | 1b-1/2/3 | 交互流 |
+| 7 | **Phase 2 spike** | 双 renderer spike（gate） | Phase 1b 全部完成 | 探索性 |
+| 8 | **Phase 2** | 原生光标 | spike 通过（路径 A/B 决策记录） | 大功能 |
+
+- **PR1（Phase 1a）与 PR2（Phase B）互不依赖**，可并行开发，但建议先合并 PR1（交互期痛点优先）。
+- **Phase 1b 的四个子 PR 之间有依赖**（见"依赖"列），但 1b-2 和 1b-3 在 1b-1 之后可并行。
+- 每个 PR 独立 TDD + 独立验收，失败不阻塞其他已合并的 PR。
 
 ### 15.5 Renderer Spike 是 Phase 2 的 Gate，非子任务
 
