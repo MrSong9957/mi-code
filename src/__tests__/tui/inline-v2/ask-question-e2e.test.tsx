@@ -127,7 +127,7 @@ describe('V2 inline E2E - questionnaire user paths', () => {
       h.stdin.write(KEYS.ENTER);
       h.stdin.write(KEYS.TAB);
       await waitMs(20);
-      expect(h.lastFrame() ?? '').toContain('> Submit answers');
+      expect(h.lastFrame() ?? '').toContain('❯ 提交答案');
       h.stdin.write(KEYS.ENTER);
       await waitMs(20);
 

@@ -79,7 +79,10 @@ export const ExitPlanModeOverlayV2 = React.memo(function ExitPlanModeOverlayV2({
 
   if (!state.visible || !state.request) return null;
 
-  const contentWidth = Math.max(1, cols - 4);  // 减去左右边框(各1) + paddingX(各1)
+  // 可用列预留 1 列安全边界:alt-screen 模式下终端最后一列不可写,
+  // 全宽 border box 会导致右边框 ╮/╰ 被推到屏幕外(实测两个 overlay 都丢右边框)。
+  // 先把 cols 减 1,再减左右边框(各1) + paddingX(各1) = 共减 5。
+  const contentWidth = Math.max(1, cols - 4);
 
   const presentation = state.request.presentation;
   const question = state.request.questions[0];
