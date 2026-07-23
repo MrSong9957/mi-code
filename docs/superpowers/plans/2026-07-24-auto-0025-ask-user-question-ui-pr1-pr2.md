@@ -123,6 +123,25 @@ const SUBMIT_TEXT = ' ✓ Submit ';
 const MIN_TAB_WIDTH = 6;
 
 /**
+ * 按显示宽度截断文本(CJK 感知)。
+ * 超过 budget 时按字符(含 CJK 全角 2 列)累加,保证结果 displayWidth <= budget。
+ * JavaScript 的 String.slice 按码点数量,与终端列数不一致(CJK 全角=2列),
+ * 极窄模式下用 slice(0,3) 会让中文 header 溢出。统一用此函数。
+ */
+function truncateByDisplayWidth(text: string, budget: number): { text: string; truncated: boolean } {
+  if (displayWidth(text) <= budget) return { text, truncated: false };
+  let result = '';
+  let width = 0;
+  for (const ch of text) {
+    const cw = displayWidth(ch);
+    if (width + cw > budget) break;
+    result += ch;
+    width += cw;
+  }
+  return { text: result, truncated: true };
+}
+
+/**
  * 计算 tabs 布局。Submit 永远可见;当前页 weight=2,其他 weight=1。
  */
 export function computeTabLayout(
@@ -132,33 +151,22 @@ export function computeTabLayout(
   const { pageIndex, answered, cols } = opts;
   const submitWidth = displayWidth(SUBMIT_TEXT);
 
-  // 极窄降级:只显示当前页前 3 字符 + Submit(Submit 也可能被截断)
-  // 关键:Submit 必须受 cols 约束,否则总宽 > cols 溢出(审查发现的 bug)
+  // 极窄降级:只显示当前页前 3 显示列 + Submit(Submit 也可能被截断)
+  // 关键:所有截断必须用 truncateByDisplayWidth(CJK 感知),不能用 slice(0,3)。
+  //   slice 按码点数量,中文 header(如"认证配置")slice(0,3)="认证配"占 6 列,会溢出。
   if (cols <= submitWidth + MIN_TAB_WIDTH) {
     const tabs: TabSlice[] = questions.map((q, i) => {
       const header = q.header || `Q${i + 1}`;  // 使用 index 保证 Q1/Q2/Q3 唯一
-      const sliced = i === pageIndex ? header.slice(0, 3) : '';
-      return { label: sliced, active: i === pageIndex, width: displayWidth(sliced), truncated: i === pageIndex && header.length > 3 };
+      if (i !== pageIndex) return { label: '', active: false, width: 0, truncated: false };
+      const { text, truncated } = truncateByDisplayWidth(header, 3);  // 前 3 显示列
+      return { label: text, active: true, width: displayWidth(text), truncated };
     });
     // Submit 截断:当前页占完后,剩余预算给 Submit;放不下则截断,极端情况只留 ✓
     const currentPageWidth = tabs[pageIndex]?.width ?? 0;
     const submitBudget = Math.max(1, cols - currentPageWidth);  // 至少留 1 列
-    let submitLabel = SUBMIT_TEXT;
-    let submitW = displayWidth(submitLabel);
-    if (submitW > submitBudget) {
-      // 截断 Submit 到预算(按字符砍,保证不超宽)
-      let truncated_ = '';
-      let tw = 0;
-      for (const ch of SUBMIT_TEXT) {
-        const cw = displayWidth(ch);
-        if (tw + cw > submitBudget) break;
-        truncated_ += ch;
-        tw += cw;
-      }
-      submitLabel = truncated_ || '✓';  // 极端兜底:至少 ✓
-      submitW = displayWidth(submitLabel);
-    }
-    tabs.push({ label: submitLabel, active: false, width: submitW, truncated: submitLabel !== SUBMIT_TEXT });
+    const { text: submitLabel, truncated: submitTrunc } = truncateByDisplayWidth(SUBMIT_TEXT, submitBudget);
+    const finalLabel = submitLabel || '✓';  // 极端兜底:至少 ✓
+    tabs.push({ label: finalLabel, active: false, width: displayWidth(finalLabel), truncated: submitTrunc || finalLabel === '✓' });
     return tabs;
   }
 
@@ -190,18 +198,11 @@ export function computeTabLayout(
     if (fullWidth <= budget) {
       return { label: fullLabel, active: i === pageIndex, width: fullWidth, truncated: false };
     }
-    // 截断:保留符号 + 部分 header + …
+    // 截断:保留符号 + 部分 header + …(用 truncateByDisplayWidth 保证 CJK 安全)
     const prefix = `${answered[i] ? '✓' : '○'} `;
     const prefixWidth = displayWidth(prefix);
     const headerBudget = Math.max(1, budget - prefixWidth - 1); // -1 给 …
-    let header = '';
-    let hw = 0;
-    for (const ch of q.header) {
-      const cw = displayWidth(ch);
-      if (hw + cw > headerBudget) break;
-      header += ch;
-      hw += cw;
-    }
+    const { text: header } = truncateByDisplayWidth(q.header, headerBudget);
     const label = `${prefix}${header}…`;
     return { label, active: i === pageIndex, width: displayWidth(label), truncated: true };
   });
@@ -265,12 +266,25 @@ Expected: PASS。
     const totalWidth = tabs.reduce((sum, t) => sum + t.width, 0);
     expect(totalWidth).toBeLessThanOrEqual(12);
   });
+
+  it('CJK header 极窄:按显示宽度截断,不溢出', () => {
+    // slice(0,3) 会取 3 个中文字符=6列,溢出;必须按 displayWidth 截 3 列(1.5 字符→1字符)
+    const qs = [
+      { header: '认证配置', question: 'q1', options: [], multiSelect: false },
+    ];
+    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false], cols: 14 });
+    // 当前页截断后宽度 <= 3
+    expect(tabs[0]!.width).toBeLessThanOrEqual(3);
+    // 总宽不超 cols
+    const totalWidth = tabs.reduce((sum, t) => sum + t.width, 0);
+    expect(totalWidth).toBeLessThanOrEqual(14);
+  });
 ```
 
 - [ ] **Step 6:运行全部测试确认通过**
 
 Run: `npx vitest run src/__tests__/tui/inline-v2/ask-question-layout.test.ts`
-Expected: 4 passed。
+Expected: 5 passed。
 
 - [ ] **Step 7:Commit**
 
@@ -700,6 +714,18 @@ describe('askOutcomeStore', () => {
     askOutcomeStore.clear();
     expect(askOutcomeStore.take('x')).toBeUndefined();
   });
+
+  it('size:反映 entry 数量(供 turn 结束后无残留验证)', () => {
+    expect(askOutcomeStore.size()).toBe(0);
+    askOutcomeStore.set('a', makeResult('a'));
+    askOutcomeStore.set('b', makeResult('b'));
+    expect(askOutcomeStore.size()).toBe(2);
+    askOutcomeStore.take('a');
+    expect(askOutcomeStore.size()).toBe(1);
+    askOutcomeStore.take('b');
+    // 模拟 turn 结束:全部消费后 store 应空(防内存泄漏的核心断言)
+    expect(askOutcomeStore.size()).toBe(0);
+  });
 });
 ```
 
@@ -753,13 +779,18 @@ export const askOutcomeStore = {
   clear(): void {
     store.clear();
   },
+
+  /** 当前 entry 数(供测试验证无残留:turn 结束后应为 0)。 */
+  size(): number {
+    return store.size;
+  },
 };
 ```
 
 - [ ] **Step 4:运行测试确认通过**
 
 Run: `npx vitest run src/__tests__/agent/ask-outcome-store.test.ts`
-Expected: 5 passed。
+Expected: 6 passed。
 
 - [ ] **Step 5:Commit**
 
@@ -1298,6 +1329,8 @@ Run: `grep -n "FinalToolMessageKind" src/ui/block-pipeline.ts`
 
 若核查发现 `FinalToolMessageKind` 与上述不符(代码已变),则新增 `ask-completion` 并同步改 3 处。
 
+**关于 `this.finishTool(idx); break;` 模式**:本分支的 `设置 item 字段 → finishTool(idx) → break` 是**复刻 spawn_agent 分支(`block-pipeline.ts:277-300`)和通用 rawOutput 分支(`:302-325`)的既有模式**,不是偏离统一流程。这两个先例都是设置 `resultLines/finalKind/expandable` 后直接 `finishTool(idx); break;`。`finishTool` 内部(`:407-451`)负责调 renderer + 注册 expandable + splice 缓冲区,是统一的收尾入口。若 `finishTool` 抛异常,那是 pipeline 层的 bug(非本分支引入),应让其抛出而非降级 —— 这正是上一轮审查要求缩小 catch 范围的原因(catch 只保护纯函数 `buildAskUserPresentation`)。
+
 - [ ] **Step 1:在 spawn_agent 特判后(约 300 行后)加 ask_user_question 分支**
 
 ```ts
@@ -1449,7 +1482,7 @@ git commit -m "test(agent): verify structuredOutcome does not leak into API tool
 ## Task 16b:端到端集成测试 — full pipeline(FR 出保险)
 
 **Files:**
-- Test: `src/__tests__/tui/inline-v2/ask-user-structured-result-e2e.test.tsx`
+- Test: `src/__tests__/tui/inline-v2/ask-user-structured-result-integration.test.ts`
 
 > **此测试是 PR2 最重要的保险**(审查指出此前只有分层单测,缺跨层链路验证)。只覆盖一个 happy path:tool_use → registry → executor → store → eventBus → pipeline → render。
 >
@@ -1458,7 +1491,7 @@ git commit -m "test(agent): verify structuredOutcome does not leak into API tool
 - [ ] **Step 1:写端到端测试 — ask_user_question 完整链路结构化渲染**
 
 ```tsx
-// src/__tests__/tui/inline-v2/ask-user-structured-result-e2e.test.tsx
+// src/__tests__/tui/inline-v2/ask-user-structured-result-integration.test.ts
 import { describe, it, expect, beforeEach } from 'vitest';
 // 复用现有 e2e fixture 模式(参考 ask-question-e2e.test.tsx)
 // 目标:验证从 tool 执行到渲染的完整链路
@@ -1510,13 +1543,13 @@ describe('ask_user_question structured result e2e', () => {
 
 - [ ] **Step 3:运行测试**
 
-Run: `npx vitest run src/__tests__/tui/inline-v2/ask-user-structured-result-e2e.test.tsx`
+Run: `npx vitest run src/__tests__/tui/inline-v2/ask-user-structured-result-integration.test.ts`
 Expected: PASS。若失败,逐层排查(Task 5→6→7→9→11→13→14 数据流方向)。
 
 - [ ] **Step 4:Commit**
 
 ```bash
-git add src/__tests__/tui/inline-v2/ask-user-structured-result-e2e.test.tsx
+git add src/__tests__/tui/inline-v2/ask-user-structured-result-integration.test.ts
 git commit -m "test(tui): e2e integration test for ask_user_question structured result pipeline"
 ```
 
