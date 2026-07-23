@@ -253,6 +253,8 @@ git commit -m "feat(tui): add computeTabLayout pure function for ask-question ta
 - Rewrite: `src/tui/inline-v2/AskQuestionOverlayV2.tsx`
 - Test: `src/__tests__/tui/inline-v2/ask-question-overlay.test.tsx`
 
+> **执行约束(重要)**:下面的 Step 4 给出了目标实现的参考代码,但**必须先读现有 `AskQuestionOverlayV2.tsx` 和 `ExitPlanModeOverlayV2.tsx`**,以实际代码中的 store 字段名、props 接口、theme context hook、Ink 组件用法为准。参考代码是基于设计文档的推导,若与真实代码冲突,**以真实代码为准适配**,不要照抄假设的接口。只迁移渲染结构(边框/色/符号/tabs),保留现有 store 订阅契约。
+
 - [ ] **Step 1:先读现有 overlay 测试,确认现有断言不破**
 
 Run: `npx vitest run src/__tests__/tui/inline-v2/ask-question-overlay.test.tsx`
@@ -1050,9 +1052,11 @@ git commit -m "feat(ui): add structuredOutcome field to UI channel types (3 file
 // 在 const output = ... 之后,emitToolResult 之前加 take + miss 检测:
         const structuredOutcome = askOutcomeStore.take(tool.id);
         // take miss 检测:ask_user_question 执行后 store 应有 entry,
-        // 若 take 返回 undefined 说明 set/take 时序异常或 toolUseId 不匹配(开发错误,非运行错误)
-        if (!structuredOutcome && tool.block.name === 'ask_user_question') {
-          console.warn('[streaming-query] ask_user_question outcome missing in store', { toolUseId: tool.id });
+        // 若 take 返回 undefined 说明 set/take 时序异常或 toolUseId 不匹配(开发错误,非运行错误)。
+        // 用 DEBUG 门控:正常情况下不输出(避免污染用户终端 stderr),调试时 DEBUG=1 可见。
+        // 对齐 ExitPlanModeOverlayV2:51 的 console.error 降级模式(项目无专门 logger 模块)。
+        if (!structuredOutcome && tool.block.name === 'ask_user_question' && process.env.DEBUG) {
+          console.error('[streaming-query] ask_user_question outcome missing in store', { toolUseId: tool.id });
         }
 // emitToolResult 加字段:
         eventBus?.emitToolResult({
@@ -1288,8 +1292,13 @@ Run: `grep -n "FinalToolMessageKind" src/ui/block-pipeline.ts`
               break;
             }
           } catch (err) {
-            // 降级:记录 debug log + 回退 rawOutput,不中断 pipeline
-            console.error('[ask_user presentation failed]', { toolUseId: block.toolUseId, err });
+            // 降级:presentation 层异常时回退 rawOutput,不中断 pipeline。
+            // catch 范围严格限定在此 try 块(buildAskUserPresentation + item 赋值),
+            // 禁止扩大到 finishTool 或 pipeline 生命周期。
+            // DEBUG 门控:正常不输出,调试时可见(对齐 Task 11 的 miss 检测模式)。
+            if (process.env.DEBUG) {
+              console.error('[ask_user presentation failed]', { toolUseId: block.toolUseId, err });
+            }
             // 落到下面的通用 rawOutput 逻辑
           }
         }
@@ -1405,6 +1414,8 @@ git commit -m "test(agent): verify structuredOutcome does not leak into API tool
 - Test: `src/__tests__/tui/inline-v2/ask-user-structured-result-e2e.test.tsx`
 
 > **此测试是 PR2 最重要的保险**(审查指出此前只有分层单测,缺跨层链路验证)。只覆盖一个 happy path:tool_use → registry → executor → store → eventBus → pipeline → render。
+>
+> **断言范围约束(防脆性)**:只验证**数据链路语义**,禁止绑定 Ink 行布局、ANSI 转义码、具体颜色值、空格数量等 UI 细节。否则 UI 微调(如缩进/换行)会导致 E2E 频繁误报。断言应针对 `mockRenderer` 收到的 `resultLines` 文本内容,而非终端渲染后的字符串。
 
 - [ ] **Step 1:写端到端测试 — ask_user_question 完整链路结构化渲染**
 
@@ -1426,11 +1437,15 @@ describe('ask_user_question structured result e2e', () => {
     // 4. 断言最终渲染输出包含 "⎿ Answered" 且不含 raw "User has answered your questions"
     //    (证明走的是结构化路径,非 Bash 折叠)
     //
-    // 关键断言:
-    // - 渲染输出含 "⎿ Answered N questions"
-    // - 渲染输出含 header → answer 配对(非 question 全文)
-    // - store 在 turn 结束后为空(sweep 生效)
-    // - 发给 mock LLM 的 tool_result content 仍是 serialize 字符串(无 structuredOutcome 字段)
+    // 关键断言(只验证数据链路语义,不绑定 Ink/ANSI 细节):
+    // 必断:
+    // - resultLines 文本含 "Answered"(证明走结构化路径)
+    // - resultLines 文本含 header(如 "Auth"),不含 question 全文(证明 request 配对生效)
+    // - 发给 mock LLM 的 tool_result content 是纯字符串(无 structuredOutcome 字段,API 未污染)
+    // - store 在 turn 结束后为空(sweep 生效,可用 askOutcomeStore 内部状态或 take 验证)
+    // 禁断(避免脆性):
+    // - 不断言 ANSI 颜色码、空格数、边框字符 ╭╰
+    // - 不断言 Ink 的具体行数布局
   });
 
   it('cancelled outcome 渲染 Declined', async () => {
