@@ -60,4 +60,41 @@ describe('<MessageLine>', () => {
     // 不崩溃即可
     expect(lastFrame()).toBeDefined();
   });
+
+  // AUTO-0025 Phase B review 修正:agent-completion 多行场景必须渲染所有行。
+  // 历史 bug:MessageLine 对 agent-completion kind 硬编码单行渲染(只取 lines[0]),
+  // 为 spawn_agent 的 ● Agent "..." finished · Ns 设计。但 ask_user_question 复用该 kind
+  // 且含父标题+子项多行,被截断丢失子项。修复:单行保持 truncate,多行走默认多行渲染。
+  describe('agent-completion kind 渲染', () => {
+    it('单行(spawn_agent):保持 truncate 单行渲染', () => {
+      const msg = makeMessage({
+        uuid: 'msg-spawn',
+        role: 'tool',
+        kind: 'agent-completion',
+        lines: [{ content: '● Agent "查找" finished · 5s', style: {}, indent: 0 }],
+      });
+      const { lastFrame } = render(<MessageLine msg={msg} cols={80} />);
+      expect(lastFrame()).toContain('Agent "查找" finished');
+    });
+
+    it('多行(ask_user_question):渲染父标题 + 所有子项', () => {
+      const msg = makeMessage({
+        uuid: 'msg-ask',
+        role: 'tool',
+        kind: 'agent-completion',
+        lines: [
+          { content: '● Answered 2 questions', style: {}, indent: 0 },
+          { content: '⎿  日志库 → winston', style: {}, indent: 2, raw: true },
+          { content: '⎿  日志级别 → debug', style: {}, indent: 2, raw: true },
+        ],
+      });
+      const { lastFrame } = render(<MessageLine msg={msg} cols={80} />);
+      const frame = lastFrame() ?? '';
+      // 父标题
+      expect(frame).toContain('Answered 2 questions');
+      // 子项必须渲染(当前 bug:只有父标题,子项丢失)
+      expect(frame).toContain('日志库 → winston');
+      expect(frame).toContain('日志级别 → debug');
+    });
+  });
 });

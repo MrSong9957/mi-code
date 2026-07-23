@@ -20,9 +20,14 @@ export interface MessageLineProps {
 }
 
 export function MessageLine({ msg, cols }: MessageLineProps): React.ReactElement {
-  // AUTO-0025-transient Task 3:agent-completion 固定单行渲染(truncate,不换行)。
+  // AUTO-0025-transient Task 3:agent-completion 单行渲染(truncate,不换行)。
   // 物理本质:完成的子代理只展示一行 ● Agent "..." finished · Ns,过长截断。
-  if (msg.kind === 'agent-completion') {
+  //
+  // AUTO-0025 Phase B review 修正:ask_user_question 复用 agent-completion kind,
+  // 但含父标题(● Answered N)+ 子项(⎿ Q → A)多行。单行特判会截断丢失子项。
+  // 修复:仅当 lines 恰好 1 行时走 truncate 单行模式(spawn_agent 行为不变);
+  // 多行时 fall through 到默认多行渲染(渲染所有 lines)。
+  if (msg.kind === 'agent-completion' && msg.lines.length <= 1) {
     const line = msg.lines[0];
     return (
       <Box height={1} width={cols}>
