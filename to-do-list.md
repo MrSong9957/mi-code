@@ -22,11 +22,6 @@
 
 ## 待办
 
-- [ ] AUTO-0001: 图片输入支持
-  > 支持在输入中附加图片，作为多模态输入发送给模型
-  > 父任务。主链路已打通（/image 命令 → 文件/Windows 剪贴板读取 → 魔数格式检测 → base64 → Anthropic vision 格式 + 3.75MB 校验 + cachePath 落盘）。剩余 3 处缺口见子任务 AUTO-0026/0027/0028。
-  > 依赖：AUTO-0026、AUTO-0027、AUTO-0028
-
 - [ ] AUTO-0005: 探索 Tip 机制
   > 调研输入提示/补全的交互方案
   > 注意：与 spinner 区域的 Tip（AUTO-0020，已实现）不同；本任务关注输入框 placeholder / ghost text / 自由文本补全，当前代码零实现。
@@ -35,14 +30,15 @@
   > AUTO-0006 当前作答 UX 为纯文本输入（输数字 / 自由文本回车）。复用 AUTO-0007 下拉菜单，实现 ↑/↓ 高亮 + Enter 选择预设 options 的交互。
   > 依赖：AUTO-0006、AUTO-0007
 
-- [ ] AUTO-0027: 支持拖拽 / 直接粘贴图片
-  > 当前 `src/tui/input/paste-handler.ts:8` 有 TODO：图片占位符 `[Image #N]` 需走单独 content block，但「当前零基础设施」。仅支持 `/image` 命令，不支持 Ctrl+V 粘贴和 drag-and-drop。
-  > 依赖：AUTO-0001
-
 - [ ] AUTO-0030: 修复 end_turn 时 assistant 消息未持久化 ~~(待办)~~
   > (已完成,见「已完成」分区)
 
 ## 已完成
+
+- [x] AUTO-0001: 图片输入支持
+  > 支持在输入中附加图片，作为多模态输入发送给模型。
+  > 完成：`/image <路径>` 与 Windows 图片剪贴板读取均可构造 ImageBlock；魔数格式检测、3.75MB 校验、磁盘缓存、Anthropic/OpenAI/Google provider 发送及 resume 回填链路完整。AUTO-0027 经 brainstorming 确认为非必要便捷入口并取消，不阻塞父任务完成。
+  > 依赖：AUTO-0026、AUTO-0028
 
 - [x] AUTO-0030: 修复 end_turn 时 assistant 消息未持久化
   > AUTO-0028 实测时发现:resume 后 JSONL 只有 user 消息,0 条 assistant。根因 `src/agent/streaming-query.ts:255-258` 的 end_turn 提前 `return`,跳过了阶段 4 把 `assistantMessages` 合并进 `messages` 的步骤。所有以纯文本回复收尾的会话(绝大多数),最后一条 assistant 都丢失。day-1 bug(`ddb7725` 持久化功能引入时就在)。
@@ -145,6 +141,12 @@
   > 运行相关测试、类型检查和 lint；记录实际输出与源码探索结论的差异；更新必要的架构说明。仅在验证通过后关闭 AUTO-0009。
   > 依赖：AUTO-0023
 
+## 已取消
+
+- [-] AUTO-0027: 支持拖拽 / 直接粘贴图片
+  > 取消：拖拽图片到终端后，终端本身已会输入文件路径；现有 `/image <路径>` 和 `/image`（Windows 图片剪贴板）已覆盖图片发送。自动把拖拽路径转成 ImageBlock 仅节省 `/image ` 前缀，却会引入路径误判与终端兼容成本，当前无必要实现。
+  > 原依赖：AUTO-0001
+
 ---
 
 ## 日志
@@ -171,3 +173,4 @@
 | 2026-07-21 | AUTO-0029 | @agent | AUTO-0028 实测暴露 resume 回显 `(结构化内容)` 缺口,顺手补:新建 `src/utils/format-content.ts` 纯函数 + 接入 `index.ts:891`;6 条单测全过,tsc exit 0,全量 1684 passed 不回归。 |
 | 2026-07-21 | AUTO-0029 | @agent | 实测发现 C 方案 `[图片 <完整 cachePath>]` 在 Windows 长路径下视觉糟糕(90+ 字符),改用 `path.basename` 只显示文件名 `[图片 1.jpg]`;新增 1 条 Windows 反斜杠路径测试(共 7 条)。 |
 | 2026-07-21 | AUTO-0030 | @agent | AUTO-0028 实测暴露 resume 后 JSONL 只存 user 不存 assistant 的严重数据完整性 bug。根因:`streaming-query.ts:255-258` end_turn 提前 return 跳过阶段 4 assistantMessages 合并。修复 + 2 条集成测试(纯文本 + 工具调用末尾),全量 1687 passed、tsc exit 0。day-1 bug 自持久化功能(`ddb7725`)引入就在。 |
+| 2026-07-21 | AUTO-0001、AUTO-0027 | @agent | brainstorming 复核范围：拖拽路径显示由终端原生提供，自动转图片仅属便捷入口；现有 `/image <路径>`、Windows 图片剪贴板、三家 provider 与 resume 链路已满足父任务。取消 AUTO-0027，关闭 AUTO-0001。 |
