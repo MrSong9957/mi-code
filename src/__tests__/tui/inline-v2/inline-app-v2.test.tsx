@@ -23,6 +23,7 @@ import { createOverlayStore } from '../../../tui/state/overlay-store.js';
 import { createAskQuestionStore } from '../../../tui/state/ask-question-store.js';
 import { createSelectionStore } from '../../../tui/state/selection-store.js';
 import { selectSpinnerView } from '../../../tui/state/spinner-view.js';
+import { displayWidth } from '../../../tui/inline/text-layout.js';
 
 function createStores(): InlineAppV2Stores {
   return {
@@ -1051,7 +1052,10 @@ describe('<InlineAppV2> agent-completion 单行展示', () => {
     expect(frame).not.toContain('spawn_agent({"role"');
   });
 
-  it('长中文标签截断为单行,不换行', () => {
+  it('长中文标签截断为单行,不换行,含截断符,不超 cols 宽', () => {
+    // PR2 review 补强:此前断言仅 toContain('Agent'),过弱,无法锁定截断契约。
+    // height={1} 删除后,截断依赖 width={cols} + wrap="truncate-end"(Ink 标准契约)。
+    // 本测试锁定:超长 agent 名称在窄终端下被截断(含 …)、保持单行、每行不超 cols。
     const stores = createStores();
     stores.messagesStore.getState().appendPendingTool('a1', [
       { content: '● spawn_agent', style: {}, indent: 0 },
@@ -1061,19 +1065,35 @@ describe('<InlineAppV2> agent-completion 单行展示', () => {
       { content: `● Agent "${longLabel}" finished · 5s`, style: {}, indent: 0 },
     ], 'agent-completion');
 
+    const COLS = 24;
     const { lastFrame } = render(
       <InlineAppV2
         messages={stores.messagesStore.getState().messages}
         status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
         logo={{ version: '0', dir: '/tmp' }}
         stores={stores}
-        cols={24}
+        cols={COLS}
         rows={24}
       />,
     );
     const frame = lastFrame() ?? '';
-    // 含 Agent 前缀(截断后仍保留开头)
-    expect(frame).toContain('Agent');
+    // 找到 agent 完成行(含 "Agent")
+    const lines = frame.split('\n');
+    const agentLine = lines.find(l => l.includes('Agent'));
+    expect(agentLine).toBeDefined();
+
+    // 断言 1:含截断符 …(证明超长被截断,非完整输出)
+    expect(agentLine).toContain('…');
+    // 断言 2:不含完整长标签原文(证明确实截断了,非换行展开)
+    expect(agentLine).not.toContain(longLabel);
+
+    // 断言 3:该行 display width <= cols(截断后不超宽)
+    expect(displayWidth(agentLine!)).toBeLessThanOrEqual(COLS);
+
+    // 断言 4:长标签未被换行展开成多行(只占 1 行)。
+    // 检查含 "Agent" 的行只有 1 条(完整长标签若换行会产生多行 Agent 内容)。
+    const agentLineCount = lines.filter(l => l.includes('Agent')).length;
+    expect(agentLineCount).toBe(1);
   });
 });
 
