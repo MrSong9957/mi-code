@@ -361,7 +361,7 @@ export async function* streamingQuery(
           continue;
         }
         try {
-          const output = await registry.execute(block.name, block.input);
+          const output = await registry.execute(block.name, block.input, { toolUseId: block.id });
           const result: ToolResultBlock = {
             type: 'tool_result',
             tool_use_id: block.id,
