@@ -13,6 +13,7 @@ import { createInputStore } from '../../tui/state/input-store.js';
 import { createLogoStore } from '../../tui/state/logo-store.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
+import { createAskQuestionStore } from '../../tui/state/ask-question-store.js';
 import {
   RenderModeProvider,
   type RenderMode,
@@ -23,6 +24,7 @@ import {
   TICK_MS,
 } from '../../tui/state/spinner-store.js';
 import { createStatusStore } from '../../tui/state/status-store.js';
+import { createClearScreenStore } from '../../tui/state/clear-screen-store.js';
 
 function renderConnected(mode: RenderMode) {
   const spinnerStore = createSpinnerStore();
@@ -42,6 +44,8 @@ function renderConnected(mode: RenderMode) {
         completionStore={createCompletionStore()}
         selectStore={createSelectStore()}
         overlayStore={createOverlayStore()}
+        askQuestionStore={createAskQuestionStore()}
+        clearScreenStore={createClearScreenStore()}
         onExit={() => {}}
       />
     </RenderModeProvider>,

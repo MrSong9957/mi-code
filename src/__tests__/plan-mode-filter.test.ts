@@ -17,7 +17,7 @@ describe('Plan 模式工具集与权限覆盖', () => {
       'schedule_create', 'schedule_update', 'schedule_remove',
       'background', 'worktree', 'mark_task_done', 'claim_task',
       'submit_plan', 'approve_plan', 'send_message',
-      'spawn_self_organizing', 'spawn_agent', 'memory_write',
+      'spawn_self_organizing', 'memory_write',
     ];
     for (const name of mustHave) {
       expect(WRITE_TOOLS, `WRITE_TOOLS 应包含 ${name}`).toContain(name);
@@ -30,6 +30,10 @@ describe('Plan 模式工具集与权限覆盖', () => {
 
   it('todo_write 不在 WRITE_TOOLS 中（plan 模式允许维护 TODO）', () => {
     expect(WRITE_TOOLS).not.toContain('todo_write');
+  });
+
+  it('spawn_agent 不在 WRITE_TOOLS 中（plan 模式下可见，支持子代理委派探索）', () => {
+    expect(WRITE_TOOLS).not.toContain('spawn_agent');
   });
 
   it('READ_ONLY_TOOLS 与 WRITE_TOOLS 不重叠', () => {
@@ -118,5 +122,12 @@ describe('Plan 模式工具列表过滤', () => {
   it('auto 模式：保留全部工具（无过滤）', () => {
     const filtered = filterToolsForMode(ALL_TOOLS, 'auto');
     expect(filtered).toEqual(ALL_TOOLS);
+  });
+
+  it('plan 模式：spawn_agent 可见（支持子代理委派探索）', () => {
+    // spawn_agent 已从 WRITE_TOOLS 移除，plan 模式下不应被过滤掉
+    const toolsWithSpawn = [...ALL_TOOLS, 'spawn_agent'];
+    const filtered = filterToolsForMode(toolsWithSpawn, 'plan');
+    expect(filtered).toContain('spawn_agent');
   });
 });

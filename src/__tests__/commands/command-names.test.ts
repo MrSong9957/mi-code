@@ -15,9 +15,8 @@ describe('COMMAND_NAMES（命令名单一真相源）', () => {
     expect(new Set(COMMAND_NAMES).size).toBe(COMMAND_NAMES.length);
   });
 
-  it('approve/reject 也包含（help 列出但 switch 特殊处理）', () => {
-    // approve/reject 在 index.ts 特殊路径，但仍应可被 TAB 补全
-    expect(COMMAND_NAMES).toContain('approve');
-    expect(COMMAND_NAMES).toContain('reject');
+  it('不包含已由问卷替代的 approve/reject', () => {
+    expect(COMMAND_NAMES).not.toContain('approve');
+    expect(COMMAND_NAMES).not.toContain('reject');
   });
 });

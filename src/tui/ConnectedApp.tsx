@@ -39,6 +39,8 @@ import { selectSpinnerView } from './state/spinner-view.js';
 import type { CompletionStore } from './state/completion-store.js';
 import type { SelectStore } from './state/select-store.js';
 import type { OverlayStore } from './state/overlay-store.js';
+import type { AskQuestionStore } from './state/ask-question-store.js';
+import type { ClearScreenStore } from './state/clear-screen-store.js';
 
 /** LOGO 区占的行数（与 App.tsx 一致） */
 const LOGO_ROWS = 3;
@@ -64,6 +66,9 @@ export interface ConnectedAppProps {
   completionStore: CompletionStore;
   selectStore: SelectStore;
   overlayStore: OverlayStore;
+  askQuestionStore: AskQuestionStore;
+  /** 计划批准后清屏信号 store(auto+clear 模式) */
+  clearScreenStore: ClearScreenStore;
   onExit: () => void;
   onTab?: (text: string) => void;
   onToggleOverlay?: () => void;
@@ -74,7 +79,7 @@ export interface ConnectedAppProps {
 }
 
 export function ConnectedApp({
-  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, onExit, onTab, onToggleOverlay, onAbortStream, onRewindLastTurn,
+  messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, askQuestionStore, clearScreenStore, onExit, onTab, onToggleOverlay, onAbortStream, onRewindLastTurn,
 }: ConnectedAppProps): React.ReactElement {
   // 选区 store（拖拽写入，所有区域订阅高亮）
   const selectionStore = useMemo(() => createSelectionStore(), []);
@@ -110,7 +115,25 @@ export function ConnectedApp({
     }
   }, [cols, isInline]);
 
-  // 订阅所有 store
+  // ── 计划批准后清屏(auto+clear 模式) ──────────────────────────────────────
+  // 物理本质:applyPlanApproval(clearContext=true) 同步清空 messagesStore + 发 tick 信号。
+  // ConnectedApp 的 effect 检测 tick 变化,执行与 resize 相同的清屏+重挂载:
+  //   \x1b[2J\x1b[3J\x1b[H(清屏+清 scrollback+光标归位)+ setV2ResizeKey 重挂载 <InlineAppV2>。
+  // 重挂载后 <Static> 重写 logo(messages 已空),实现 Claude Code 式"全新开始"。
+  // 非 clearContext 模式(auto+keep/build+keep)不触发清屏。
+  const clearTick = useStore(clearScreenStore, (s) => s.tick);
+  const prevClearTickRef = useRef(clearTick);
+  useEffect(() => {
+    if (prevClearTickRef.current !== clearTick) {
+      prevClearTickRef.current = clearTick;
+      if (isInline) {
+        process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+        setV2ResizeKey((k) => k + 1);
+      }
+    }
+  }, [clearTick, isInline]);
+
+  // 订阅所有 stores
   const messages = useStore(messagesStore, (s) => s.messages);
   const inputText = useStore(inputStore, (s) => s.text);
   const cursor = useStore(inputStore, (s) => s.cursor);
@@ -194,12 +217,18 @@ export function ConnectedApp({
     inputStore, onExit, onTab, onToggleOverlay, () => overlayStore.getState().visible,
     handlePageScroll, completionStore, selectStore,
     spinnerStore, onAbortStream, onRewindLastTurn,
+    askQuestionStore,
   );
 
   // 粘贴占位符：bracketed paste 内容 → storePastedContent 生成占位符 → insert 到输入框。
   // usePaste 自动管 \x1b[?2004h 生命周期，inline/alt-screen 都生效。
   // 粘贴内容走单独通道，不泄漏到 useInput（Ink 文档：separate event channels）。
   usePaste((text: string) => {
+    const ask = askQuestionStore.getState();
+    if (ask.visible) {
+      if (ask.inputMode) ask.insertOther(text);
+      return;
+    }
     inputStore.getState().insert(storePastedContent(text));
   });
 
@@ -345,6 +374,7 @@ export function ConnectedApp({
             selectStore,
             selectionStore,
             overlayStore,
+            askQuestionStore,
           }}
           cols={cols}
           rows={rows}

@@ -34,6 +34,7 @@ export interface Theme {
   warning: string;        // 警告——目录路径、警告信息
   info: string;           // 信息——模式指示、代码块
   suggestion: string;     // 建议——链接、进度条
+  planMode: string;          // 计划审批——边框、标题
 
   // 状态栏字段色
   statusMode: string;     // 权限模式（auto/plan/build）
@@ -92,6 +93,7 @@ export const darkTheme: Theme = {
   warning:      'rgb(255, 210, 80)',    // 琥珀
   info:         'rgb(100, 200, 240)',   // 天蓝
   suggestion:   'rgb(120, 140, 255)',   // 靛蓝
+  planMode:     'rgb(0, 153, 153)',     // 深青（略提亮保证暗底对比度）
 
   // 状态栏
   statusMode:       'rgb(100, 200, 240)',
@@ -150,6 +152,7 @@ export const lightTheme: Theme = {
   warning:      'rgb(180, 130, 0)',
   info:         'rgb(0, 140, 190)',
   suggestion:   'rgb(60, 80, 200)',
+  planMode:     'rgb(0, 102, 102)',     // 深青
 
   // 状态栏
   statusMode:       'rgb(0, 140, 190)',

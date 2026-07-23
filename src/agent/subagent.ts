@@ -9,11 +9,29 @@
 // 2. 上下文克隆：继承父代理的文件读取状态
 // 3. 异步后台执行：run_in_background 支持
 
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { runWithVercelAI } from './llm-vercel.js';
-import type { ToolRegistry } from './tool-registry.js';
-import type { RegisteredTool } from './types.js';
+import { streamingQuery } from './streaming-query.js';
+import { StreamEventBus } from './stream-event-bus.js';
+import { ToolRegistry } from './tool-registry.js';
+import type { RegisteredTool, StreamingLLMClient } from './types.js';
 import { ROLE_REGISTRY, filterToolsByRole, type Role } from './roles.js';
 import type { PermissionChecker } from '../permission/checker.js';
+
+/**
+ * 用工具子集构建一个新的 ToolRegistry（streamingQuery 需要 registry.execute）。
+ *
+ * streamingQuery 走主 agent 路径，对工具的并发分区/执行依赖 ToolRegistry 完整接口，
+ * 而非原始 Map。这里把角色过滤后的工具重新注册进一个干净的 registry。
+ */
+function buildSubRegistry(toolSubset: Map<string, RegisteredTool>): ToolRegistry {
+  const registry = new ToolRegistry();
+  for (const { definition, executor } of toolSubset.values()) {
+    registry.register(definition, executor);
+  }
+  return registry;
+}
 
 export interface SubagentOptions {
   model?: string;
@@ -45,15 +63,245 @@ export interface SubagentOptions {
    * 不传则子代理工具调用裸跑（向后兼容，但不推荐生产用）。
    */
   permissionChecker?: PermissionChecker;
+  /**
+   * 流式 LLM 客户端（多 provider 支持）。
+   *
+   * 物理本质：子代理的"工作证件"。主 agent 按 provider 配置分发到 anthropic/openai/google
+   * 等流式客户端；子代理复用同一套 client，从而支持 OpenAI 兼容的 MiMo 等非 Anthropic provider。
+   *
+   * 传入时走主 agent 的 streamingQuery 路径（多 provider，修复子代理写死 Anthropic 的 bug）；
+   * 不传时回退到 runWithVercelAI（向后兼容，仅 Anthropic，测试路径用）。
+   */
+  client?: StreamingLLMClient;
+  /**
+   * 可用技能描述（注入 system prompt，让子代理发现/调用技能）。
+   * 由主 agent 通过 skillRegistry.describeAvailable() 生成，spawn-agent-tool 透传。
+   */
+  skillsDescription?: string;
+}
+
+export type SubagentStatus = 'completed' | 'incomplete' | 'unverified' | 'background';
+
+export interface SubagentEvidence {
+  toolCallCount: number;
+  successfulToolResultCount: number;
 }
 
 export interface SubagentResult {
   text: string;
   isBackground: boolean;
+  status: SubagentStatus;
+  terminationReason: string;
+  evidence: SubagentEvidence;
+}
+
+const EVIDENCE_TOOLS = new Set([
+  'read_file', 'run_bash', 'memory_read', 'memory_list', 'read_plan_file',
+]);
+
+function isSuccessfulEvidence(name: string, output: string): boolean {
+  return EVIDENCE_TOOLS.has(name)
+    && !/^\s*(?:\[Tool Error\]|\[Blocked|Error:)/i.test(output);
 }
 
 /** 共享的文件读取状态（跨子代理） */
 const sharedFileState = new Map<string, string>();
+
+/**
+ * 在角色 system prompt 后追加环境信息 + 行为约束（对齐 CC enhanceSystemPromptWithEnvDetails）。
+ *
+ * CC 追加：绝对路径要求、emoji 禁令、tool call 前不用冒号、CWD/平台/Shell/git 仓库检测。
+ * 这些约束让子代理输出更规范（绝对路径方便主 agent 定位文件）。
+ */
+export function enhanceSubagentSystemPrompt(
+  baseSystem: string,
+  options?: { skillsDescription?: string },
+): string {
+  const lines = [
+    baseSystem,
+    '',
+    'Notes:',
+    '- Use absolute file paths in your responses.',
+    '- Do not use emojis.',
+    '- Do not use a colon before tool calls.',
+    `- Working directory: ${process.cwd()}`,
+    `- Platform: ${process.platform}`,
+    `- Shell: ${process.env.SHELL ?? process.env.ComSpec ?? 'unknown'}`,
+    `- Is a git repository: ${existsSync(join(process.cwd(), '.git'))}`,
+  ];
+  if (options?.skillsDescription) {
+    lines.push('', `Available skills:\n${options.skillsDescription}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 用流式客户端（streamingQuery）执行子代理。
+ *
+ * 复用主 agent 的 streamingQuery 路径，从而支持 OpenAI/Google/MiMo 等非 Anthropic provider。
+ * 返回子代理输出的最终文本（累加所有 assistant 文本块，行为对齐 runWithVercelAI 的 .text）。
+ *
+ * 物理本质：临时工走正门，和正式员工用同一套门禁（provider 分发）。
+ */
+async function runSubagentWithClient(
+  client: StreamingLLMClient,
+  toolSubset: Map<string, RegisteredTool>,
+  prompt: string,
+  system: string,
+  options: SubagentOptions,
+): Promise<{ text: string; toolCallCount: number; successfulToolResultCount: number; terminationReason: string; finalTurnSynthesized?: boolean }> {
+  const controller = new AbortController();
+  // 子代理作为有限步循环：显式 maxSteps 作为安全网（默认 10，对齐 Vercel 回退路径）
+  const maxTurns = options.maxSteps || 10;
+
+  const subRegistry = buildSubRegistry(toolSubset);
+
+  let resultText = '';
+  // 收集工具调用信息，用于 maxTurns 耗尽且无文本输出时的 fallback 摘要
+  const toolCallNames: string[] = [];
+  let toolCallCount = 0;
+  let successfulToolResultCount = 0;
+  // AUTO-0025 Task 4:子代理默认启用"无工具最终总结轮"(仅在 maxTurns 已定义时生效)。
+  // 物理本质:让临时工在工时耗尽前,用已收集的证据写一份正式总结,
+  // 而不是把"Now let me check..."这种过程句当成交付物。
+  const reserveFinalTextTurn = true;
+
+  // 用 StreamEventBus 捕获真实终止原因（end_turn / max_turns / user_abort / error）
+  const eventBus = new StreamEventBus();
+  let terminationReason = 'unknown';
+  const onLoopEnd = ({ reason }: { reason: string }) => { terminationReason = reason; };
+  eventBus.onLoopEnd(onLoopEnd);
+
+  try {
+    for await (const message of streamingQuery(client, subRegistry, prompt, {
+    systemPrompt: system,
+    tools: Array.from(toolSubset.values()).map(t => t.definition),
+    signal: controller.signal,
+    maxTurns,
+    permissionChecker: options.permissionChecker,
+    model: options.model,
+    eventBus,
+    reserveFinalTextTurn,
+  })) {
+    if (message !== null && typeof message === 'object' && 'type' in message) {
+      if (message.type === 'assistant') {
+        const content = (message as { content?: unknown }).content;
+        if (Array.isArray(content)) {
+          let turnText = '';
+          for (const block of content) {
+            if (block !== null && typeof block === 'object' && 'type' in block) {
+              const bt = (block as { type: string }).type;
+              if (bt === 'text') {
+                const text = (block as { text?: string }).text;
+                if (text) turnText += text;
+              } else if (bt === 'tool_use') {
+                const name = (block as { name?: string }).name;
+                if (name) {
+                  toolCallNames.push(name);
+                  toolCallCount++;
+                }
+              }
+            }
+          }
+          if (turnText.trim()) resultText = turnText;
+        }
+      } else if (message.type === 'tool_result') {
+        const tr = message as { name?: string; output?: string };
+        if (tr.name && tr.output && isSuccessfulEvidence(tr.name, tr.output)) {
+          successfulToolResultCount++;
+        }
+      }
+    }
+  }
+  } finally {
+    eventBus.offLoopEnd(onLoopEnd);
+  }
+  // AUTO-0025 Task 4:判断 final turn 是否真的产出了基于证据的总结。
+  //
+  // 物理语义:end_turn 退出 + resultText 非空 = 模型在 final turn 用工具结果写了总结。
+  // 若 end_turn 但 resultText 空,说明 final turn 模型"交白卷"——标记为未合成,
+  // 让 finalizeSubagentExecution 判为 incomplete(不再用旧的工具调用兜底摘要冒充结果)。
+  //
+  // 关键边界:只有当 maxTurns >= 2(reserveFinalTextTurn 有机会生效)时,
+  // finalTurnSynthesized 才参与判定。maxTurns < 2 时根本没机会进入 final turn,
+  // 此时 finalTurnSynthesized 为 undefined,不影响既有的 terminationReason 判定。
+  const finalTurnWasActive = reserveFinalTextTurn && maxTurns >= 2;
+  const finalTurnSynthesized = finalTurnWasActive
+    ? (terminationReason === 'end_turn' && resultText.trim().length > 0)
+    : undefined;
+
+  // 模型可能只调工具不输出文字（某些 GLM/MiMo 行为），用工具调用信息兜底。
+  // 但 reserveFinalTextTurn 启用时,若 final turn 没产出文本,不走此兜底——
+  // 否则会把"模型交白卷"伪装成"已完成 N 个工具调用",与 final summary 语义冲突。
+  if (!resultText && toolCallNames.length > 0 && !reserveFinalTextTurn) {
+    const counts: Record<string, number> = {};
+    for (const n of toolCallNames) counts[n] = (counts[n] ?? 0) + 1;
+    const summary = Object.entries(counts).map(([n, c]) => `${n}${c > 1 ? `×${c}` : ''}`).join(', ');
+    return {
+      text: `Sub-agent completed ${toolCallNames.length} tool call(s) [${summary}] — no explicit text summary produced.`,
+      toolCallCount,
+      successfulToolResultCount,
+      terminationReason,
+      finalTurnSynthesized,
+    };
+  }
+  return { text: resultText || '(no final text)', toolCallCount, successfulToolResultCount, terminationReason, finalTurnSynthesized };
+}
+
+/**
+ * 根据执行证据和终止原因，判定子代理最终状态并格式化安全返回值。
+ */
+function finalizeSubagentExecution(
+  text: string,
+  isBackground: boolean,
+  role: Role | undefined,
+  execution: { toolCallCount: number; successfulToolResultCount: number; terminationReason: string; finalTurnSynthesized?: boolean },
+): SubagentResult {
+  const base = { isBackground, evidence: { toolCallCount: execution.toolCallCount, successfulToolResultCount: execution.successfulToolResultCount } };
+
+  if (isBackground) {
+    return { text: '[Subagent launched in background]', ...base, status: 'background', terminationReason: 'background' };
+  }
+
+  // AUTO-0025 Task 4:reserveFinalTextTurn 启用但 final turn 没合成文本 → incomplete。
+  // 物理本质:工时耗尽前给了临时工"写总结"的机会,但他交了白卷——不算完成。
+  // 即使 terminationReason 是 end_turn(模型自主结束了),没有总结文本就是没交付。
+  if (execution.finalTurnSynthesized === false) {
+    return {
+      text: `[Subagent incomplete: no final summary] ${text || '(no final text)'}`,
+      ...base,
+      status: 'incomplete',
+      // 用 max_turns 表达"轮次耗尽且未产出总结"——比 end_turn 更准确反映未完成
+      terminationReason: 'max_turns',
+    };
+  }
+
+  // max_turns / user_abort / error 优先于 explore 证据门槛
+  if (execution.terminationReason !== 'end_turn') {
+    const reasonLabel = execution.terminationReason === 'max_turns'
+      ? `reached max turns`
+      : execution.terminationReason === 'user_abort'
+        ? 'aborted by user'
+        : `terminated: ${execution.terminationReason}`;
+    return {
+      text: `[Subagent incomplete: ${reasonLabel}] ${text || '(no final text)'}`,
+      ...base,
+      status: 'incomplete',
+      terminationReason: execution.terminationReason,
+    };
+  }
+
+  if (role === 'explore' && execution.successfulToolResultCount === 0) {
+    return {
+      text: '[Subagent unverified] Explore agent produced no successful evidence tool result. Retry with read_file or read-only run_bash.',
+      ...base,
+      status: 'unverified',
+      terminationReason: execution.terminationReason,
+    };
+  }
+
+  return { text, ...base, status: 'completed', terminationReason: execution.terminationReason };
+}
 
 /**
  * 运行子代理
@@ -72,26 +320,54 @@ export async function runSubagent(
   const toolSubset: Map<string, RegisteredTool> = filterToolsByRole(tools.tools, options.role);
 
   // Fork 模式：使用父代理的 system 触发 prompt cache
-  const effectiveSystem = options.forkMode && options.parentSystem
+  const baseSystem = options.forkMode && options.parentSystem
     ? options.parentSystem
     : system;
+  // 追加环境信息 + 行为约束（对齐 CC enhanceSystemPromptWithEnvDetails）
+  const effectiveSystem = enhanceSubagentSystemPrompt(baseSystem, {
+    skillsDescription: options.skillsDescription,
+  });
 
   // 异步后台执行
   if (options.runInBackground) {
     runSubagentBackground(prompt, toolSubset, options, effectiveSystem);
-    return { text: '[Subagent launched in background]', isBackground: true };
+    return {
+      text: '[Subagent launched in background]',
+      isBackground: true,
+      status: 'background',
+      terminationReason: 'background',
+      evidence: { toolCallCount: 0, successfulToolResultCount: 0 },
+    };
   }
 
   // 同步执行（在指定 cwd 下运行，结束后恢复）
   const prevCwd = options.cwd ? process.cwd() : null;
   if (options.cwd) process.chdir(options.cwd);
   try {
-    const result = await runWithVercelAI(prompt, toolSubset, {
-      model: options.model,
-      maxSteps: options.maxSteps || 10,
-      system: effectiveSystem,
-      permissionChecker: options.permissionChecker,
-    });
+    let text: string;
+    let toolCallCount = 0;
+    let successfulToolResultCount = 0;
+    let terminationReason = 'end_turn';
+    // AUTO-0025 Task 4:仅 client 路径会设置 finalTurnSynthesized;Vercel 回退路径不设置(undefined)。
+    let finalTurnSynthesized: boolean | undefined;
+    if (options.client) {
+      // 多 provider 路径：走主 agent 的 streamingQuery，支持 OpenAI/MiMo 等
+      const exec = await runSubagentWithClient(options.client, toolSubset, prompt, effectiveSystem, options);
+      text = exec.text;
+      toolCallCount = exec.toolCallCount;
+      successfulToolResultCount = exec.successfulToolResultCount;
+      terminationReason = exec.terminationReason;
+      finalTurnSynthesized = exec.finalTurnSynthesized;
+    } else {
+      // 回退：Vercel AI SDK（仅 Anthropic；测试路径/向后兼容）
+      const result = await runWithVercelAI(prompt, toolSubset, {
+        model: options.model,
+        maxSteps: options.maxSteps || 10,
+        system: effectiveSystem,
+        permissionChecker: options.permissionChecker,
+      });
+      text = result.text || '(no summary)';
+    }
 
     // 克隆文件读取状态到共享池
     if (options.readFileState) {
@@ -100,7 +376,12 @@ export async function runSubagent(
       }
     }
 
-    return { text: result.text || '(no summary)', isBackground: false };
+    return finalizeSubagentExecution(text, false, options.role, {
+      toolCallCount,
+      successfulToolResultCount,
+      terminationReason,
+      finalTurnSynthesized,
+    });
   } finally {
     if (prevCwd) process.chdir(prevCwd);
   }
@@ -116,14 +397,22 @@ async function runSubagentBackground(
   system: string,
 ): Promise<void> {
   try {
-    const result = await runWithVercelAI(prompt, toolSubset, {
-      model: options.model,
-      maxSteps: options.maxSteps || 10,
-      system,
-      permissionChecker: options.permissionChecker,
-    });
+    let text: string;
+    if (options.client) {
+      // 多 provider 路径（后台执行同样支持 OpenAI/MiMo 等）
+      const exec = await runSubagentWithClient(options.client, toolSubset, prompt, system, options);
+      text = exec.text;
+    } else {
+      const result = await runWithVercelAI(prompt, toolSubset, {
+        model: options.model,
+        maxSteps: options.maxSteps || 10,
+        system,
+        permissionChecker: options.permissionChecker,
+      });
+      text = result.text || '(no summary)';
+    }
     if (options.onBackgroundComplete) {
-      options.onBackgroundComplete(result.text || '(no summary)');
+      options.onBackgroundComplete(text);
     }
   } catch (err) {
     if (options.onBackgroundComplete) {

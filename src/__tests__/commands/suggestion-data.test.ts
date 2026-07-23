@@ -33,6 +33,12 @@ describe('COMMAND_SUGGESTIONS', () => {
     expect(groups.has('Session')).toBe(true);
   });
 
+  it('不展示已由问卷替代的 approve/reject', () => {
+    const names = COMMAND_SUGGESTIONS.map(s => s.name);
+    expect(names).not.toContain('approve');
+    expect(names).not.toContain('reject');
+  });
+
   it('同分组命令相邻(分组内连续)', () => {
     const groups = COMMAND_SUGGESTIONS.map(s => s.group);
     let prev = groups[0];

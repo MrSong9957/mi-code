@@ -8,6 +8,10 @@ import { Text } from 'ink';
 import { createInputStore, type InputStore } from '../../tui/state/input-store.js';
 import { useInputHandler } from '../../tui/input/use-input-handler.js';
 import { createSpinnerStore, type SpinnerStore } from '../../tui/state/spinner-store.js';
+import { createAskQuestionStore, type AskQuestionStore } from '../../tui/state/ask-question-store.js';
+import { createCompletionStore, type CompletionStore } from '../../tui/state/completion-store.js';
+import { createSelectStore, type SelectStore } from '../../tui/state/select-store.js';
+import type { AskQuestionRequest } from '../../agent/ask-user-types.js';
 import { resetPasteState } from '../../tui/input/paste-handler.js';
 
 /** 用 input-store 渲染一个 probe，把当前 text 显示出来。
@@ -19,6 +23,9 @@ function InputProbe({
   onToggleOverlay,
   overlayVisible,
   spinnerStore,
+  askQuestionStore,
+  completionStore,
+  selectStore,
   onAbortStream,
   onRewindLastTurn,
 }: {
@@ -28,17 +35,186 @@ function InputProbe({
   onToggleOverlay?: () => void;
   overlayVisible?: () => boolean;
   spinnerStore?: SpinnerStore;
+  askQuestionStore?: AskQuestionStore;
+  completionStore?: CompletionStore;
+  selectStore?: SelectStore;
   onAbortStream?: () => void;
   onRewindLastTurn?: () => void;
 }): React.ReactElement {
   useInputHandler(
     store, onExit, onTab, onToggleOverlay, overlayVisible,
-    undefined, undefined, undefined,
+    undefined, completionStore, selectStore,
     spinnerStore, onAbortStream, onRewindLastTurn,
+    askQuestionStore,
   );
   const text = store.getState().text;
   return React.createElement(Text, {}, `text="${text}"`);
 }
+
+const questionnaireRequest: AskQuestionRequest = {
+  questions: [
+    {
+      question: 'Q1', header: 'One', multiSelect: false,
+      options: [{ label: 'A', description: 'first' }, { label: 'B', description: 'second' }],
+    },
+    {
+      question: 'Q2', header: 'Two', multiSelect: true,
+      options: [{ label: 'C', description: 'third' }],
+    },
+  ],
+};
+
+function openQuestionnaire(request: AskQuestionRequest = questionnaireRequest) {
+  const askQuestionStore = createAskQuestionStore();
+  const onOutcome = vi.fn();
+  askQuestionStore.getState().open('req-1', request, onOutcome);
+  return { askQuestionStore, onOutcome };
+}
+
+describe('useInputHandler: questionnaire priority and routing', () => {
+  it('routes Up/Down and Ctrl+P/Ctrl+N to questionnaire focus without changing the input draft', () => {
+    const store = createInputStore();
+    store.getState().setText('draft stays');
+    const { askQuestionStore } = openQuestionnaire();
+    const { stdin } = render(React.createElement(InputProbe, { store, askQuestionStore }));
+
+    stdin.write('\x1b[B');
+    expect(askQuestionStore.getState().focusIndex).toBe(1);
+    stdin.write('\x0e');
+    expect(askQuestionStore.getState().focusIndex).toBe(2);
+    stdin.write('\x1b[A');
+    expect(askQuestionStore.getState().focusIndex).toBe(1);
+    stdin.write('\x10');
+    expect(askQuestionStore.getState().focusIndex).toBe(0);
+    expect(store.getState().text).toBe('draft stays');
+  });
+
+  it('routes Tab/Right and Shift+Tab/Left between questionnaire pages', () => {
+    const store = createInputStore();
+    const { askQuestionStore } = openQuestionnaire();
+    const { stdin } = render(React.createElement(InputProbe, { store, askQuestionStore }));
+
+    stdin.write('\t');
+    expect(askQuestionStore.getState().pageIndex).toBe(1);
+    stdin.write('\x1b[C');
+    expect(askQuestionStore.getState().pageIndex).toBe(2);
+    stdin.write('\x1b[Z');
+    expect(askQuestionStore.getState().pageIndex).toBe(1);
+    stdin.write('\x1b[D');
+    expect(askQuestionStore.getState().pageIndex).toBe(0);
+  });
+
+  it.each([['Space', ' '], ['Enter', '\r']])('%s activates the focused questionnaire control', (_label, key) => {
+    const store = createInputStore();
+    store.getState().setText('draft stays');
+    const { askQuestionStore, onOutcome } = openQuestionnaire({
+      questions: [questionnaireRequest.questions[0]!],
+    });
+    const { stdin } = render(React.createElement(InputProbe, { store, askQuestionStore }));
+
+    stdin.write(key);
+    expect(onOutcome).toHaveBeenCalledWith('req-1', {
+      kind: 'submitted', answers: { Q1: 'A' },
+    });
+    expect(store.getState().text).toBe('draft stays');
+  });
+
+  it('keeps Other editing entirely inside questionnaire state', () => {
+    const store = createInputStore();
+    store.getState().setText('draft stays');
+    const { askQuestionStore } = openQuestionnaire();
+    const { stdin } = render(React.createElement(InputProbe, { store, askQuestionStore }));
+
+    stdin.write('\x1b[B');
+    stdin.write('\x1b[B');
+    stdin.write('\r');
+    expect(askQuestionStore.getState().inputMode).toBe(true);
+    stdin.write('abc');
+    stdin.write('\x1b[D');
+    stdin.write('\x1b[3~');
+    stdin.write('\x7f');
+    stdin.write('\r');
+
+    expect(askQuestionStore.getState()).toMatchObject({
+      inputMode: false,
+      otherDraft: '',
+      others: { Q1: 'a' },
+    });
+    expect(store.getState().text).toBe('draft stays');
+  });
+
+  it('Esc cancels the questionnaire instead of reaching normal ESC handling', () => {
+    vi.useFakeTimers();
+    const store = createInputStore();
+    const spinnerStore = createSpinnerStore();
+    spinnerStore.getState().start('thinking');
+    const onAbortStream = vi.fn();
+    const { askQuestionStore, onOutcome } = openQuestionnaire();
+    const { stdin } = render(React.createElement(InputProbe, {
+      store, spinnerStore, askQuestionStore, onAbortStream,
+    }));
+
+    stdin.write('\x1b');
+    vi.advanceTimersByTime(30);
+    expect(onOutcome).toHaveBeenCalledWith('req-1', { kind: 'cancelled' });
+    expect(onAbortStream).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('activates Chat through questionnaire routing', () => {
+    const store = createInputStore();
+    const { askQuestionStore, onOutcome } = openQuestionnaire({
+      questions: [questionnaireRequest.questions[0]!],
+    });
+    const { stdin } = render(React.createElement(InputProbe, { store, askQuestionStore }));
+
+    stdin.write('\x1b[B');
+    stdin.write('\x1b[B');
+    stdin.write('\x1b[B');
+    stdin.write('\r');
+    expect(onOutcome).toHaveBeenCalledWith('req-1', expect.objectContaining({ kind: 'chat' }));
+  });
+
+  it('questionnaire precedes overlay, select, completion, and normal input routing', () => {
+    const store = createInputStore();
+    store.getState().setText('draft stays');
+    const { askQuestionStore } = openQuestionnaire();
+    const completionStore = createCompletionStore();
+    completionStore.getState().filter('');
+    const selectStore = createSelectStore();
+    selectStore.getState().open('Pick', [
+      { value: 'one', label: 'One' }, { value: 'two', label: 'Two' },
+    ]);
+    const onToggleOverlay = vi.fn();
+    const { stdin } = render(React.createElement(InputProbe, {
+      store,
+      askQuestionStore,
+      completionStore,
+      selectStore,
+      onToggleOverlay,
+      overlayVisible: () => true,
+    }));
+
+    stdin.write('\x1b[B');
+    expect(askQuestionStore.getState().focusIndex).toBe(1);
+    expect(selectStore.getState().index).toBe(0);
+    expect(completionStore.getState().index).toBe(0);
+    expect(onToggleOverlay).not.toHaveBeenCalled();
+    expect(store.getState().text).toBe('draft stays');
+  });
+
+  it('keeps Ctrl+C global and ahead of an open questionnaire', () => {
+    const store = createInputStore();
+    const onExit = vi.fn();
+    const { askQuestionStore, onOutcome } = openQuestionnaire();
+    const { stdin } = render(React.createElement(InputProbe, { store, askQuestionStore, onExit }));
+
+    stdin.write('\x03');
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(askQuestionStore.getState().visible).toBe(true);
+    expect(onOutcome).not.toHaveBeenCalled();
+  });
+});
 
 describe('useInputHandler（键事件 → store）', () => {
   it('可打印字符 → insert', () => {

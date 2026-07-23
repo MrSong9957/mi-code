@@ -22,7 +22,9 @@ export interface TuiMessage {
   /** 语义角色（决定 MessageRow 整体样式倾向，如 user 带 ❯ 前缀已烤进行内容） */
   role: 'user' | 'assistant' | 'system' | 'tool' | 'thinking';
   /** 专用固化消息类型；普通消息省略。 */
-  kind?: 'turn-duration';
+  kind?: 'turn-duration' | 'tool-progress' | 'thinking-progress' | 'agent-completion';
+  /** \u5de5\u5177\u8c03\u7528 ID\uff1a\u7528\u4e8e\u5c06\u7ed3\u679c\u539f\u5730\u66f4\u65b0\u5230\u5f85\u5b8c\u6210\u6d88\u606f */
+  toolUseId?: string;
   /** 已固化的渲染行（来自 BlockPipeline 的 FormattedLine）。
    *  finalized=true 时这是最终内容；finalized=false 且为 assistant 流式中，
    *  末行可能由 streamingText 动态覆盖。 */

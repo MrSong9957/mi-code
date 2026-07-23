@@ -107,8 +107,11 @@ function renderBlockToken(tok: Token, idx: number, themeName?: ThemeName): React
         const itemContent = item.tokens
           ? renderListItemContent(item.tokens, itemKey, themeName)
           : React.createElement(Text, { key: itemKey }, item.text);
-        return React.createElement(Text, { key: itemKey },
-          marker,
+        // 用 <Box> 而非 <Text> 包裹：itemContent 可能含 <Box>（如嵌套 list），
+        // Ink 禁止 <Box> 嵌套在 <Text> 内，用 <Box flexDirection="row"> 让 marker
+        // 与首行内容水平排列，嵌套的块级内容自然换行。
+        return React.createElement(Box, { key: itemKey, flexDirection: 'row' },
+          React.createElement(Text, null, marker),
           itemContent,
         );
       });

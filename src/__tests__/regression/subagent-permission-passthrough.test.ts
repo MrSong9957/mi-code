@@ -1,4 +1,4 @@
-﻿// 回归测试：子代理权限透传（task / spawn_self_organizing / spawn_agent）
+// 回归测试：子代理权限透传（task / spawn_self_organizing / spawn_agent）
 //
 // 物理本质：总公司给外包团队配"门禁卡"。
 // spawn_agent（正确）：派工时把门禁卡（PermissionChecker）交给外包，他刷卡进对应区域。
@@ -31,7 +31,7 @@ function makeFakeRunner(capture: { options: SubagentOptions | null }) {
   return vi.fn(
     async (_prompt: string, _tools: ToolRegistry, options: SubagentOptions): Promise<SubagentResult> => {
       capture.options = options;
-      return { text: 'done', isBackground: false };
+      return { text: 'done', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     },
   );
 }
@@ -114,13 +114,12 @@ describe('子代理权限透传回归', () => {
     expect((captured.options[0] as SubagentOptions).permissionChecker).toBeUndefined();
   });
 
-  // ── 缺口 #2 的结构性锁定 ──
+  // ── 缺口 #2 已修复：spawn_self_organizing 现在透传 permissionChecker ──
   //
-  // SelfOrganizingOptions 类型本身就不含 permissionChecker 字段，
-  // 所以"透传"在类型层就不可能成立——这是比 task 更深的缺口。
-  // 这里用 it.fails 锁定"理想行为"：派工 options 应包含 permissionChecker 键。
-  // 修复需同时改 SelfOrganizingOptions 类型 + createSpawnSelfOrganizingTool 签名。
-  it.fails('spawn_self_organizing 派工 options 应含 permissionChecker 键 [已知缺口：类型层缺失]', async () => {
+  // 修复后 SelfOrganizingOptions 类型含 permissionChecker 字段，
+  // createSpawnSelfOrganizingTool 签名也接受 permissionChecker 并透传。
+  // 原 it.fails 已转为正式断言。
+  it('spawn_self_organizing 派工 options 应含 permissionChecker 键', async () => {
     const captured: { options: SelfOrganizingOptions[] } = { options: [] };
     const fakeRunner = vi.fn(
       async (
@@ -138,12 +137,15 @@ describe('子代理权限透传回归', () => {
     );
     const todoManager = new TodoManager();
     const inboxManager = new InboxManager();
+    const checker = new PermissionChecker({ mode: 'build', workdir: process.cwd() });
     const tool = createSpawnSelfOrganizingTool(fakeRegistry, todoManager, inboxManager, {
       runFn: fakeRunner,
+      permissionChecker: checker,
     });
     await tool.executor({ name: 'w', role: 'coder', identity: 'i', prompt: 'p' });
     expect(captured.options).toHaveLength(1);
-    // 理想：options 上存在 permissionChecker 键
+    // 修复后：options 上存在 permissionChecker 键
     expect('permissionChecker' in captured.options[0]).toBe(true);
+    expect(captured.options[0].permissionChecker).toBe(checker);
   });
 });

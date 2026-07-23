@@ -18,6 +18,14 @@ import type { Block, FormattedLine, UIMessageStyle } from './types.js';
 import { INDENT, BLOCK_STYLES, buildToolResultBlock, summarizeOutput } from './block-format.js';
 import { MessageFormatter } from './message-formatter.js';
 import { ExpandableBlockStore } from './expandable-store.js';
+import { buildSubagentCompletionPresentation } from './subagent-presentation.js';
+
+/**
+ * AUTO-0025-transient Task 3:工具完成消息的专用 kind。
+ * - 'tool-progress':通用工具消息(默认)
+ * - 'agent-completion':子代理完成单行展示
+ */
+export type FinalToolMessageKind = 'tool-progress' | 'agent-completion';
 
 /**
  * PipelineRenderer：pipeline 依赖的下游渲染/投递接口（最小接口，便于 mock）。
@@ -40,6 +48,14 @@ export interface PipelineRenderer {
   eraseStreamingThinking(): void;
   /** 封口流式（插分隔符，不强制 flushNow）——比 finalizeStreaming 温和 */
   sealStreaming(): void;
+  startToolCall?(toolUseId: string, lines: FormattedLine[]): void;
+  /**
+   * AUTO-0025-transient Task 3:完成工具调用。finalKind 决定固化消息的专用 kind。
+   * - 'tool-progress'(默认):通用工具消息
+   * - 'agent-completion':子代理完成单行展示
+   */
+  finishToolCall?(toolUseId: string, lines: FormattedLine[], finalKind?: FinalToolMessageKind): boolean;
+  appendToolHook?(toolUseId: string, lines: FormattedLine[]): boolean;
   flushNow(): void;
   clearMessages(): void;
 }
@@ -81,6 +97,8 @@ interface BufferedTool {
   hasExpandable?: boolean;
   /** hook 行（PostToolUse 日志，跟在 result 后） */
   hookLines?: FormattedLine[];
+  /** AUTO-0025-transient Task 3:完成消息的专用 kind(agent-completion 走单行展示) */
+  finalKind?: FinalToolMessageKind;
 }
 
 /**
@@ -91,11 +109,26 @@ interface BufferedTool {
  * - thinkingActive：thinking 块是否进行中（决定 thinking_end 是否输出摘要）
  * - 所有 ●/⎿ 前缀、缩进、样式都从这里产出（调 MessageFormatter + block-format）
  */
+/**
+ * AUTO-0025-transient:thinking 协议生命周期状态机(两态)。
+ *
+ * 状态语义区分"协议生命周期"和"UI 呈现":
+ * - idle:无 thinking block 进行中。不变量:buffer 为空,无活动计时,无临时闪烁行。
+ * - active:thinking block 已开始(content_block_start thinking)。不变量:已显示临时闪烁行,
+ *   允许累积 delta 到 buffer。
+ *
+ * 设计决策(审查修正):thinking_start 是 thinking block 生命周期开始的权威协议事件,
+ * 足以驱动"正在思考"的 UI 状态。它不保证该 block 最终包含非空、可展开的 thinking 文本——
+ * 某些 provider(MiMo 兼容端点)的 thinking_delta 内容为空或纯空白。旧三态(visible 门控)
+ * 错误地用"是否收到非空文本"推断"thinking 生命周期是否存在",导致空 delta provider 不显示。
+ */
+type ThinkingPhase = 'idle' | 'active';
+
 export class BlockPipeline {
   private renderer: PipelineRenderer;
   private hasContent = false;
   private assistantGapApplied = false;
-  private thinkingActive = false;
+  private thinkingPhase: ThinkingPhase = 'idle';
   /**
    * 工具块缓冲区（方案 C：视觉位置修复）。
    *
@@ -110,6 +143,7 @@ export class BlockPipeline {
    * 缓冲吸收这个时序，等配对再 flush，保证 call→result→call→result 交替。
    */
   private toolBuffer: BufferedTool[] = [];
+  private lastFinishedToolUseId: string | undefined;
   /** thinking 文本只在内存中累积，供 ctrl+o 展开；不写入默认可见消息区。 */
   private thinkingBuffer = '';
   /** 可折叠块存储（thinking + tool_result 的 summary/full）——ctrl+o 临时 alt screen 覆盖层渲染用 */
@@ -131,43 +165,45 @@ export class BlockPipeline {
         this.print(MessageFormatter.format('input', {}, block.text), 'user');
         break;
 
-      case 'thinking_start':
-        // 固化 ● Thinking… 标题行。原始思考仅缓存，结束后打印摘要行。
+      case 'thinking_start': {
+        // AUTO-0025-transient:thinking block 生命周期开始 → 立即显示闪烁行。
+        // 重复 start 完全无副作用(幂等):不清空 buffer,不重置计时,不二次显示。
+        if (this.thinkingPhase === 'active') break;
+        this.thinkingPhase = 'active';
+        this.thinkingBuffer = '';
+        // idle → active 的真实迁移:插模型块分隔符(仅这一次),显示临时闪烁行。
         this.openModelBlock();
-        this.print(MessageFormatter.format('thinking', {}, 'Thinking…'), 'thinking_header');
-        this.thinkingActive = true;
+        this.renderer.appendStreamingThinking('Thinking…');
         break;
+      }
 
-      case 'thinking_delta':
-        // 仅累积供 ctrl+o 展开，禁止把原始推理流写进默认可见消息区。
+      case 'thinking_delta': {
+        // 只在 active 态累积 buffer(供 Ctrl+O 展开)。idle 时完全忽略——
+        // 维持 idle ⇒ buffer 为空 不变量,防止孤立 delta 污染下一个 thinking block。
+        if (this.thinkingPhase !== 'active') break;
         this.thinkingBuffer += block.content;
         break;
+      }
 
       case 'thinking_end': {
-        // thinking 结束：擦除流式草稿 → 注册可折叠块 → 打印摘要行（折叠）
-        if (this.thinkingActive) {
-          // 先擦除流式思考草稿区，让摘要行替代它
-          this.renderer.eraseStreamingThinking();
+        // active 态才产生摘要;idle 时(end 无 start)完全无害,只确保回到 idle。
+        if (this.thinkingPhase === 'active') {
           const summaryLines = MessageFormatter.format('thinking_end', {
             duration: block.durationSec,
             filesRead: block.filesRead,
           });
-          // 注册可折叠块：summary=摘要行，full=完整思考文本（按行拆分 + dim 缩进）
+          // 注册可折叠块:summary=摘要行,full=完整思考文本或 placeholder(空 buffer 时)。
           const id = `thinking-${++this.idCounter}`;
-          const fullLines = this.thinkingBuffer
-            ? this.thinkingBuffer.split('\n').map(l => ({
-                content: `  ${l}`,
-                style: BLOCK_STYLES.dim,
-                indent: INDENT.nested,
-              }))
-            : summaryLines; // 无思考内容时 full = summary
+          const fullLines = this.buildThinkingFullLines();
           this.expandable.add({ id, kind: 'thinking', summaryLines, fullLines });
-          // 摘要用 'thinking_summary' role（非 assistant），强制 messages-store 新建消息，
-          // 避免 appendLine 续接到已固化的 ● Thinking… 消息导致渲染层跳过渲染。
+          // 再擦除临时行(让摘要行替代闪烁的 Thinking…)
+          this.renderer.eraseStreamingThinking();
+          // 摘要用 'thinking_summary' role(非 assistant),强制 messages-store 新建消息,
+          // 避免 appendLine 续接已固化消息导致渲染层跳过。
           this.print(summaryLines, 'thinking_summary');
         }
+        this.thinkingPhase = 'idle';
         this.thinkingBuffer = '';
-        this.thinkingActive = false;
         break;
       }
 
@@ -195,6 +231,8 @@ export class BlockPipeline {
           toolName: block.name,
           toolInput: block.input,
         });
+        this.openModelBlock();
+        this.renderer.startToolCall?.(toolUseId, callLines);
         this.toolBuffer.push({
           toolUseId,
           name: block.name,
@@ -212,12 +250,12 @@ export class BlockPipeline {
         let idx = -1;
         if (block.toolUseId) {
           idx = this.toolBuffer.findIndex(t => t.toolUseId === block.toolUseId);
-        }
-        if (idx < 0) {
+        } else {
           // FIFO：第一个还没 result 的项
           idx = this.toolBuffer.findIndex(t => t.resultLines === undefined);
         }
         if (idx < 0) {
+          this.lastFinishedToolUseId = undefined;
           // 兜底：没找到对应 call，立即渲染（不丢失 result）
           // 这种情况极少：result 先于 call、或 hook 之外的非工具 result
           this.openBlock();
@@ -231,6 +269,36 @@ export class BlockPipeline {
         const item = this.toolBuffer[idx]!;
         // input 优先级：result 自带 > 配对 call 缓存的 input
         const input = block.input ?? item.input;
+
+        // AUTO-0025-transient Task 3:spawn_agent 完成专用展示。
+        // 成功解析 envelope 时,用单行 ● Agent "..." finished · Ns 替换通用结果行,
+        // 注册 envelope 剥离后的正文为 expandable(Ctrl+O),finalKind 标 agent-completion。
+        // 失败(null)走通用降级,不注册 expandable。
+        if (item.name === 'spawn_agent') {
+          const presentation = buildSubagentCompletionPresentation(input, block.output, block.durationMs ?? 0);
+          if (presentation) {
+            item.resultLines = [{
+              content: presentation.line,
+              style: BLOCK_STYLES.magenta,
+              indent: 0,
+            }];
+            item.finalKind = 'agent-completion';
+            // 注册 expandable:full=子代理正文(无 envelope),供 Ctrl+O 展开
+            const id = `agent-${++this.idCounter}`;
+            const fullLines = presentation.fullOutput.split('\n').map((l, i) => ({
+              content: `${i === 0 ? '⎿  ' : '   '}${l}`,
+              style: BLOCK_STYLES.dim,
+              indent: INDENT.nested,
+              raw: true,
+            }));
+            item.expandableId = id;
+            item.expandableFullLines = fullLines;
+            item.hasExpandable = true;
+            this.finishTool(idx);
+            break;
+          }
+        }
+
         const meta = buildToolResultBlock(block.name, input, block.output);
         const summaryLines = MessageFormatter.format('tool_result', meta);
         item.resultLines = summaryLines;
@@ -253,7 +321,7 @@ export class BlockPipeline {
         }
 
         // 配对完成 → 立即 flush 该项
-        this.flushTool(idx);
+        this.finishTool(idx);
         break;
       }
 
@@ -265,7 +333,9 @@ export class BlockPipeline {
         // 屏幕底部就是它的 result 行——hook 立即 print 自然紧跟其后。
         // 不另加块间空行（result→hook 是同一工具的附属，视觉上紧贴）。
         const hookLines = [{ content: block.text, style: BLOCK_STYLES.dim, indent: INDENT.nested }];
-        this.print(hookLines, 'tool');
+        if (!this.lastFinishedToolUseId || !this.renderer.appendToolHook?.(this.lastFinishedToolUseId, hookLines)) {
+          this.print(hookLines, 'tool');
+        }
         break;
       }
 
@@ -334,9 +404,30 @@ export class BlockPipeline {
    * 物理：从货架上取下这个配对完成的包裹，按"call→result→hook"顺序摆上交付台。
    * 落屏后从缓冲区移除（已交付）。
    */
-  private flushTool(idx: number): void {
+  private finishTool(idx: number): void {
     const item = this.toolBuffer[idx];
     if (!item) return;
+    if (this.renderer.finishToolCall) {
+      // AUTO-0025-transient Task 3:agent-completion 只用 resultLines(单行),
+      // 不拼 callLines(避免 pending 的 ● spawn_agent 行残留)。其余拼 call+result。
+      const isAgentCompletion = item.finalKind === 'agent-completion';
+      const lines = isAgentCompletion
+        ? (item.resultLines ?? item.callLines)
+        : (item.resultLines ? [...item.callLines, ...item.resultLines] : item.callLines);
+      if (this.renderer.finishToolCall(item.toolUseId, lines, item.finalKind)) {
+        if (item.resultLines && item.hasExpandable && item.expandableId && item.expandableFullLines) {
+          this.expandable.add({
+            id: item.expandableId,
+            kind: 'tool_result',
+            summaryLines: item.resultLines,
+            fullLines: item.expandableFullLines,
+          });
+        }
+        this.lastFinishedToolUseId = item.toolUseId;
+        this.toolBuffer.splice(idx, 1);
+        return;
+      }
+    }
     // 块间空行：首个工具前由 openModelBlock 处理（与 thinking/assistant_text 之间也加空行）
     this.openModelBlock();
     // call 行（● Read(...)）
@@ -366,7 +457,7 @@ export class BlockPipeline {
   private flushAllPending(): void {
     // 按 call 到达顺序（缓冲区顺序）逐个 flush；没 result 的项只渲染 call 行
     while (this.toolBuffer.length > 0) {
-      this.flushTool(0);
+      this.finishTool(0);
     }
   }
 
@@ -375,14 +466,52 @@ export class BlockPipeline {
     this.renderer.flushNow();
   }
 
+  /**
+   * AUTO-0025-transient:构建 thinking 可折叠块的完整展开行。
+   *
+   * - 有实质内容(trim 非空):按行拆分 + dim 缩进,供 Ctrl+O 展开真实推理。
+   * - 无实质内容:显示明确 placeholder,不用摘要兜底(避免误导用户以为摘要就是完整 thinking)。
+   *   placeholder 文案用 "received"(陈述客户端事实)而非 "provided by model"(归因可能不准)。
+   */
+  private buildThinkingFullLines(): FormattedLine[] {
+    const hasContent = this.thinkingBuffer.trim().length > 0;
+    if (hasContent) {
+      return this.thinkingBuffer.split('\n').map(l => ({
+        content: `  ${l}`,
+        style: BLOCK_STYLES.dim,
+        indent: INDENT.nested,
+      }));
+    }
+    return [{
+      content: '  (No thinking content received)',
+      style: BLOCK_STYLES.dim,
+      indent: INDENT.nested,
+      raw: true,
+    }];
+  }
+
+  /**
+   * AUTO-0025-transient:重置 thinking 状态。
+   * eraseIfActive=true 且当前 active 时,先擦除临时行(用于 clearTurnState 保留历史消息场景)。
+   * eraseIfActive=false 时(clear 已会 clearMessages 物理清屏)只重置 phase 和 buffer。
+   */
+  private resetThinkingState(eraseIfActive: boolean): void {
+    if (eraseIfActive && this.thinkingPhase === 'active') {
+      this.renderer.eraseStreamingThinking();
+    }
+    this.thinkingPhase = 'idle';
+    this.thinkingBuffer = '';
+  }
+
   /** 清空（新 turn 开始时） */
   clear(): void {
     // 先把未交付的工具块 flush 出去，避免丢失
     this.flushAllPending();
     this.hasContent = false;
     this.assistantGapApplied = false;
-    this.thinkingActive = false;
-    this.thinkingBuffer = '';
+    // clear 会 clearMessages 物理清屏,临时行随之消失,只需重置 phase/buffer。
+    this.resetThinkingState(false);
+    this.lastFinishedToolUseId = undefined;
     this.expandable.clear();
     this.renderer.clearMessages();
   }
@@ -395,7 +524,9 @@ export class BlockPipeline {
   clearTurnState(): void {
     // flush 未交付的工具块（防丢失）
     this.flushAllPending();
-    this.thinkingBuffer = '';
+    // clearTurnState 保留历史消息,visible 临时行需显式擦除。
+    this.resetThinkingState(true);
+    this.lastFinishedToolUseId = undefined;
     this.expandable.clear();
     // hasContent 保持 true（屏幕上仍有历史内容，新块前要加空行）
   }

@@ -3,12 +3,13 @@
 // 新增（s12）：可选 worktree 参数——子代理在指定 git worktree 隔离目录内执行，
 // 实现任务间的目录隔离（互不污染未提交改动）。
 //
-// 新增（smallModel）：子代理等轻量任务走小模型省钱。未配置时回退到 undefined，
-// 由 runSubagent 内部使用默认（主）模型——默认行为零变化。
-import type { ToolDefinition, ToolExecutor } from '../types.js';
+// provider 支持：通过 clientProvider 闭包注入多 provider client，
+// 让子代理走与主 agent 相同的 streamingQuery 路径（支持 OpenAI/MiMo 等）。
+import type { ToolDefinition, ToolExecutor, StreamingLLMClient } from '../types.js';
 import type { ToolRegistry } from '../tool-registry.js';
 import { runSubagent } from '../subagent.js';
 import type { SubagentOptions, SubagentResult } from '../subagent.js';
+import type { SubagentModel } from '../roles.js';
 import type { WorktreeManager } from '../../worktree/worktree-manager.js';
 
 /** 子代理执行器类型（用于依赖注入，便于测试） */
@@ -18,10 +19,14 @@ type SubagentRunner = (
   options: SubagentOptions,
 ) => Promise<SubagentResult>;
 
+/** 创建子代理 LLM client 的工厂（多 provider 支持，modelChoice 控制模型选择） */
+export type SubagentClientProvider = (modelChoice?: SubagentModel) => StreamingLLMClient;
+
 export function createTaskTool(
   childTools: ToolRegistry,
   worktreeManager?: WorktreeManager,
-  smallModel?: string,
+  /** 创建子代理用的 LLM client（多 provider 支持）。不传则回退 Vercel AI SDK（仅 Anthropic）。 */
+  clientProvider?: SubagentClientProvider,
   /** 依赖注入：测试时传入 mock，生产路径留空走真实 runSubagent */
   runSubagentFn: SubagentRunner = runSubagent,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
@@ -63,7 +68,11 @@ export function createTaskTool(
         return `Error: worktree "${worktreeName}" requested but worktree support is not configured.`;
       }
 
-      const result = await runSubagentFn(prompt, childTools, { cwd, model: smallModel });
+      const result = await runSubagentFn(prompt, childTools, {
+        cwd,
+        // task 用 general 角色（继承主模型），传 'inherit' 让 clientProvider 选主模型
+        client: clientProvider ? clientProvider('inherit') : undefined,
+      });
       return result.text;
     },
   };

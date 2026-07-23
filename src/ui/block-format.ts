@@ -193,15 +193,16 @@ export function summarizeOutput(
 }
 
 /**
- * 格式化 thinking 结束摘要：`thought for Ns, read M files (ctrl+o to expand)`。
+ * 格式化 thinking 结束摘要：`Thought for Ns, read M files (ctrl+o to expand)`。
  *
- * 对标 Claude Code SpinnerAnimationRow.tsx:172：固定 "thought"（小写），dim 色。
+ * AUTO-0025-transient:首字母大写 Thought(临时行消失后留下的永久摘要,句首大写)。
  * - filesRead=0 时省略 "read M files"。
  * - filesRead=1 单数 file，否则 files。
- * - duration 始终输出（含 0），>= 60s 用分钟格式（如 1m 40s）。
+ * - duration 经 lifecycle 传入已是整数秒(向下取整,不夸大),formatter 再 Math.max(1, round)
+ *   保证至少 1s 显示;>= 60s 用分钟格式。
  */
 export function formatThinkingSummary(durationSec: number, filesRead: number): string {
-  let text = `thought for ${formatDuration(durationSec)}`;
+  let text = `Thought for ${formatDuration(durationSec)}`;
   if (filesRead > 0) {
     text += `, read ${filesRead} file${filesRead > 1 ? 's' : ''}`;
   }
@@ -211,7 +212,8 @@ export function formatThinkingSummary(durationSec: number, filesRead: number): s
 
 /**
  * 格式化时长：< 60s 显示 Ns，>= 60s 显示 Nm Ms（对标 Claude Code formatDuration）。
- * 始终至少 1（Math.max(1, round)）。
+ * 始终至少 1(Math.max(1, round))——lifecycle 传入整数秒,此处 round 接收整数不变,
+ * max(1,...) 作为显示下限防御。
  */
 function formatDuration(sec: number): string {
   const s = Math.max(1, Math.round(sec));

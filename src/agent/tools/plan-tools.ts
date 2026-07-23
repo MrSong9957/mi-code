@@ -2,11 +2,14 @@
 //
 // 物理本质：
 // - write_plan_file = 把设计图纸写进档案柜（PlanStore），plan 模式唯一允许的写入动作
-// - exit_plan_mode  = 把图纸递给业主审批（AskUserManager 挂起等用户 /approve 或 /reject）
+// - exit_plan_mode  = 把图纸递给业主，通过 AskUserManager 问卷等待审批结果
 
 import type { ToolDefinition, ToolExecutor } from '../types.js';
-import type { PlanStore } from '../../plan/plan-store.js';
+import type { PlanContext, PlanStore } from '../../plan/plan-store.js';
 import type { AskUserManager } from '../ask-user-manager.js';
+import type { AskQuestionRequest } from '../ask-user-types.js';
+import { serializeAskQuestionOutcome } from '../ask-user-serialization.js';
+import { stripPlanFrontmatter } from '../../plan/plan-presentation.js';
 
 /**
  * write_plan_file：把 plan 内容写到 PlanStore。
@@ -16,7 +19,7 @@ import type { AskUserManager } from '../ask-user-manager.js';
  */
 export function createWritePlanTool(
   planStore: PlanStore,
-  getSessionId: () => string,
+  getPlanContext: () => PlanContext | null,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
   return {
     definition: {
@@ -43,67 +46,128 @@ export function createWritePlanTool(
       if (!content) {
         return 'Error: content is required';
       }
-      const filePath = planStore.write(getSessionId(), content);
-      return `Plan written to ${filePath}`;
+      const context = getPlanContext();
+      if (!context) return 'Error: No active plan context for the current turn.';
+      try {
+        const filePath = planStore.write(context, content);
+        return `Plan written to ${filePath}`;
+      } catch (error) {
+        return `Error: ${error instanceof Error ? error.message : String(error)}`;
+      }
     },
   };
 }
 
 /**
- * exit_plan_mode：提交 plan 等待用户审批。
- *
- * 读出最近一份 plan 显示给用户，然后挂起等待 /approve 或 /reject。
- * - /approve：返回 'Plan approved. You may now implement.' 给 AI
- * - /reject：返回 'Plan rejected: <reason>' 给 AI（无原因时 'Plan rejected'）
- *
- * 注意：模式切换（approve 后切 build）由 index.ts 的 /approve 分支完成，
- * 不在工具 executor 内做（executor 拿不到 permissionChecker/configStore/layout）。
+ * read_plan_file：读回当前计划文件内容（剥离 frontmatter）。
+ * 让 LLM 能增量编辑计划——读回当前草稿，修改后用 write_plan_file 全量重写。
  */
+export function createReadPlanTool(
+  planStore: PlanStore,
+  getPlanContext: () => PlanContext | null,
+): { definition: ToolDefinition; executor: ToolExecutor } {
+  return {
+    definition: {
+      name: 'read_plan_file',
+      description: 'Read the current plan file content. Returns the plan Markdown without frontmatter. Use this to review your current draft before updating it with write_plan_file.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+    executor: async () => {
+      const context = getPlanContext();
+      const plan = context ? planStore.getActive(context) : null;
+      if (!plan) {
+        return 'Error: no plan written yet. Call write_plan_file first.';
+      }
+      return stripPlanFrontmatter(plan.content);
+    },
+  };
+}
+
+export interface ExitPlanModeDeps {
+  getUsagePercent: () => number;
+  onApprove: (mode: 'auto' | 'build', clearContext: boolean) => void;
+  getPlanContext: () => PlanContext | null;
+}
+
+const PLAN_APPROVAL_QUESTION = 'Claude 已拟定执行方案，是否继续？';
+const AUTO_CLEAR_LABEL = '确认执行，清空上下文并使用自动模式';
+const AUTO_KEEP_LABEL = '确认执行，使用自动模式';
+const BUILD_KEEP_LABEL = '确认执行，手动审核修改';
+
 export function createExitPlanModeTool(
   askManager: AskUserManager,
   planStore: PlanStore,
+  deps: ExitPlanModeDeps,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
   return {
     definition: {
       name: 'exit_plan_mode',
       description: [
         'Submit your plan for user approval. Call this AFTER you have written the plan',
-        'with write_plan_file. The user will review and respond with /approve or /reject.',
-        'Returns "approved" or "rejected" with optional reason.',
+        'with write_plan_file. The user can approve an execution mode or request changes.',
       ].join(' '),
       parameters: {
         type: 'object',
-        properties: {
-          summary: {
-            type: 'string',
-            description: 'Optional one-line summary shown to the user as the approval prompt header.',
-          },
-        },
+        properties: {},
         required: [],
       },
     },
-    executor: async (input) => {
-      const plan = planStore.getCurrent();
+    executor: async (_input) => {
+      const context = deps.getPlanContext();
+      const plan = context ? planStore.getActive(context) : null;
       if (!plan) {
-        return 'Error: no plan written. Call write_plan_file first.';
+        return 'Error: No plan was written in the current turn. Call write_plan_file first.';
       }
-      const summary = (input.summary as string)?.trim() || 'Plan ready for review';
-      const question = `${summary}\n\nPlan file: ${plan.filePath}\n\nType /approve to start implementation, or /reject <reason> to request changes.`;
-      const decision = await askManager.ask({
-        id: `plan-exit-${Date.now()}`,
-        header: 'Plan review',
-        question,
-        options: ['/approve', '/reject'],
-      });
-      // index.ts 的 /approve /reject 分支会 resolve 对应字符串
-      if (decision === 'approve') {
-        planStore.setStatus('approved');
-        return 'Plan approved by user. You may now implement the plan. Switch to build mode has been requested.';
+      const approvalContext = context!;
+
+      const request: AskQuestionRequest = {
+        questions: [{
+          question: PLAN_APPROVAL_QUESTION,
+          header: 'Plan',
+          options: [
+            {
+              label: AUTO_CLEAR_LABEL,
+              description: `重置对话（已占用 ${deps.getUsagePercent()}%），Agent 自动执行所有修改`,
+            },
+            {
+              label: AUTO_KEEP_LABEL,
+              description: '保留当前上下文，Agent 自动执行所有修改',
+            },
+            {
+              label: BUILD_KEEP_LABEL,
+              description: '保留当前上下文，每步修改需你确认',
+            },
+          ],
+          multiSelect: false,
+        }],
+        otherLabel: '提出修改意见',
+        presentation: {
+          kind: 'plan-approval',
+          content: stripPlanFrontmatter(plan.content),
+          filePath: plan.filePath,
+        },
+      };
+      const outcome = await askManager.ask(request);
+
+      if (outcome.kind === 'submitted') {
+        const answer = outcome.answers[PLAN_APPROVAL_QUESTION];
+        if (answer === AUTO_CLEAR_LABEL) {
+          deps.onApprove('auto', true);
+          planStore.setStatus(approvalContext, 'approved');
+        } else if (answer === AUTO_KEEP_LABEL) {
+          deps.onApprove('auto', false);
+          planStore.setStatus(approvalContext, 'approved');
+        } else if (answer === BUILD_KEEP_LABEL) {
+          deps.onApprove('build', false);
+          planStore.setStatus(approvalContext, 'approved');
+        }
       }
-      // reject 或任意文本（当作 reject 原因）
-      planStore.setStatus('rejected');
-      const reason = decision && decision !== 'reject' ? `: ${decision}` : '';
-      return `Plan rejected by user${reason}. Revise the plan and call write_plan_file + exit_plan_mode again.`;
+
+      return serializeAskQuestionOutcome(outcome);
     },
   };
 }

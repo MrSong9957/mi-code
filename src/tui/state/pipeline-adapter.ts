@@ -49,12 +49,34 @@ export class PipelineToStoreAdapter implements PipelineRenderer {
     style?: Record<string, unknown>,
     _raw?: boolean,
   ): void {
+    // AUTO-0025 空消息修复:拦截 block-pipeline 产出的纯布局空行。
+    // openModelBlock()/ensureGap() 会调 printMessage('', 'system') 在块间插物理空行,
+    // 这是 ANSI renderer 时代的布局机制(那时直接写 stdout,只能靠空行控间距)。
+    // 在 message-based store + <Static> 模型下,空字符串行会被渲染成真实空白行,
+    // 造成 thinking summary 与 assistant 间出现多余空白。adapter 是"旧输出模型→新
+    // message 模型"的边界层,在此拦截:空 system 行不创建 message,间距交给渲染层。
+    // 范围严格限定 text==='' && role==='system',不影响其他 system 文本或非 system 角色。
+    if (text === '' && role === 'system') {
+      return;
+    }
+
     const line: FormattedLine = {
       content: text,
       style: (style ?? {}) as UIMessageStyle,
       indent: 0,
     };
     if (_raw) line.raw = true;
+
+    // AUTO-0025 修复:thinking_summary 必须创建独立 finalized message。
+    // 原因:若走 mapRole→'system'→appendLine,会被续接进 thinking_start 时
+    // openModelBlock() 输出的 system 空行分隔符消息,summary 沉到该空白块第 2 行,
+    // 肉眼不可见。thinking_summary 是"一条完整摘要行",语义上应作为独立消息进入 <Static>,
+    // 不参与普通 system 行的续接合并。用 appendMessage 强制新建(新 uuid)。
+    if (role === 'thinking_summary') {
+      this.store.getState().appendMessage('system', [line]);
+      return;
+    }
+
     this.store.getState().appendLine(mapRole(role), line);
   }
 
@@ -113,6 +135,18 @@ export class PipelineToStoreAdapter implements PipelineRenderer {
   flushNow(): void {
     // 无操作：store 是响应式的，Ink 自动重渲染。
     // 保留方法以满足 PipelineRenderer 接口契约。
+  }
+
+  startToolCall(toolUseId: string, lines: FormattedLine[]): void {
+    this.store.getState().appendPendingTool(toolUseId, lines);
+  }
+
+  finishToolCall(toolUseId: string, lines: FormattedLine[], finalKind?: 'tool-progress' | 'agent-completion'): boolean {
+    return this.store.getState().resolvePendingTool(toolUseId, lines, finalKind);
+  }
+
+  appendToolHook(toolUseId: string, lines: FormattedLine[]): boolean {
+    return this.store.getState().appendToolHook(toolUseId, lines);
   }
 
   appendStreamingThinking(text: string): void {

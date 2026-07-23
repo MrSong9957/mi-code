@@ -24,6 +24,8 @@ import { createSpinnerStore } from '../../../tui/state/spinner-store.js';
 import { createCompletionStore } from '../../../tui/state/completion-store.js';
 import { createSelectStore } from '../../../tui/state/select-store.js';
 import { createOverlayStore } from '../../../tui/state/overlay-store.js';
+import { createAskQuestionStore } from '../../../tui/state/ask-question-store.js';
+import { createClearScreenStore } from '../../../tui/state/clear-screen-store.js';
 import { EMPTY_SPINNER_CONTEXT } from '../../../tui/state/spinner-store.js';
 import { useTerminalSize } from '../../../tui/hooks/useTerminalSize.js';
 
@@ -44,6 +46,8 @@ function makeStores() {
     completionStore: createCompletionStore(),
     selectStore: createSelectStore(),
     overlayStore: createOverlayStore(),
+    askQuestionStore: createAskQuestionStore(),
+    clearScreenStore: createClearScreenStore(),
   };
 }
 

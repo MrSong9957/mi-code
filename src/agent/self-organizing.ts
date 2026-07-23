@@ -2,14 +2,23 @@
 //
 // 物理本质：一个会自己找活干的临时工。
 // 干完活 → 举手说"没事了" → 自己看看板 → 有活就认领 → 没活等 60 秒 → 走人。
+//
+// provider 支持：传入 client 时走 streamingQuery（多 provider），
+// 不传则回退 runWithVercelAI（仅 Anthropic，向后兼容/测试用）。
 
 import { runWithVercelAI } from './llm-vercel.js';
-import type { ToolRegistry } from './tool-registry.js';
+import { streamingQuery } from './streaming-query.js';
+import { ToolRegistry } from './tool-registry.js';
+import type { RegisteredTool, StreamingLLMClient } from './types.js';
 import type { TodoManager } from './todo.js';
 import type { InboxManager } from './inbox.js';
 
 export interface SelfOrganizingOptions {
   model?: string;
+  /** 流式 LLM 客户端（多 provider 支持）。传入时走 streamingQuery。 */
+  client?: StreamingLLMClient;
+  /** 权限检查器（透传给 streamingQuery） */
+  permissionChecker?: import('../permission/checker.js').PermissionChecker;
   idleTimeout?: number;   // 空闲超时（毫秒），默认 60000
   pollInterval?: number;  // 轮询间隔（毫秒），默认 5000
   maxWorkTurns?: number;  // 单次工作阶段最大轮数，默认 50
@@ -50,16 +59,25 @@ export async function runSelfOrganizingSubagent(
     setStatus(name, 'working', statusUpdates);
 
     const systemPrompt = buildSystemPrompt(name, role, identity);
-    const result = await runWithVercelAI(prompt, tools.tools, {
-      model: options.model,
-      system: systemPrompt,
-      maxSteps: maxWorkTurns,
-    });
 
-    const output = result.text || '';
+    let output: string;
+    if (options.client) {
+      // 多 provider 路径：走 streamingQuery
+      output = await runSelfOrganizingWithClient(options.client, tools.tools, prompt, systemPrompt, maxWorkTurns, options);
+    } else {
+      // 回退：Vercel AI SDK（仅 Anthropic）
+      const result = await runWithVercelAI(prompt, tools.tools, {
+        model: options.model,
+        system: systemPrompt,
+        maxSteps: maxWorkTurns,
+      });
+      output = result.text || '';
+    }
 
     // 检查是否请求 idle
-    const requestedIdle = output.includes('IDLE_REQUESTED') || result.steps < maxWorkTurns;
+    // Vercel 回退路径用 result.steps < maxWorkTurns 判断是否提前结束（= idle 请求）。
+    // client 路径没有 steps 计数，仅靠 IDLE_REQUESTED 标记判断。
+    const requestedIdle = output.includes('IDLE_REQUESTED');
 
     if (!requestedIdle) {
       return output || `${name} completed work.`;
@@ -116,4 +134,48 @@ function setStatus(name: string, status: string, updates: string[]): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * 用 streamingQuery 执行自组织子代理的单次 WORK 阶段（多 provider 支持）。
+ *
+ * 复用 subagent.ts 的模式：构造 subRegistry、遍历 generator 收集 assistant 文本。
+ */
+async function runSelfOrganizingWithClient(
+  client: StreamingLLMClient,
+  toolSubset: Map<string, RegisteredTool>,
+  prompt: string,
+  system: string,
+  maxTurns: number,
+  options: SelfOrganizingOptions,
+): Promise<string> {
+  const controller = new AbortController();
+  // 构造一个干净的 ToolRegistry（streamingQuery 需要 registry.execute 完整接口）
+  const subRegistry = new ToolRegistry();
+  for (const { definition, executor } of toolSubset.values()) {
+    subRegistry.register(definition, executor);
+  }
+
+  let resultText = '';
+  for await (const message of streamingQuery(client, subRegistry, prompt, {
+    systemPrompt: system,
+    tools: Array.from(toolSubset.values()).map(t => t.definition),
+    signal: controller.signal,
+    maxTurns,
+    permissionChecker: options.permissionChecker,
+    model: options.model,
+  })) {
+    if (message !== null && typeof message === 'object' && 'type' in message && message.type === 'assistant') {
+      const content = (message as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block !== null && typeof block === 'object' && 'type' in block && (block as { type: string }).type === 'text') {
+            const text = (block as { text?: string }).text;
+            if (text) resultText += text;
+          }
+        }
+      }
+    }
+  }
+  return resultText || '';
 }

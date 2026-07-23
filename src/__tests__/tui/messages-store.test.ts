@@ -207,6 +207,55 @@ describe('messages-store', () => {
       random.mockRestore();
     }
   });
+  it('pending tool: \u521b\u5efa\u5373\u53ef\u89c1\uff0c\u5e76\u6309 toolUseId \u539f\u5730\u5b8c\u6210', () => {
+    const store = createMessagesStore();
+    const firstId = store.getState().appendPendingTool('t1', [LINE('\u25cf spawn_agent')]);
+    const secondId = store.getState().appendPendingTool('t2', [LINE('\u25cf read_file')]);
+
+    expect([firstId, secondId]).toEqual(['msg-1', 'msg-2']);
+    expect(store.getState().messages).toMatchObject([
+      { uuid: firstId, kind: 'tool-progress', toolUseId: 't1', finalized: false },
+      { uuid: secondId, kind: 'tool-progress', toolUseId: 't2', finalized: false },
+    ]);
+
+    expect(store.getState().resolvePendingTool('t2', [LINE('\u25ba result two')])).toBe(true);
+    expect(store.getState().messages).toMatchObject([
+      { toolUseId: 't1', finalized: false },
+      { toolUseId: 't2', finalized: true, lines: [{ content: '\u25ba result two' }] },
+    ]);
+  });
+
+  it('pending tool: \u672a\u77e5 toolUseId \u4e0d\u8bef\u4fee\u6539\u5176\u4ed6\u6d88\u606f', () => {
+    const store = createMessagesStore();
+    store.getState().appendPendingTool('t1', [LINE('\u25cf first')]);
+    store.getState().appendPendingTool('t2', [LINE('\u25cf second')]);
+
+    expect(store.getState().resolvePendingTool('missing', [LINE('\u25ba wrong')])).toBe(false);
+    expect(store.getState().messages).toMatchObject([
+      { toolUseId: 't1', finalized: false, lines: [{ content: '\u25cf first' }] },
+      { toolUseId: 't2', finalized: false, lines: [{ content: '\u25cf second' }] },
+    ]);
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // AUTO-0025-transient Task 1:thinking 临时行是单例,按 kind 移除。
+  //
+  // 物理本质:任意时刻最多一条 thinking-progress 活动行。重复 start 幂等,
+  // remove 按 kind 移除(不依赖末条位置),不影响 pending 工具消息。
+  // ────────────────────────────────────────────────────────────────────
+
+  it('thinking progress is unique and removed by kind without touching pending tools', () => {
+    const store = createMessagesStore();
+    store.getState().appendPendingTool('tool-1', [LINE('● spawn_agent')]);
+    store.getState().startStreamingThinking('Thinking…');
+    store.getState().startStreamingThinking('Thinking…');
+
+    expect(store.getState().messages.filter(m => m.kind === 'thinking-progress')).toHaveLength(1);
+    expect(store.getState().removeStreamingThinking()).toBe(true);
+    expect(store.getState().messages.some(m => m.kind === 'thinking-progress')).toBe(false);
+    expect(store.getState().messages.some(m => m.toolUseId === 'tool-1')).toBe(true);
+    expect(store.getState().removeStreamingThinking()).toBe(false);
+  });
 });
 
 describe('isAppendableMessage', () => {

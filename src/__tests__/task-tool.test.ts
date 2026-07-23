@@ -21,7 +21,7 @@ function makeSpy(captured: { options?: SubagentOptions }) {
     options: SubagentOptions,
   ): Promise<SubagentResult> => {
     captured.options = options;
-    return { text: 'mock subagent result', isBackground: false };
+    return { text: 'mock subagent result', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
   };
 }
 

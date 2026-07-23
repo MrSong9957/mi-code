@@ -166,6 +166,42 @@ describe('ConfigStore', () => {
     const store2 = new ConfigStore(configDir);
     expect(store2.getSmallModel('anthropic')).toBe('mimo-v2.5');
   });
+
+  // ── plansDirectory：plan 目录可配置化 ──
+  it('getPlansDirectory should default to undefined', () => {
+    const store = new ConfigStore(tempDir);
+    expect(store.getPlansDirectory()).toBeUndefined();
+  });
+
+  it('setPlansDirectory should persist and reload', () => {
+    const configDir = join(tempDir, '.micode');
+    const store1 = new ConfigStore(configDir);
+    store1.setPlansDirectory('/custom/plans');
+
+    const store2 = new ConfigStore(configDir);
+    expect(store2.getPlansDirectory()).toBe('/custom/plans');
+  });
+
+  it('setPlansDirectory(undefined) clears the override', () => {
+    const configDir = join(tempDir, '.micode');
+    const store1 = new ConfigStore(configDir);
+    store1.setPlansDirectory('/custom/plans');
+    store1.setPlansDirectory(undefined);
+
+    const store2 = new ConfigStore(configDir);
+    expect(store2.getPlansDirectory()).toBeUndefined();
+  });
+
+  it('should load plansDirectory from config file', () => {
+    const configDir = join(tempDir, '.micode-plans');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({
+      plansDirectory: '/from/file/plans',
+    }));
+
+    const store = new ConfigStore(configDir);
+    expect(store.getPlansDirectory()).toBe('/from/file/plans');
+  });
 });
 
 describe('Command Parser', () => {
@@ -207,6 +243,8 @@ describe('Command Executor', () => {
     const store = new ConfigStore(tempDir);
     const result = executeCommand({ name: 'help', args: [] }, store);
     expect(result.message).toContain('Available commands');
+    expect(result.message).not.toContain('/approve');
+    expect(result.message).not.toContain('/reject');
   });
 
   it('should execute /login command', () => {
@@ -219,6 +257,21 @@ describe('Command Executor', () => {
     const store = new ConfigStore(tempDir);
     const result = executeCommand({ name: 'config', args: [] }, store);
     expect(result.message).toContain('Current configuration');
+  });
+
+  it('/config set plansDirectory persists the override', () => {
+    const store = new ConfigStore(tempDir);
+    const result = executeCommand({ name: 'config', args: ['set', 'plansDirectory', '/custom/plans'] }, store);
+    expect(result.message).toContain('plansDirectory set to: /custom/plans');
+    expect(store.getPlansDirectory()).toBe('/custom/plans');
+  });
+
+  it('/config set plansDirectory default clears the override', () => {
+    const store = new ConfigStore(tempDir);
+    store.setPlansDirectory('/custom/plans');
+    const result = executeCommand({ name: 'config', args: ['set', 'plansDirectory', 'default'] }, store);
+    expect(result.message).toContain('(default ~/.micode/plans/)');
+    expect(store.getPlansDirectory()).toBeUndefined();
   });
 
   it('should execute /provider command', () => {

@@ -26,7 +26,7 @@ import { BlockPipeline } from './ui/block-pipeline.js';
 import { bootstrap, type BootstrapHandle } from './tui/bootstrap.js';
 import { readSpinnerContext } from './tui/spinner-context.js';
 import { EMPTY_SPINNER_CONTEXT } from './tui/state/spinner-store.js';
-import { finalizeTurnLifecycle, handleTurnLoopEnd } from './tui/turn-lifecycle.js';
+import { finalizeTurnLifecycle, handleTurnLoopEnd, startTurnThinking, finishTurnThinking, idleTurnThinking, type TurnThinkingState } from './tui/turn-lifecycle.js';
 import { writeResumeHint } from './cli/resume-hint.js';
 import { ConfigStore, SUPPORTED_PROVIDERS } from './config/index.js';
 import { parseCommand, executeCommand } from './commands/index.js';
@@ -36,6 +36,8 @@ import { TodoManager } from './agent/todo.js';
 import { createTaskTool } from './agent/tools/task-tool.js';
 import { createSpawnAgentTool } from './agent/tools/spawn-agent-tool.js';
 import { createSpawnSelfOrganizingTool } from './agent/tools/spawn-self-organizing-tool.js';
+import { runSubagent } from './agent/subagent.js';
+import { plannerPrompt } from './prompts/index.js';
 import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
 import { parseBlockPrefix } from './commands/parser.js';
@@ -52,8 +54,9 @@ import { MemoryManager } from './memory/index.js';
 import { createMemoryWriteTool, createMemoryReadTool, createMemoryListTool } from './agent/tools/memory-tool.js';
 import { AskUserManager } from './agent/ask-user-manager.js';
 import { createAskUserTool } from './agent/tools/ask-user-tool.js';
-import { PlanStore } from './plan/plan-store.js';
-import { createWritePlanTool, createExitPlanModeTool } from './agent/tools/plan-tools.js';
+import { PlanStore, type PlanContext } from './plan/plan-store.js';
+import { applyPlanApproval } from './plan/plan-approval-transition.js';
+import { createWritePlanTool, createExitPlanModeTool, createReadPlanTool } from './agent/tools/plan-tools.js';
 import { setWorkdir, getWorkdir } from './agent/tools/path-sandbox.js';
 import { HistoryManager } from './history.js';
 import { splitSubmitTracks, commitNewTurn } from './tui/input/submit-transformer.js';
@@ -114,10 +117,6 @@ function createStreamClient(provider: string, apiKey: string, model: string, bas
   }
 }
 
-// 子代理工具用的 small model(启动快照,工具接口暂不支持 getter)。
-// 主对话模型已动态化(currentModel),子代理 small model 留后续。
-const SMALL_MODEL_SNAPSHOT = currentSmallModel();
-
 const todoManager = new TodoManager();
 const skillRegistry = new SkillRegistry();
 skillRegistry.loadFromDir('skills');
@@ -158,6 +157,7 @@ const cliOpts = parseCliArgs();
 const sessionStore = new SessionStore();
 // 会话 ID：resume 时用恢复的 id，否则新建
 let sessionId: string = randomUUID();
+let currentPlanContext: PlanContext | null = null;
 // 当前会话累积消息（resume 时预载，streamingQuery onMessages 时更新）
 let sessionMessages: Message[] = [];
 
@@ -171,15 +171,45 @@ function getShortDir(): string {
 const GIT_BRANCH = getGitBranch();
 const SHORT_DIR = getShortDir();
 
+/** 主 agent 最近一轮的 system prompt（供 fork 子代理继承） */
+let lastSystemPrompt = '';
+
 const childToolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, backgroundManager, taskBoard, worktreeManager);
 const toolRegistry = createDefaultRegistry(todoManager, undefined, scheduler, backgroundManager, taskBoard, worktreeManager);
-const taskTool = createTaskTool(childToolRegistry, worktreeManager, SMALL_MODEL_SNAPSHOT);
+// task / spawn_self_organizing / spawn_agent 都用同一个 clientProvider 闭包：
+// 每次 spawn 时读取当前 provider 配置，让子代理走主 agent 的多 provider 路径
+// （streamingQuery），支持 OpenAI/MiMo 等非 Anthropic provider。
+// modelChoice 让不同角色用不同模型（explore=small 便宜, plan/inherit=主模型）。
+const subagentClientProvider = (modelChoice?: 'small' | 'inherit') => {
+  const provider = currentProvider();
+  const apiKey = configStore.getApiKey(provider);
+  const baseUrl = configStore.getProvider(provider)?.baseUrl;
+  const model = modelChoice === 'inherit' ? currentModel() : currentSmallModel();
+  return createStreamClient(provider, apiKey ?? '', model, baseUrl);
+};
+const taskTool = createTaskTool(childToolRegistry, worktreeManager, subagentClientProvider);
 toolRegistry.register(taskTool.definition, taskTool.executor);
-const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, { model: SMALL_MODEL_SNAPSHOT });
+const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, {
+  clientProvider: subagentClientProvider,
+  permissionChecker,
+});
 toolRegistry.register(spawnSoTool.definition, spawnSoTool.executor);
 // spawn_agent：派角色化子代理（explore/plan/general）
 // 透传 permissionChecker：让子代理也受 plan 模式约束（读 allow / 写 deny）
-const spawnAgentTool = createSpawnAgentTool(childToolRegistry, SMALL_MODEL_SNAPSHOT, permissionChecker);
+// 透传技能目录：让子代理 system prompt 含技能发现信息（对齐 CC skill discovery）
+function truncateSkillsDescription(desc: string, maxLines = 20): string {
+  const lines = desc.split('\n');
+  if (lines.length <= maxLines) return desc;
+  return lines.slice(0, maxLines).join('\n') + `\n... and ${lines.length - maxLines} more skills`;
+}
+const spawnAgentTool = createSpawnAgentTool(
+  childToolRegistry,
+  subagentClientProvider,
+  permissionChecker,
+  runSubagent,
+  truncateSkillsDescription(skillRegistry.describeAvailable()),
+  () => lastSystemPrompt,  // getParentSystemPrompt
+);
 toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 const loadSkillTool = createLoadSkillTool(skillRegistry);
 toolRegistry.register(loadSkillTool.definition, loadSkillTool.executor);
@@ -276,15 +306,9 @@ const SUBMIT_DEDUP_WINDOW_MS = 2000;
 let lastSubmitText = '';
 let lastSubmitAt = 0;
 
-/**
- * AskUserManager：AI 向用户提问的挂起-应答状态机。
- * 物理本质：服务员把问题递给顾客（贴消息区 + 页脚提示）后站等回话。
- * 与 handleInput 共享同一实例：工具 executor 内 ask() 挂起，回车提交时 resolve()。
- */
 const askManager = new AskUserManager({
-  printLine: (s) => printLine(s),
-  // 提问提示走消息区（charter StatusBar 无 hint 字段，提示信息进 messagesStore 显示）
-  setHint: (s) => { if (s) printLine(s); },
+  open: (id, request, done) => tuiHandle?.askQuestionStore.getState().open(id, request, done),
+  close: (id) => tuiHandle?.askQuestionStore.getState().close(id),
 });
 // 注册 ask_user_question 工具（依赖 askManager）
 const askTool = createAskUserTool(askManager);
@@ -295,19 +319,35 @@ toolRegistry.register(askTool.definition, askTool.executor);
  * 目录 ~/.micode/plans/，文件名 <sessionId>-<ts>.md。
  * 同时把 planDir 注册到 PermissionChecker，让 plan 模式下 write_file 写到该目录放行。
  */
-const planStore = new PlanStore(join(homedir(), '.micode'));
+const configuredPlansDir = configStore.getPlansDirectory();
+const planStore = new PlanStore(join(homedir(), '.micode'), configuredPlansDir);
 permissionChecker.setPlanDir(planStore.getPlansDir());
 // 注册 write_plan_file 与 exit_plan_mode 工具（依赖 planStore + askManager）
-const writePlanTool = createWritePlanTool(planStore, () => sessionId);
+const writePlanTool = createWritePlanTool(planStore, () => currentPlanContext);
 toolRegistry.register(writePlanTool.definition, writePlanTool.executor);
-const exitPlanTool = createExitPlanModeTool(askManager, planStore);
+const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
+  getUsagePercent: () => Math.round((tuiHandle?.statusStore.getState().contextPct ?? 0) * 100),
+  getPlanContext: () => currentPlanContext,
+  onApprove: (mode, clearContext) => applyPlanApproval(mode, clearContext, {
+    clearPipeline: () => pipeline.clear(),
+    triggerClearScreen: () => tuiHandle?.clearScreenStore.getState().triggerClearScreen(),
+    clearSessionMessages: () => { sessionMessages = []; },
+    rotateSessionId: () => { sessionId = randomUUID(); },
+    resetContextUsage: () => tuiHandle?.statusStore.getState().setContextPct(0),
+    setPermissionMode: (next) => permissionChecker.setMode(next),
+    setConfigMode: (next) => configStore.setPermissionMode(next),
+    setStatusMode: (next) => tuiHandle?.statusStore.getState().setMode(next),
+  }),
+});
 toolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
-// 同时注册到 childToolRegistry：plan 角色子代理需要这两个工具（白名单由 roles.ts 控制）
+// read_plan_file：只读工具，plan 模式下自然可见（不在 WRITE_TOOLS）
+const readPlanTool = createReadPlanTool(planStore, () => currentPlanContext);
+toolRegistry.register(readPlanTool.definition, readPlanTool.executor);
+// 同时注册到 childToolRegistry：plan/explore 角色子代理需要这些工具（白名单由 roles.ts 控制）
 childToolRegistry.register(writePlanTool.definition, writePlanTool.executor);
-childToolRegistry.register(exitPlanTool.definition, exitPlanTool.executor);
-// ask_user_question 同样需要给子代理（plan 角色白名单含此工具）
-const askToolChild = createAskUserTool(askManager);
-childToolRegistry.register(askToolChild.definition, askToolChild.executor);
+childToolRegistry.register(readPlanTool.definition, readPlanTool.executor);
+// 注意：exit_plan_mode 和 ask_user_question 不注册到 childToolRegistry，
+// 子代理不能直接与用户交互（由 SUBAGENT_DISALLOWED_TOOLS 兜底）
 
 /**
  * TAB 行为（对标 Claude Code）：
@@ -381,8 +421,7 @@ function handleToggleOverlay(handle: BootstrapHandle | null): void {
  *
  * 职责（与旧实现完全一致）：
  * 1. 'exit' 命令 → cleanup + 退出
- * 2. pending question（askManager.hasPending）→ resolve（/approve //reject 特判）
- * 3. 新 turn：history 落盘 + clearTurnState + emit user_input + 命令解析 + agent loop
+ * 2. 新 turn：history 落盘 + clearTurnState + emit user_input + 命令解析 + agent loop
  *
  * ink-store 迁移点：input/cursorPos 已由 inputStore 管理（submit 时清空），故删除旧
  * input=''/cursorPos=0/syncInput；layout.* → tuiHandle.statusStore。
@@ -488,31 +527,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     process.exit(0);
   }
 
-  // 1. 优先处理 pending question：agent 运行中也可回答
-  if (askManager.hasPending()) {
-    if (!userInput) return; // 空回车：忽略
-    // plan 批准流特判：/approve /reject 走专属副作用（切 mode + resolve）
-    if (userInput === '/approve' || userInput.startsWith('/reject')) {
-      pipeline.emit({ kind: 'user_input', text: userInput });
-      if (userInput === '/approve') {
-        permissionChecker.setMode('build');
-        configStore.setPermissionMode('build');
-        tuiHandle?.statusStore.getState().setMode('build');
-        printLine('✓ Plan approved. Switched to build mode.');
-        askManager.resolve('approve');
-      } else {
-        const reason = userInput.slice('/reject'.length).trim();
-        printLine(`✗ Plan rejected${reason ? ': ' + reason : ''}.`);
-        askManager.resolve(reason || 'reject');
-      }
-      return;
-    }
-    pipeline.emit({ kind: 'user_input', text: userInput });
-    askManager.resolve(userInput);
-    return;
-  }
-
-  // 2. 新 turn
+  // 新 turn
   // 快照提交前的 messagesStore 长度(撤回判断用,见 handleRewindLastTurn)。
   // 必须在 commitNewTurn emit user_input 之前——emit 后 user 消息就进 store 了。
   lastSubmitMsgsLen = tuiHandle?.messagesStore.getState().messages.length ?? 0;
@@ -525,6 +540,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     { historyText: trimmedRaw, agentText: userInput, project: currentProject, isProcessing }
   );
   if (!committed) return;
+  currentPlanContext = { sessionId, turnId: randomUUID() };
+  planStore.beginTurn(currentPlanContext);
 
   // 检查 ! 前缀拦截
   const blockReq = parseBlockPrefix(userInput);
@@ -582,31 +599,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const skillsDescription = skillRegistry.describeAvailable();
   const currentMode = permissionChecker.getMode();
   const planModeInstruction = currentMode === 'plan'
-    ? '\n\n## PLAN MODE ACTIVE\n' +
-      'You MUST NOT make any edits, run write tools, or otherwise change the system. ' +
-      'Only read-only operations and the plan-related tools (write_plan_file, exit_plan_mode) are allowed.\n' +
-      '\n' +
-      '## Communication（重要）\n' +
-      'Always give the user a concise verbal update — never chain tool calls in silence:\n' +
-      '- Before a batch of tool calls: one short sentence on what you are about to look at and why.\n' +
-      '- After exploration is complete: a thorough but concise summary of what you found, the architecture/design, ' +
-      'and (if you propose changes) how the user can verify them. This summary is your deliverable.\n' +
-      'The user should never feel the task is half-done or left hanging.\n' +
-      '\n' +
-      'Workflow:\n' +
-      '1. Explore the codebase — prefer dedicated read-only tools:\n' +
-      '   - read_file (view a file OR list a directory)\n' +
-      '   - glob (find files by name pattern, e.g. "**/*.ts")\n' +
-      '   - grep (search file contents by regex)\n' +
-      '   For cases those tools cannot cover (git log, find with complex filters),\n' +
-      '   you MAY use run_bash with read-only commands (ls/cat/grep/git status/git diff).\n' +
-      '   NEVER run write commands (mkdir/rm/git commit/npm install/...).\n' +
-      '2. When you have a complete plan, call write_plan_file with the full Markdown content\n' +
-      '3. Call exit_plan_mode to submit it for user approval\n' +
-      '4. The user will respond with /approve (you may then implement) or /reject <reason> (revise and resubmit)\n' +
-      'For large or unfamiliar codebases, consider spawning an explore agent (spawn_agent role="explore") ' +
-      'to investigate in parallel without bloating your main context.\n' +
-      'Do NOT execute the plan until it is approved and the mode switches to build.'
+    ? `\n\n${plannerPrompt}`
     : '';
 
   const systemPrompt = [
@@ -615,14 +608,31 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     'Only use tools when the user asks you to do something concrete (run a command, read/edit a file, search code).',
     'For questions, explanations, and advice, respond with plain text — never wrap your reply in a Bash echo command.',
     '',
+    // 意图检测层：探索型/规划型任务优先 spawn 子代理，避免主上下文膨胀。
+    // 在任何模式下生效（不限于 plan 模式），让"生成改造计划"等请求自动触发委派。
+    'When the user\'s request implies a multi-step investigation, planning, architecture analysis,',
+    'or restructuring task (e.g. "generate a plan", "改造", "分析架构", "refactor"), spawn explore',
+    'sub-agents (spawn_agent role="explore") to investigate in parallel FIRST, before reading files',
+    'yourself. Each sub-agent returns a summary you can synthesize — this keeps your context focused.',
+    '',
+    // AUTO-0025 Task 5:显式委派约束。
+    // 当用户明确要求"用子代理/spawn agent"时,主 agent 不能在子代理失败后静默用自己的工具重做。
+    // 子代理输出携带 [Subagent status=...] 前缀,主 agent 据此判断成功/失败。
+    // 注意:此约束仅限用户显式要求子代理的场景;主 agent 自己选择的自动委派失败后仍可容错。
+    'When the user explicitly requires a subagent (e.g. "用子代理", "use a subagent", "spawn an agent"),',
+    'do not replace an incomplete or failed subagent run with your own filesystem/tool investigation.',
+    'Report the subagent status (from the [Subagent status=...] prefix) and available partial result.',
+    'This restriction does not apply to automatic delegation that you selected yourself.',
+    '',
     skillsDescription,
     reminder ? `\n${reminder}` : '',
     planModeInstruction,
   ].join('\n');
 
+  // 记录最近一轮的 system prompt，供 fork 子代理继承
+  lastSystemPrompt = systemPrompt;
+
   isProcessing = true;
-  let thinkingContent = '';
-  let thinkingStart = Date.now();
 
   // 动态读 provider/apiKey/model(支持运行时 /model /provider 切换)。
   // createStreamClient 工厂按 provider 分发(anthropic/openai)。
@@ -642,6 +652,10 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const compactClient = createStreamClient(provider, apiKey, currentSmallModel(), baseUrl);
   const eventBus = new StreamEventBus();
   const activeToolIds = new Set<string>();
+  // AUTO-0025-transient:用不可变 TurnThinkingState 替换原始 thinkingActive/thinkingContent/thinkingStart。
+  // 所有退出路径(content_block_stop thinking、首个 assistant text、onToolCall、loop-end、finally)
+  // 统一走 finishTurnThinking,幂等保证只 emit 一次 thinking_end。
+  let thinking: TurnThinkingState = idleTurnThinking();
   const turnLifecycle = {
     activeToolIds,
     setSpinnerHasActiveTools: (hasActiveTools: boolean) => {
@@ -656,18 +670,19 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     now: Date.now,
   };
   eventBus.onToolCall(d => {
+    // AUTO-0025-transient:工具乱序兼容——thinking 仍 active 时,先幂等结束 thinking,
+    // 再创建工具行。多个并行 tool_call 只 emit 一次 thinking_end(第二次 finish 因 active=false 跳过)。
+    thinking = finishTurnThinking(turnLifecycle, thinking);
+    tuiHandle?.setSpinnerMode('tool-use');
     activeToolIds.add(d.toolUseId);
     tuiHandle?.setSpinnerHasActiveTools(true);
     pipeline.emit({ kind: 'tool_call', name: d.name, input: d.input, toolUseId: d.toolUseId });
-    tuiHandle?.setSpinnerMode('tool-use');
-    // 不再 setLabel('Running xxx')：避免一次 turn 内多次工具调用时 spinner 文字反复切换闪烁。
-    // 工具调用信息已通过 tool_call block 进入消息流（pipeline.emit），用户在正文区可见。
-    // spinner 保持显示 verb（Working/Cogitated…），仅靠 mode='tool-use' 的 shimmer/呼吸灯表达活跃。
   });
   eventBus.onToolResult(d => {
     activeToolIds.delete(d.toolUseId);
     tuiHandle?.setSpinnerHasActiveTools(activeToolIds.size > 0);
-    pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId });
+    // AUTO-0025-transient Task 3:传 durationMs,供 spawn_agent 完成展示用。
+    pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId, durationMs: d.duration });
     refreshSpinnerContext();
   });
   eventBus.onLoopEnd(() => {
@@ -693,7 +708,6 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   let assistantText = '';
   let persistedCount = sessionMessages.length;
   const blockTypes = new Map<number, string>();
-  let thinkingActive = false; // 收到 content_block_start(thinking) 时设 true
   // Spinner 立即启动(label="Connecting..."),收到第一个 event 后切到正常 verb。
   // 兼顾"用户有即时反馈"和"状态准确"。
   let spinnerStarted = false;
@@ -729,19 +743,15 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       if ('type' in msg && msg.type === 'content_block_start') {
         const cbs = msg as { type: 'content_block_start'; index: number; blockType: string };
         blockTypes.set(cbs.index, cbs.blockType);
-        if (cbs.blockType === 'thinking' && !thinkingActive) {
+        if (cbs.blockType === 'thinking' && !thinking.active) {
+          thinking = startTurnThinking(thinking, Date.now());
           pipeline.emit({ kind: 'thinking_start' });
-          thinkingStart = Date.now();
-          thinkingActive = true;
           tuiHandle?.setSpinnerMode('thinking');
         }
       } else if ('type' in msg && msg.type === 'content_block_stop') {
         const cstop = msg as { type: 'content_block_stop'; index: number };
-        if (blockTypes.get(cstop.index) === 'thinking' && thinkingActive) {
-          const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-          pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
-          thinkingContent = '';
-          thinkingActive = false;
+        if (blockTypes.get(cstop.index) === 'thinking' && thinking.active) {
+          thinking = finishTurnThinking(turnLifecycle, thinking);
           tuiHandle?.setSpinnerMode('responding');
         }
       } else if ('type' in msg && msg.type === 'content_block_delta') {
@@ -749,17 +759,18 @@ async function handleUserSubmit(rawText: string): Promise<void> {
         if (delta.content) tuiHandle?.spinnerOnToken(delta.content.length);
         if (delta.deltaType === 'text' && delta.content) {
           gotAnyResponse = true;
-          if (assistantText === '' && thinkingContent) {
-            const elapsed = Math.floor((Date.now() - thinkingStart) / 1000);
-            pipeline.emit({ kind: 'thinking_end', durationSec: elapsed, filesRead: 0 });
-            thinkingContent = '';
-            thinkingActive = false;
+          if (assistantText === '' && thinking.active) {
+            thinking = finishTurnThinking(turnLifecycle, thinking);
             tuiHandle?.setSpinnerMode('responding');
           }
           assistantText += delta.content;
           pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: false });
         } else if (delta.deltaType === 'thinking' && delta.content) {
-          thinkingContent += delta.content;
+          // 无 start 的隐式 delta(防御):先 start 再 emit delta
+          if (!thinking.active) {
+            thinking = startTurnThinking(thinking, Date.now());
+            pipeline.emit({ kind: 'thinking_start' });
+          }
           pipeline.emit({ kind: 'thinking_delta', content: delta.content });
         }
       } else if ('type' in msg && msg.type === 'message_start') {
@@ -811,13 +822,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
     }
   } finally {
-    const finalizedThinking = finalizeTurnLifecycle(turnLifecycle, {
-      thinkingActive,
-      thinkingContent,
-      thinkingStart,
-    });
-    thinkingActive = finalizedThinking.thinkingActive;
-    thinkingContent = finalizedThinking.thinkingContent;
+    // AUTO-0025-transient:统一退出路径——finalizeTurnLifecycle 幂等结束 thinking + stop spinner。
+    thinking = finalizeTurnLifecycle(turnLifecycle, thinking);
     isProcessing = false;
     currentAbortController = null;
     // lastSubmittedAgentText 在 turn 结束时清空。

@@ -3,10 +3,26 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { BlockPipeline } from '../../ui/block-pipeline.js';
+describe('finishToolCall fallback', () => {
+  it('prints the complete tool exchange once when in-place update is declined', () => {
+    const { renderer, prints } = mockRenderer();
+    renderer.startToolCall = vi.fn();
+    renderer.finishToolCall = vi.fn(() => false);
+    const pipeline = new BlockPipeline(renderer);
+
+    pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: 'fallback.ts' }, toolUseId: 'fallback-1' });
+    pipeline.emit({ kind: 'tool_result', name: 'read_file', output: 'fallback result', toolUseId: 'fallback-1' });
+    pipeline.clearTurnState();
+
+    const contentTexts = prints.filter(print => print.text !== '').map(print => print.text);
+    expect(contentTexts.filter(text => text.includes('fallback.ts'))).toHaveLength(1);
+    expect(contentTexts.filter(text => text.includes('fallback result'))).toHaveLength(1);
+  });
+});
 
 /** mock 的 Renderer：记录所有 printMessage / appendStreamingMarkdown 调用 */
 function mockRenderer() {
-  const prints: { text: string; role?: string; style?: Record<string, unknown> }[] = [];
+  const prints: { text: string; role?: string; style?: Record<string, unknown>; toolUseId?: string }[] = [];
   const streamMarks: { text: string; isFinal: boolean }[] = [];
   const renderer = {
     printMessage: vi.fn((text: string, role?: string, style?: Record<string, unknown>) => {
@@ -18,6 +34,32 @@ function mockRenderer() {
     appendStreamingThinking: vi.fn(),
     eraseStreamingThinking: vi.fn(),
     sealStreaming: vi.fn(),
+    startToolCall: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[]) => {
+      for (const line of lines) prints.push({ text: line.content, role: 'tool', style: line.style, toolUseId });
+    }),
+    finishToolCall: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[], finalKind?: string) => {
+      const index = prints.map(print => print.toolUseId).lastIndexOf(toolUseId);
+      if (finalKind === 'agent-completion') {
+        // AUTO-0025-transient:agent-completion 替换整个 pending 消息为单行(不保留 call 行)
+        if (index >= 0) {
+          prints[index] = { text: lines[0]?.content ?? '', role: 'tool', style: lines[0]?.style, toolUseId };
+        } else {
+          prints.push({ text: lines[0]?.content ?? '', role: 'tool', style: lines[0]?.style, toolUseId });
+        }
+      } else {
+        prints.splice(index + 1, 0, ...lines.slice(1).map(line => ({
+          text: line.content, role: 'tool', style: line.style, toolUseId,
+        })));
+      }
+      return true;
+    }),
+    appendToolHook: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[]) => {
+      const index = prints.map(print => print.toolUseId).lastIndexOf(toolUseId);
+      prints.splice(index + 1, 0, ...lines.map(line => ({
+        text: line.content, role: 'tool', style: line.style, toolUseId,
+      })));
+      return true;
+    }),
     finalizeStreaming: vi.fn(),
     appendStreaming: vi.fn(),
     flushNow: vi.fn(),
@@ -41,31 +83,35 @@ describe('BlockPipeline', () => {
       expect(prints[0].style).toMatchObject({ fg: 'success', bold: true });
     });
 
-    it('thinking_start → printMessage("● Thinking…", magenta)；首个模型块前有空行', () => {
+    it('thinking_start → 立即显示闪烁行(idle→active,AUTO-0025-transient 修正)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
-      // 第一个模型块前强制有空行（前面有 banner/用户输入）
-      expect(prints[0].text).toBe('');
-      const content = firstContent(prints);
-      expect(content!.text).toBe('● Thinking…');
+      // start 立即触发 appendStreamingThinking + openModelBlock(首块空行)
+      expect(renderer.appendStreamingThinking).toHaveBeenCalledWith('Thinking…');
+      expect(prints[0].text).toBe(''); // openModelBlock 的首块空行
     });
 
-    it('thinking_delta → 不渲染（折叠），仅累积', () => {
-      const { renderer, prints } = mockRenderer();
+    it('thinking_delta 在 active 态只累积,不额外触发显示(AUTO-0025-transient 修正)', () => {
+      const { renderer } = mockRenderer();
       const p = new BlockPipeline(renderer);
+      p.emit({ kind: 'thinking_start' });
+      // start 已触发一次
+      expect(renderer.appendStreamingThinking).toHaveBeenCalledTimes(1);
       p.emit({ kind: 'thinking_delta', content: '用户问...' });
-      expect(prints.length).toBe(0); // 不产生任何输出
+      // delta 不再额外触发显示(只累积 buffer)
+      expect(renderer.appendStreamingThinking).toHaveBeenCalledTimes(1);
     });
 
-    it('thinking_end → printMessage("  thought for Ns...", dim)，需先 thinking_start', () => {
+    it('thinking_end → printMessage("  Thought for Ns...", dim),需先 active(AUTO-0025-transient 修正)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
       p.emit({ kind: 'thinking_start' });
+      p.emit({ kind: 'thinking_delta', content: '实质内容' });
       p.emit({ kind: 'thinking_end', durationSec: 5, filesRead: 2 });
-      const summary = prints.find(p => p.text.includes('thought for'));
+      const summary = prints.find(p => p.text.includes('Thought for'));
       expect(summary).toBeDefined();
-      expect(summary!.text).toBe('  thought for 5s, read 2 files (ctrl+o to expand)');
+      expect(summary!.text).toBe('  Thought for 5s, read 2 files (ctrl+o to expand)');
       expect(summary!.style).toMatchObject({ dim: true });
     });
 
@@ -141,14 +187,12 @@ describe('BlockPipeline', () => {
   });
 
   describe('块间空行（集中化）', () => {
-    it('首个模型块前有空行（前面总有 banner/用户输入）', () => {
+    it('首个模型块前有空行(AUTO-0025-transient:thinking_start 即 active,触发 openModelBlock)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
+      // thinking_start 现在立即 active,openModelBlock 产生首块空行
       p.emit({ kind: 'thinking_start' });
-      // 第一个模型块：强制加空行（pipeline 假设前面有非模型内容）
-      expect(prints[0].text).toBe('');
-      const content = firstContent(prints);
-      expect(content!.text).toBe('● Thinking…');
+      expect(prints[0].text).toBe(''); // 首个模型块前空行
     });
 
     it('第二个块前加空行（tool_call 在 thinking_end 之后）', () => {
@@ -164,15 +208,16 @@ describe('BlockPipeline', () => {
       expect(toolIdx).toBeGreaterThan(0);
     });
 
-    it('assistant_text 多次 delta 只加一次空行', () => {
+    it('assistant_text 多次 delta 只加一次空行(AUTO-0025-transient)', () => {
       const { renderer, prints } = mockRenderer();
       const p = new BlockPipeline(renderer);
-      p.emit({ kind: 'thinking_start' }); // 建立块 1（含首块空行）
+      // thinking_start 即 active,openModelBlock 加首空行
+      p.emit({ kind: 'thinking_start' });
       // assistant 流式块
       p.emit({ kind: 'assistant_text', text: 'a', isFinal: false });
       p.emit({ kind: 'assistant_text', text: 'ab', isFinal: false });
       p.emit({ kind: 'assistant_text', text: 'abc', isFinal: true });
-      // 空行数：首块 1（thinking 前）+ thinking→assistant 间 1 = 2
+      // 空行数:thinking visible 首 1 + thinking→assistant 间 1 = 2
       const emptyCount = prints.filter(p => p.text === '').length;
       expect(emptyCount).toBe(2);
     });
@@ -211,8 +256,8 @@ describe('BlockPipeline', () => {
       p.emit({ kind: 'thinking_start' });
       p.emit({ kind: 'thinking_delta', content: '完整思考内容' });
       p.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
-      // 折叠态（主屏）：应含 thought for 摘要
-      expect(prints.some(p => p.text.includes('thought for'))).toBe(true);
+      // 折叠态（主屏）：应含 Thought for 摘要(AUTO-0025-transient 大写)
+      expect(prints.some(p => p.text.includes('Thought for'))).toBe(true);
     });
 
     it('getLastExpandableFullLines 返回 thinking 完整内容（覆盖层渲染用）', () => {
@@ -415,6 +460,92 @@ describe('BlockPipeline', () => {
       // 即使没 result，call 行也得渲染出来（不能因缓冲而丢失）
       expect(contentTexts.some(t => t.includes('orphan.ts')), '未配对 call 不应丢失').toBe(true);
     });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// AUTO-0025-transient Task 3:spawn_agent 完成展示。
+//
+// 验证:完成的 spawn_agent 渲染为单行 ● Agent "..." finished · Ns,
+// 完整输出注册为 expandable 供 Ctrl+O。malformed 输出走通用降级。
+// ────────────────────────────────────────────────────────────────────
+
+describe('BlockPipeline spawn_agent 完成展示 (AUTO-0025-transient Task 3)', () => {
+  it('正常结果:单行 ● Agent "..." finished · duration', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
+      input: { role: 'explore', description: '查找实现', prompt: '...' },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a1', durationMs: 147_000,
+      output: '[Subagent status=completed]\nfull child result',
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    expect(contentTexts.some(t => t.includes('Agent "查找实现" finished · 2m 27s'))).toBe(true);
+  });
+
+  it('正常结果:Ctrl+O full lines 含完整子代理正文(无 envelope)', () => {
+    const { renderer } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
+      input: { role: 'explore', prompt: '...' },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a1', durationMs: 5_000,
+      output: '[Subagent status=completed]\nfull child result body',
+    });
+    const expandable = pipeline.getLastExpandableFullLines();
+    expect(expandable).not.toBeNull();
+    expect(expandable!.lines.map(l => l.content).join('\n')).toContain('full child result body');
+    expect(expandable!.lines.map(l => l.content).join('\n')).not.toContain('[Subagent status=');
+  });
+
+  it('malformed 输出(无 envelope):走通用降级,含 call 行 + 原始预览', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
+      input: { role: 'explore', prompt: '...' },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a1', durationMs: 1_000,
+      output: 'malformed output',
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    // 含 spawn_agent call 行(通用降级)
+    expect(contentTexts.some(t => t.includes('spawn_agent'))).toBe(true);
+    // 不含 Agent finished 专用行
+    expect(contentTexts.some(t => t.includes('Agent "'))).toBe(false);
+    // 无 expandable(通用降级不注册)
+    expect(pipeline.getLastExpandableFullLines()).toBeNull();
+  });
+
+  it('并行 spawn_agent 结果乱序到达:各自独立 finalize', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
+      input: { role: 'explore', description: '任务一', prompt: 'p1' },
+    });
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a2',
+      input: { role: 'plan', description: '任务二', prompt: 'p2' },
+    });
+    // 结果乱序:a2 先到
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a2', durationMs: 3_000,
+      output: '[Subagent status=completed]\nresult two',
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a1', durationMs: 5_000,
+      output: '[Subagent status=completed]\nresult one',
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    expect(contentTexts.some(t => t.includes('任务一'))).toBe(true);
+    expect(contentTexts.some(t => t.includes('任务二'))).toBe(true);
   });
 });
 
