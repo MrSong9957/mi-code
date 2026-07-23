@@ -132,14 +132,33 @@ export function computeTabLayout(
   const { pageIndex, answered, cols } = opts;
   const submitWidth = displayWidth(SUBMIT_TEXT);
 
-  // 极窄降级:只显示当前页前 3 字符 + Submit
+  // 极窄降级:只显示当前页前 3 字符 + Submit(Submit 也可能被截断)
+  // 关键:Submit 必须受 cols 约束,否则总宽 > cols 溢出(审查发现的 bug)
   if (cols <= submitWidth + MIN_TAB_WIDTH) {
     const tabs: TabSlice[] = questions.map((q, i) => {
       const header = q.header || `Q${i + 1}`;  // 使用 index 保证 Q1/Q2/Q3 唯一
       const sliced = i === pageIndex ? header.slice(0, 3) : '';
       return { label: sliced, active: i === pageIndex, width: displayWidth(sliced), truncated: i === pageIndex && header.length > 3 };
     });
-    tabs.push({ label: SUBMIT_TEXT, active: false, width: submitWidth, truncated: false });
+    // Submit 截断:当前页占完后,剩余预算给 Submit;放不下则截断,极端情况只留 ✓
+    const currentPageWidth = tabs[pageIndex]?.width ?? 0;
+    const submitBudget = Math.max(1, cols - currentPageWidth);  // 至少留 1 列
+    let submitLabel = SUBMIT_TEXT;
+    let submitW = displayWidth(submitLabel);
+    if (submitW > submitBudget) {
+      // 截断 Submit 到预算(按字符砍,保证不超宽)
+      let truncated_ = '';
+      let tw = 0;
+      for (const ch of SUBMIT_TEXT) {
+        const cw = displayWidth(ch);
+        if (tw + cw > submitBudget) break;
+        truncated_ += ch;
+        tw += cw;
+      }
+      submitLabel = truncated_ || '✓';  // 极端兜底:至少 ✓
+      submitW = displayWidth(submitLabel);
+    }
+    tabs.push({ label: submitLabel, active: false, width: submitW, truncated: submitLabel !== SUBMIT_TEXT });
     return tabs;
   }
 
@@ -227,13 +246,31 @@ Expected: PASS。
     expect(tabs[1]!.label).toBe('');
     // Submit 仍在
     expect(tabs.some(t => t.label.includes('Submit'))).toBe(true);
+    // 总宽不超 cols(审查发现的 bug:Submit 宽10 + 当前页3 可能溢出)
+    const totalWidth = tabs.reduce((sum, t) => sum + t.width, 0);
+    expect(totalWidth).toBeLessThanOrEqual(20);
+  });
+
+  it('极端窄终端(12列):Submit 也被截断,总宽不超', () => {
+    const qs = [
+      { header: 'Auth', question: 'q1', options: [], multiSelect: false },
+    ];
+    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false], cols: 12 });
+    // 当前页前 3 字符
+    expect(tabs[0]!.label).toBe('Aut');
+    // Submit 被截断(原始 ' ✓ Submit ' 宽10,3+10=13>12)
+    const submitTab = tabs[tabs.length - 1]!;
+    expect(submitTab.truncated).toBe(true);
+    // 总宽严格不超
+    const totalWidth = tabs.reduce((sum, t) => sum + t.width, 0);
+    expect(totalWidth).toBeLessThanOrEqual(12);
   });
 ```
 
 - [ ] **Step 6:运行全部测试确认通过**
 
 Run: `npx vitest run src/__tests__/tui/inline-v2/ask-question-layout.test.ts`
-Expected: 3 passed。
+Expected: 4 passed。
 
 - [ ] **Step 7:Commit**
 
@@ -1269,37 +1306,38 @@ Run: `grep -n "FinalToolMessageKind" src/ui/block-pipeline.ts`
 
         // AUTO-0025 Phase B:ask_user_question 结构化展示。
         if (item.name === 'ask_user_question' && block.structuredOutcome) {
+          // catch 范围严格限定在 buildAskUserPresentation(纯函数,可预期失败)。
+          // 禁止包住 item 赋值 / finishTool(那是 pipeline 状态变更,异常应抛出而非降级)。
+          let presentation: { summary: string; lines: string[] } | null = null;
           try {
-            const presentation = buildAskUserPresentation(block.structuredOutcome);
-            if (presentation) {
-              item.resultLines = [{
-                content: `⎿ ${presentation.summary}`,
-                style: BLOCK_STYLES.magenta,
-                indent: 0,
-              }];
-              item.finalKind = 'agent-completion';  // 复用:跳过 callLines,只渲染结果摘要(见 Step 0 决策)
-              const id = `ask-${++this.idCounter}`;
-              const fullLines = presentation.lines.map((l, i) => ({
-                content: `${i === 0 ? '⎿  ' : '   '}${l}`,
-                style: BLOCK_STYLES.dim,
-                indent: INDENT.nested,
-                raw: true,
-              }));
-              item.expandableId = id;
-              item.expandableFullLines = fullLines;
-              item.hasExpandable = true;
-              this.finishTool(idx);
-              break;
-            }
+            presentation = buildAskUserPresentation(block.structuredOutcome);
           } catch (err) {
-            // 降级:presentation 层异常时回退 rawOutput,不中断 pipeline。
-            // catch 范围严格限定在此 try 块(buildAskUserPresentation + item 赋值),
-            // 禁止扩大到 finishTool 或 pipeline 生命周期。
+            // presentation 层异常:回退 rawOutput,不中断 pipeline。
             // DEBUG 门控:正常不输出,调试时可见(对齐 Task 11 的 miss 检测模式)。
             if (process.env.DEBUG) {
               console.error('[ask_user presentation failed]', { toolUseId: block.toolUseId, err });
             }
-            // 落到下面的通用 rawOutput 逻辑
+            // presentation 保持 null,落到下面的通用 rawOutput 逻辑
+          }
+          if (presentation) {
+            item.resultLines = [{
+              content: `⎿ ${presentation.summary}`,
+              style: BLOCK_STYLES.magenta,
+              indent: 0,
+            }];
+            item.finalKind = 'agent-completion';  // 复用:跳过 callLines,只渲染结果摘要(见 Step 0 决策)
+            const id = `ask-${++this.idCounter}`;
+            const fullLines = presentation.lines.map((l, i) => ({
+              content: `${i === 0 ? '⎿  ' : '   '}${l}`,
+              style: BLOCK_STYLES.dim,
+              indent: INDENT.nested,
+              raw: true,
+            }));
+            item.expandableId = id;
+            item.expandableFullLines = fullLines;
+            item.hasExpandable = true;
+            this.finishTool(idx);
+            break;
           }
         }
 ```
@@ -1454,11 +1492,21 @@ describe('ask_user_question structured result e2e', () => {
 });
 ```
 
-- [ ] **Step 2:实现测试**
+- [ ] **Step 2:实现测试(默认采用 BlockPipeline integration 层级)**
 
-参考 `src/__tests__/tui/inline-v2/ask-question-e2e.test.tsx` 的 fixture 搭建方式(mock LLM stream + AskUserManager)。关键:用 `mockRenderer`(参考 `block-pipeline.test.ts:40-55`)捕获 pipeline 产出,断言 `resultLines` 内容。
+**默认采用集成测试层级**,不尝试完整 TUI e2e。原因:本测试目标是验证数据链路(structuredOutcome → presentation → render model),不是验证 Ink/React/TTY。完整 TUI e2e 依赖真实渲染,脆弱且超出本测试目的。
 
-如果现有 e2e fixture 难以直接复用(依赖 TUI 真实渲染),可降级为**集成测试层级**:直接构造 `BlockPipeline`,手动 `emit({ kind: 'tool_call', name: 'ask_user_question', ... })` + `emit({ kind: 'tool_result', name: 'ask_user_question', structuredOutcome: {...}, ... })`,断言 `mockRenderer` 收到的行含结构化摘要。这覆盖了 Task 13(block-pipeline 分支)+ Task 14(透传)的端到端协作。
+实现方式:直接构造 `BlockPipeline`,用 `mockRenderer`(参考 `block-pipeline.test.ts:40-55`)捕获产出:
+
+```tsx
+// 1. 构造 BlockPipeline + mockRenderer
+// 2. pipeline.emit({ kind: 'tool_call', name: 'ask_user_question', toolUseId: 'tuu-1', input: {...} })
+// 3. pipeline.emit({ kind: 'tool_result', name: 'ask_user_question', toolUseId: 'tuu-1',
+//                    structuredOutcome: { version:1, request: {...}, outcome: {kind:'submitted', answers:{...}} } })
+// 4. 断言 mockRenderer.finishToolCall 收到的 lines 含结构化摘要(见 Step 1 的"必断"清单)
+```
+
+这覆盖 Task 13(block-pipeline 分支)+ Task 14(透传)的协作。store/streaming-query 层已有 Task 6/11 的单测覆盖。
 
 - [ ] **Step 3:运行测试**
 
