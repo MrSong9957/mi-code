@@ -495,7 +495,9 @@ executor(input) ──返回 string──┬── API 通道: ToolResultBlock.c
                                     (不发给 API)
 ```
 
-事实核查结论（代码证据）：API 通道与 UI 通道在 `streaming-query.ts:313-345` 物理分离，是两个独立对象。在 UI 通道加字段 100% 不影响 API 请求。
+事实核查结论（代码证据）：API 通道与 UI 通道在 `streaming-query.ts:313-345` 物理分离，是两个独立对象，`structuredOutcome` 字段不进入 `ToolResultBlock.content`，因此不会进入发给 Anthropic 的 API content。
+
+但本次改造触及 API 请求生成链路附近的代码（`ToolExecutor` ctx 扩展、`registry.execute` 签名、`streaming-query` 调用点），存在调用顺序/await 时序/error handling 变化的潜在风险。**不宣称"100% 不影响 API"**，而是通过 Phase B 验收里的「API diff 验证」确保请求语义不变（见 15.2 Phase B 验收）。
 
 #### 改造链路（7 个点）
 
@@ -542,8 +544,8 @@ executor: async (input, ctx) => {
   const validated = validateAskUserInput(input);
   if (!validated.ok) return `Error: ${validated.error}`;
   const outcome = await mgr.ask(validated.value);
-  if (ctx) askOutcomeStore.set(ctx.toolUseId, outcome);  // 结构化 outcome 入驻
-  return serializeAskQuestionOutcome(outcome);            // 返回类型不变：string
+  if (ctx) askOutcomeStore.set(ctx.toolUseId, { version: 1, outcome });  // 版本化包装
+  return serializeAskQuestionOutcome(outcome);                            // 返回类型不变：string
 },
 ```
 
@@ -553,16 +555,16 @@ store value 带 `createdAt`，支持 TTL 兜底；清理有三级防线：
 
 ```ts
 interface StoredOutcome {
-  outcome: AskQuestionOutcome;
+  result: StructuredAskResult;   // 含 version + outcome
   createdAt: number;
 }
 const TTL_MS = 5 * 60 * 1000;  // 5 min 兜底上限
 const store = new Map<string, StoredOutcome>();
 
 export const askOutcomeStore = {
-  set: (id: string, o: AskQuestionOutcome) => store.set(id, { outcome: o, createdAt: Date.now() }),
-  take: (id: string): AskQuestionOutcome | undefined => {
-    const s = store.get(id); store.delete(id); return s?.outcome;  // 一次性消费
+  set: (id: string, r: StructuredAskResult) => store.set(id, { result: r, createdAt: Date.now() }),
+  take: (id: string): StructuredAskResult | undefined => {
+    const s = store.get(id); store.delete(id); return s?.result;  // 一次性消费
   },
   sweep: () => {
     const now = Date.now();
@@ -590,9 +592,9 @@ export const askOutcomeStore = {
 
 ```ts
 const output = await registry.execute(name, input, { toolUseId: id });
-const structuredOutcome = askOutcomeStore.take(id);  // 一次性消费
-emitToolResult({ ..., structuredOutcome });
-yield { ..., structuredOutcome };
+const structuredResult = askOutcomeStore.take(id);  // 一次性消费，含 version + outcome
+emitToolResult({ ..., structuredOutcome: structuredResult });
+yield { ..., structuredOutcome: structuredResult };
 ```
 
 **点 7：block-pipeline 结构化渲染分支**
@@ -601,9 +603,14 @@ yield { ..., structuredOutcome };
 
 ```ts
 if (item.name === 'ask_user_question' && item.structuredOutcome) {
-  return buildAskUserPresentation(item.structuredOutcome);
+  try {
+    return buildAskUserPresentation(item.structuredOutcome);  // 内部检查 version
+  } catch {
+    // 降级：structuredOutcome 异常时回退原 rawOutput 路径
+  }
 }
-// else 原逻辑
+// 原逻辑兜底
+return buildToolResultBlock(item.name, input, item.output);
 ```
 
 新建 `src/ui/ask-user-presentation.ts`（仿 `subagent-presentation.ts`）。
@@ -624,23 +631,40 @@ if (item.name === 'ask_user_question' && item.structuredOutcome) {
 
 ```ts
 // stream-event-bus.ts ToolResultEvent
-structuredOutcome?: AskQuestionOutcome;
+structuredOutcome?: StructuredAskResult;
 // streaming-query.ts StreamMessage tool_result 分支
-structuredOutcome?: AskQuestionOutcome;
+structuredOutcome?: StructuredAskResult;
 // ui/types.ts Block tool_result 分支
-structuredOutcome?: AskQuestionOutcome;
+structuredOutcome?: StructuredAskResult;
 ```
+
+**版本化与 fallback（硬约束）**：
+
+`structuredOutcome` 不是裸 `AskQuestionOutcome`，而是带版本号的包装，renderer 不识别版本时回退 `rawOutput`：
+
+```ts
+interface StructuredAskResult {
+  version: 1;          // 结构化结果版本，当前固定 1
+  outcome: AskQuestionOutcome;
+}
+```
+
+- **变更原因**：未来 `AskQuestionOutcome` schema 变化（如 v2）时，renderer 能按版本降级，不靠 try/catch 兜底逻辑错误。
+- **fallback 规则**：`buildAskUserPresentation` 检查 `version`，非支持的版本（或字段缺失/损坏）时回退原 `rawOutput` Bash 风格折叠，与 Rollback 条件（15.2 Phase B Rollback）共用降级路径。
+- **version 由谁写入**：executor 在 `askOutcomeStore.set` 时包装为 `{ version: 1, outcome }`；`streaming-query` take 后原样透传。
+- **不是 feature flag**：当前不引入 `enableStructuredAskResult` 运行时开关（YAGNI）；版本号是 schema 演进的防御性设计，不是动态启停机制。
 
 #### Phase B 硬约束（写入验收）
 
 | 约束 | 说明 |
 |------|------|
-| ✅ API 通道零污染 | `ToolResultBlock.content` 仍是 serialize 字符串；convertMessages 白名单构造 |
+| ✅ API content 零污染 | `structuredOutcome` 不进 `ToolResultBlock.content`；convertMessages 白名单构造。但改造触及 API 生成链路附近代码，通过 API diff 验证确保语义不变，不宣称"100%" |
 | ✅ 返回类型不变 | `ToolExecutor` 仍 `Promise<string>` |
 | ✅ 旧 executor 零改动 | `ctx` 可选 |
 | ✅ 一次性消费无残留 | `take` 后立即 delete |
 | ✅ orphan 清理 | 三级防线：take 删 + finally sweep + TTL 兜底 |
 | ✅ ctx 是通用扩展点 | `ToolExecutionContext` 非 ask 专用，未来可扩 signal/traceId |
+| ✅ 版本化 + fallback | `structuredOutcome` 带 `version`，renderer 不识别时回退 `rawOutput` |
 | ❌ 禁止改 ToolExecutor 返回类型 | |
 | ❌ 禁止 block-format 解析自然语言字符串 | |
 | ❌ 禁止把结构化字段塞进 API content | |
@@ -715,8 +739,23 @@ return buildToolResultBlock(item.name, input, item.output);
 
 **实施建议（不改文档命名，改任务拆分）**：
 
-- writing-plans 阶段把 Phase 1b 拆成独立子任务，每个子系统单独 TDD + 验收，不要作为一个大 PR。
+- writing-plans 阶段把 Phase 1b 拆成独立子任务，每个子系统单独 TDD + 验收，**不要作为一个大 PR**。
+- 建议拆分粒度（每个独立成 PR，互不阻塞）：
+  - **1b-1 焦点边界**：首尾停止替代循环（状态机问题，参考第 8 节表）
+  - **1b-2 Other 草稿模型**：草稿与已提交答案分离，按题恢复（状态机问题，参考第 9 节）
+  - **1b-3 visible window**：可见控件窗口推导（布局算法问题，参考第 10 节，`computeVisibleWindow` 纯函数可独立 TDD）
+  - **1b-4 多选 submit flow**：多选 Next/Submit 控件与 Esc policy（交互流问题，参考第 8.2、9.1 节）
+- 拆分原则：visible window 是布局算法，Other draft 是状态机，两者不要混合；任何一个失败不阻塞其他。
 - 心智模型对照：Phase 1a = UI 基础；Phase 1b = 交互状态机（大功能）；Phase 2 = 真实光标（大功能，含 renderer spike）。
 - 实施时不要因 Phase 编号连续而低估 1b/2 的工作量。
 
 本提醒不改变原设计第 5、13 节的 Phase 定义和验收顺序，仅作为 writing-plans 的输入。
+
+### 15.5 Renderer Spike 是 Phase 2 的 Gate，非子任务
+
+原设计第 11 节已设计双 renderer spike（路径 A/B）。此处强调其**性质**：
+
+- **Spike 是 gate（准入门槛），不是 Phase 2 的子任务**。Phase 2 的最大风险不在实现，而在探索 double-buffer renderer 当前 `cursorTarget` / `internal_cursorTarget` 机制是否可靠——这是未知点。
+- **实施顺序必须是**：Renderer Spike → 输出决策记录（路径 A 或 B + 两种 renderer 测试证据）→ **才**进入 Phase 2 实现。
+- 第 13 节把 spike 列在 Phase 1b 步骤 7，这只是"最早可执行的时机"，不改变 spike 作为 Phase 2 前置 gate 的性质。
+- **Phase 2 启动硬检查点**（原设计第 11.4 节）必须先满足：实施记录写出 spike 采用路径 A 或 B 并附证据，不得留下未决分支。
