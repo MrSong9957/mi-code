@@ -435,7 +435,7 @@ Phase 2 启动前，实施记录必须明确写出 spike 采用路径 A 或路�
 - **色槽选择**：`theme.suggestion`（靛蓝），与计划审批的 `theme.planMode`（暗青）区分用途。不新增 theme 槽。
 - **宽度计算**：`contentWidth = Math.max(1, cols - 4)`（减左右边框各 1 + paddingX 各 1），与 `ExitPlanModeOverlayV2:82` 一致。
 - **影响范围**：仅 `AskQuestionOverlayV2` 渲染层；不改 store、input handler。
-- **验收标准**：40/80 列下 overlay 带圆角边框且不超宽；与计划审批 overlay 视觉风格统一。
+- **验收标准**：24/40/80 列下 overlay 带圆角边框且不超宽；与计划审批 overlay 视觉风格统一。边框 + tabs + 符号最容易在 24 列崩溃（边框占 2 列 + padding 2 列 + 符号前缀），必须覆盖 24 列快照验证不超宽。
 
 #### 新增决策 A2：单选/多选符号区分
 
@@ -461,7 +461,7 @@ const checkSymbol = selected.includes(option.label) ? '[x]' : '[ ]';
 - **权重分配理由**：固定 50% 上限在"当前页长标题 + 其他多个重要标题"场景下会过度挤压其他 tab。weight 比例分配（当前 2 : 其他 1）既突出当前页，又保证其他 tab 有稳定可读预算。
 - **变更原因**：原设计第 7 节描述了宽度模式，但未指定实现入口；`computeTabLayout` 作为纯函数是天然 TDD 锚点。
 - **影响范围**：`AskQuestionOverlayV2` 内 tabs 行渲染。
-- **验收标准**：`computeTabLayout` 单测覆盖 1/4 question × 宽/窄/极窄终端 × 各 pageIndex 组合。
+- **验收标准**：`computeTabLayout` 单测覆盖 1/4 question × 24/40/80 列 × 各 pageIndex 组合，输出行不超宽。
 
 #### 新增决策 A4：Other/Chat 文案
 
@@ -545,6 +545,8 @@ MessageFormatter 渲染: ⎿ Answered N questions (折叠) / Q→A (展开)
 ```ts
 export interface ToolExecutionContext {
   toolUseId: string;
+  // 未来扩展（当前不实现，仅预留）：
+  // signal?: AbortSignal;   // 用户取消 / turn 中断 / timeout
 }
 
 export type ToolExecutor = (
@@ -697,6 +699,10 @@ interface StructuredAskResult {
   2. 回退 `rawOutput` Bash 风格折叠；
   3. **不中断 tool_result pipeline**，不抛错到上层。
   即用户最坏看到旧版折叠形态，不会看到崩溃或空白。
+- **catch 实现规范**：禁止裸 `catch {}`（吞掉程序 bug）。降级 catch 必须区分：
+  - **可降级**（version 不支持、字段缺失）：log + fallback，正常路径。
+  - **程序 bug**（TypeError、未预期异常）：log（含完整 stack）+ fallback，但 debug log 级别提升为 error，确保不静默隐藏代码缺陷。
+  - 实现示例：`catch (err) { logError('ask_user presentation failed', { toolUseId, err }); return fallback; }`，而非 `catch {}`。
 
 #### Phase B 硬约束（写入验收）
 
@@ -712,6 +718,30 @@ interface StructuredAskResult {
 | ❌ 禁止改 ToolExecutor 返回类型 | |
 | ❌ 禁止 block-format 解析自然语言字符串 | |
 | ❌ 禁止把结构化字段塞进 API content | |
+
+#### toolUseId 唯一性约束（硬要求）
+
+`askOutcomeStore` 用 `toolUseId` 做 key，前提是它在 store 生命周期内唯一。
+
+- **单 agent turn 内唯一**：由 Anthropic API 保证（`ToolUseBlock.id` 全局唯一）。streaming 路径（`tool.block.id`）和 legacy 路径（`loop.ts:252` 的 `b.id`）同源，均来自 API 返回的 id。
+- **跨 turn 不保证**：store 是短生命周期（take 即删 + TTL 5min 兜底），不依赖跨 turn 唯一性。
+- **硬约束**：store 的 key 语义是"单 turn 内唯一"，不是全局唯一。实现和测试均以此为前提。
+
+#### Phase B 关键测试（数据一致性）
+
+Phase B 唯一真正的数据一致性风险是 Map key 隔离。必须覆盖：
+
+```text
+并发隔离测试：
+  set(idA, outcomeA)
+  set(idB, outcomeB)
+  take(idA) => outcomeA    // 不被 B 污染
+  take(idB) => outcomeB    // 不被 A 污染
+  take(idA) => undefined   // 已消费
+```
+
+- 虽然当前 `ask_user_question` 是非并发工具（executor 串行），但 store 本身是通用 Map，未来若子代理解禁 ask 或并发场景出现，key 隔离必须成立。
+- 此测试是 store 单测的必选项，不是可选。
 
 #### Phase B 实施顺序
 
