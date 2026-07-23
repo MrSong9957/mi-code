@@ -24,6 +24,8 @@ import { Box, Static, Text } from 'ink';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { MessageLine } from './MessageLine.js';
+import { renderFinalizedLine } from '../inline/text-layout.js';
+import type { FormattedLine } from '../../ui/types.js';
 import { PendingToolMessage } from './PendingToolMessage.js';
 import { PendingThinkingMessage } from './PendingThinkingMessage.js';
 import { SpinnerMemo } from './spinner-memo.js';
@@ -60,6 +62,73 @@ function LogoLineV2({ logo }: { logo: LogoData }): React.ReactElement {
       {'\n'}
       <Text color="magenta">{`  ▘▘ ▝▝    ${logo.dir}`}</Text>
       {'\n'}
+    </Text>
+  );
+}
+
+/** 聚合预览的最大 path 行数(超出折叠为 +N more)。 */
+const READ_GROUP_PREVIEW_LINES = 4;
+
+/**
+ * 从 read_file message 的首行 `● Read(path)` 解析出 path。
+ * 解析失败回退原 content(防御,不阻塞渲染)。
+ */
+function extractReadPath(msg: TuiMessage): string {
+  const content = msg.lines[0]?.content ?? '';
+  // 匹配 ● Read(path) 提取 path(任务约束:稳定判断前缀,不依赖路径格式)
+  const match = content.match(/^● Read\((.*)\)$/);
+  return match ? match[1]! : content;
+}
+
+/**
+ * ReadGroupLine:连续 read_file 的聚合渲染组件。
+ *
+ * 物理本质:把多个 ● Read(path) 块压缩成一个:
+ *   ● Read 3 items
+ *     ⎿ src/
+ *     ⎿ src/agent/
+ *     ⎿ src/utils/
+ *     +0 more (ctrl+o to expand)   ← 仅超出预览行数时
+ *
+ * 渲染契约与 MessageLine 一致:用 renderFinalizedLine 转 ANSI,
+ * 每行 + '\n',复用 tool role 的样式映射。
+ *
+ * 本期不实现 ctrl+o 展开(任务范围:只做预览折叠)。
+ */
+function ReadGroupLine({ msgs, cols }: { msgs: TuiMessage[]; cols: number }): React.ReactElement {
+  const paths = msgs.map(extractReadPath);
+  // 标题行:● Read N items(复用 magenta 样式,与单个 Read 的 ● 一致)
+  const titleLine: FormattedLine = {
+    content: `● Read ${msgs.length} items`,
+    style: { fg: 'brand' },
+    indent: 0,
+  };
+  // path 预览行:⎿ path /    path(首行 ⎿,续行对齐空格,与 formatToolResult 风格一致)
+  const truncated = paths.length > READ_GROUP_PREVIEW_LINES;
+  const previewPaths = paths.slice(0, READ_GROUP_PREVIEW_LINES);
+  const pathLines: FormattedLine[] = previewPaths.map((p, i) => ({
+    content: `${i === 0 ? '⎿  ' : '   '}${p}`,
+    style: { dim: true },
+    indent: 2,
+    raw: true,
+  }));
+  if (truncated) {
+    const hidden = paths.length - READ_GROUP_PREVIEW_LINES;
+    pathLines.push({
+      content: `   +${hidden} more (ctrl+o to expand)`,
+      style: { dim: true },
+      indent: 2,
+      raw: true,
+    });
+  }
+  const allLines = [titleLine, ...pathLines];
+  return (
+    <Text>
+      {allLines.flatMap((line, lineIdx) =>
+        renderFinalizedLine('tool', line, cols).map((ansiLine, i) => (
+          <Text key={`${lineIdx}-${i}`}>{ansiLine + '\n'}</Text>
+        ))
+      )}
     </Text>
   );
 }
@@ -172,13 +241,23 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
   const inputRowY = streamingRowCount + thinkingRowCount + pendingToolsRowCount + pendingGapRowCount + spinnerRowCount + 1;
 
   // <Static> items:logo 作为首项(只写一次进 scrollback)+ 已固化消息。
-  // 用 discriminator 字段区分 logo item 和 message item。
+  // Read 聚合:连续 read_file 经 groupConsecutiveReadMessages 合并成 read-group,
+  // 渲染成 ● Read N items + ⎿ path 预览,减少垂直占用。
+  // logo 不参与聚合(单独处理,保证首位不变量)。
   type StaticItem =
     | { kind: 'logo'; id: typeof LOGO_STATIC_ID; logo: LogoData }
-    | { kind: 'message'; id: string; msg: TuiMessage };
+    | { kind: 'message'; id: string; msg: TuiMessage }
+    | { kind: 'read-group'; id: string; msgs: TuiMessage[] };
+  const displayItems = groupConsecutiveReadMessages(finalized);
   const staticItems: StaticItem[] = [
     { kind: 'logo', id: LOGO_STATIC_ID, logo },
-    ...finalized.map((msg): StaticItem => ({ kind: 'message', id: msg.uuid, msg })),
+    ...displayItems.map((item): StaticItem => {
+      if (item.kind === 'read-group') {
+        // 组 id 用成员 uuid 拼接,保证唯一且稳定(Static 需要稳定 key)
+        return { kind: 'read-group', id: 'rg-' + item.msgs.map(m => m.uuid).join('-'), msgs: item.msgs };
+      }
+      return { kind: 'message', id: item.msg.uuid, msg: item.msg };
+    }),
   ];
 
   // 防御性断言:logo 必须在 staticItems 首位。
@@ -198,7 +277,9 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
       <Static items={staticItems}>
         {(item) => item.kind === 'logo'
           ? <LogoLineV2 key={item.id} logo={item.logo} />
-          : <MessageLine key={item.id} msg={item.msg} cols={cols} />}
+          : item.kind === 'read-group'
+            ? <ReadGroupLine key={item.id} msgs={item.msgs} cols={cols} />
+            : <MessageLine key={item.id} msg={item.msg} cols={cols} />}
       </Static>
       {/* OverlayHost:visible 时进终端备用屏直接写 stdout(不走 Ink 渲染),
           避免覆盖 footer 或盖不住 scrollback。返回 null,无可见 React 元素。 */}
@@ -267,3 +348,116 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
     </Box>
   );
 }
+
+// ─────────────────────────────────────────────────────────────
+// Read 聚合显示适配器(display adapter,纯函数)
+//
+// 物理本质:渲染前的"分组翻译器"。不改 message 数据,只把连续的
+// read_file tool message 合并成一个 read-group 显示条目。
+//
+// 解决问题:连续多个 Read 各占一个 ● 块,占用垂直空间。
+// 聚合后渲染成 ● Read N items + ⎿ path 预览。
+//
+// 关键约束 —— <Static> append-only:
+//   Ink <Static> 已渲染的 item 不可变(内部用 index 跳过已渲染项)。
+//   因此聚合基于"已 finalized 的连续段"做回溯合并——段被非 Read 打断时
+//   锁定,生成后不再变。这与 Static 的 append-only 语义契合。
+//
+// 聚合规则(严格):
+//   连续满足 role==='tool' && lines[0].content 以 '● Read(' 开头
+//   段被以下任一打断:role!=='tool'、content 不以 ● Read( 开头
+//   仅 ≥2 个才聚合成 read-group;单个 Read 保持原样(行为不变)
+//
+// 工具名识别:解析 lines[0].content 前缀 '● Read('。
+// 不新增 message 字段(任务约束:纯显示优化,不改 schema)。
+// ─────────────────────────────────────────────────────────────
+
+/** 显示条目:聚合后的渲染单元,区分单条消息与 Read 聚合组。 */
+export type DisplayItem =
+  | { kind: 'message'; msg: TuiMessage }
+  | { kind: 'read-group'; msgs: TuiMessage[] };
+
+/** 判断 message 是否是 read_file 工具调用(用于聚合识别)。 */
+function isReadToolMessage(msg: TuiMessage): boolean {
+  // 仅 tool role 参与;system/assistant 等即使内容巧合也不聚合(防御)
+  if (msg.role !== 'tool') return false;
+  const firstLine = msg.lines[0];
+  // 稳定判断:content 以 '● Read(' 开头。不依赖路径格式。
+  return firstLine?.content.startsWith('● Read(') ?? false;
+}
+
+/**
+ * 判断 message 是否是 thinking_summary(模型思考摘要)。
+ *
+ * 真实时序:模型每次工具调用前会 thinking,产生 role=system 的摘要行
+ * (如 "Thought for 1s (ctrl+o to expand)")。它是工具调用的伴随状态,
+ * 不属于用户内容流,因此不应阻止同批 Read 聚合。
+ *
+ * 判定:role=system 且首行 content 含 "Thought for"。
+ * (与 formatThinkingSummary 输出一致,不依赖精确格式)
+ */
+function isThinkingSummary(msg: TuiMessage): boolean {
+  if (msg.role !== 'system') return false;
+  const firstLine = msg.lines[0];
+  return firstLine?.content.includes('Thought for') ?? false;
+}
+
+/**
+ * 把 finalized messages 分组为显示条目。
+ *
+ * 连续的 read_file message 合并成 read-group;其余原样保留为 message。
+ * 纯函数,无副作用,不改输入。
+ *
+ * 聚合规则(适配真实 Agent runtime 时序 thinking→tool→thinking→tool):
+ *   - 连续 Read 段允许中间夹 thinking_summary(不打断聚合)
+ *   - thinking_summary 保留为独立 message item(不合并进 group,不丢弃)
+ *   - 段被非 Read、非 thinking_summary 的 message 打断(如 Bash/assistant/user)
+ *   - 仅段内 Read ≥2 才聚合成 read-group;单个 Read 保持原样
+ *
+ * 输出顺序:read-group 放段首位置,段内被跨越的 thinking_summary 紧随其后
+ * (保持相对顺序,不丢失 thinking 信息)。
+ */
+export function groupConsecutiveReadMessages(messages: TuiMessage[]): DisplayItem[] {
+  const result: DisplayItem[] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const msg = messages[i]!;
+    if (!isReadToolMessage(msg)) {
+      // 非 Read:原样保留,前进 1(thinking_summary 也走这里,独立输出)
+      result.push({ kind: 'message', msg });
+      i++;
+      continue;
+    }
+    // Read:收集连续段(允许中间夹 thinking_summary,它们不进 group 但属本段)
+    const group: TuiMessage[] = [msg];
+    const interspersedThoughts: TuiMessage[] = [];
+    let j = i + 1;
+    while (j < messages.length) {
+      const next = messages[j]!;
+      if (isReadToolMessage(next)) {
+        group.push(next);
+        j++;
+      } else if (isThinkingSummary(next)) {
+        // thinking_summary 不打断段,但不并入 group(保留独立显示)
+        interspersedThoughts.push(next);
+        j++;
+      } else {
+        // 其他 message(Bash/assistant/user/system非thinking)打断段
+        break;
+      }
+    }
+    // ≥2 个 Read 才聚合;单个 Read 保持原样(验收:单个 Read 行为不变)
+    if (group.length >= 2) {
+      result.push({ kind: 'read-group', msgs: group });
+    } else {
+      result.push({ kind: 'message', msg: group[0]! });
+    }
+    // 段内被跨越的 thinking_summary 紧随 group 输出(保留信息,不移动到段外)
+    for (const t of interspersedThoughts) {
+      result.push({ kind: 'message', msg: t });
+    }
+    i = j;
+  }
+  return result;
+}
+
