@@ -55,10 +55,18 @@ export function computeTabLayout(
   const { pageIndex, answered, cols } = opts;
   const submitWidth = displayWidth(SUBMIT_TEXT);
 
+  // 极窄降级阈值:当可用宽度装不下"每个 tab 至少 MIN_TAB_WIDTH"时,降级。
+  // 原阈值 cols <= submitWidth + MIN_TAB_WIDTH 只考虑单个 tab,但多 tab 场景下
+  // 各 tab 的 MIN_TAB_WIDTH 下限之和会超过 available,导致总宽溢出。
+  // 正确判断:available < MIN_TAB_WIDTH * questions.length 时降级。
+  const availableForTabs = cols - submitWidth;
+  const needsNarrowFallback = availableForTabs < MIN_TAB_WIDTH * questions.length
+    || cols <= submitWidth + MIN_TAB_WIDTH;
+
   // 极窄降级:只显示当前页前 3 显示列 + Submit(Submit 也可能被截断)
   // 关键:所有截断必须用 truncateByDisplayWidth(CJK 感知),不能用 slice(0,3)。
   //   slice 按码点数量,中文 header(如"认证配置")slice(0,3)="认证配"占 6 列,会溢出。
-  if (cols <= submitWidth + MIN_TAB_WIDTH) {
+  if (needsNarrowFallback) {
     const tabs: TabSlice[] = questions.map((q, i) => {
       const header = q.header || `Q${i + 1}`;  // 使用 index 保证 Q1/Q2/Q3 唯一
       if (i !== pageIndex) return { label: '', active: false, width: 0, truncated: false };

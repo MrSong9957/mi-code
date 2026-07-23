@@ -42,6 +42,37 @@ describe('computeTabLayout', () => {
     expect(totalWidth).toBeLessThanOrEqual(16);
   });
 
+  it('窄终端(20列,2题):available 不足以容纳各 tab 最小宽度,降级', () => {
+    // cols=20,submitWidth=10,availableForTabs=10 < MIN_TAB_WIDTH*2=12 → 走极窄降级。
+    // 验证:非当前页清空、当前页前 3 列、Submit 完整、总宽不超。
+    const qs = [
+      { header: 'Auth', question: 'q1', options: [], multiSelect: false },
+      { header: 'Library', question: 'q2', options: [], multiSelect: false },
+    ];
+    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false, false], cols: 20 });
+    expect(tabs[1]!.label).toBe('');          // 非当前页降级清空
+    expect(tabs[0]!.active).toBe(true);
+    const submitTab = tabs[tabs.length - 1]!;
+    expect(submitTab.label).toContain('Submit');
+    expect(submitTab.truncated).toBe(false);  // Submit 完整(预算够)
+    const totalWidth = tabs.reduce((sum, t) => sum + t.width, 0);
+    expect(totalWidth).toBeLessThanOrEqual(20);
+  });
+
+  it('窄终端(24列,2题):available 足够,走权重分支非降级', () => {
+    // cols=24,availableForTabs=14 >= MIN_TAB_WIDTH*2=12 → 走权重分支。
+    // 验证:两个 tab 都显示(可能截断)、Submit 完整、总宽不超。
+    const qs = [
+      { header: 'Auth', question: 'q1', options: [], multiSelect: false },
+      { header: 'Library', question: 'q2', options: [], multiSelect: false },
+    ];
+    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false, false], cols: 24 });
+    expect(tabs[0]!.label).toContain('Auth');  // 当前页显示
+    expect(tabs[1]!.label).not.toBe('');        // 非当前页也显示(非降级)
+    const totalWidth = tabs.reduce((sum, t) => sum + t.width, 0);
+    expect(totalWidth).toBeLessThanOrEqual(24);
+  });
+
   it('极端窄终端(12列):Submit 也被截断,总宽不超', () => {
     const qs = [
       { header: 'Auth', question: 'q1', options: [], multiSelect: false },

@@ -92,7 +92,7 @@ export const AskQuestionOverlayV2 = React.memo(function AskQuestionOverlayV2({
         {unanswered && <Text color={theme.warning}>{truncateLine('请先完成所有问题再提交', contentWidth)}</Text>}
         <Text color={state.focusIndex === 0 ? theme.suggestion : undefined}>{truncateLine(`${state.focusIndex === 0 ? '❯ ' : '  '}提交答案`, contentWidth)}</Text>
         <Text color={state.focusIndex === 1 ? theme.suggestion : undefined}>{truncateLine(`${state.focusIndex === 1 ? '❯ ' : '  '}取消`, contentWidth)}</Text>
-        <Text color={theme.textMuted}>{truncateLine('Enter 提交 · Esc 取消', contentWidth)}</Text>
+        <Text color={theme.textMuted}>{truncateLine('Enter 提交 · Esc 取消本次访谈', contentWidth)}</Text>
       </Box>
     );
   }
@@ -152,8 +152,8 @@ export const AskQuestionOverlayV2 = React.memo(function AskQuestionOverlayV2({
   );
 
   const help = state.inputMode
-    ? 'Enter 保存 · Esc 取消'
-    : '↑↓ 导航 · Enter 选择 · Esc 取消';
+    ? 'Enter 保存 · Esc 取消本次访谈'
+    : '↑↓ 导航 · Enter 选择 · Esc 取消本次访谈';
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={theme.suggestion} paddingX={1}>

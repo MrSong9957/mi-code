@@ -66,6 +66,17 @@ describe('<AskQuestionOverlayV2>', () => {
     expect(frame).toContain('[ ] B');
   });
 
+  it('renders round border container (A1 验收:borderStyle="round")', () => {
+    // A1 验收标准:overlay 必须用 borderStyle="round"。
+    // 断言左边框 ╭(ink-testing 下右边框 ╮ 首次渲染缺失是已知问题,只断言左上角)。
+    const store = openStore();
+    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('╭');   // 左上角圆角 = borderStyle="round" 已生效
+    expect(frame).toContain('╰');   // 左下角圆角
+  });
+
   it('renders single-select radio symbols (◉/◯) distinct from multi-select', () => {
     // Q2 是单选(multiSelect: false),应显示 radio 而非 checkbox
     const store = openStore();
