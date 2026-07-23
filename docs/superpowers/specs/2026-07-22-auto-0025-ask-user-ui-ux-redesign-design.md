@@ -585,7 +585,13 @@ executor: async (input, ctx) => {
   const validated = validateAskUserInput(input);
   if (!validated.ok) return `Error: ${validated.error}`;
   const outcome = await mgr.ask(validated.value);
-  if (ctx) askOutcomeStore.set(ctx.toolUseId, { version: 1, outcome });  // 版本化包装
+  if (ctx) {
+    askOutcomeStore.set(ctx.toolUseId, { version: 1, outcome });  // 版本化包装
+  } else {
+    // 开发错误检测：调用点忘记传 ctx 时发出警告，避免静默退回 rawOutput
+    // 不改类型、不抛错，仅 debug 级别日志（当前 4 个调用点已核实都传 ctx）
+    debug.warn('ask_user_question executed without toolUseId ctx');
+  }
   return serializeAskQuestionOutcome(outcome);                            // 返回类型不变：string
 },
 ```
@@ -723,7 +729,7 @@ interface StructuredAskResult {
 
 `askOutcomeStore` 用 `toolUseId` 做 key，前提是它在 store 生命周期内唯一。
 
-- **单 agent turn 内唯一**：由 Anthropic API 保证（`ToolUseBlock.id` 全局唯一）。streaming 路径（`tool.block.id`）和 legacy 路径（`loop.ts:252` 的 `b.id`）同源，均来自 API 返回的 id。
+- **单 agent turn 内唯一**：当前依赖 Anthropic 返回的 `ToolUseBlock.id` 在单 turn 内唯一（streaming 路径 `tool.block.id` 与 legacy 路径 `loop.ts:252` 的 `b.id` 同源）。工程设计不依赖外部系统"永久保证"，但当前事实如此。
 - **跨 turn 不保证**：store 是短生命周期（take 即删 + TTL 5min 兜底），不依赖跨 turn 唯一性。
 - **硬约束**：store 的 key 语义是"单 turn 内唯一"，不是全局唯一。实现和测试均以此为前提。
 
@@ -742,6 +748,20 @@ Phase B 唯一真正的数据一致性风险是 Map key 隔离。必须覆盖：
 
 - 虽然当前 `ask_user_question` 是非并发工具（executor 串行），但 store 本身是通用 Map，未来若子代理解禁 ask 或并发场景出现，key 隔离必须成立。
 - 此测试是 store 单测的必选项，不是可选。
+
+#### Phase B 单测顺序（按数据流方向，定位更快）
+
+```
+1. askOutcomeStore 单测          — set/take/sweep/clear + 并发隔离 + TTL
+2. registry.execute ctx 透传测试 — 验证 ctx 从 registry 传到 executor
+3. executor 写入测试             — ask-user-tool executor set { version, outcome }
+4. streaming-query 集成测试       — take + 挂载 structuredOutcome 到 UI 通道
+5. block-pipeline 渲染测试       — buildAskUserPresentation 折叠/展开 + fallback
+6. API diff                      — 对比改造前后发给 Anthropic 的 tool_result content
+```
+
+- 按数据流方向（store → registry → executor → streaming-query → pipeline → API）逐层测试，任一层失败能快速定位。
+- 每层 RED → GREEN，不跳层。
 
 #### Phase B 实施顺序
 
@@ -818,7 +838,7 @@ return buildToolResultBlock(item.name, input, item.output);
   - **1b-1 焦点边界**：首尾停止替代循环（状态机问题，参考第 8 节表）
   - **1b-3 visible window**：可见控件窗口推导（布局算法问题，参考第 10 节，`computeVisibleWindow` 纯函数可独立 TDD）
   - **1b-2 Other 草稿模型**：草稿与已提交答案分离，按题恢复（状态机问题，参考第 9 节）
-  - **1b-4 多选 submit flow**：多选 Next/Submit 控件与 Esc policy（交互流问题，参考第 8.2、9.1 节）
+  - **1b-4 多选 submit flow**：多选 Next/Submit 控件与 Esc policy（交互流问题，参考第 8.2、9.1 节）。**TTY 验收重点**：多选题 control 顺序是 options → Other → Next/Submit → Chat，需真实验证"最后一题按 ↓ 是否自然到达 Chat"，避免用户误以为 Chat 是全局退出入口。
 - **实施顺序调整（审查建议）**：`1b-1 → 1b-3 → 1b-2 → 1b-4`。原因：visible window 依赖 focus index 和 control model，而 Other draft 不依赖布局。先稳定 focus model + render model，再处理状态扩展。
 - 拆分原则：visible window 是布局算法，Other draft 是状态机，两者不要混合；任何一个失败不阻塞其他。
 - 心智模型对照：Phase 1a = UI 基础；Phase 1b = 交互状态机（大功能）；Phase 2 = 真实光标（大功能，含 renderer spike）。
