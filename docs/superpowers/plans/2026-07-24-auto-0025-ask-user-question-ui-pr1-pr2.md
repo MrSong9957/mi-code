@@ -135,7 +135,7 @@ export function computeTabLayout(
   // 极窄降级:只显示当前页前 3 字符 + Submit
   if (cols <= submitWidth + MIN_TAB_WIDTH) {
     const tabs: TabSlice[] = questions.map((q, i) => {
-      const header = q.header || `Q${i + 1}`;
+      const header = q.header || `Q${i + 1}`;  // 使用 index 保证 Q1/Q2/Q3 唯一
       const sliced = i === pageIndex ? header.slice(0, 3) : '';
       return { label: sliced, active: i === pageIndex, width: displayWidth(sliced), truncated: i === pageIndex && header.length > 3 };
     });
@@ -144,7 +144,7 @@ export function computeTabLayout(
   }
 
   const available = cols - submitWidth;
-  const headers = questions.map(q => q.header || `Q${q ? 1 : 1}`); // placeholder, 下行修正
+  const headers = questions.map((q, i) => q.header || `Q${i + 1}`);
   // 计算每个 tab 理想宽度:符号(✓/○ 2字符)+ header + 间距(2)
   const ideals = questions.map(q => 2 + displayWidth(q.header || 'Q') + 2);
   const idealTotal = ideals.reduce((s, w) => s + w, 0);
@@ -1047,8 +1047,13 @@ git commit -m "feat(ui): add structuredOutcome field to UI channel types (3 file
 
 ```ts
 // src/agent/streaming-query.ts — 阶段3 流式分支,找到 emitToolResult 和 yield 前后:
-// 在 const output = ... 之后,emitToolResult 之前加:
+// 在 const output = ... 之后,emitToolResult 之前加 take + miss 检测:
         const structuredOutcome = askOutcomeStore.take(tool.id);
+        // take miss 检测:ask_user_question 执行后 store 应有 entry,
+        // 若 take 返回 undefined 说明 set/take 时序异常或 toolUseId 不匹配(开发错误,非运行错误)
+        if (!structuredOutcome && tool.block.name === 'ask_user_question') {
+          console.warn('[streaming-query] ask_user_question outcome missing in store', { toolUseId: tool.id });
+        }
 // emitToolResult 加字段:
         eventBus?.emitToolResult({
           toolUseId: tool.id,
@@ -1239,6 +1244,19 @@ git commit -m "feat(ui): add buildAskUserPresentation pure function (submitted/c
 **Files:**
 - Modify: `src/ui/block-pipeline.ts:245`(case 'tool_result')
 
+- [ ] **Step 0:核查 FinalToolMessageKind,确认复用 `agent-completion`**
+
+Run: `grep -n "FinalToolMessageKind" src/ui/block-pipeline.ts`
+
+**事实确认(已核查)**:`FinalToolMessageKind = 'tool-progress' | 'agent-completion'`(`block-pipeline.ts:28`)。`finishTool`(`:407-451`)对 `agent-completion` 特殊处理:**只用 resultLines,不拼 callLines**(避免 `● ask_user_question(...)` call 行残留)。
+
+**决策:复用 `agent-completion`,不新增 `ask-completion`**。理由:
+- ask_user_question 的结构化摘要(`⎿ Answered N questions`)就是结果展示,不需要保留 call 行,与 `agent-completion` 语义一致。
+- 新增 `ask-completion` 需改 3 处(`FinalToolMessageKind` union、`finishTool` 分支、Ctrl+O 标题),违反 YAGNI。
+- `ExpandableBlock.kind` 保持 `'tool_result'`(Ctrl+O 标题显示 "Tool result",可接受;ask_user 的展开内容是答案列表,语义贴合)。
+
+若核查发现 `FinalToolMessageKind` 与上述不符(代码已变),则新增 `ask-completion` 并同步改 3 处。
+
 - [ ] **Step 1:在 spawn_agent 特判后(约 300 行后)加 ask_user_question 分支**
 
 ```ts
@@ -1255,7 +1273,7 @@ git commit -m "feat(ui): add buildAskUserPresentation pure function (submitted/c
                 style: BLOCK_STYLES.magenta,
                 indent: 0,
               }];
-              item.finalKind = 'agent-completion';
+              item.finalKind = 'agent-completion';  // 复用:跳过 callLines,只渲染结果摘要(见 Step 0 决策)
               const id = `ask-${++this.idCounter}`;
               const fullLines = presentation.lines.map((l, i) => ({
                 content: `${i === 0 ? '⎿  ' : '   '}${l}`,
@@ -1315,6 +1333,14 @@ git commit -m "feat(ui): block-pipeline renders ask_user_question with structure
 **Files:**
 - Modify: `src/index.ts:681-687`
 
+- [ ] **Step 0:确认 eventBus 是 tool_result 进入 pipeline 的唯一路径**
+
+Run: `grep -rn "emit({.*kind:.*tool_result\|emit({.*'tool_result'" src/ --include="*.ts" --include="*.tsx" | grep -v test`
+
+**事实确认(已核查)**:`pipeline.emit({ kind: 'tool_result', ... })` 唯一入口在 `src/index.ts:685`,位于 `eventBus.onToolResult` handler 内(`:681`)。`StreamMessage` 的 `tool_result` 变体(`index.ts:788`)只触发 PostToolUse hook,**不发 block**。
+
+因此 `structuredOutcome` 只需在 `onToolResult` handler 这一处透传即可覆盖全部 tool_result 渲染路径。若 grep 发现其他 `pipeline.emit({ kind: 'tool_result' })` 入口(代码已变),需同步处理。
+
 - [ ] **Step 1:onToolResult handler 透传**
 
 ```ts
@@ -1373,7 +1399,67 @@ git commit -m "test(agent): verify structuredOutcome does not leak into API tool
 
 ---
 
-## Task 16:类型检查 + Lint + 全量测试 + TTY 验收
+## Task 16b:端到端集成测试 — full pipeline(FR 出保险)
+
+**Files:**
+- Test: `src/__tests__/tui/inline-v2/ask-user-structured-result-e2e.test.tsx`
+
+> **此测试是 PR2 最重要的保险**(审查指出此前只有分层单测,缺跨层链路验证)。只覆盖一个 happy path:tool_use → registry → executor → store → eventBus → pipeline → render。
+
+- [ ] **Step 1:写端到端测试 — ask_user_question 完整链路结构化渲染**
+
+```tsx
+// src/__tests__/tui/inline-v2/ask-user-structured-result-e2e.test.tsx
+import { describe, it, expect, beforeEach } from 'vitest';
+// 复用现有 e2e fixture 模式(参考 ask-question-e2e.test.tsx)
+// 目标:验证从 tool 执行到渲染的完整链路
+
+describe('ask_user_question structured result e2e', () => {
+  beforeEach(() => {
+    // 清理 store + pipeline 状态
+  });
+
+  it('完整链路:tool_use → executor set store → eventBus → pipeline → ⎿ Answered', async () => {
+    // 1. 构造 mock:LLM 返回 ask_user_question tool_use
+    // 2. 构造 mock:AskUserManager.ask resolve 为 submitted outcome
+    // 3. 运行 streamingQuery(或直接驱动 BlockPipeline)
+    // 4. 断言最终渲染输出包含 "⎿ Answered" 且不含 raw "User has answered your questions"
+    //    (证明走的是结构化路径,非 Bash 折叠)
+    //
+    // 关键断言:
+    // - 渲染输出含 "⎿ Answered N questions"
+    // - 渲染输出含 header → answer 配对(非 question 全文)
+    // - store 在 turn 结束后为空(sweep 生效)
+    // - 发给 mock LLM 的 tool_result content 仍是 serialize 字符串(无 structuredOutcome 字段)
+  });
+
+  it('cancelled outcome 渲染 Declined', async () => {
+    // manager resolve 为 cancelled,断言渲染含 "⎿ Declined"
+  });
+});
+```
+
+- [ ] **Step 2:实现测试**
+
+参考 `src/__tests__/tui/inline-v2/ask-question-e2e.test.tsx` 的 fixture 搭建方式(mock LLM stream + AskUserManager)。关键:用 `mockRenderer`(参考 `block-pipeline.test.ts:40-55`)捕获 pipeline 产出,断言 `resultLines` 内容。
+
+如果现有 e2e fixture 难以直接复用(依赖 TUI 真实渲染),可降级为**集成测试层级**:直接构造 `BlockPipeline`,手动 `emit({ kind: 'tool_call', name: 'ask_user_question', ... })` + `emit({ kind: 'tool_result', name: 'ask_user_question', structuredOutcome: {...}, ... })`,断言 `mockRenderer` 收到的行含结构化摘要。这覆盖了 Task 13(block-pipeline 分支)+ Task 14(透传)的端到端协作。
+
+- [ ] **Step 3:运行测试**
+
+Run: `npx vitest run src/__tests__/tui/inline-v2/ask-user-structured-result-e2e.test.tsx`
+Expected: PASS。若失败,逐层排查(Task 5→6→7→9→11→13→14 数据流方向)。
+
+- [ ] **Step 4:Commit**
+
+```bash
+git add src/__tests__/tui/inline-v2/ask-user-structured-result-e2e.test.tsx
+git commit -m "test(tui): e2e integration test for ask_user_question structured result pipeline"
+```
+
+---
+
+## Task 17:类型检查 + Lint + 全量测试 + TTY 验收
 
 - [ ] **Step 1:TypeScript 通过**
 
@@ -1428,8 +1514,11 @@ Expected: 全部 PASS,无回归。
 - UI 通道类型扩展 → Task 10 ✓
 - index.ts 透传 → Task 14 ✓
 - API diff 验证 → Task 15 ✓
-- orphan 清理(三级) → Task 6(sweep/clear/TTL)+ Task 11(finally)✓
+- orphan 清理(三级) → Task 6(sweep/clear/TTL)+ Task 11(finally)+ take miss debug ✓
 - 并发隔离测试 → Task 6 ✓
+- **端到端链路测试 → Task 16b(新增,审查要求)** ✓
+- **FinalToolMessageKind 复用决策 → Task 13 Step 0(核查)** ✓
+- **eventBus 唯一路径验证 → Task 14 Step 0(核查)** ✓
 
 **类型一致性:** `StructuredAskResult { version, request, outcome }` 在 Task 5 定义,Task 6/9/10/12/13 全部一致使用。`ToolExecutionContext { toolUseId }` 在 Task 7 定义,Task 8/9 一致。
 
