@@ -457,7 +457,8 @@ const checkSymbol = selected.includes(option.label) ? '[x]' : '[ ]';
 
 原设计第 7 节已系统设计导航栏宽度模式。本补丁明确把布局推导抽为可独立 TDD 的纯函数 `computeTabLayout`，归入原设计第 6 节规划的 `ask-question-layout.ts` 模块（原设计已命名该模块为布局纯函数的家）：
 
-- **核心算法**：Submit 固定预留可见；当前 tab 优先分配（最多 50% 剩余宽度）；其余 tab 均分（最少 6 字符，超出加 `…`）；极窄降级只显示当前 tab 前 3 字符。
+- **核心算法**：Submit 固定预留可见；按权重分配剩余宽度（当前 tab weight=2，其他 tab weight=1，避免当前页固定霸占 50% 导致其他标题被挤压不可读）；每个 tab 最少 6 字符保底，超出加 `…`；极窄降级只显示当前 tab 前 3 字符。
+- **权重分配理由**：固定 50% 上限在"当前页长标题 + 其他多个重要标题"场景下会过度挤压其他 tab。weight 比例分配（当前 2 : 其他 1）既突出当前页，又保证其他 tab 有稳定可读预算。
 - **变更原因**：原设计第 7 节描述了宽度模式，但未指定实现入口；`computeTabLayout` 作为纯函数是天然 TDD 锚点。
 - **影响范围**：`AskQuestionOverlayV2` 内 tabs 行渲染。
 - **验收标准**：`computeTabLayout` 单测覆盖 1/4 question × 宽/窄/极窄终端 × 各 pageIndex 组合。
@@ -512,6 +513,7 @@ export type ToolExecutor = (
 ```
 
 - 返回类型仍是 `Promise<string>`，不违反原约束。
+- **`ToolExecutionContext` 是通用执行上下文扩展点，不是 ask_user_question 专用 hack**。当前仅含 `toolUseId`（Phase B 唯一需要），但设计为开放接口：未来可扩展 `signal`（取消信号）、`traceId`（链路追踪）、`agentId`（多 agent 标识）等字段。命名保持 `ToolExecutionContext`（非 `AskUserContext`），所有工具的 executor 均可消费。Phase B 只是第一个使用者。
 
 **点 2：registry.execute 透传 ctx（tool-registry.ts:41）**
 
@@ -547,21 +549,42 @@ executor: async (input, ctx) => {
 
 **点 5：askOutcomeStore（新建 `src/agent/ask-outcome-store.ts`）**
 
+store value 带 `createdAt`，支持 TTL 兜底；清理有三级防线：
+
 ```ts
-const store = new Map<string, AskQuestionOutcome>();
+interface StoredOutcome {
+  outcome: AskQuestionOutcome;
+  createdAt: number;
+}
+const TTL_MS = 5 * 60 * 1000;  // 5 min 兜底上限
+const store = new Map<string, StoredOutcome>();
+
 export const askOutcomeStore = {
-  set: (id: string, o: AskQuestionOutcome) => store.set(id, o),
+  set: (id: string, o: AskQuestionOutcome) => store.set(id, { outcome: o, createdAt: Date.now() }),
   take: (id: string): AskQuestionOutcome | undefined => {
-    const o = store.get(id); store.delete(id); return o;  // 一次性消费
+    const s = store.get(id); store.delete(id); return s?.outcome;  // 一次性消费
   },
+  sweep: () => {
+    const now = Date.now();
+    for (const [id, s] of store) if (now - s.createdAt > TTL_MS) store.delete(id);
+  },
+  clear: () => store.clear(),
 };
 ```
 
-- **orphan 清理约束（硬要求）**：
-  - `take()` 后立即 `delete`，正常路径无残留。
-  - executor 抛异常：`mgr.ask()` 的 pending 由 AskUserManager 的 `cancelPending` 清理，异常发生在 serialize 之后则 store 已 set —— 必须在 executor 外层 try/catch 兜底 delete。
-  - streaming-query 未消费：若 yield 链路中断，entry 残留。需挂接 request lifecycle hook 或在 streamingQuery 结束时 sweep 未 take 的 entry。
-  - 长期运行 CLI 不得出现内存泄漏。
+**orphan 清理三级防线（均有确定落点，非模糊"挂接 hook"）**：
+
+| 防线 | 机制 | 落点 | 覆盖场景 |
+|------|------|------|----------|
+| 1. 正常消费 | `take()` 后立即 `delete` | 点 6 streaming-query 调用 take | 正常 flow，无残留 |
+| 2. turn 结束 sweep | `sweep()` 删超 TTL 的 entry | `streaming-query.ts:460-463` 现有 `finally` 块，紧挨 `onMessages` 调用 | generator normal return / consumer break / throw 三路径(JS generator 语义保证 finally 全执行) |
+| 3. TTL 兜底 | `clear()` 全清 / 或按 TTL 增量清 | 新 agent turn 开始前 + `sweep` 增量清 | 极端情况(进程长跑、多 turn 残留累积) |
+
+- **防线 2 的可靠性依据**（代码事实核查）：`streamingQuery` 是 `async function*`，其顶层 try/finally（`streaming-query.ts:156` try / `:460-463` finally）受 JS generator 语义保护。三个消费方（`index.ts:722` 主 agent、`subagent.ts:176` 子代理、`self-organizing.ts:160` 自组织）即使 break 或 throw，generator 的 finally 必然执行。`self-organizing.ts:160` 无消费方 try/finally，正是把 sweep 放在 generator 自身 finally 而非消费方的决定性理由。
+- **store 注入方式**：仿 `onMessages` 模式，通过 `StreamingQueryOptions`（`streaming-query.ts:63-105`）注入 store 引用，finally 里调用 `askOutcomeStore.sweep()`。
+- **legacy 路径**：`loop.ts` 的 `agentLoop` 无 finally，需在调用 `agentLoop` 的上层 await 处包 try/finally 调用 `sweep`；或在 `agentLoop` 函数体加顶层 try/finally。两条路径无法用同一钩子统一，实施时分别处理。
+- **executor 抛异常**：若 `mgr.ask()` resolve 后 serialize 抛异常，entry 已 set。在 executor 外层（registry.execute 的 try/catch，`tool-registry.ts:48-51`）补一次 `askOutcomeStore.take(id)` 兜底删除（此时 take 出的 outcome 丢弃即可，因为 output 已是错误字符串）。
+- **长期运行 CLI 不得出现内存泄漏**：三级防线联合保证。
 
 **点 6：streaming-query 阶段 3 取出并挂载（两个分支都改）**
 
@@ -616,7 +639,8 @@ structuredOutcome?: AskQuestionOutcome;
 | ✅ 返回类型不变 | `ToolExecutor` 仍 `Promise<string>` |
 | ✅ 旧 executor 零改动 | `ctx` 可选 |
 | ✅ 一次性消费无残留 | `take` 后立即 delete |
-| ✅ orphan 清理 | executor 异常 / 未消费场景需兜底清理 |
+| ✅ orphan 清理 | 三级防线：take 删 + finally sweep + TTL 兜底 |
+| ✅ ctx 是通用扩展点 | `ToolExecutionContext` 非 ask 专用，未来可扩 signal/traceId |
 | ❌ 禁止改 ToolExecutor 返回类型 | |
 | ❌ 禁止 block-format 解析自然语言字符串 | |
 | ❌ 禁止把结构化字段塞进 API content | |
@@ -644,6 +668,35 @@ Phase B（固化结果结构化）
 - API 请求不变：对比改造前后发给 Anthropic 的 tool_result content。
 - orphan 清理：长跑测试或单测验证无残留 entry。
 
+#### Phase B Rollback 条件（失败降级，不回滚 UI）
+
+Phase B 与 Phase 1a 已正确隔离（见 15.3），因此 Phase B 出问题时**只关闭结构化渲染分支，不回滚交互期 UI**。
+
+触发 Rollback 的条件（任一命中即降级）：
+
+| 条件 | 检测方式 | 降级动作 |
+|------|----------|----------|
+| API 请求 content 变化 | 改造前后 diff 发给 Anthropic 的 tool_result content | 立即修复 executor 返回，API 不变是硬底线 |
+| streaming-query 回归 | 流式分支集成测试失败 | 关闭 `structuredOutcome` 字段透传 |
+| tool_result 丢失/渲染异常 | `buildAskUserPresentation` 抛错或产出空 | 回退到原 `rawOutput` Bash 风格折叠 |
+
+**降级实现机制**：在 `block-pipeline.ts` 的 `ask_user_question` 特判分支外加防御：
+
+```ts
+if (item.name === 'ask_user_question' && item.structuredOutcome) {
+  try {
+    return buildAskUserPresentation(item.structuredOutcome);
+  } catch {
+    // 降级：structuredOutcome 异常时回退原 rawOutput 路径
+  }
+}
+// 原逻辑兜底
+return buildToolResultBlock(item.name, input, item.output);
+```
+
+- **不回滚 Phase 1a**：Phase B 的失败只影响固化结果展示形态，交互期 overlay（边框、符号、tabs）不受影响。
+- **Rollback 是运行时降级，不是代码回滚**：特判分支始终保留 try/catch，保证任何异常都不阻塞主流程。
+
 ### 15.3 Phase B 与原设计的边界
 
 | 原 Phase 1a/1b/2 | Phase B |
@@ -653,3 +706,17 @@ Phase B（固化结果结构化）
 | 在 `AskQuestionOverlayV2` 内 | 跨 `ask-user-tool` → `streaming-query` → `block-pipeline` |
 
 两者**完全解耦**：Phase B 的 `structuredOutcome` 只在 `tool_result` 渲染时读取，与 overlay 内的交互状态机无交集。可独立开发、独立验收。
+
+### 15.4 关于原设计 Phase 1b / Phase 2 的实施拆分提醒
+
+> **本节不修改原设计内容，仅为实施阶段的任务拆分提供警示，文档命名保持原样。**
+
+原设计的 Phase 划分在**设计层面**是清晰的，但在**实施工作量**层面，Phase 1b 实际包含多个独立子系统（状态机改造、Other 草稿分离、visible window、多选 Next、Esc policy），已接近"第二个大功能"的体量。
+
+**实施建议（不改文档命名，改任务拆分）**：
+
+- writing-plans 阶段把 Phase 1b 拆成独立子任务，每个子系统单独 TDD + 验收，不要作为一个大 PR。
+- 心智模型对照：Phase 1a = UI 基础；Phase 1b = 交互状态机（大功能）；Phase 2 = 真实光标（大功能，含 renderer spike）。
+- 实施时不要因 Phase 编号连续而低估 1b/2 的工作量。
+
+本提醒不改变原设计第 5、13 节的 Phase 定义和验收顺序，仅作为 writing-plans 的输入。
