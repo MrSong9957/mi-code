@@ -324,11 +324,10 @@ export class BlockPipeline {
           }
           if (presentation) {
             // 父标题行:● 前缀(顶层块标记),与 message-formatter 的 ● Tool(...) 同级语义。
-            // 子项行:首行 ⎿  (⎿+两空格),续行    (三空格)对齐,与 formatToolResult 的
-            //   ⎿ 结果行约定一致(message-formatter.ts:148-149)。
-            // indent 双设:block/nested(Ink ScrollBox 消费)+ content 内前缀(Legacy ANSI 兼容)。
-            const childLines: FormattedLine[] = presentation.lines.map((l, i) => ({
-              content: `${i === 0 ? '⎿  ' : '   '}${l}`,
+            // 子项行:统一 `  ⎿ ` 前缀(2空格 + ⎿ + 1空格),所有子项一致(非首行带⎿、续行不带)。
+            // indent 双设:nested=2(Ink ScrollBox 消费)+ content 内前缀(Legacy ANSI 兼容)。
+            const childLines: FormattedLine[] = presentation.lines.map((l) => ({
+              content: `  ⎿ ${l}`,
               style: BLOCK_STYLES.dim,
               indent: INDENT.nested,
               raw: true,

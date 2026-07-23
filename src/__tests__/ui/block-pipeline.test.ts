@@ -687,7 +687,7 @@ describe('BlockPipeline ask_user_question 结构化展示 (AUTO-0025 Phase B Tas
     expect(lines[0]!.style).toMatchObject({ fg: 'brand' });
   });
 
-  it('子项格式:首行 ⎿  前缀,续行    对齐,dim + indent:2 + raw', () => {
+  it('子项格式:每个子项统一 `  ⎿ ` 前缀(2空格+⎿+1空格),dim + indent:2 + raw', () => {
     const { renderer, finishToolCalls } = mockRenderer();
     const pipeline = new BlockPipeline(renderer);
     pipeline.emit({
@@ -703,11 +703,9 @@ describe('BlockPipeline ask_user_question 结构化展示 (AUTO-0025 Phase B Tas
     // lines[0] 是父标题,lines[1]/[2] 是子项
     const child1 = lines[1]!;
     const child2 = lines[2]!;
-    // 首子行:⎿  (⎿ + 两空格)前缀
-    expect(child1.content.startsWith('⎿  ')).toBe(true);
-    // 续子行:   (三空格)前缀对齐
-    expect(child2.content.startsWith('   ')).toBe(true);
-    expect(child2.content.startsWith('⎿')).toBe(false);
+    // 所有子项统一 `  ⎿ ` 前缀(禁止首行有⎿续行无)
+    expect(child1.content.startsWith('  ⎿ ')).toBe(true);
+    expect(child2.content.startsWith('  ⎿ ')).toBe(true);
     // 子项样式:dim + indent:2 + raw:true
     for (const child of [child1, child2]) {
       expect(child.style).toMatchObject({ dim: true });

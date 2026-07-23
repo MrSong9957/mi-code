@@ -97,4 +97,28 @@ describe('<MessageLine>', () => {
       expect(frame).toContain('日志级别 → debug');
     });
   });
+
+  // PR2 review:assistant 多段文本续行必须有 2 空格缩进(非顶格)。
+  // 根因:renderFinalizedLine 非溢出分支不按 \n 拆分续行,直接单行输出导致续行顶格。
+  describe('assistant 续行缩进', () => {
+    it('多段文本:首行 ● 前缀,续行 2 空格缩进(非顶格)', () => {
+      const msg = makeMessage({
+        uuid: 'msg-cont',
+        role: 'assistant',
+        lines: [{ content: '● 第一行内容\n第二行内容', style: {}, indent: 0 }],
+      });
+      const { lastFrame } = render(<MessageLine msg={msg} cols={80} />);
+      const frame = lastFrame() ?? '';
+      // 首行带 ● 前缀
+      expect(frame).toContain('● 第一行内容');
+      // 续行必须 2 空格缩进(不是顶格)。检查"第二行内容"前有 2 空格。
+      // frame 含 \n 分隔的行,续行应是 "  第二行内容"
+      expect(frame).toContain('  第二行内容');
+      // 禁止:续行顶格(无缩进)。"第二行内容" 前不应是行首(无前导空格)
+      const lines = frame.split('\n');
+      const contLine = lines.find(l => l.includes('第二行内容'));
+      expect(contLine).toBeDefined();
+      expect(contLine!.startsWith('  ')).toBe(true);
+    });
+  });
 });

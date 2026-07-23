@@ -1076,3 +1076,73 @@ describe('<InlineAppV2> agent-completion 单行展示', () => {
     expect(frame).toContain('Agent');
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// PR2 review:独立 block 之间空行间距(Issue 3)。
+//
+// 验证:两条 finalized 消息在 <Static> 渲染时之间有空行分隔。
+// 根因:<Static> 渲染独立 TuiMessage 时无 spacer,pipeline 插的空行被 adapter 吞掉。
+// 修复:渲染层对非首个内容 item 前加 spacer,跳过自带前导空行的消息(去重)。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<InlineAppV2> 独立 block 间距 (PR2 review Issue 3)', () => {
+  it('两条 finalized tool 消息之间有空行分隔', () => {
+    const stores = createStores();
+    const s = stores.messagesStore.getState();
+    s.appendPendingTool('t1', [{ content: '● tool1', style: {}, indent: 0 }]);
+    s.resolvePendingTool('t1', [{ content: '● tool1', style: {}, indent: 0 }], 'tool-progress');
+    s.appendPendingTool('t2', [{ content: '● tool2', style: {}, indent: 0 }]);
+    s.resolvePendingTool('t2', [{ content: '● tool2', style: {}, indent: 0 }], 'tool-progress');
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    const lines = frame.split('\n');
+    const idx1 = lines.findIndex(l => l.includes('tool1'));
+    const idx2 = lines.findIndex(l => l.includes('tool2'));
+    expect(idx1).toBeGreaterThanOrEqual(0);
+    expect(idx2).toBeGreaterThan(idx1);
+    // 两者之间应有空行(idx2 - idx1 === 2:tool1, 空行, tool2)
+    expect(idx2 - idx1).toBe(2);
+    expect(lines[idx1 + 1]!.trim()).toBe('');
+  });
+
+  it('两条 agent-completion(单行 spawn_agent)消息之间有空行', () => {
+    // 这是 issue 3 的真实复现场景:agent-completion 单行 truncate 分支此前末尾无 \n,
+    // 导致连续 spawn_agent 紧贴。修复:单行分支补尾 \n,与默认分支输出契约一致。
+    const stores = createStores();
+    const s = stores.messagesStore.getState();
+    s.appendPendingTool('a1', [{ content: '● spawn_agent({"role":"explore"})', style: {}, indent: 0 }]);
+    s.resolvePendingTool('a1', [{ content: '● Agent "探索" finished · 3s', style: {}, indent: 0 }], 'agent-completion');
+    s.appendPendingTool('a2', [{ content: '● spawn_agent({"role":"plan"})', style: {}, indent: 0 }]);
+    s.resolvePendingTool('a2', [{ content: '● Agent "规划" finished · 5s', style: {}, indent: 0 }], 'agent-completion');
+
+    const { lastFrame } = render(
+      <InlineAppV2
+        messages={stores.messagesStore.getState().messages}
+        status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+        logo={{ version: '0', dir: '/tmp' }}
+        stores={stores}
+        cols={80}
+        rows={24}
+      />,
+    );
+    const frame = lastFrame() ?? '';
+    const lines = frame.split('\n');
+    const idx1 = lines.findIndex(l => l.includes('探索'));
+    const idx2 = lines.findIndex(l => l.includes('规划'));
+    expect(idx1).toBeGreaterThanOrEqual(0);
+    expect(idx2).toBeGreaterThan(idx1);
+    // agent-completion 之间应有空行(修复前紧贴:idx2 - idx1 === 1)
+    expect(idx2 - idx1).toBe(2);
+    expect(lines[idx1 + 1]!.trim()).toBe('');
+  });
+});
