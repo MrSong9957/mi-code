@@ -65,8 +65,24 @@ export interface ToolDefinition {
   parameters: ToolParameter;
 }
 
-/** 工具执行函数 */
-export type ToolExecutor = (input: Record<string, unknown>) => Promise<string>;
+/**
+ * 工具执行上下文(通用扩展点,非 ask 专用)。
+ *
+ * 物理本质:executor 函数签名上的"侧信道",承载 input 参数之外的环境信息。
+ * 当前仅 toolUseId(ask-user-tool 用它把结构化 outcome 写入 askOutcomeStore)。
+ * 设计为可选参数,旧 executor 签名 `(input) => Promise<string>` 零改动兼容。
+ */
+export interface ToolExecutionContext {
+  toolUseId: string;
+  // 未来扩展(当前不实现,仅预留):
+  // signal?: AbortSignal;   // 用户取消 / turn 中断 / timeout
+}
+
+/** 工具执行函数。ctx 可选,旧 executor 零改动。返回类型固定 Promise<string>。 */
+export type ToolExecutor = (
+  input: Record<string, unknown>,
+  ctx?: ToolExecutionContext,
+) => Promise<string>;
 
 /** 注册的工具 */
 export interface RegisteredTool {

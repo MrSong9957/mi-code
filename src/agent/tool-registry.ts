@@ -2,7 +2,7 @@
 import { spawn } from 'child_process';
 import { Encoder } from '../output/encoder.js';
 import { killProcessTree } from './process-tree.js';
-import type { ToolDefinition, ToolExecutor, RegisteredTool } from './types.js';
+import type { ToolDefinition, ToolExecutor, RegisteredTool, ToolExecutionContext } from './types.js';
 import { createReadFileTool, createWriteFileTool, createEditFileTool } from './tools/index.js';
 import { createGlobTool, createGrepTool } from './tools/search-tools.js';
 import { createTodoTool } from './tools/todo-tool.js';
@@ -37,14 +37,18 @@ export class ToolRegistry {
     return Array.from(this._tools.values()).map(t => t.definition);
   }
 
-  /** 执行工具 */
-  async execute(name: string, input: Record<string, unknown>): Promise<string> {
+  /** 执行工具(透传 ctx 给 executor,旧 executor 忽略该可选参数) */
+  async execute(
+    name: string,
+    input: Record<string, unknown>,
+    ctx?: ToolExecutionContext,
+  ): Promise<string> {
     const tool = this._tools.get(name);
     if (!tool) {
       return `Error: Unknown tool "${name}"`;
     }
     try {
-      return await tool.executor(input);
+      return await tool.executor(input, ctx);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return `Error executing tool "${name}": ${message}`;
