@@ -682,7 +682,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     activeToolIds.delete(d.toolUseId);
     tuiHandle?.setSpinnerHasActiveTools(activeToolIds.size > 0);
     // AUTO-0025-transient Task 3:传 durationMs,供 spawn_agent 完成展示用。
-    pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId, durationMs: d.duration });
+    // AUTO-0025 Phase B (Task 14):透传 structuredOutcome(UI 通道),
+    // 供 block-pipeline 的 ask_user_question 结构化展示分支使用。
+    pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId, durationMs: d.duration, structuredOutcome: d.structuredOutcome });
     refreshSpinnerContext();
   });
   eventBus.onLoopEnd(() => {
