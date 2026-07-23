@@ -55,6 +55,17 @@ export class PipelineToStoreAdapter implements PipelineRenderer {
       indent: 0,
     };
     if (_raw) line.raw = true;
+
+    // AUTO-0025 修复:thinking_summary 必须创建独立 finalized message。
+    // 原因:若走 mapRole→'system'→appendLine,会被续接进 thinking_start 时
+    // openModelBlock() 输出的 system 空行分隔符消息,summary 沉到该空白块第 2 行,
+    // 肉眼不可见。thinking_summary 是"一条完整摘要行",语义上应作为独立消息进入 <Static>,
+    // 不参与普通 system 行的续接合并。用 appendMessage 强制新建(新 uuid)。
+    if (role === 'thinking_summary') {
+      this.store.getState().appendMessage('system', [line]);
+      return;
+    }
+
     this.store.getState().appendLine(mapRole(role), line);
   }
 

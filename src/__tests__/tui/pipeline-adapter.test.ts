@@ -98,4 +98,44 @@ describe('PipelineToStoreAdapter', () => {
     adapter.appendStreamingMarkdown('hi', false);
     expect(store.getState().messages[0]!.role).toBe('assistant');
   });
+
+  // AUTO-0025 bug 修复:thinking_summary 必须创建独立 finalized message,
+  // 不能被 mapRole 降级成 system 后经 appendLine 续接进已有的 system 空行消息。
+  // 复现场景:thinking_start 时 openModelBlock() 先输出了一个 system 空行分隔符,
+  // thinking_end 时 summary 进来,若走 appendLine('system') 会续接进那条空行消息,
+  // 导致 summary 被埋进空白块的第 2 行,肉眼不可见。
+  it('printMessage(thinking_summary) → 创建独立消息,不续接已有 system 空行', () => {
+    const store = createMessagesStore();
+    const adapter = new PipelineToStoreAdapter(store);
+    // 模拟真实时序:先有一条 system 空行分隔符(openModelBlock 产物)
+    adapter.printMessage('', 'system');
+    const gapMsg = store.getState().messages[store.getState().messages.length - 1]!;
+    expect(gapMsg.lines[0]!.content).toBe(''); // 前置:确实是空行消息
+
+    // thinking_end 的 summary 进来
+    adapter.printMessage('  Thought for 1s (ctrl+o to expand)', 'thinking_summary');
+
+    const msgs = store.getState().messages;
+    // 必须创建新消息(不续接进空行消息)
+    expect(msgs.length).toBe(2);
+    // summary 在独立消息里(末条),不在空行消息的 lines 里
+    const summaryMsg = msgs[msgs.length - 1]!;
+    expect(summaryMsg.uuid).not.toBe(gapMsg.uuid);
+    expect(summaryMsg.lines.some(l => l.content.includes('Thought for 1s'))).toBe(true);
+    // 空行消息保持原样,不被污染
+    expect(gapMsg.lines.length).toBe(1);
+    expect(gapMsg.lines[0]!.content).toBe('');
+  });
+
+  it('printMessage(thinking_summary) 连续两条 summary → 各自独立消息', () => {
+    const store = createMessagesStore();
+    const adapter = new PipelineToStoreAdapter(store);
+    adapter.printMessage('  Thought for 1s', 'thinking_summary');
+    adapter.printMessage('  Thought for 2s', 'thinking_summary');
+    const msgs = store.getState().messages;
+    // 每条 summary 都是独立消息,不互相续接
+    expect(msgs.length).toBe(2);
+    expect(msgs[0]!.lines[0]!.content).toContain('Thought for 1s');
+    expect(msgs[1]!.lines[0]!.content).toContain('Thought for 2s');
+  });
 });
