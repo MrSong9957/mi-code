@@ -2,6 +2,7 @@
 
 日期：2026-07-22
 状态：设计已批准，待实施计划
+增量补丁：2026-07-24 新增 Phase 1a 细节修正与 Phase B 数据闭环（见第 15 节）；原设计已批准状态不变，补丁为增量扩展，不推翻既有章节
 
 ## 1. 背景
 
@@ -402,3 +403,253 @@ Phase 2 启动前，实施记录必须明确写出 spike 采用路径 A 或路�
 - 工具 schema、manager、provider、tool-result 和持久化协议零变化。
 - 无新增运行时依赖。
 - 聚焦测试、影响模块测试、全量测试、typecheck、lint 和真实终端验收通过。
+
+## 15. 增量补丁（2026-07-24）
+
+> **补丁性质**：本次为增量扩展，不推翻第 1–14 节的已批准设计。
+> 原设计的 Phase 1a/1b/2 计划保持有效；本节新增 Phase B 作为第四条独立交付链路，并对 Phase 1a 补充两项容器与符号细节。
+> 后续 Agent 执行时，Phase 1a/1b/2 遵照原文，Phase B 遵照本节。
+
+### 15.0 补丁动机
+
+原设计第 3 节「非目标」明确「不修改公开 JSON Schema、Provider、tool-result 或持久化协议」，因此原设计的 tool_result 渲染走 Bash 风格折叠（`rawOutput` 摘要 + `+N 行 ctrl+o to expand`）。
+
+实际验收确认：`ask_user_question` 的回答字符串在历史回看时被折叠，用户需要展开才能看到自己选了什么，体验不佳。本次补丁在不破坏「协议零变化」前提下，通过 UI 通道旁路携带结构化 outcome，让固化结果结构化渲染。同时补齐原设计 Phase 1a 未明确的容器边框与单选/多选符号区分。
+
+### 15.1 Phase 1a 细节修正（容器与符号）
+
+#### 新增决策 A1：圆角边框容器
+
+原设计 Phase 1a 只规定颜色层级，未规定容器边框。补充：
+
+通用问卷 `AskQuestionOverlayV2` 采用与 `ExitPlanModeOverlayV2` 相同的容器模式：
+
+```tsx
+<Box flexDirection="column"
+     borderStyle="round"
+     borderColor={theme.suggestion}
+     paddingX={1}>
+```
+
+- **变更原因**：mi-code 的通用问卷是独占活动区的 overlay（替换 spinner+footer），与 `ExitPlanModeOverlayV2` 同语义，而非 Claude Code 那种嵌入消息流的 inline 组件。CC 的「不加边框」结论基于 inline 语义，不适用于 overlay 语义。圆角边框让两个 overlay 视觉统一。
+- **色槽选择**：`theme.suggestion`（靛蓝），与计划审批的 `theme.planMode`（暗青）区分用途。不新增 theme 槽。
+- **宽度计算**：`contentWidth = Math.max(1, cols - 4)`（减左右边框各 1 + paddingX 各 1），与 `ExitPlanModeOverlayV2:82` 一致。
+- **影响范围**：仅 `AskQuestionOverlayV2` 渲染层；不改 store、input handler。
+- **验收标准**：40/80 列下 overlay 带圆角边框且不超宽；与计划审批 overlay 视觉风格统一。
+
+#### 新增决策 A2：单选/多选符号区分
+
+原设计 Phase 1a 用 `theme.success` 高亮选中项，但未区分单选/多选符号。补充：
+
+```ts
+// 单选（multiSelect === false）：radio 符号
+const checkSymbol = selected.includes(option.label) ? '◉' : '◯';
+
+// 多选（multiSelect === true）：保留复选框
+const checkSymbol = selected.includes(option.label) ? '[x]' : '[ ]';
+```
+
+- **变更原因**：当前单选多选都用 `[x]`/`[ ]`，用户无法一眼判断能选几个。
+- **影响范围**：仅 `AskQuestionOverlayV2` 渲染层。
+- **验收标准**：单选题显示 `◉/◯`，多选题显示 `[x]/[ ]`；聚焦项前缀 `❯`（原设计 Phase 1a 第 5.2 节已规定用 `❯`，此处强调 AskQuestionOverlayV2 需对齐，不再用 `>`）。
+
+#### 新增决策 A3：tabs 布局纯函数 computeTabLayout
+
+原设计第 7 节已系统设计导航栏宽度模式。本补丁明确把布局推导抽为可独立 TDD 的纯函数 `computeTabLayout`，归入原设计第 6 节规划的 `ask-question-layout.ts` 模块（原设计已命名该模块为布局纯函数的家）：
+
+- **核心算法**：Submit 固定预留可见；当前 tab 优先分配（最多 50% 剩余宽度）；其余 tab 均分（最少 6 字符，超出加 `…`）；极窄降级只显示当前 tab 前 3 字符。
+- **变更原因**：原设计第 7 节描述了宽度模式，但未指定实现入口；`computeTabLayout` 作为纯函数是天然 TDD 锚点。
+- **影响范围**：`AskQuestionOverlayV2` 内 tabs 行渲染。
+- **验收标准**：`computeTabLayout` 单测覆盖 1/4 question × 宽/窄/极窄终端 × 各 pageIndex 组合。
+
+#### 新增决策 A4：Other/Chat 文案
+
+- Other：走 `request.otherLabel`（数据驱动，默认 `"其他"`，禁止空白）。
+- Chat：固定中文 `"与 Agent 讨论此问题"`（系统行为入口）。
+- **影响范围**：`AskQuestionOverlayV2` 渲染层。
+- **验收标准**：Other 空白时回退 `"其他"`；文案不是核心验收项。
+
+### 15.2 新增 Phase B：固化结果结构化（meta 旁路）
+
+原设计排除 tool-result 协议变化。Phase B 在不破坏该约束的前提下，通过 **UI 通道旁路** 携带结构化 outcome，让固化结果结构化渲染。
+
+#### 目标产出
+
+```text
+当前：                              目标（Phase B）：
+⎿ User has answered your questions  ⎿ Answered 2 questions
+  "Q1"="A","Q2"="B". You can...       Q1 → A
+  +2 行 (ctrl+o to expand)            Q2 → [B, C]
+
+                                    cancelled: ⎿ Declined to answer
+                                    chat:      ⎿ Feedback: ...
+```
+
+#### 架构基础：API/UI 双通道隔离
+
+```
+executor(input) ──返回 string──┬── API 通道: ToolResultBlock.content (发给 Anthropic)
+                                │   convertMessages 白名单构造，零污染
+                                └── UI 通道: StreamMessage.output + structuredOutcome
+                                    (不发给 API)
+```
+
+事实核查结论（代码证据）：API 通道与 UI 通道在 `streaming-query.ts:313-345` 物理分离，是两个独立对象。在 UI 通道加字段 100% 不影响 API 请求。
+
+#### 改造链路（7 个点）
+
+**点 1：ToolExecutor 类型扩展（types.ts）**
+
+```ts
+export interface ToolExecutionContext {
+  toolUseId: string;
+}
+
+export type ToolExecutor = (
+  input: Record<string, unknown>,
+  ctx?: ToolExecutionContext,   // 可选，旧 executor 零改动
+) => Promise<string>;
+```
+
+- 返回类型仍是 `Promise<string>`，不违反原约束。
+
+**点 2：registry.execute 透传 ctx（tool-registry.ts:41）**
+
+```ts
+async execute(name: string, input: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<string> {
+  ...
+  return await tool.executor(input, ctx);
+}
+```
+
+**点 3：4 个调用点补 ctx 实参（均有现成 toolUseId）**
+
+| 文件 | 行号 | 实参 |
+|------|------|------|
+| `streaming-executor.ts` | 132 | `{ toolUseId: tool.block.id }` |
+| `streaming-query.ts` | 364 | `{ toolUseId: block.id }` |
+| `loop.ts` | 265 | `{ toolUseId: call.id }`（legacy 并行） |
+| `loop.ts` | 293 | `{ toolUseId: call.id }`（legacy 串行） |
+
+事实核查：4 个调用点上下文均已持有 toolUseId。
+
+**点 4：ask-user-tool executor 写入 outcomeStore**
+
+```ts
+executor: async (input, ctx) => {
+  const validated = validateAskUserInput(input);
+  if (!validated.ok) return `Error: ${validated.error}`;
+  const outcome = await mgr.ask(validated.value);
+  if (ctx) askOutcomeStore.set(ctx.toolUseId, outcome);  // 结构化 outcome 入驻
+  return serializeAskQuestionOutcome(outcome);            // 返回类型不变：string
+},
+```
+
+**点 5：askOutcomeStore（新建 `src/agent/ask-outcome-store.ts`）**
+
+```ts
+const store = new Map<string, AskQuestionOutcome>();
+export const askOutcomeStore = {
+  set: (id: string, o: AskQuestionOutcome) => store.set(id, o),
+  take: (id: string): AskQuestionOutcome | undefined => {
+    const o = store.get(id); store.delete(id); return o;  // 一次性消费
+  },
+};
+```
+
+- **orphan 清理约束（硬要求）**：
+  - `take()` 后立即 `delete`，正常路径无残留。
+  - executor 抛异常：`mgr.ask()` 的 pending 由 AskUserManager 的 `cancelPending` 清理，异常发生在 serialize 之后则 store 已 set —— 必须在 executor 外层 try/catch 兜底 delete。
+  - streaming-query 未消费：若 yield 链路中断，entry 残留。需挂接 request lifecycle hook 或在 streamingQuery 结束时 sweep 未 take 的 entry。
+  - 长期运行 CLI 不得出现内存泄漏。
+
+**点 6：streaming-query 阶段 3 取出并挂载（两个分支都改）**
+
+```ts
+const output = await registry.execute(name, input, { toolUseId: id });
+const structuredOutcome = askOutcomeStore.take(id);  // 一次性消费
+emitToolResult({ ..., structuredOutcome });
+yield { ..., structuredOutcome };
+```
+
+**点 7：block-pipeline 结构化渲染分支**
+
+`case 'tool_result'`（block-pipeline.ts:245）里，仿 `spawn_agent` 先例（同文件 277 行）加特判：
+
+```ts
+if (item.name === 'ask_user_question' && item.structuredOutcome) {
+  return buildAskUserPresentation(item.structuredOutcome);
+}
+// else 原逻辑
+```
+
+新建 `src/ui/ask-user-presentation.ts`（仿 `subagent-presentation.ts`）。
+
+#### buildAskUserPresentation 展示形态
+
+```text
+折叠：⎿ Answered N questions       （N = Object.keys(answers).length）
+展开：⎿ Q1 → A
+        Q2 → [B, C]
+```
+
+- summary 走中文（项目无 i18n 体系，与 ExitPlanMode 硬编码中文一致）。
+- N 按实际回答数（`Object.keys(answers).length`），不按 option 数量。
+- cancelled → `⎿ Declined to answer`；chat → `⎿ Feedback: ${feedback}`。
+
+#### UI 通道类型扩展（3 处）
+
+```ts
+// stream-event-bus.ts ToolResultEvent
+structuredOutcome?: AskQuestionOutcome;
+// streaming-query.ts StreamMessage tool_result 分支
+structuredOutcome?: AskQuestionOutcome;
+// ui/types.ts Block tool_result 分支
+structuredOutcome?: AskQuestionOutcome;
+```
+
+#### Phase B 硬约束（写入验收）
+
+| 约束 | 说明 |
+|------|------|
+| ✅ API 通道零污染 | `ToolResultBlock.content` 仍是 serialize 字符串；convertMessages 白名单构造 |
+| ✅ 返回类型不变 | `ToolExecutor` 仍 `Promise<string>` |
+| ✅ 旧 executor 零改动 | `ctx` 可选 |
+| ✅ 一次性消费无残留 | `take` 后立即 delete |
+| ✅ orphan 清理 | executor 异常 / 未消费场景需兜底清理 |
+| ❌ 禁止改 ToolExecutor 返回类型 | |
+| ❌ 禁止 block-format 解析自然语言字符串 | |
+| ❌ 禁止把结构化字段塞进 API content | |
+
+#### Phase B 实施顺序
+
+在 Phase 1a 完成后（用户痛点先解决），再启动 Phase B：
+
+```
+Phase 1a（交互期 UI）
+  ↓ 交付价值：交互期体验达标
+Phase B（固化结果结构化）
+  ↓ 交付价值：历史回看结构化
+```
+
+理由（用户确认）：
+- 用户主要痛点是交互期 UI。
+- Phase B 改数据链路（4 文件透传），风险面大于 Phase 1a（纯渲染）。
+- Phase B 即使失败，也不影响核心问答流程。
+
+#### Phase B 验收
+
+- 主路径（streaming-query 流式分支）：TTY 验证 + 集成测试。
+- legacy 路径（loop.ts）：编译通过 + 单测覆盖，不要求 TTY 验证。
+- API 请求不变：对比改造前后发给 Anthropic 的 tool_result content。
+- orphan 清理：长跑测试或单测验证无残留 entry。
+
+### 15.3 Phase B 与原设计的边界
+
+| 原 Phase 1a/1b/2 | Phase B |
+|------------------|---------|
+| 交互期 UI（overlay 渲染、状态机、光标） | 固化后结果（tool_result 渲染） |
+| 不碰数据链路 | 改数据链路（UI 通道透传） |
+| 在 `AskQuestionOverlayV2` 内 | 跨 `ask-user-tool` → `streaming-query` → `block-pipeline` |
+
+两者**完全解耦**：Phase B 的 `structuredOutcome` 只在 `tool_result` 渲染时读取，与 overlay 内的交互状态机无交集。可独立开发、独立验收。
