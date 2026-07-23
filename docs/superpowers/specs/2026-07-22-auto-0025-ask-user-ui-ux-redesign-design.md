@@ -586,7 +586,11 @@ executor: async (input, ctx) => {
   if (!validated.ok) return `Error: ${validated.error}`;
   const outcome = await mgr.ask(validated.value);
   if (ctx) {
-    askOutcomeStore.set(ctx.toolUseId, { version: 1, outcome });  // 版本化包装
+    askOutcomeStore.set(ctx.toolUseId, {
+      version: 1,
+      request: validated.value,   // 含 questions（header/options/multiSelect）
+      outcome,
+    });
   } else {
     // 开发错误检测：调用点忘记传 ctx 时发出警告，避免静默退回 rawOutput
     // 不改类型、不抛错，仅 debug 级别日志（当前 4 个调用点已核实都传 ctx）
@@ -692,10 +696,13 @@ structuredOutcome?: StructuredAskResult;
 ```ts
 interface StructuredAskResult {
   version: 1;          // 结构化结果版本，当前固定 1
-  outcome: AskQuestionOutcome;
+  request: AskQuestionRequest;   // 含 questions（header/options/multiSelect），供展示配对
+  outcome: AskQuestionOutcome;   // submitted/cancelled/chat
 }
 ```
 
+- **为什么含 request**：`AskQuestionOutcome.answers` 的 key 是 question 全文（长），而 UI 展示想用 `header`（短）。若只存 outcome，presentation 函数只能显示长问题文本。含 request 让 `buildAskUserPresentation` 能做 `request.questions[i].header` ↔ `outcome.answers[question]` 配对。
+- **存的是展示所需字段**：request 保存 `AskQuestionRequest`（含 questions 的 header/options/multiSelect），不是原始 input。未来 schema 变化时 UI 不重新解析。
 - **变更原因**：未来 `AskQuestionOutcome` schema 变化（如 v2）时，renderer 能按版本降级，不靠 try/catch 兜底逻辑错误。
 - **fallback 规则**：`buildAskUserPresentation` 检查 `version`，非支持的版本（或字段缺失/损坏）时回退原 `rawOutput` Bash 风格折叠，与 Rollback 条件（15.2 Phase B Rollback）共用降级路径。
 - **version 由谁写入**：executor 在 `askOutcomeStore.set` 时包装为 `{ version: 1, outcome }`；`streaming-query` take 后原样透传。
