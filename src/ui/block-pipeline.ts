@@ -19,6 +19,7 @@ import { INDENT, BLOCK_STYLES, buildToolResultBlock, summarizeOutput } from './b
 import { MessageFormatter } from './message-formatter.js';
 import { ExpandableBlockStore } from './expandable-store.js';
 import { buildSubagentCompletionPresentation } from './subagent-presentation.js';
+import { buildAskUserPresentation } from './ask-user-presentation.js';
 
 /**
  * AUTO-0025-transient Task 3:工具完成消息的专用 kind。
@@ -286,6 +287,50 @@ export class BlockPipeline {
             // 注册 expandable:full=子代理正文(无 envelope),供 Ctrl+O 展开
             const id = `agent-${++this.idCounter}`;
             const fullLines = presentation.fullOutput.split('\n').map((l, i) => ({
+              content: `${i === 0 ? '⎿  ' : '   '}${l}`,
+              style: BLOCK_STYLES.dim,
+              indent: INDENT.nested,
+              raw: true,
+            }));
+            item.expandableId = id;
+            item.expandableFullLines = fullLines;
+            item.hasExpandable = true;
+            this.finishTool(idx);
+            break;
+          }
+        }
+
+        // AUTO-0025 Phase B (Task 13):ask_user_question 结构化展示。
+        // 物理本质:把回答提交后的 tool_result 从"Bash 折叠"改为结构化展示。
+        // 折叠态:⎿ Answered N questions;展开态(Ctrl+O):header → answer 配对。
+        // 仅当 block.structuredOutcome 存在(UI 通道携带)时走此路径,
+        // 否则 fall through 到通用 rawOutput 逻辑(向后兼容)。
+        if (item.name === 'ask_user_question' && block.structuredOutcome) {
+          // catch 范围严格限定在 buildAskUserPresentation(纯函数,可预期失败)。
+          // 禁止包住 item 赋值 / finishTool(那是 pipeline 状态变更,异常应抛出而非降级)。
+          let presentation: { summary: string; lines: string[] } | null = null;
+          try {
+            presentation = buildAskUserPresentation(block.structuredOutcome);
+          } catch (err) {
+            // presentation 层异常:回退 rawOutput,不中断 pipeline。
+            // DEBUG 门控:正常不输出,调试时可见(对齐 streaming-query take miss 检测模式)。
+            if (process.env.DEBUG) {
+              console.error('[ask_user presentation failed]', { toolUseId: block.toolUseId, err });
+            }
+            // presentation 保持 null,落到下面的通用 rawOutput 逻辑
+          }
+          if (presentation) {
+            item.resultLines = [{
+              content: `⎿ ${presentation.summary}`,
+              style: BLOCK_STYLES.magenta,
+              indent: 0,
+            }];
+            // 复用 agent-completion:跳过 callLines,只渲染结果摘要(见 Step 0 决策)。
+            // ask 的结构化摘要(⎿ Answered N questions)就是结果展示,不需要保留 ● ask_user_question(...) call 行。
+            item.finalKind = 'agent-completion';
+            // 注册 Ctrl+O 展开内容:header → answer 配对列表
+            const id = `ask-${++this.idCounter}`;
+            const fullLines = presentation.lines.map((l, i) => ({
               content: `${i === 0 ? '⎿  ' : '   '}${l}`,
               style: BLOCK_STYLES.dim,
               indent: INDENT.nested,

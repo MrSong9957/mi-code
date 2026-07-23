@@ -549,3 +549,112 @@ describe('BlockPipeline spawn_agent 完成展示 (AUTO-0025-transient Task 3)', 
   });
 });
 
+// ────────────────────────────────────────────────────────────────────
+// AUTO-0025 Phase B (Task 13):ask_user_question 结构化展示。
+//
+// 验证:带 structuredOutcome 的 ask_user_question tool_result 渲染为
+// ⎿ Answered N questions(折叠态)+ header → answer(展开态 Ctrl+O),
+// 不走通用 Bash 折叠(不留 ● ask_user_question call 行)。
+// ────────────────────────────────────────────────────────────────────
+
+describe('BlockPipeline ask_user_question 结构化展示 (AUTO-0025 Phase B Task 13)', () => {
+  const structuredSubmitted = {
+    version: 1 as const,
+    request: {
+      questions: [
+        {
+          header: 'Auth',
+          question: 'Which auth?',
+          options: [{ label: 'OAuth', description: 'd' }, { label: 'Key', description: 'd' }],
+          multiSelect: false,
+        },
+        {
+          header: 'Lib',
+          question: 'Which lib?',
+          options: [{ label: 'A', description: 'd' }, { label: 'B', description: 'd' }],
+          multiSelect: true,
+        },
+      ],
+    },
+    outcome: { kind: 'submitted' as const, answers: { 'Which auth?': 'OAuth', 'Which lib?': 'A, B' } },
+  };
+
+  it('submitted:折叠态 ⎿ Answered N questions,展开态 header → answer', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'ask_user_question', toolUseId: 'q1',
+      input: { questions: structuredSubmitted.request.questions },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'ask_user_question', toolUseId: 'q1',
+      output: 'User has answered your questions: ...',
+      structuredOutcome: structuredSubmitted,
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    // 折叠态:含 Answered N questions(agent-completion 单行,不含 call 行)
+    expect(contentTexts.some(t => t.includes('Answered') && t.includes('2 question'))).toBe(true);
+    // 不含 ask_user_question call 行(agent-completion 复用:跳过 callLines)
+    expect(contentTexts.some(t => t.includes('ask_user_question'))).toBe(false);
+    // 不含 raw "User has answered"(证明走结构化路径,非 Bash 折叠)
+    expect(contentTexts.some(t => t.includes('User has answered'))).toBe(false);
+  });
+
+  it('submitted:Ctrl+O 展开含 header → answer 配对(不含 question 全文)', () => {
+    const { renderer } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'ask_user_question', toolUseId: 'q1',
+      input: { questions: structuredSubmitted.request.questions },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'ask_user_question', toolUseId: 'q1',
+      output: 'raw serialize',
+      structuredOutcome: structuredSubmitted,
+    });
+    const expandable = pipeline.getLastExpandableFullLines();
+    expect(expandable).not.toBeNull();
+    const fullText = expandable!.lines.map(l => l.content).join('\n');
+    // header → answer 配对
+    expect(fullText).toContain('Auth → OAuth');
+    expect(fullText).toContain('Lib → A, B');
+    // 不含 question 全文(证明走 header 配对)
+    expect(fullText).not.toContain('Which auth?');
+  });
+
+  it('cancelled:折叠态 ⎿ Declined to answer', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'ask_user_question', toolUseId: 'q2',
+      input: { questions: structuredSubmitted.request.questions },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'ask_user_question', toolUseId: 'q2',
+      output: 'User declined to answer questions',
+      structuredOutcome: { ...structuredSubmitted, outcome: { kind: 'cancelled' } },
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    expect(contentTexts.some(t => t.toLowerCase().includes('declined'))).toBe(true);
+  });
+
+  it('无 structuredOutcome:走通用降级(含 call 行 + raw 预览)', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'ask_user_question', toolUseId: 'q3',
+      input: { questions: [] },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'ask_user_question', toolUseId: 'q3',
+      output: 'some raw output',
+      // 无 structuredOutcome
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    // 通用降级:含 call 行
+    expect(contentTexts.some(t => t.includes('ask_user_question'))).toBe(true);
+    // 无结构化摘要
+    expect(contentTexts.some(t => t.includes('Answered'))).toBe(false);
+  });
+});
+
