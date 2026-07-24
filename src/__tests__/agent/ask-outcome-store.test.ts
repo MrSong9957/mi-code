@@ -66,4 +66,32 @@ describe('askOutcomeStore', () => {
     // 模拟 turn 结束:全部消费后 store 应空(防内存泄漏的核心断言)
     expect(askOutcomeStore.size()).toBe(0);
   });
+
+  // ── turn 生命周期 vs TTL 生命周期的职责分离 ──
+  // sweep() 是 TTL 清理(只删超 5min 的 entry),不应承担 turn 结束清理职责。
+  // turn 结束(含异常路径)应调 clear() 强制清空,否则 orphan 会跨 turn 残留最长 5min。
+  // 此前 streamingQuery finally 误调 sweep(),无法清理本 turn 的 orphan(契约违反)。
+
+  it('clear:turn 结束强制清空 orphan(take miss / 异常路径残留)', () => {
+    // 模拟异常路径:set 了但没 take(executor 异常 / take miss)
+    askOutcomeStore.set('orphan-1', makeResult('orphan-1'));
+    askOutcomeStore.set('orphan-2', makeResult('orphan-2'));
+    expect(askOutcomeStore.size()).toBe(2);
+    // turn 结束(异常路径 finally)调 clear:立即清空,不等 TTL
+    askOutcomeStore.clear();
+    expect(askOutcomeStore.size()).toBe(0);
+  });
+
+  it('sweep 与 clear 职责分离:sweep 不清未过 TTL 的 orphan,clear 立即清空', () => {
+    // 同样新鲜的 orphan:sweep 清不掉(crit:证明 sweep 不适合 turn 清理)
+    vi.useFakeTimers();
+    askOutcomeStore.set('fresh-orphan', makeResult('fresh'));
+    vi.advanceTimersByTime(10 * 1000);  // 10s,远未到 TTL
+    askOutcomeStore.sweep();
+    expect(askOutcomeStore.size()).toBe(1);  // sweep 清不掉
+    // clear 能清掉:turn 生命周期清理的正确选择
+    askOutcomeStore.clear();
+    expect(askOutcomeStore.size()).toBe(0);
+    vi.useRealTimers();
+  });
 });

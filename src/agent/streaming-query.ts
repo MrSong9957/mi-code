@@ -481,10 +481,14 @@ export async function* streamingQuery(
   // 落到这里说明逻辑有漏洞——记录后兜底退出，避免死循环。
   eventBus?.emitLoopEnd({ reason: 'unexpected_exit' });
   } finally {
-    // AUTO-0025 Phase B (Task 11):turn 结束兜底清理 outcome store。
-    // 正常路径下 take 已消费所有 entry;此处清理未消费的(take miss / 权限拦截 / 异常路径留下的)。
-    // 配合 TTL 5min 双保险防 orphan/内存泄漏。
-    askOutcomeStore.sweep();
+    // AUTO-0025 Phase B:turn 结束强制清空 outcome store(turn 生命周期清理)。
+    // 正常路径下 take 已消费所有 entry;此处用 clear() 强制清空未消费的
+    // (take miss / 权限拦截 / 异常路径留下的 orphan),不等 TTL。
+    // 注意:不能用 sweep()——sweep 是 TTL 清理(只删超 5min 的 entry),
+    // 对本 turn 产生的 orphan 是 no-op。两者职责分离:
+    //   clear()  = turn 生命周期(本函数 finally,确定性清空)
+    //   sweep()  = 进程生命周期(防御性 TTL,长运行兜底,当前无定时调用点)
+    askOutcomeStore.clear();
     // 无论正常结束/错误/中断，都把最终消息列表回调出去（供会话持久化落盘）
     if (onMessages) onMessages(messages);
   }

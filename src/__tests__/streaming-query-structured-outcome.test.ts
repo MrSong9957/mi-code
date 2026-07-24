@@ -129,7 +129,7 @@ describe('streamingQuery structuredOutcome 透传', () => {
     const expectedApiContent = serializeAskQuestionOutcome({ kind: 'submitted', answers: { 'Which auth?': 'OAuth' } });
     expect((toolResultBlocks[0] as { content: string }).content).toBe(expectedApiContent);
 
-    // sweep 生效:turn 结束后 store 应空
+    // turn 结束清理生效(finally clear):store 应空(正常路径下 take 已消费)
     expect(askOutcomeStore.size()).toBe(0);
   });
 

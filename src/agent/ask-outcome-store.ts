@@ -37,7 +37,11 @@ export const askOutcomeStore = {
     return entry.result;
   },
 
-  /** 删除超 TTL 的 entry(streamingQuery finally 调用,兜底清理)。 */
+  /**
+   * 删除超 TTL 的 entry(进程生命周期防御性清理,只删超 5min 的)。
+   * 注意:不用于 turn 结束清理 —— sweep 对本 turn 产生的 orphan 是 no-op。
+   * 当前无定时调用点(预留:长运行进程可周期性调用做 TTL 兜底)。
+   */
   sweep(): void {
     const now = Date.now();
     for (const [id, entry] of store) {
@@ -45,7 +49,7 @@ export const askOutcomeStore = {
     }
   },
 
-  /** 全清(极端兜底/测试用)。 */
+  /** 全清(turn 结束清理用:streamingQuery finally 调此清空未消费的 orphan)。 */
   clear(): void {
     store.clear();
   },
