@@ -6,7 +6,7 @@
 // 关键断言:tool_result 事件携带 structuredOutcome(走 UI 通道),
 //          而 ToolResultBlock.content 仍是 serialize 字符串(API 通道不变)。
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { streamingQuery } from '../agent/streaming-query.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
 import { askOutcomeStore } from '../agent/ask-outcome-store.js';
@@ -158,5 +158,34 @@ describe('streamingQuery structuredOutcome 透传', () => {
 
     expect(toolResults).toHaveLength(1);
     expect(toolResults[0]?.structuredOutcome).toBeUndefined();
+  });
+});
+
+// ── streamingQuery finally 生命周期契约(锁住"finally 必须 clear")──
+// code review 指出的验证缺口:store 层 clear/sweep 职责测试无法防止 finally 误调 sweep。
+// 此测试直接验证调用关系:turn 结束时 finally 调 clear()(确定性清空),不调 sweep()(TTL 清理)。
+// 若未来有人把 finally 改回 sweep,本测试失败 —— orphan 会回归(秒级 turn 内 sweep 是 no-op)。
+describe('streamingQuery turn 结束生命周期契约', () => {
+  beforeEach(() => askOutcomeStore.clear());
+
+  it('finally 调 clear() 清空 store,不调 sweep()', async () => {
+    const clearSpy = vi.spyOn(askOutcomeStore, 'clear');
+    const sweepSpy = vi.spyOn(askOutcomeStore, 'sweep');
+
+    const client = new ScriptedStreamClient([
+      [{ type: 'text', text: 'done' }],  // 单轮纯文本,不触发工具,正常 end_turn 退出
+    ]);
+    const registry = new ToolRegistry();
+    const gen = streamingQuery(client, registry, 'hi', {
+      systemPrompt: 'sys',
+      tools: [],
+      signal: new AbortController().signal,
+    });
+    for await (const _ of gen) { void _; }
+
+    // 核心契约:turn 结束(无论正常/异常)finally 必须调 clear(确定性清空 orphan)
+    expect(clearSpy).toHaveBeenCalled();
+    // 禁止:sweep 是 TTL 清理(进程生命周期),不该在 turn finally 调用
+    expect(sweepSpy).not.toHaveBeenCalled();
   });
 });
