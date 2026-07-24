@@ -185,7 +185,10 @@ describe('streamingQuery turn 结束生命周期契约', () => {
 
     // 核心契约:turn 结束(无论正常/异常)finally 必须调 clear(确定性清空 orphan)
     expect(clearSpy).toHaveBeenCalled();
-    // 禁止:sweep 是 TTL 清理(进程生命周期),不该在 turn finally 调用
+    // 刻意约束:sweep 不该在 turn finally 调用。sweep 是 TTL 清理(只删超 5min 的 entry),
+    // 对秒级 turn 内的 orphan 是 no-op —— 这正是原 bug 的根因(finally 误调 sweep 导致 orphan 残留)。
+    // 若未来设计变化需要在 finally 同时调 clear+sweep,请先评估 orphan 清理是否仍确定,
+    // 再更新此断言。勿直接删除此断言(会失去对 sweep 误用的回归保护)。
     expect(sweepSpy).not.toHaveBeenCalled();
   });
 });
