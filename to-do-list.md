@@ -26,19 +26,19 @@
   > 调研输入提示/补全的交互方案
   > 注意：与 spinner 区域的 Tip（AUTO-0020，已实现）不同；本任务关注输入框 placeholder / ghost text / 自由文本补全，当前代码零实现。
 
-- [ ] AUTO-0025: AskUserQuestion 接入下拉选择菜单
-  > AUTO-0006 当前作答 UX 为纯文本输入（输数字 / 自由文本回车）。复用 AUTO-0007 下拉菜单，实现 ↑/↓ 高亮 + Enter 选择预设 options 的交互。
-  > 依赖：AUTO-0006、AUTO-0007
-
-- [ ] AUTO-0030: 修复 end_turn 时 assistant 消息未持久化 ~~(待办)~~
-  > (已完成,见「已完成」分区)
-
 ## 已完成
 
 - [x] AUTO-0001: 图片输入支持
   > 支持在输入中附加图片，作为多模态输入发送给模型。
   > 完成：`/image <路径>` 与 Windows 图片剪贴板读取均可构造 ImageBlock；魔数格式检测、3.75MB 校验、磁盘缓存、Anthropic/OpenAI/Google provider 发送及 resume 回填链路完整。AUTO-0027 经 brainstorming 确认为非必要便捷入口并取消，不阻塞父任务完成。
   > 依赖：AUTO-0026、AUTO-0028
+
+- [x] AUTO-0025: AskUserQuestion 接入下拉选择菜单
+  > AUTO-0006 原作答 UX 为纯文本输入。本任务重构 overlay 交互 + 固化结果结构化展示，分两 PR 完成。
+  > 完成 PR1（`2882666`）：新建 `computeTabLayout` 纯函数（权重分配 + CJK 安全截断 + 极窄降级）；重写 `AskQuestionOverlayV2`（圆角边框 + suggestion 色 + 单选 ◉/◯ 多选 [x]/[ ] + 聚焦 ❯ + tabs 导航）。5 列宽/窄/极窄终端覆盖。
+  > 完成 PR2（`8263009`）：解决回答提交后 tool_result 被当 Bash 折叠的痛点。meta 旁路双通道隔离——`StructuredAskResult` 走 UI 通道（`askOutcomeStore` set/take/sweep/clear + TTL），API 通道（`ToolResultBlock.content`）零污染（Task 15 三重证明）。渲染层 3 个 contract 修正：Answered 子项统一 `  ⎿ ` 前缀、assistant 续行缩进（统一走 `wrapStreamingText`）、agent-completion 块间距（删 `height={1}` + 补尾 `\n`）。新增 ConPTY 真实终端验收工具（`npm run test:tty`，node-pty + ANSI Screen 还原，12 项断言）。TDD 全程 RED→GREEN，影响域 245+ passed、全量 1971 passed（6 failed 全 pre-existing/flaky）。
+  > follow-up（`b96516c`/`c52b173`/`5d1caae`）：code review 发现 `streamingQuery finally` 误调 `sweep()`（TTL 清理，对本 turn orphan 是 no-op）的生命周期契约错误，改调 `clear()`（turn 确定性清理）。补 spy 契约测试 + mutation 验证锁住 finally→clear 调用关系。
+  > 依赖：AUTO-0006、AUTO-0007
 
 - [x] AUTO-0030: 修复 end_turn 时 assistant 消息未持久化
   > AUTO-0028 实测时发现:resume 后 JSONL 只有 user 消息,0 条 assistant。根因 `src/agent/streaming-query.ts:255-258` 的 end_turn 提前 `return`,跳过了阶段 4 把 `assistantMessages` 合并进 `messages` 的步骤。所有以纯文本回复收尾的会话(绝大多数),最后一条 assistant 都丢失。day-1 bug(`ddb7725` 持久化功能引入时就在)。
@@ -174,3 +174,4 @@
 | 2026-07-21 | AUTO-0029 | @agent | 实测发现 C 方案 `[图片 <完整 cachePath>]` 在 Windows 长路径下视觉糟糕(90+ 字符),改用 `path.basename` 只显示文件名 `[图片 1.jpg]`;新增 1 条 Windows 反斜杠路径测试(共 7 条)。 |
 | 2026-07-21 | AUTO-0030 | @agent | AUTO-0028 实测暴露 resume 后 JSONL 只存 user 不存 assistant 的严重数据完整性 bug。根因:`streaming-query.ts:255-258` end_turn 提前 return 跳过阶段 4 assistantMessages 合并。修复 + 2 条集成测试(纯文本 + 工具调用末尾),全量 1687 passed、tsc exit 0。day-1 bug 自持久化功能(`ddb7725`)引入就在。 |
 | 2026-07-21 | AUTO-0001、AUTO-0027 | @agent | brainstorming 复核范围：拖拽路径显示由终端原生提供，自动转图片仅属便捷入口；现有 `/image <路径>`、Windows 图片剪贴板、三家 provider 与 resume 链路已满足父任务。取消 AUTO-0027，关闭 AUTO-0001。 |
+| 2026-07-24 | AUTO-0025 | @agent | 完成 AskUserQuestion overlay 重构 + 固化结果结构化展示。PR1（`2882666`）：`computeTabLayout` + `AskQuestionOverlayV2` 圆角边框/radio-checkbox/聚焦符。PR2（`8263009`）：meta 旁路双通道（StructuredAskResult 走 UI 通道，API content 零污染）+ 渲染层 3 contract 修正（子项统一 ⎿ / 续行缩进 / agent-completion 间距）+ ConPTY 验收工具（`npm run test:tty`）。follow-up（`b96516c`/`c52b173`/`5d1caae`）：code review 发现 finally 误调 sweep 的生命周期契约错误，改 clear + spy 契约测试 + mutation 验证。 |
