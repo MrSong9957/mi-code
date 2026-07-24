@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:regression": "vitest run src/__tests__/regression/",
+    "test:tty": "node scripts/tty-verify/run-verify.cjs",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "typecheck": "tsc --noEmit",

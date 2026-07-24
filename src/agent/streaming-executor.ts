@@ -129,7 +129,7 @@ export class StreamingToolExecutor {
         }
       }
 
-      const output = await this.registry.execute(tool.block.name, tool.block.input);
+      const output = await this.registry.execute(tool.block.name, tool.block.input, { toolUseId: tool.block.id });
       tool.results = [{ type: 'text', text: output }];
       tool.status = 'completed';
     } catch (error) {

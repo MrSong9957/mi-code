@@ -19,6 +19,7 @@ import { INDENT, BLOCK_STYLES, buildToolResultBlock, summarizeOutput } from './b
 import { MessageFormatter } from './message-formatter.js';
 import { ExpandableBlockStore } from './expandable-store.js';
 import { buildSubagentCompletionPresentation } from './subagent-presentation.js';
+import { buildAskUserPresentation } from './ask-user-presentation.js';
 
 /**
  * AUTO-0025-transient Task 3:工具完成消息的专用 kind。
@@ -294,6 +295,52 @@ export class BlockPipeline {
             item.expandableId = id;
             item.expandableFullLines = fullLines;
             item.hasExpandable = true;
+            this.finishTool(idx);
+            break;
+          }
+        }
+
+        // AUTO-0025 Phase B (Task 13):ask_user_question 结构化展示。
+        // 物理本质:把回答提交后的 tool_result 从"Bash 折叠"改为父子结构化展示。
+        // 主消息区默认渲染(非 Ctrl+O 展开):
+        //   ● Answered N questions          ← 父标题(magenta,顶层块)
+        //     ⎿ Q1 → A1                     ← 子项(dim,⎿ 前缀 + indent:2)
+        //     ⎿ Q2 → A2
+        // 仅当 block.structuredOutcome 存在(UI 通道携带)时走此路径,
+        // 否则 fall through 到通用 rawOutput 逻辑(向后兼容)。
+        if (item.name === 'ask_user_question' && block.structuredOutcome) {
+          // catch 范围严格限定在 buildAskUserPresentation(纯函数,可预期失败)。
+          // 禁止包住 item 赋值 / finishTool(那是 pipeline 状态变更,异常应抛出而非降级)。
+          let presentation: { summary: string; lines: string[] } | null = null;
+          try {
+            presentation = buildAskUserPresentation(block.structuredOutcome);
+          } catch (err) {
+            // presentation 层异常:回退 rawOutput,不中断 pipeline。
+            // DEBUG 门控:正常不输出,调试时可见(对齐 streaming-query take miss 检测模式)。
+            if (process.env.DEBUG) {
+              console.error('[ask_user presentation failed]', { toolUseId: block.toolUseId, err });
+            }
+            // presentation 保持 null,落到下面的通用 rawOutput 逻辑
+          }
+          if (presentation) {
+            // 父标题行:● 前缀(顶层块标记),与 message-formatter 的 ● Tool(...) 同级语义。
+            // 子项行:统一 `  ⎿ ` 前缀(2空格 + ⎿ + 1空格),所有子项一致(非首行带⎿、续行不带)。
+            // indent 双设:nested=2(Ink ScrollBox 消费)+ content 内前缀(Legacy ANSI 兼容)。
+            const childLines: FormattedLine[] = presentation.lines.map((l) => ({
+              content: `  ⎿ ${l}`,
+              style: BLOCK_STYLES.dim,
+              indent: INDENT.nested,
+              raw: true,
+            }));
+            item.resultLines = [
+              { content: `● ${presentation.summary}`, style: BLOCK_STYLES.magenta, indent: INDENT.block },
+              ...childLines,
+            ];
+            // 复用 agent-completion:finishTool 只用 resultLines(父标题+子项),
+            // 不拼 callLines(避免 ● ask_user_question(...) call 行残留)。
+            item.finalKind = 'agent-completion';
+            // 不注册 expandable:子项已在主消息区默认展示。
+            // Ctrl+O 保持现有机制(取最后一个 expandable,ask 不再特判)。
             this.finishTool(idx);
             break;
           }

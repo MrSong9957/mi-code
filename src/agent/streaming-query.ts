@@ -31,6 +31,8 @@ import {
   FailureInbox,
 } from './recovery.js';
 import { jitteredBackoff, sleep } from './backoff.js';
+import type { StructuredAskResult } from './ask-user-types.js';
+import { askOutcomeStore } from './ask-outcome-store.js';
 
 /**
  * 流式路径下的权限预检：返回是否被拦截及回写给模型的输出文本。
@@ -57,7 +59,8 @@ function checkPermissionOrBlock(
 export type StreamMessage =
   | NormalizedMessage
   | StreamEvent
-  | { type: 'tool_result'; toolUseId: string; name: string; output: string };
+  // AUTO-0025 Phase B (Task 10):structuredOutcome 走 UI 通道(仅 ask_user_question 有)。
+  | { type: 'tool_result'; toolUseId: string; name: string; output: string; structuredOutcome?: StructuredAskResult };
 
 /** 流式查询选项 */
 export interface StreamingQueryOptions {
@@ -328,11 +331,22 @@ export async function* streamingQuery(
             idleRequested = true;
           }
 
+          // AUTO-0025 Phase B (Task 11):meta 旁路消费端。
+          // 从 outcome store take 出结构化结果(ask_user_question executor 在 Task 9 写入)。
+          // take 即删:正常路径下一次性消费。take miss 检测:ask_user_question 执行后 store 应有 entry,
+          // 若返回 undefined 说明 set/take 时序异常或 toolUseId 不匹配(开发错误,非运行错误)。
+          // DEBUG 门控:正常不输出(避免污染终端),调试时 DEBUG=1 可见。
+          const structuredOutcome = askOutcomeStore.take(tool.id);
+          if (!structuredOutcome && tool.block.name === 'ask_user_question' && process.env.DEBUG) {
+            console.error('[streaming-query] ask_user_question outcome missing in store', { toolUseId: tool.id });
+          }
+
           eventBus?.emitToolResult({
             toolUseId: tool.id,
             name: tool.block.name,
             output,
             duration: Date.now() - (toolStartTimes.get(tool.id) ?? Date.now()),
+            structuredOutcome,
           });
 
           yield {
@@ -340,6 +354,7 @@ export async function* streamingQuery(
             toolUseId: tool.id,
             name: tool.block.name,
             output,
+            structuredOutcome,
           };
         }
       }
@@ -361,7 +376,7 @@ export async function* streamingQuery(
           continue;
         }
         try {
-          const output = await registry.execute(block.name, block.input);
+          const output = await registry.execute(block.name, block.input, { toolUseId: block.id });
           const result: ToolResultBlock = {
             type: 'tool_result',
             tool_use_id: block.id,
@@ -374,11 +389,18 @@ export async function* streamingQuery(
             idleRequested = true;
           }
 
+          // AUTO-0025 Phase B (Task 11):meta 旁路消费端(传统分支,与流式分支对齐)。
+          const structuredOutcome = askOutcomeStore.take(block.id);
+          if (!structuredOutcome && block.name === 'ask_user_question' && process.env.DEBUG) {
+            console.error('[streaming-query] ask_user_question outcome missing in store', { toolUseId: block.id });
+          }
+
           eventBus?.emitToolResult({
             toolUseId: block.id,
             name: block.name,
             output,
             duration: Date.now() - (toolStartTimes.get(block.id) ?? Date.now()),
+            structuredOutcome,
           });
 
           yield {
@@ -386,6 +408,7 @@ export async function* streamingQuery(
             toolUseId: block.id,
             name: block.name,
             output,
+            structuredOutcome,
           };
         } catch (error) {
           const output = `[Tool Error] ${String(error)}`;
@@ -458,6 +481,10 @@ export async function* streamingQuery(
   // 落到这里说明逻辑有漏洞——记录后兜底退出，避免死循环。
   eventBus?.emitLoopEnd({ reason: 'unexpected_exit' });
   } finally {
+    // AUTO-0025 Phase B (Task 11):turn 结束兜底清理 outcome store。
+    // 正常路径下 take 已消费所有 entry;此处清理未消费的(take miss / 权限拦截 / 异常路径留下的)。
+    // 配合 TTL 5min 双保险防 orphan/内存泄漏。
+    askOutcomeStore.sweep();
     // 无论正常结束/错误/中断，都把最终消息列表回调出去（供会话持久化落盘）
     if (onMessages) onMessages(messages);
   }

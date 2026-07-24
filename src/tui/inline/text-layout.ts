@@ -188,19 +188,20 @@ export function wrapThinkingTextTrimmed(text: string, cols: number): string[] {
 
 /**
  * 把单条已固化的 FormattedLine 渲染成终端字符串数组。
- * 补齐缩进 → 上色。assistant 长文本额外按终端宽度折行（续行缩进 2 空格）。
+ * 补齐缩进 → 上色。assistant 文本(● 前缀)统一走 wrapStreamingText:
+ * 按 \n 拆分段落,首行 ● 前缀,续行 2 空格缩进(避免续行顶格丢层级)。
+ *
+ * PR2 review 修正:此前非溢出分支直接单行输出,不拆 \n、不给续行加缩进,
+ * 导致多段 assistant 文本续行顶格(内容长度相关的间歇性 bug)。合并为单分支后,
+ * 短文本也正确:wrapStreamingText 对短段落 foldLine 返回单行,不改变内容。
  */
 export function renderFinalizedLine(role: string, line: FormattedLine, cols: number): string[] {
   const leading = line.content.length - line.content.trimStart().length;
   const pad = leading < line.indent ? ' '.repeat(line.indent - leading) : '';
   const fullContent = pad + line.content;
 
-  if (role === 'assistant' && line.content.startsWith(STREAM_PREFIX)
-      && displayWidth(fullContent) > cols) {
-    return wrapStreamingText(fullContent, cols);
-  }
   if (role === 'assistant' && line.content.startsWith(STREAM_PREFIX)) {
-    return [STREAM_PREFIX + highlightLine(line.content.slice(STREAM_PREFIX.length))];
+    return wrapStreamingText(fullContent, cols);
   }
   return [colorizeStyled(fullContent, line.style)];
 }

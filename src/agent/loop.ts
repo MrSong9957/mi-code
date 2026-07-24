@@ -262,7 +262,7 @@ export async function agentLoop(
         const batchResults = await Promise.all(
           batch.calls.map(async (call) => {
             callbacks.onToolCall?.(call.name, call.input);
-            const rawOutput = await registry.execute(call.name, call.input);
+            const rawOutput = await registry.execute(call.name, call.input, { toolUseId: call.id });
             const output = persistLargeOutput(call.id, rawOutput, call.name);
             callbacks.onToolResult?.(call.id, output);
             if (call.name === 'idle') idleRequested = true;
@@ -290,7 +290,7 @@ export async function agentLoop(
             }
           }
 
-          const rawOutput = await registry.execute(call.name, call.input);
+          const rawOutput = await registry.execute(call.name, call.input, { toolUseId: call.id });
           const output = persistLargeOutput(call.id, rawOutput, call.name);
 
           // idle 检测

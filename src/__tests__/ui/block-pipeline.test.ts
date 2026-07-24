@@ -24,6 +24,8 @@ describe('finishToolCall fallback', () => {
 function mockRenderer() {
   const prints: { text: string; role?: string; style?: Record<string, unknown>; toolUseId?: string }[] = [];
   const streamMarks: { text: string; isFinal: boolean }[] = [];
+  // AUTO-0025 Phase B:记录每次 finishToolCall 的 (toolUseId, lines, finalKind),供结构化断言
+  const finishToolCalls: { toolUseId: string; lines: { content: string; style: Record<string, unknown>; indent?: number; raw?: boolean }[]; finalKind?: string }[] = [];
   const renderer = {
     printMessage: vi.fn((text: string, role?: string, style?: Record<string, unknown>) => {
       prints.push({ text, role, style });
@@ -37,14 +39,20 @@ function mockRenderer() {
     startToolCall: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[]) => {
       for (const line of lines) prints.push({ text: line.content, role: 'tool', style: line.style, toolUseId });
     }),
-    finishToolCall: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown> }[], finalKind?: string) => {
+    finishToolCall: vi.fn((toolUseId: string, lines: { content: string; style: Record<string, unknown>; indent?: number; raw?: boolean }[], finalKind?: string) => {
+      finishToolCalls.push({ toolUseId, lines, finalKind });
       const index = prints.map(print => print.toolUseId).lastIndexOf(toolUseId);
       if (finalKind === 'agent-completion') {
-        // AUTO-0025-transient:agent-completion 替换整个 pending 消息为单行(不保留 call 行)
+        // agent-completion:替换 pending call 行为 resultLines[0](父标题),
+        // 追加 resultLines[1:](子项行)。模拟真实 store:整组 lines 存为一条 TuiMessage。
+        // (spawn_agent 仍是单行;ask_user_question 现为父标题+子项多行)
         if (index >= 0) {
           prints[index] = { text: lines[0]?.content ?? '', role: 'tool', style: lines[0]?.style, toolUseId };
+          prints.splice(index + 1, 0, ...lines.slice(1).map(line => ({
+            text: line.content, role: 'tool', style: line.style, toolUseId,
+          })));
         } else {
-          prints.push({ text: lines[0]?.content ?? '', role: 'tool', style: lines[0]?.style, toolUseId });
+          for (const line of lines) prints.push({ text: line.content, role: 'tool', style: line.style, toolUseId });
         }
       } else {
         prints.splice(index + 1, 0, ...lines.slice(1).map(line => ({
@@ -65,7 +73,7 @@ function mockRenderer() {
     flushNow: vi.fn(),
     clearMessages: vi.fn(),
   };
-  return { renderer, prints, streamMarks };
+  return { renderer, prints, streamMarks, finishToolCalls };
 }
 
 /** 从 prints 找第一条非空内容（跳过块间空行） */
@@ -546,6 +554,192 @@ describe('BlockPipeline spawn_agent 完成展示 (AUTO-0025-transient Task 3)', 
     const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
     expect(contentTexts.some(t => t.includes('任务一'))).toBe(true);
     expect(contentTexts.some(t => t.includes('任务二'))).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// AUTO-0025 Phase B (Task 13):ask_user_question 结构化展示。
+//
+// 验证:带 structuredOutcome 的 ask_user_question tool_result 渲染为
+// ⎿ Answered N questions(折叠态)+ header → answer(展开态 Ctrl+O),
+// 不走通用 Bash 折叠(不留 ● ask_user_question call 行)。
+// ────────────────────────────────────────────────────────────────────
+
+describe('BlockPipeline ask_user_question 结构化展示 (AUTO-0025 Phase B Task 13)', () => {
+  const structuredSubmitted = {
+    version: 1 as const,
+    request: {
+      questions: [
+        {
+          header: 'Auth',
+          question: 'Which auth?',
+          options: [{ label: 'OAuth', description: 'd' }, { label: 'Key', description: 'd' }],
+          multiSelect: false,
+        },
+        {
+          header: 'Lib',
+          question: 'Which lib?',
+          options: [{ label: 'A', description: 'd' }, { label: 'B', description: 'd' }],
+          multiSelect: true,
+        },
+      ],
+    },
+    outcome: { kind: 'submitted' as const, answers: { 'Which auth?': 'OAuth', 'Which lib?': 'A, B' } },
+  };
+
+  it('submitted:父标题 ● Answered N + 子项 ⎿ header → answer 都在主消息区', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'ask_user_question', toolUseId: 'q1',
+      input: { questions: structuredSubmitted.request.questions },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'ask_user_question', toolUseId: 'q1',
+      output: 'User has answered your questions: ...',
+      structuredOutcome: structuredSubmitted,
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    // 父标题:● Answered 2 questions(顶层块标记,非 ⎿ 子项标记)
+    expect(contentTexts.some(t => t.startsWith('● ') && t.includes('Answered') && t.includes('2 question'))).toBe(true);
+    // 子项:header → answer 配对,默认显示在主消息区(非 Ctrl+O 展开)
+    expect(contentTexts.some(t => t.includes('Auth → OAuth'))).toBe(true);
+    expect(contentTexts.some(t => t.includes('Lib → A, B'))).toBe(true);
+    // 不含 ask_user_question call 行(agent-completion 复用:跳过 callLines)
+    expect(contentTexts.some(t => t.includes('ask_user_question'))).toBe(false);
+    // 不含 question 全文(证明走 header 配对,非 raw answers)
+    expect(contentTexts.some(t => t.includes('Which auth?'))).toBe(false);
+    // 不含 raw API 字符串(证明走结构化路径,非 Bash 折叠)
+    expect(contentTexts.some(t => t.includes('User has answered'))).toBe(false);
+  });
+
+  it('submitted:不再注册 Ctrl+O expandable(子项已在主消息区)', () => {
+    const { renderer } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'ask_user_question', toolUseId: 'q1',
+      input: { questions: structuredSubmitted.request.questions },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'ask_user_question', toolUseId: 'q1',
+      output: 'raw serialize',
+      structuredOutcome: structuredSubmitted,
+    });
+    // ask_user_question 不再特判 Ctrl+O:无 expandable 注册
+    expect(pipeline.getLastExpandableFullLines()).toBeNull();
+  });
+
+  it('cancelled:父标题 ● Declined to answer', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'ask_user_question', toolUseId: 'q2',
+      input: { questions: structuredSubmitted.request.questions },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'ask_user_question', toolUseId: 'q2',
+      output: 'User declined to answer questions',
+      structuredOutcome: { ...structuredSubmitted, outcome: { kind: 'cancelled' } },
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    // cancelled 无子项,只有父标题行(● 前缀,与 submitted 同为顶层块)
+    expect(contentTexts.some(t => t.startsWith('● ') && t.toLowerCase().includes('declined'))).toBe(true);
+  });
+
+  it('无 structuredOutcome:走通用降级(含 call 行 + raw 预览)', () => {
+    const { renderer, prints } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'ask_user_question', toolUseId: 'q3',
+      input: { questions: [] },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'ask_user_question', toolUseId: 'q3',
+      output: 'some raw output',
+      // 无 structuredOutcome
+    });
+    const contentTexts = prints.filter(p => p.text !== '').map(p => p.text);
+    // 通用降级:含 call 行
+    expect(contentTexts.some(t => t.includes('ask_user_question'))).toBe(true);
+    // 无结构化摘要
+    expect(contentTexts.some(t => t.includes('Answered'))).toBe(false);
+  });
+
+  // ── 回归测试:锁定 review 验收点(父标题格式 / 子项格式 / 单复数) ──
+
+  it('父标题格式:● 前缀(非 ⎿),magenta 样式', () => {
+    const { renderer, finishToolCalls } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'ask_user_question', toolUseId: 'q-fmt',
+      input: { questions: structuredSubmitted.request.questions },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'ask_user_question', toolUseId: 'q-fmt',
+      output: 'x',
+      structuredOutcome: structuredSubmitted,
+    });
+    expect(finishToolCalls).toHaveLength(1);
+    const lines = finishToolCalls[0]!.lines;
+    // 父标题是第一行,● 前缀
+    expect(lines[0]!.content.startsWith('● ')).toBe(true);
+    // 父标题用 magenta(brand)样式
+    expect(lines[0]!.style).toMatchObject({ fg: 'brand' });
+  });
+
+  it('子项格式:每个子项统一 `  ⎿ ` 前缀(2空格+⎿+1空格),dim + indent:2 + raw', () => {
+    const { renderer, finishToolCalls } = mockRenderer();
+    const pipeline = new BlockPipeline(renderer);
+    pipeline.emit({
+      kind: 'tool_call', name: 'ask_user_question', toolUseId: 'q-child',
+      input: { questions: structuredSubmitted.request.questions },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'ask_user_question', toolUseId: 'q-child',
+      output: 'x',
+      structuredOutcome: structuredSubmitted,
+    });
+    const lines = finishToolCalls[0]!.lines;
+    // lines[0] 是父标题,lines[1]/[2] 是子项
+    const child1 = lines[1]!;
+    const child2 = lines[2]!;
+    // 所有子项统一 `  ⎿ ` 前缀(禁止首行有⎿续行无)
+    expect(child1.content.startsWith('  ⎿ ')).toBe(true);
+    expect(child2.content.startsWith('  ⎿ ')).toBe(true);
+    // 子项样式:dim + indent:2 + raw:true
+    for (const child of [child1, child2]) {
+      expect(child.style).toMatchObject({ dim: true });
+      expect(child.indent).toBe(2);
+      expect(child.raw).toBe(true);
+    }
+  });
+
+  it('单复数:0 questions / 1 question / N questions', () => {
+    const mk = (n: number) => ({
+      version: 1 as const,
+      request: {
+        questions: Array.from({ length: n }, (_, i) => ({
+          header: `H${i}`,
+          question: `q${i}`,
+          options: [{ label: 'a', description: 'd' }, { label: 'b', description: 'd' }],
+          multiSelect: false,
+        })),
+      },
+      outcome: { kind: 'submitted' as const, answers: Object.fromEntries(Array.from({ length: n }, (_, i) => [`q${i}`, 'a'])) },
+    });
+
+    for (const [n, expected] of [[0, 'Answered 0 questions'], [1, 'Answered 1 question'], [3, 'Answered 3 questions']] as const) {
+      const { renderer, finishToolCalls } = mockRenderer();
+      const pipeline = new BlockPipeline(renderer);
+      pipeline.emit({ kind: 'tool_call', name: 'ask_user_question', toolUseId: `q-plural-${n}`, input: { questions: [] } });
+      pipeline.emit({
+        kind: 'tool_result', name: 'ask_user_question', toolUseId: `q-plural-${n}`,
+        output: 'x',
+        structuredOutcome: mk(n),
+      });
+      const titleLine = finishToolCalls[0]!.lines[0]!.content;
+      expect(titleLine).toBe(`● ${expected}`);
+    }
   });
 });
 
