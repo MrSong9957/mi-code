@@ -420,3 +420,146 @@ export type {
   MemoryPromptHandoffInput,
   MemoryPromptHandoffResult,
 } from './context/bounded-memory-render.js';
+
+// Wave G 公共契约导出(GRC-1 / M-049:Post-Compact Reconstruction)。
+//
+// 这一段是 Wave G 最后一个 Task(T11)落地的"公共出口"—— 只暴露 reconstruction
+// pipeline 的稳定 contract:policy / snapshot / plan / resolution / candidate /
+// postflight / publish + activation evidence/result。
+//
+// **不导出**(spec Task 11 Step 3):
+//   - SessionStore 私有路径(`SessionStore` class / `loadReconstructionLines` 等
+//     内部 helper)—— 这些是 store.ts 的实现细节,reconstruction 通过 injected
+//     port 消费,不直接暴露给外部。
+//   - raw persistence records(`RestoredWorkingSetSnapshotRecord` /
+//     `ReconstructionStateRecord` / `ActiveWorkingSetSwapResult`)—— 这些是
+//     store.ts 的物理存储形态,不属于 GRC-1 的稳定公共契约。
+//   - compactor internals(`ReconstructionCompactor` 签名本身是 injected port,
+//     但其 result 形态由 GRC-1 在 `ReconstructionInput.compactor` 字段内联定义,
+//     不单独导出)。
+//   - Prompt body / Memory raw detail —— reconstruction 只持有 identity refs
+//     (message_id / summary_ref / entrypoint_id 等),不持有正文;正文由上游
+//     契约(BRC-1 / FRC-1)自行渲染。
+//
+// 来源:`src/agent/context/reconstruction.ts`(T1-T10 全部就绪)。
+
+// === GRC-1 Post-Compact Reconstruction ===
+// 值导出(函数 + 常量)
+export {
+  // T1 capture + transaction request + idempotency
+  createReconstructionPolicy,
+  capturePreCompactSnapshot,
+  computeReconstructionIdempotencyKey,
+  createReconstructionTransactionRequest,
+  // T3 preflight + compaction result + summary shape validator
+  runReconstructionPreflight,
+  validateCompactSummaryShape,
+  createCompactionResultSnapshot,
+  // T4 pinned working set plan
+  buildPinnedWorkingSetPlan,
+  // T5 / T6 source resolution
+  resolveProjectInstruction,
+  rebuildMemoryEntrypoint,
+  // T7 candidate assembly + omission manifest
+  assembleRestoredWorkingSetCandidate,
+  computeOmissionManifest,
+  // T8 postflight validation + Core Anchor
+  validateReconstructionPostflight,
+  reconstructPostCompactWorkingSet,
+  // T9 atomic publish + default publisher
+  publishRestoredWorkingSetAtomically,
+  createDefaultPublisher,
+  // T10 activation gate
+  canActivatePostCompactReconstruction,
+  // 各 protocol version 独立演进(INV-G20 不引入冻结 D-edge 的稳定锚)
+  RECONSTRUCTION_PROTOCOL_VERSION,
+  RECONSTRUCTION_POLICY_PROTOCOL_VERSION,
+  PRECOMPACT_PROTOCOL_VERSION,
+  RECONSTRUCTION_TRANSACTION_PROTOCOL_VERSION,
+  COMPACT_RESULT_PROTOCOL_VERSION,
+  WORKING_SET_PLAN_PROTOCOL_VERSION,
+  WORKING_SET_PLAN_ITEM_PROTOCOL_VERSION,
+  SOURCE_RESOLUTION_PROTOCOL_VERSION,
+  CANDIDATE_PROTOCOL_VERSION,
+  POSTFLIGHT_PROTOCOL_VERSION,
+  PUBLISH_PROTOCOL_VERSION,
+  RESTORED_WS_PROTOCOL_VERSION,
+  OMISSION_PROTOCOL_VERSION,
+  PREFLIGHT_PROTOCOL_VERSION,
+  SUMMARY_SHAPE_PROTOCOL_VERSION,
+  PUBLISH_ACK_PROTOCOL_VERSION,
+  RESTORED_WS_RECORD_PROTOCOL_VERSION,
+  RECONSTRUCTION_ACTIVATION_PROTOCOL_VERSION,
+} from './context/reconstruction.js';
+
+// 类型导出 — policy / snapshot / plan / resolution / candidate / postflight / publish + activation
+export type {
+  // 共享身份与状态
+  WaveGContractRef,
+  ReconstructionState,
+  WorkingSetRequirement,
+  ReconstructionResolutionAction,
+  // T1 policy + capture + transaction
+  ReconstructionPolicy,
+  PreCompactSnapshot,
+  PostCompactReconstructionTransaction,
+  CapturePreCompactInput,
+  CreateTransactionRequestInput,
+  // T3 preflight + compaction result + summary shape
+  PreflightStatus,
+  PreflightInput,
+  PreflightDependencies,
+  PreflightResult,
+  SummaryShapeValidation,
+  CompactionMethod,
+  CompactionResultSnapshot,
+  CompactionResultInput,
+  CompactionResultDependencies,
+  // T4 pinned working set plan
+  WorkingSetItemKind,
+  WorkingSetPlane,
+  PinnedWorkingSetPlanItem,
+  PinnedWorkingSetPlan,
+  ActiveProjectInstructionInput,
+  ExecutionStateRefInput,
+  BuildPinnedWorkingSetPlanInput,
+  // T5 / T6 / T7 共享 source resolution
+  SourceResolutionStatus,
+  ReconstructionSourceResolution,
+  ProjectInstructionLifecycleInput,
+  ProjectInstructionResolutionDependencies,
+  MemoryRebuildInput,
+  MemoryRebuildDependencies,
+  // FRC-1 rebuild handoff port(只暴露 port 类型,不暴露 FRC-1 内部实现)。
+  // 注:MemoryEntrypointRebuildInput 已由 Wave F 公共出口导出(它是 FRC-1 owner
+  // 的稳定 contract);GRC-1 通过 injected port 消费同名类型,TS structural typing
+  // 自动匹配。这里不重复导出避免标识符冲突。
+  MemoryEntrypointRebuildResult,
+  MemoryEntrypointRebuildPort,
+  // T7 candidate + omission manifest
+  ReconstructionOmissionReason,
+  ReconstructionOmissionItem,
+  ReconstructionBlockedRequiredItem,
+  ReconstructionOmissionManifest,
+  RestoredWorkingSetCandidate,
+  AssembleCandidateInput,
+  // T8 postflight + Core Anchor
+  PostCompactToolValidationRef,
+  PostflightValidationResult,
+  PostflightDependencies,
+  PostflightInput,
+  ReconstructionPersistence,
+  ReconstructionCompactor,
+  ReconstructionInput,
+  ReconstructionDependencies,
+  ReconstructionAttemptStatus,
+  ReconstructionAttemptResult,
+  // T9 atomic publish + acknowledgement + restored snapshot
+  ReconstructionPublishAcknowledgement,
+  RestoredWorkingSetSnapshot,
+  WorkingSetPublisher,
+  PublishRestoredWorkingSetInput,
+  // T10 activation gate
+  PostCompactReconstructionActivationEvidence,
+  PostCompactReconstructionActivationResult,
+} from './context/reconstruction.js';

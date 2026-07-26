@@ -107,6 +107,17 @@ export const PUBLISH_PROTOCOL_VERSION = 'mi.publish/1';
 export const RESTORED_WS_PROTOCOL_VERSION = 'mi.restored_ws/1';
 export const OMISSION_PROTOCOL_VERSION = 'mi.omission/1';
 
+/**
+ * Reconstruction activation gate 协议版本(spec §7.26)。
+ *
+ * 与 reconstruction 主协议(mi.reconstruction/1)独立版本化:activation 只描述
+ * "是否允许进入 reconstruction 主路径",不描述 reconstruction 自身的 record schema。
+ * 升级 activation 评判标准(增删门、调整 reason_code 命名)只 bump 这个 version,
+ * 不污染 reconstruction transaction 的 protocol_version。
+ */
+export const RECONSTRUCTION_ACTIVATION_PROTOCOL_VERSION =
+  'mi.reconstruction.activation/1';
+
 // ===========================================================================
 // Data structures (spec §6.2 / §6.3 / §6.4 / §7.2 / §7.3 / §7.13).
 // ===========================================================================
@@ -4962,4 +4973,167 @@ function buildPublishAckStateRecord(args: {
     transitioned_at: args.committed_at,
     payload_ref: args.restored_working_set_snapshot_id,
   };
+}
+
+// ===========================================================================
+// Wave G Task 10 — Activation Gate(§7.26 十六门)
+// ===========================================================================
+//
+// 物理本质:进入 post-compact reconstruction 主路径前的一道"是否允许动刀"闸门。
+//
+// reconstruction 是一项不可逆且影响深远的操作(它会改写 active working set、
+// 重排 meta/system/user、可能改写 Memory entrypoint)。在所有上游契约(T1-T9
+// capture / preflight / candidate / postflight / atomic publish)都就绪之前,
+// 主路径不应该被启用。这道闸门把"是否就绪"这个判断从隐式(各处 if 判断)收敛
+// 为一个显式的纯函数:输入 16 门 evidence,输出 active + reason_codes。
+//
+// 关键不变量(spec §7.26):
+//   - AND gate:16 门全为 true → active=true;任一为 false → active=false。
+//   - reason_code 命名:`reconstruction.gate_missing.<evidence_field_name>`。
+//     字段名直接用 evidence 接口字段名,语义透明,不脱敏,便于运维定位缺失门。
+//   - 纯函数:不读 store、不调用 build/publish、不依赖时间种子(checked_at 用
+//     当前时间,但这是诊断字段,不参与判定)。
+//   - 失败显式:任一门缺 evidence 不进入 active,绝不静默 fallback 到旧路径。
+//     "进入旧路径"的决策属于调用方(streamingQuery 的 hook 是否传入),不属于
+//     activation gate 本身。
+//
+// 16 门字段顺序(spec §7.26 1-16):
+//   1.  precompact_transcript_immutable                          — T1 capture
+//   2.  before_compaction_validation_available                   — T2 preflight
+//   3.  compactor_immutable_result_with_shape_validation         — T3 compaction
+//   4.  current_user_exact_preservable                           — identity
+//   5.  project_instruction_lifecycle_correlatable               — T6 lifecycle
+//   6.  preserve_reload_invalidate_enforced                      — T6 directive
+//   7.  reload_via_trusted_pipeline                             — T6 reload
+//   8.  frc1_target_context_rebuild_available                    — T5/FRC-1
+//   9.  system_prompt_outside_reconstruction                     — INV-G7
+//   10. working_set_plane_separated                              — T4 plane
+//   11. postflight_tool_validation_available                     — T7 postflight
+//   12. duplicate_order_budget_validators_available              — T7/T8 validator
+//   13. atomic_publish_rollback_available                        — T9 publish
+//   14. transaction_idempotency_recovery_persistable             — T9 recovery
+//   15. completed_tool_no_reexecution                            — INV-G18
+//   16. deterministic_failure_recovery_evidence                  — T9 V3 evidence
+
+/**
+ * Post-compact reconstruction 的 16 门激活证据(spec §7.26 1-16)。
+ *
+ * 每个字段对应一道上游契约门。evidence 由调用方负责构造(在生产环境从
+ * SessionStore 能力探测、能力 manifest、policy 配置中聚合得到)。activation
+ * gate 只做 AND 判定,不做 evidence 真伪验证 —— evidence 是声明性的,但其
+ * 字段名固定,调用方谎报 evidence 的责任在调用方。
+ */
+export interface PostCompactReconstructionActivationEvidence {
+  // 1. pre-compact transcript snapshot immutable(T1 capturePreCompactSnapshot)
+  precompact_transcript_immutable: boolean;
+  // 2. BRC-5 before-compaction validation available(T2 runReconstructionPreflight)
+  before_compaction_validation_available: boolean;
+  // 3. compactor 输出 immutable result/summary hash + text-only shape validation
+  compactor_immutable_result_with_shape_validation: boolean;
+  // 4. current user identity 可精确保留(INV-G4)
+  current_user_exact_preservable: boolean;
+  // 5. ProjectInstructionActivation 与 MetaMessageLifecycleRecord 可关联(T6)
+  project_instruction_lifecycle_correlatable: boolean;
+  // 6. preserve/reload/invalidate 有 runtime enforcement(T6 directive)
+  preserve_reload_invalidate_enforced: boolean;
+  // 7. reload 走受信 pipeline 并产生新 acknowledgement(T6 reload)
+  reload_via_trusted_pipeline: boolean;
+  // 8. FRC-1 可为 target context 重建 Memory entrypoint(T5 rebuildMemoryEntrypoint)
+  frc1_target_context_rebuild_available: boolean;
+  // 9. system Prompt 明确位于 reconstruction 之外(INV-G7:system prompt 不被重建)
+  system_prompt_outside_reconstruction: boolean;
+  // 10. working set 可分 plane 表达(T4 WorkingSetPlane)
+  working_set_plane_separated: boolean;
+  // 11. postflight tool validation available(T7 validateReconstructionPostflight)
+  postflight_tool_validation_available: boolean;
+  // 12. duplicate/order/budget validators available(T7/T8)
+  duplicate_order_budget_validators_available: boolean;
+  // 13. active working set 支持原子 publish/rollback(T9 publishRestoredWorkingSetAtomically)
+  atomic_publish_rollback_available: boolean;
+  // 14. transaction/idempotency/recovery 可持久化(T9 recovery)
+  transaction_idempotency_recovery_persistable: boolean;
+  // 15. completed tool call 不会被 reconstruction 重新执行(INV-G18)
+  completed_tool_no_reexecution: boolean;
+  // 16. 关键路径具有 deterministic failure/recovery 验证(T9 V3 evidence)
+  deterministic_failure_recovery_evidence: boolean;
+}
+
+/**
+ * Activation gate 的判定结果。
+ *
+ * - `activation_protocol_version`:固定为 RECONSTRUCTION_ACTIVATION_PROTOCOL_VERSION。
+ * - `active`:16 门 AND 结果。true 时调用方可以(但不强制)进入 reconstruction 主路径。
+ * - `reason_codes`:`reconstruction.gate_missing.<field>` 的有序列表,按 evidence
+ *   字段定义顺序排列(便于日志比对)。active=true 时为空数组。
+ * - `checked_at`:判定时刻的 ISO 8601 时间戳。诊断字段,不参与判定逻辑。
+ */
+export interface PostCompactReconstructionActivationResult {
+  activation_protocol_version: string;
+  active: boolean;
+  reason_codes: ReadonlyArray<string>;
+  checked_at: string;
+}
+
+/**
+ * 16 门字段名,按 evidence 接口字段定义顺序。
+ *
+ * 使用对象 key 顺序(ES2015+ 保证字符串 key 按插入顺序迭代)从一份"全 true"
+ * evidence 提取字段名 —— 这样任何字段重命名都会让这个数组同步更新,
+ * 不会出现"门被加了但 reason_code 漏掉"的 drift。
+ */
+const ACTIVATION_GATE_FIELDS = Object.keys({
+  precompact_transcript_immutable: true,
+  before_compaction_validation_available: true,
+  compactor_immutable_result_with_shape_validation: true,
+  current_user_exact_preservable: true,
+  project_instruction_lifecycle_correlatable: true,
+  preserve_reload_invalidate_enforced: true,
+  reload_via_trusted_pipeline: true,
+  frc1_target_context_rebuild_available: true,
+  system_prompt_outside_reconstruction: true,
+  working_set_plane_separated: true,
+  postflight_tool_validation_available: true,
+  duplicate_order_budget_validators_available: true,
+  atomic_publish_rollback_available: true,
+  transaction_idempotency_recovery_persistable: true,
+  completed_tool_no_reexecution: true,
+  deterministic_failure_recovery_evidence: true,
+} satisfies PostCompactReconstructionActivationEvidence);
+
+/**
+ * 判定是否允许进入 post-compact reconstruction 主路径(spec §7.26)。
+ *
+ * 16 门 AND gate:
+ *   - 全部门为 true → `{ active: true, reason_codes: [] }`
+ *   - 任一门为 false → `{ active: false, reason_codes: [...] }`,
+ *     其中 reason_codes 按 evidence 字段定义顺序包含每个缺失门的
+ *     `reconstruction.gate_missing.<field>`。
+ *
+ * 纯函数:不调用任何 build/publish/persistence,不读 store,不依赖随机种子。
+ * 失败显式:任一门缺 evidence 不进入 active。
+ *
+ * 注:active=true 不等于"必须进入 reconstruction";调用方仍可因策略、A/B 实验、
+ * 灰度等原因选择走旧路径(不传 postCompactReconstruction hook)。
+ * active=false 则明确禁止进入新路径。
+ *
+ * @param evidence 16 门证据(由调用方从 SessionStore 能力探测 + policy 聚合)。
+ */
+export function canActivatePostCompactReconstruction(
+  evidence: PostCompactReconstructionActivationEvidence,
+): PostCompactReconstructionActivationResult {
+  const reason_codes: string[] = [];
+  for (const field of ACTIVATION_GATE_FIELDS) {
+    const passed = Boolean(
+      (evidence as unknown as Record<string, unknown>)[field],
+    );
+    if (!passed) {
+      reason_codes.push(`reconstruction.gate_missing.${field}`);
+    }
+  }
+  return freezeSnapshot({
+    activation_protocol_version: RECONSTRUCTION_ACTIVATION_PROTOCOL_VERSION,
+    active: reason_codes.length === 0,
+    reason_codes,
+    checked_at: new Date().toISOString(),
+  });
 }

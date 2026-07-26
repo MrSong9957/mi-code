@@ -341,6 +341,46 @@ export interface StreamingQueryOptions {
         } | null;
         [key: string]: unknown;
       }>;
+  /**
+   * Wave G Task 10 (M-049): Post-Compact Reconstruction hook(可选)。
+   *
+   * 物理本质:compaction boundary 之后的 working-set 重建入口。当调用方传入此
+   * hook,streamingQuery 在 runCompaction + L4 全量摘要完成后调用它,用 hook
+   * 返回的 `next_messages` 替换当前 messages(把 compacted transcript 升级为
+   * 完整的 restored working set)。
+   *
+   * LEGACY:不传 → 旧行为完全不变(只走 runCompaction / compactHistoryWithLLM,
+   * compacted messages 直接进下一轮,无 reconstruction)。这与 boundedMemoryIntegration
+   * 的 hook 模式一致 —— 不传 = 不启用。
+   *
+   * 接入点(唯一 cutover):第 4 阶段更新消息历史后、循环回到顶部前。
+   *   - 调用 hook,传入 { messages, sessionId, turnId }
+   *   - 若返回 restored_snapshot 非空 + next_messages 非空 → 替换 messages
+   *   - 若返回 restored_snapshot=null → 不替换(调用方主动放弃,走 LEGACY)
+   *   - 若 hook 抛错 → 静默失败(保留 compacted messages,不改变 TurnOutcome)
+   *
+   * 关键不变量(spec §7.26 / §7.21):
+   *   - 不删除 runCompaction / compactHistoryWithLLM(它们仍是 CompactionResultSnapshot
+   *     的 producer,reconstruction 内部会引用其输出 hash)。
+   *   - hook 不实现 reconstruction 自身 —— 它只调用 reconstruction.ts 中的
+   *     reconstructPostCompactWorkingSet。所有 reconstruction 逻辑在上游契约层。
+   *   - 失败静默:hook 抛错绝不抛给 generator,保留 compacted messages 让 turn 继续。
+   *
+   * 类型故意用 structural shape 而不是直接 import RestoredWorkingSetSnapshot
+   * (避免 streaming-query.ts 反向依赖 reconstruction.ts 的内部类型;hook 调用方
+   * 负责保证返回值符合 reconstruction.ts 的 interface 契约)。
+   */
+  postCompactReconstruction?: (input: {
+    messages: Message[];
+    sessionId: string;
+    turnId: string;
+  }) => Promise<{
+    restored_snapshot: {
+      restored_working_set_snapshot_id: string;
+      [key: string]: unknown;
+    } | null;
+    next_messages: Message[];
+  }>;
 }
 
 /**
@@ -383,6 +423,7 @@ export async function* streamingQuery(
     noToolContract,
     referenceValidationHook,
     boundedMemoryIntegration,
+    postCompactReconstruction,
   } = options;
 
   // Wave C Task 9 (M-031): No-Tool Contract 启用时, 本次 query 整体禁用工具。
@@ -891,6 +932,55 @@ export async function* streamingQuery(
           message: 'Context window exceeded, compaction recommended',
           recoverable: true,
         });
+      }
+    }
+
+    // ═══════ Wave G Task 10 (M-049): post-compact reconstruction cutover ═══════
+    //
+    // 物理本质:compaction boundary 之后的 working-set 重建入口(可选 hook)。
+    // 当调用方传入 postCompactReconstruction 时,在 runCompaction + L4 完成后,
+    // 调用它把 compacted messages 升级为完整的 restored working set。
+    //
+    // 这是 T10 唯一的 cutover 点。旧路径(runCompaction / compactHistoryWithLLM
+    // 的输出直接进下一轮)与新路径(reconstruction 的 next_messages)在此分叉:
+    //   - 不传 hook → 旧路径(messages 保持 compacted 状态,行为不变)
+    //   - 传 hook 且返回有效 restored_snapshot + next_messages → 新路径
+    //   - 传 hook 但返回 restored_snapshot=null → 旧行为(调用方主动放弃)
+    //   - 传 hook 但抛错 → 静默失败(保留 compacted messages,不改变 TurnOutcome)
+    //
+    // 关键不变量(spec §7.26 / §7.21):
+    //   - 不删除 / 不改变 runCompaction / compactHistoryWithLLM 算法 —— 它们仍是
+    //     CompactionResultSnapshot 的 producer(reconstruction 内部引用其 hash)。
+    //   - hook 只调用 reconstruction.ts 中的 reconstructPostCompactWorkingSet;
+    //     reconstruction 自身的所有逻辑在上游契约层,streamingQuery 不实现 reconstruction。
+    //   - 失败静默(INV-G / spec §7.18 风格):hook 抛错绝不传播给 generator,
+    //     保留 compacted messages 让 turn 继续推进。
+    //   - 不改变 TurnOutcome —— reconstruction 的成败不影响本轮的工具执行结果。
+    //
+    // 注:此 cutover 与 boundedMemoryIntegration 的 hook 模式一致 —— 可选 + 失败静默 +
+    // LEGACY 默认。生产主路径(index.ts)在 activation gate 全门为 true 后选择是否
+    // 传入此 hook;不传则保持当前 LEGACY 行为。
+    if (postCompactReconstruction) {
+      try {
+        const reconResult = await postCompactReconstruction({
+          messages,
+          sessionId: STREAMING_SESSION_ID,
+          turnId: makeTurnId(turnCount),
+        });
+        // 调用方返回 restored_snapshot 非空 + next_messages 非空 才替换。
+        // restored_snapshot=null 表示调用方主动放弃(例如 activation gate 未通过),
+        // 此时走 LEGACY —— 保留 compacted messages,不替换。
+        if (
+          reconResult.restored_snapshot !== null &&
+          Array.isArray(reconResult.next_messages) &&
+          reconResult.next_messages.length > 0
+        ) {
+          messages = reconResult.next_messages;
+        }
+      } catch {
+        // 静默失败:hook 抛错时不传播,保留 compacted messages 让本轮 turn 继续。
+        // 不改变 TurnOutcome,不发 context_overflow 事件(reconstruction 失败
+        // 不是 compaction 失败;compaction 已成功,只是 reconstruction 升级失败)。
       }
     }
   }
