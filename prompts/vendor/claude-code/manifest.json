@@ -1,0 +1,1268 @@
+{
+    "schema_version":  1,
+    "library":  "claude-code-system-prompts",
+    "snapshot_id":  "v2026-07-26",
+    "source":  {
+                   "local_path":  "D:\\Files\\Obsidian\\sources\\claude-code\\claude-code-system-prompts",
+                   "git_tag":  null,
+                   "git_commit":  null,
+                   "captured_on":  "2026-07-26",
+                   "license":  "MIT"
+               },
+    "content":  {
+                    "root":  "v2026-07-26/system-prompts",
+                    "file_count":  250
+                },
+    "files":  [
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-agent-creation-architect.md",
+                      "bytes":  5374,
+                      "sha256":  "7ab82552b63d2d91ce6e12bb2fc247c8aac25c098648d008c3f399b9f34d64fa"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-agent-hook.md",
+                      "bytes":  861,
+                      "sha256":  "8d2826cc118ec896384ef1fe56a0d9b51b621285181b208cc3505d142eb71e57"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-auto-mode-rule-reviewer.md",
+                      "bytes":  1467,
+                      "sha256":  "be2b5a9adf1a18326159d4c5fa3e9508acb1063578f6b6726ec1bf7476c56119"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-bash-command-description-writer.md",
+                      "bytes":  1130,
+                      "sha256":  "357e48f33d9ed9c1f49a46e14e87f397ab7c624d7065044991b63b4d94947e0e"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-bash-command-prefix-detection.md",
+                      "bytes":  3194,
+                      "sha256":  "fd777fc6d290af5a0e9421cb093c4f1770ae76d760a7020415898f0a965e250f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-batch-slash-command.md",
+                      "bytes":  4673,
+                      "sha256":  "582af7b976a70bfa1f00e52b34f119fc1846674871ac402911c6e441672a48b6"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-claude-guide-agent.md",
+                      "bytes":  3541,
+                      "sha256":  "885b01f4aecae2df8760b4f127174b3ab465262461fc2e0c6f9e5e4650837e0c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-claudemd-creation.md",
+                      "bytes":  1910,
+                      "sha256":  "5dc0b7d73a6e65739d9eaced48f87fa8593c5316958c853df58c6ec952911c23"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-coding-session-title-generator.md",
+                      "bytes":  1004,
+                      "sha256":  "42c64686dc28d76e5d617945cc1bf645fb7e075c85aca5e38abb23e1abcaac07"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-conversation-summarization.md",
+                      "bytes":  5342,
+                      "sha256":  "b8c25075d040933edf6a63fce30031159f05f15943ba63fcd5ac481aab54a6cb"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-determine-which-memory-files-to-attach.md",
+                      "bytes":  1339,
+                      "sha256":  "218d46681a186b65a7247fee40b46f89f426f261d6dcdc85975b7b3f4b592692"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-dream-memory-consolidation.md",
+                      "bytes":  3428,
+                      "sha256":  "91f312e38f990f93f1727718ef93f9523d30be54edce060a16c0983132530be8"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-explore.md",
+                      "bytes":  3027,
+                      "sha256":  "9036d8806eedc3e1a702049cca6c728833276af3ed2016f56aac45e47a8e2a27"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-general-purpose.md",
+                      "bytes":  2036,
+                      "sha256":  "ba8717868c9f60d4d56cdff7b7a56059b30049b6c9015ec95c9b6b368ec92ca1"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-hook-condition-evaluator.md",
+                      "bytes":  572,
+                      "sha256":  "e0ac1d1e46c2846eab27c13cbefcb2a4b186a1d2019e57dd55dc785125f7c73c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-plan-mode-enhanced.md",
+                      "bytes":  3237,
+                      "sha256":  "dc4beaa596d2cc84bc3b4b44591111395a30bc30dc494542d9a816224ec51c4b"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-pr-comments-slash-command.md",
+                      "bytes":  1761,
+                      "sha256":  "b6f268e47e7530deba5578e233fda00729d18f3d549e4a9e5ba420164c4e8fc4"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-prompt-suggestion-generator-v2.md",
+                      "bytes":  1440,
+                      "sha256":  "595593a869308633a714e3069dcfb85c73cd9a49695e61893f5c748fc02eab12"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-quick-git-commit.md",
+                      "bytes":  2245,
+                      "sha256":  "269128dfdd27b4b0e193800bf3bda123eec7a11704822941949936bb18d83c65"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-quick-pr-creation.md",
+                      "bytes":  3195,
+                      "sha256":  "00a25da1b546c06c94bd649dc9bda347b8b8ab3c5989d136c35c069e79550523"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-recent-message-summarization.md",
+                      "bytes":  3459,
+                      "sha256":  "88ff5c951e6ea4780466b6971d9e02701b263466833990d93d29da0fc68405ff"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-review-pr-slash-command.md",
+                      "bytes":  1188,
+                      "sha256":  "0fb34df0a322513c6a111843dd17e872a5d1171fcb4f53731a9aae9586602c7c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-schedule-slash-command.md",
+                      "bytes":  9405,
+                      "sha256":  "718417e9f8898bfeeb67ff40d24cedd892769720fe98e651c25a075070a1b8e3"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-security-monitor-for-autonomous-agent-actions-first-part.md",
+                      "bytes":  13106,
+                      "sha256":  "eff53d77fe38121176053746ef95de37c4af7f7d6602815d7062ff2054fb7be9"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-security-monitor-for-autonomous-agent-actions-second-part.md",
+                      "bytes":  13732,
+                      "sha256":  "3f902009b4790d834fa71501153206e7110841c352740075b5e4375b9a4abe36"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-security-review-slash-command.md",
+                      "bytes":  11190,
+                      "sha256":  "b2d4243fc397012893c6e5eeb905afc03302ea084b0999af0d14b404f66a5291"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-session-memory-update-instructions.md",
+                      "bytes":  3831,
+                      "sha256":  "3992fda60f113984b3ccd9d31b5435906e097023e7241622bc35de0403106708"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-session-search-assistant.md",
+                      "bytes":  2228,
+                      "sha256":  "e30466cb0c8cf20b4b405f70fec9ec8db21cf3bbcecc4f68c9f9a71052eb3b25"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-session-title-and-branch-generation.md",
+                      "bytes":  1633,
+                      "sha256":  "dba8695501a15a87bfafb2937a95a57cf2579e792935da781f5d91920b366800"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-status-line-setup.md",
+                      "bytes":  7519,
+                      "sha256":  "e47c6554aab47530f4ff73176bd2a9e827d74cf297aef77edf2ca5421af1ac53"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-update-magic-docs.md",
+                      "bytes":  3570,
+                      "sha256":  "c76e3a75b5c559227c6c0b6b2c09ff58f6b70accc6157f7a673df1c4e8eaad87"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-verification-specialist.md",
+                      "bytes":  10150,
+                      "sha256":  "1632e3af3e4768e5bb049a843e83c58bd81fd09625d0b165d91ef6a8466b6edc"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-webfetch-summarizer.md",
+                      "bytes":  1099,
+                      "sha256":  "b9056b4308a8b8af1046844f6f6388f32301a8db9fcc02817268ac5d33f1341f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/agent-prompt-worker-fork-execution.md",
+                      "bytes":  2164,
+                      "sha256":  "280ccf6f2655466f168639920f20560ee53758bec53ca3b315372e505011f3e5"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-agent-sdk-patterns-python.md",
+                      "bytes":  9544,
+                      "sha256":  "21ff7b941cc3cfe1f46777840ee74e60f5a8c095d993ac37992c69f20105f089"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-agent-sdk-patterns-typescript.md",
+                      "bytes":  5050,
+                      "sha256":  "9025cfdf3dac50f9757d14370fffafe0c0ae83723017c41ec59b7a19cf8c4bff"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-agent-sdk-reference-python.md",
+                      "bytes":  13009,
+                      "sha256":  "464d8069c268d22791c79698a1dcd1a514924aaf2e375f10bc723c7b9db81574"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-agent-sdk-reference-typescript.md",
+                      "bytes":  11175,
+                      "sha256":  "2c6fc6e72ad7137dd0ceb03825ce76383f6f742785356f162603f15b828c0281"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-claude-api-reference-c.md",
+                      "bytes":  14728,
+                      "sha256":  "4cccd0cdf6bdf983d71b83ec699bb9bdec2e26c72dc91a460446b24da7c01a77"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-claude-api-reference-curl.md",
+                      "bytes":  6697,
+                      "sha256":  "4e5fe3f7fb416376e7860ecd5980d5ea63b3c78dc53f075d59efd89f686c799a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-claude-api-reference-go.md",
+                      "bytes":  14125,
+                      "sha256":  "7aa84259a93f962205fe5d34966c8943f200098a022251ad5c01e5cb8f6f10ed"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-claude-api-reference-java.md",
+                      "bytes":  15437,
+                      "sha256":  "e6d282206c83cf90854adc64d6709651321bdf724649bec8c5dda926f8436cea"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-claude-api-reference-php.md",
+                      "bytes":  11376,
+                      "sha256":  "66a125ab25010893903b257a3dd72d47b8e2724ae6904621fb37aa5aa38a88b3"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-claude-api-reference-python.md",
+                      "bytes":  12410,
+                      "sha256":  "1d89fa6753a349ae44190748b9e10600a5d32fc3591bca56af13bbfe14f3f991"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-claude-api-reference-ruby.md",
+                      "bytes":  3272,
+                      "sha256":  "035c5699f49834b4664dcbdf0d645caa7aa5713293e6b3211d4e20616a2ae0fb"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-claude-api-reference-typescript.md",
+                      "bytes":  10191,
+                      "sha256":  "f2da93a758d4a21cac8a1af34e7d97525bd4e710f1bb4ed3a0315d599455b1e4"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-claude-model-catalog.md",
+                      "bytes":  7444,
+                      "sha256":  "5bf490c96d1ed27f703ba339317bb6e8759f33490a912aae804e652caafeee23"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-files-api-reference-python.md",
+                      "bytes":  4314,
+                      "sha256":  "634de6ab74f2ce592ecf944e62a857dc9291d2b593e0fd0526fc5c8ca268a20d"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-files-api-reference-typescript.md",
+                      "bytes":  2601,
+                      "sha256":  "50ef8ae220ee533742618c13469ed08b0d741a3c5f21d74a9f2b61df46002f22"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-github-actions-workflow-for-claude-mentions.md",
+                      "bytes":  2227,
+                      "sha256":  "85fb4008d73773368ee09770e53b50af5346a5761c6dc51e677ca86770bd9d92"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-github-app-installation-pr-description.md",
+                      "bytes":  2093,
+                      "sha256":  "fe5bb17e4ff3e87e71455b8435840c41153ad16554bfa3f807bec5b6f893188f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-http-error-codes-reference.md",
+                      "bytes":  7428,
+                      "sha256":  "625afd22382005a823fe1ff1ef48f77bf0ee1b2d24c01c574f8ae5ef8c83f00c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-live-documentation-sources.md",
+                      "bytes":  11058,
+                      "sha256":  "00990b035daf60b064f0e3e15be5f6a4998237ca72979cb21fbe4ecdbe392af4"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-message-batches-api-reference-python.md",
+                      "bytes":  5444,
+                      "sha256":  "a01ea8b7c05c2269f28f3da1aacbf5c8d42cb280867a88b3010846e1d7f8019a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-prompt-caching-design-optimization.md",
+                      "bytes":  7753,
+                      "sha256":  "efd530f473871c8bf9a14a30cfa48b6bc88f3855ffa743e6ed5eb56274b816a0"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-session-memory-template.md",
+                      "bytes":  1456,
+                      "sha256":  "fc3b0d3387477e5612e54c2e921ffa2ca3a9621b71b50f0ac772888bda72a824"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-streaming-reference-python.md",
+                      "bytes":  5534,
+                      "sha256":  "a75d9ca3a6f05742294320694f049173c909769cb663a529eb768c7feab5b580"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-streaming-reference-typescript.md",
+                      "bytes":  5912,
+                      "sha256":  "1b4b7edecf61306ae328071c3f38b8bf7e929fec4c0610c1924132c279a04ca6"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-tool-use-concepts.md",
+                      "bytes":  15218,
+                      "sha256":  "42707c8b872171e31ce42701670bb16b1797e0463c2d1fe9a9e230a9b0d84fc7"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-tool-use-reference-python.md",
+                      "bytes":  17205,
+                      "sha256":  "8304e52debf77996fcefe3ee12785bb64c8473d6c8b12d9ce7c3b151572da4bb"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/data-tool-use-reference-typescript.md",
+                      "bytes":  15658,
+                      "sha256":  "1139ddad24ea427124de75d5778e1f4cbd08c7f1a3d63f3a3fcdc0fc9d33373d"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-build-with-claude-api.md",
+                      "bytes":  20535,
+                      "sha256":  "86c1052428dfa5057a5fe695307a6aaaba599fa2a6feab6822a7fcf531d89451"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-build-with-claude-api-reference-guide.md",
+                      "bytes":  1814,
+                      "sha256":  "2273d7d956a16af6f697a6cfa1b22163672973ac59334a3a2db645b70867ef03"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-create-verifier-skills.md",
+                      "bytes":  10100,
+                      "sha256":  "b5439a0c5326d297e214ceeefe865aef714da9036992e24dd6df2cf27bc40c3c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-debugging.md",
+                      "bytes":  1981,
+                      "sha256":  "7da2edb2fb873d2492adc24ee2edf473c550faf12e829e51a31f67c51f4baa37"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-init-claudemd-and-skill-setup-new-version.md",
+                      "bytes":  18534,
+                      "sha256":  "564a6a8e8b0253b223fa4d93be2c4ecee4750af11f69566bb092623a5c0d1f9c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-loop-slash-command.md",
+                      "bytes":  3517,
+                      "sha256":  "ac2779a19bb1c30737448f33c97bbfabdebbb62e90ca8fc03151ed7f7636ed47"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-simplify.md",
+                      "bytes":  4130,
+                      "sha256":  "578a26cc4b84e92daa9286c64f5dc40962be4e2c2573fcf111d81248c4ba8c0e"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-stuck-slash-command.md",
+                      "bytes":  3665,
+                      "sha256":  "7c049832ddf9b3ee42ac0d9adf3491647fceddc8e33c9f443bc4eab373065b41"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-update-claude-code-config.md",
+                      "bytes":  4572,
+                      "sha256":  "e759c4bbda1a755145aa991ced9218352add96f829da2fb524aa490409957b86"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-update-config-7-step-verification-flow.md",
+                      "bytes":  4356,
+                      "sha256":  "e55695eee3db072fae92e8e0fcd801ed9b26aee829b887c53a897a1d04b30510"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-verify-cli-changes-example-for-verify-skill.md",
+                      "bytes":  2308,
+                      "sha256":  "93151d049c7f7ad53b8691789d37a9e4bce7d173490da93593af71c344ae9710"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-verify-serverapi-changes-example-for-verify-skill.md",
+                      "bytes":  2353,
+                      "sha256":  "657cbe82afc80e830595453edf5b2274c01cbf2b90970c00a58462b442875605"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/skill-verify-skill.md",
+                      "bytes":  19043,
+                      "sha256":  "f1f01f763c2fcf97fa2d6d05f1aa42537c59684857b86069cd38d8a1f52bee8a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-advisor-tool-instructions.md",
+                      "bytes":  2308,
+                      "sha256":  "086b25f4230ba276ffdf57c3637a2ed44b0714bc7d818adc058107e716cf058e"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-agent-memory-instructions.md",
+                      "bytes":  1867,
+                      "sha256":  "3416a1e04762296ac40ea5c5557a1836eb73b1aa1c422a7d2e72883bda4984c3"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-agent-summary-generation.md",
+                      "bytes":  942,
+                      "sha256":  "6279e865f7fbef57d5121344f381f8e42c0e00b1e36d1174a59c5d8166cc6019"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-agent-thread-notes.md",
+                      "bytes":  1001,
+                      "sha256":  "c97e61cd0767e4d047641a089b27e84056678b1bd2f0c95a98761dd0913b5d55"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-auto-mode.md",
+                      "bytes":  1460,
+                      "sha256":  "8de333878f0313e0f23dc028703a63d59f12a120d77e034c0f9eb6060cd46acf"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-avoiding-unnecessary-sleep-commands-part-of-powershell-tool-description.md",
+                      "bytes":  1216,
+                      "sha256":  "03cfa8b6bbbfa76bd7c21bfef3380861196737f16e2f8a01bb3b213b0e078d7c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-censoring-assistance-with-malicious-activities.md",
+                      "bytes":  925,
+                      "sha256":  "79cd149c7a7152b287f06e9e48b15c30ebdc72de8bc945b466c96b5d7c8b1efc"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-chrome-browser-mcp-tools.md",
+                      "bytes":  826,
+                      "sha256":  "bf1f305b4c488ff5df3e721413122c8e821b2f4eabbc0000515bcf3f10a43641"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-claude-in-chrome-browser-automation.md",
+                      "bytes":  3704,
+                      "sha256":  "5525a73cf6007f65516a69ad04a1f6d2df4599d1ed0cf2f28c4125b5b5b12591"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-context-compaction-summary.md",
+                      "bytes":  1638,
+                      "sha256":  "b3e4116fa0e47d461c8b2839d3adf54dd3bc75dc9ccf6c9ffb744dbbde138086"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-description-part-of-memory-instructions.md",
+                      "bytes":  1113,
+                      "sha256":  "3ec46a07c302348b285cec78b86401440f47003825bd8a546f65a792849191cd"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-ambitious-tasks.md",
+                      "bytes":  541,
+                      "sha256":  "7c21eb53a8c569e309266471bcea0a683287c00e1106f06abd18a5c3e648272b"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-blocked-approach.md",
+                      "bytes":  727,
+                      "sha256":  "d97d745b42ac48d0886e0df0bb57e01e7b5aab444baab1efb2b121e107026d72"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-help-and-feedback.md",
+                      "bytes":  398,
+                      "sha256":  "1a23625fc30ecd63cf9837feb5f5ae07d2d135d010fc58c29433d57adb9fd65a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-minimize-file-creation.md",
+                      "bytes":  546,
+                      "sha256":  "52f2aa07ceb1292326132228c4f6ea62a2779db67620d9523fe1c5d77c450d0b"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-no-compatibility-hacks.md",
+                      "bytes":  551,
+                      "sha256":  "dfa2863e9d18088ddba4c9b57d0910b9ea19723742e885c7dc3359a48b6c68b6"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-no-premature-abstractions.md",
+                      "bytes":  628,
+                      "sha256":  "c6f19321f92aecdca5df45f504af0f8a3ea11d87714bffaacbb087ba6e7e1e1f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-no-time-estimates.md",
+                      "bytes":  497,
+                      "sha256":  "fad7e5882fcf5a2b276cddfe04d80f89b7350bd5431b408dae7679be54cb7b36"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-no-unnecessary-additions.md",
+                      "bytes":  660,
+                      "sha256":  "a1d0839cd54cd8098f8ad3fb1f7c03bd3abd2f701145b4c552e5ae80a1b05f10"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-no-unnecessary-error-handling.md",
+                      "bytes":  653,
+                      "sha256":  "b66f697e77fe8dcc246621ce2b096e74998a185c1f2d3e0c4826aa3d6e5c097d"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-read-before-modifying.md",
+                      "bytes":  523,
+                      "sha256":  "8a159d531871e306145ef45bc1a69f2be4f28c735d36d15a5f1af600c8bb0bf4"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-security.md",
+                      "bytes":  569,
+                      "sha256":  "69404cf5a2209b8844c99cf21dd7866b424b156fc08bc284d996caf5ae8d1b88"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-doing-tasks-software-engineering-focus.md",
+                      "bytes":  861,
+                      "sha256":  "0caca470d474b2a2fd1112a4884341538346baf48aefdab4463ee2c34553672d"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-executing-actions-with-care.md",
+                      "bytes":  3136,
+                      "sha256":  "c6a96866b39d10d09445c6b465d17808bef8cb396a3d151801c150d27432476b"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-fork-usage-guidelines.md",
+                      "bytes":  1918,
+                      "sha256":  "8b5c7aeea2e23a8b61fbda3e4ae9b1cf8d72700c498e452aa0e7a19ec0f41468"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-git-status.md",
+                      "bytes":  703,
+                      "sha256":  "f562f65fd8c3fce7fd6e30674945e20ded3eb28996df6729f0d9d05912553851"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-hooks-configuration.md",
+                      "bytes":  4576,
+                      "sha256":  "f092cde4a74033c00da1f8e6f7cc8042c4889bef5bee23dcd10e040a21651aa0"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-how-to-use-the-sendusermessage-tool.md",
+                      "bytes":  1493,
+                      "sha256":  "d68bfaf5524af6190496ff5c4c488e8eb647f93b6e38b9d774e5d8ea19a4dfa1"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-insights-at-a-glance-summary.md",
+                      "bytes":  2754,
+                      "sha256":  "bac6072a365bd41087e3eed56d162704c1245edab68057f5b15059a647d4095e"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-insights-friction-analysis.md",
+                      "bytes":  861,
+                      "sha256":  "7daa045c5ab594311a03aaebf394d8ddd6fbd3abeff500deba5b71d6d2431ba4"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-insights-on-the-horizon.md",
+                      "bytes":  867,
+                      "sha256":  "abdf9f0abf2937536d0d3514c845f450defa3aaf35a1dc5f0befdd27cc063161"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-insights-session-facets-extraction.md",
+                      "bytes":  1508,
+                      "sha256":  "fecdcb88e49556604b34632a86588f83c556f2a984d673c84887390ed9fe4ebd"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-insights-suggestions.md",
+                      "bytes":  3007,
+                      "sha256":  "ab4242219ddb094d4df90d753b109f579f5a1c300258d56e8f5dbadc52e248dd"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-learning-mode.md",
+                      "bytes":  4822,
+                      "sha256":  "b9a9d3ad94a6b6214a59fe26b0d2fabb35bca2d8926b40e5baad96eee15d88aa"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-learning-mode-insights.md",
+                      "bytes":  1085,
+                      "sha256":  "54191a5453d51e624eea6abf5633a2c3c8b8947a900d4d7b19871f0a20247365"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-memory-description-of-user-feedback.md",
+                      "bytes":  1111,
+                      "sha256":  "29db9d85443aac9bffd706d1edb77818679f91adb27a584f16ae8c95a4b6a2ae"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-minimal-mode.md",
+                      "bytes":  942,
+                      "sha256":  "9623473d7a68163df1ccb02e69a62d6c6ddf995923e7784a2350c8b0b2d5892c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-one-of-six-rules-for-using-sleep-command.md",
+                      "bytes":  408,
+                      "sha256":  "ec558f4f7be39d4fc0af5c2efb98d868f6ed03d62a5c5a0d88e30efe18dbaccd"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-option-previewer.md",
+                      "bytes":  989,
+                      "sha256":  "3fe30cc4f4ea9ca0b52cd52ff02e31e383329af41276a3e7f9ce3e188cd7a71a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-output-efficiency.md",
+                      "bytes":  1112,
+                      "sha256":  "cbb554774eddada1d5ad7c1d6ee65dc3fe98c6d8821b1e6837a7ba394bb8e64d"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-parallel-tool-call-note-part-of-tool-usage-policy.md",
+                      "bytes":  882,
+                      "sha256":  "ce7b7b1e598e4b15baba340f37c45ba0e7fffedfcefe19faa8e99df6a59dec8f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-phase-four-of-plan-mode.md",
+                      "bytes":  810,
+                      "sha256":  "078791722a5d0f010a93973846e9544b7df57888b8ddd505d89fdc352134c74f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-scratchpad-directory.md",
+                      "bytes":  1027,
+                      "sha256":  "ca394898fa6f530b6330509a433d17354ed928820b7a17e9e7ce56b446daf244"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-skillify-current-session.md",
+                      "bytes":  7706,
+                      "sha256":  "53201bab75df5eaa70a5247c76c71064f26b45bbc1b497fc4cc25912cfac64f3"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-subagent-delegation-examples.md",
+                      "bytes":  2768,
+                      "sha256":  "b973d0ff3c41577838b96515cac04bdfc9cb24e8b141eaf9a9259f5a8b099c87"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-system-section.md",
+                      "bytes":  931,
+                      "sha256":  "ebd417b1058c7bf171052ba1317b7b9471fae80fe730bc25ad22dd1e86e3b2fc"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-teammate-communication.md",
+                      "bytes":  815,
+                      "sha256":  "79e936dbfc3e74387bc111fa7804946eb9ad0c37d6e3b3ce89ed70cd1166f81f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-team-memory-content-display.md",
+                      "bytes":  577,
+                      "sha256":  "fb591e6a7730a60d96531e390be36896344529e991820e437383234eb902d561"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tone-and-style-code-references.md",
+                      "bytes":  494,
+                      "sha256":  "7e7a69fea271e61281a27294389c43b52f8061845aa8fe927a2b6cd1ab8e642f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tone-and-style-concise-output-short.md",
+                      "bytes":  367,
+                      "sha256":  "394e076458d8ebb3cc3048f66322e832c0742fc361aa30fae24ed2be228f233a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-execution-denied.md",
+                      "bytes":  932,
+                      "sha256":  "43679c0a0265716db90e263e7674b4a60f45c07a153654939f3e8bd29a529583"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-create-files.md",
+                      "bytes":  430,
+                      "sha256":  "0711ca19addac29d966a7648f280e5bcb0a8e96191ee599eaba5e424e56ad0ef"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-delegate-exploration.md",
+                      "bytes":  748,
+                      "sha256":  "b61ca389b74aba3fd039ee4f90f7d757b7d50e29f5a980bc959d82cbbc1a7c74"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-direct-search.md",
+                      "bytes":  445,
+                      "sha256":  "0f661bc7dc8e70ff84e77e57f11301c7461a562d957ff2e977b05acc432f6f16"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-edit-files.md",
+                      "bytes":  371,
+                      "sha256":  "024f9ce230d5bbbe47d1e2376761dea176b111aeb2f109164818b7dc0860e999"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-read-files.md",
+                      "bytes":  394,
+                      "sha256":  "5b48c573ba6964486b6167e7c6cb06fcce1dbd112e7a5640b96a53c635d4d945"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-reserve-bash.md",
+                      "bytes":  666,
+                      "sha256":  "f72cae795a74105aa622e529254f7e2f9f50b40541650f9d6f0e1d48913cfd43"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-search-content.md",
+                      "bytes":  400,
+                      "sha256":  "b27f20b72fc8f3ad46254b5395c6e78550b343689225137f7fb3b4485bc6864e"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-search-files.md",
+                      "bytes":  384,
+                      "sha256":  "8b597ddbe88abe9f60a0907f0bd8e2179f2ab6a58f3d508e3e9877c4e7716d4b"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-skill-invocation.md",
+                      "bytes":  681,
+                      "sha256":  "737a9ec0d255af35a3539cbd9c86cd8caad7cb093b54c1efd0d7f050f54efa1c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-subagent-guidance.md",
+                      "bytes":  798,
+                      "sha256":  "db003e1d146a0e3b34501a96361b1cc11760730c050b4351849ec781c1d7d6a1"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-tool-usage-task-management.md",
+                      "bytes":  635,
+                      "sha256":  "55d7fb3d1c09ae6a4e34353826bbb6d85b0b750b6bb67bb0dfe1dd0937260f88"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-worker-instructions.md",
+                      "bytes":  1209,
+                      "sha256":  "a0e07bd6836b851d35db2e34b12cdbaee5cc2f75a68d51d1b7692d504ef27ae8"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-prompt-writing-subagent-prompts.md",
+                      "bytes":  1945,
+                      "sha256":  "5260326c0732c06ab350849ac2ece88391b7e23d49e9064c76250c73e5908391"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-agent-mention.md",
+                      "bytes":  479,
+                      "sha256":  "34b15503dbb81db8e26187cc2bf5139f205b3cd9a3d7323374d2eb009e47a2d9"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-btw-side-question.md",
+                      "bytes":  1383,
+                      "sha256":  "d37d7c95c996be3c811568bbc5284a607a148ff258761716431758505a159555"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-compact-file-reference.md",
+                      "bytes":  555,
+                      "sha256":  "853bcd6abb036ccd1105fb625a256645630b94062ede481205d5d30da76dc44c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-exited-plan-mode.md",
+                      "bytes":  537,
+                      "sha256":  "f8d1918610523b3b5915522906b152211063623c0d8a445b2e48365e36282e30"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-file-exists-but-empty.md",
+                      "bytes":  372,
+                      "sha256":  "55689abca5b583b4b4eabfda175992abfc3f50a330148121e221ee5960c82d9c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-file-modified-by-user-or-linter.md",
+                      "bytes":  710,
+                      "sha256":  "aaf6eba8abdf5bca8adeb1637ad42e1bb6d4ae67abe28d78e84153927443040a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-file-opened-in-ide.md",
+                      "bytes":  439,
+                      "sha256":  "5701d81ef4f141d3401346cba5bae879e3e4b8e68f3e79706ec6dcd5f75aaa77"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-file-shorter-than-offset.md",
+                      "bytes":  522,
+                      "sha256":  "136781679d969156c731b2e409fe58ed881113de95b3dfd5c57ba2582f5739b3"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-file-truncated.md",
+                      "bytes":  595,
+                      "sha256":  "8aecf928e9b11df9a4d24079f71aa9947fd62400f84871c3dc4bec17fa48a19f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-hook-additional-context.md",
+                      "bytes":  411,
+                      "sha256":  "dc929cf995edebf5cea6a1aaf2938a5a414440897eb00d0c0a66b1f93bd666a9"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-hook-blocking-error.md",
+                      "bytes":  472,
+                      "sha256":  "28b814695290038b50af4e9aa020c894c0ecd1238f3467af4714abb56b542c03"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-hook-stopped-continuation.md",
+                      "bytes":  415,
+                      "sha256":  "9042d8e44deaef9fd12bccfdd8e9810523d648c34dee69c68c1c2552ae6f5002"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-hook-stopped-continuation-prefix.md",
+                      "bytes":  346,
+                      "sha256":  "2c0919a87f5a822b4369e40b7f4142dbe6d71a807d6f26a5b80eb2b87c2213a9"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-hook-success.md",
+                      "bytes":  365,
+                      "sha256":  "5bfe41eff822d4aa4a0f51b5f373c6417902a4e1135cb58f0a27fe1f48e784c3"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-invoked-skills.md",
+                      "bytes":  425,
+                      "sha256":  "462b5a05075e8756d917776f52a7d3d00105ff32f04292db72ef3946ec8d8267"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-lines-selected-in-ide.md",
+                      "bytes":  554,
+                      "sha256":  "ca92f2bcfd1457e2d6c8b8be263d57cb15630dd6952092321c60e5a0b8888d05"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-malware-analysis-after-read-tool-call.md",
+                      "bytes":  691,
+                      "sha256":  "e3312ac3d7ebbf4a067c148fbd3c86213af043650e03d137e473b60fcc6b4b26"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-mcp-resource-no-content.md",
+                      "bytes":  435,
+                      "sha256":  "8b25a9dbb8dbbb2327f0a7c78ce63ac4a225a291e2ec681c92bbf9dea884dd5a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-mcp-resource-no-displayable-content.md",
+                      "bytes":  483,
+                      "sha256":  "9bbe696cffe0a01cc2939c48e808545f25b93da3340ee1afae22cb50ddf0d4b4"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-memory-file-contents.md",
+                      "bytes":  433,
+                      "sha256":  "785aaac321ee90bcf8671c6cb4edbcab8ebaed37a5dcfef3755c799dde4bfef9"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-nested-memory-contents.md",
+                      "bytes":  402,
+                      "sha256":  "21b740c6c1871788375eb37b4731cc74ab600e29e03b571483d664e299e7eb58"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-new-diagnostics-detected.md",
+                      "bytes":  441,
+                      "sha256":  "2e93df32bd67c2a4668cc2606cccce3e42822661086b31b01bba3ac4b8f5e8db"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-output-style-active.md",
+                      "bytes":  435,
+                      "sha256":  "3b125bf86e8a16cda8ee01f9799344a5482a7299a93387659ba91b7233d986f4"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-plan-file-reference.md",
+                      "bytes":  531,
+                      "sha256":  "ce6ff6ec0861c5ac04632a5d4dfdd462f6184f9af87985b24b8869dd9fe29831"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-plan-mode-is-active-5-phase.md",
+                      "bytes":  5716,
+                      "sha256":  "001b74dc8366ca16250272fdede3409cad00af97e89be143d3a8ad147a97b1d1"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-plan-mode-is-active-iterative.md",
+                      "bytes":  4226,
+                      "sha256":  "6077f7ec93f30eb7d433facfd1cd3b7df93ee8bbf3381eb265a4287baa46ca50"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-plan-mode-is-active-subagent.md",
+                      "bytes":  1591,
+                      "sha256":  "eda1e04d5a0e1e754a69f342eae8bfbe7384135392bff658532da694b7f09890"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-plan-mode-re-entry.md",
+                      "bytes":  1454,
+                      "sha256":  "cea9680746ab7e4145b1ea0565e6143be790ae1186f5d0185b54e867ee76b2b0"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-session-continuation.md",
+                      "bytes":  469,
+                      "sha256":  "506521230bf153096c8fdc7cc565349bda005d3643936cb5ffd84782bfc68591"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-task-tools-reminder.md",
+                      "bytes":  852,
+                      "sha256":  "6c05c1423a00f7ea8bb580d2eef0323971e42c5e81bbb37347be64d5c6b0d085"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-team-coordination.md",
+                      "bytes":  1124,
+                      "sha256":  "5c45c55ef88baea6067fc32e417be650917e280d3338ba3e83b258f2dbb92ccc"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-team-shutdown.md",
+                      "bytes":  834,
+                      "sha256":  "8bd352bc6cbd2d0614e8fc08528d72333ade09502276ebb86cce1b9a22b2996f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-todowrite-reminder.md",
+                      "bytes":  736,
+                      "sha256":  "8d1243789c845e42ebac9e32148a0a8a5f76e4688c955f96cf6c7f7476f6037e"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-token-usage.md",
+                      "bytes":  401,
+                      "sha256":  "b4daf9a178a623966fbff90a1a31f96104e6526e2544fe9f149275fa8ab7285c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-ultraplan-mode.md",
+                      "bytes":  2111,
+                      "sha256":  "ad295a8e266608d5849aed3ad0265c893d0131e497d647a29d864051e5ceb84c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-usd-budget.md",
+                      "bytes":  400,
+                      "sha256":  "200aec4127ac29024423afc223793738d30c6bb497542f1e07eb6e7e32f20a3d"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/system-reminder-verify-plan-reminder.md",
+                      "bytes":  487,
+                      "sha256":  "e9d62ec1e45faa4d86f33cc8a17de5137d02e688871362b9306d02438fe767d0"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-agent-usage-notes.md",
+                      "bytes":  3858,
+                      "sha256":  "9e0473f1762cf706f932c4cc69d57188c1d012b11a802a8ad6408288e5d701c9"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-agent-when-to-launch-subagents.md",
+                      "bytes":  1115,
+                      "sha256":  "07475b9b69b358701515fe51ac248a3f939879d95dcae1464a6136d7aec084d7"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-askuserquestion.md",
+                      "bytes":  1442,
+                      "sha256":  "be31b8604e18c92310d57f40d1110cc44660e4a057234bcdb354729d3b4e2d7e"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-askuserquestion-preview-field.md",
+                      "bytes":  1017,
+                      "sha256":  "a1effcfe81eebed2d536f6931dc48a33fad427b093d685e392966524e22f42b7"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-alternative-communication.md",
+                      "bytes":  396,
+                      "sha256":  "bb76ef97ebacbf50ccdd9ca747d2ab758c642295bbd0d4bcef9dcb699f776de0"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-alternative-content-search.md",
+                      "bytes":  432,
+                      "sha256":  "aacb06a477335d784a007b3b88e58f160e881424b4250b3e3329e37f19ae482d"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-alternative-edit-files.md",
+                      "bytes":  415,
+                      "sha256":  "79389082f8fda75bab7de7ffab553d3436e867cf301dc49ab7446b0a80ca688f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-alternative-file-search.md",
+                      "bytes":  420,
+                      "sha256":  "6f3d2be4bfee37b1b416fe316e7a70fe6e3e95ec1b556c2772815b4ab5ace5ae"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-alternative-read-files.md",
+                      "bytes":  427,
+                      "sha256":  "12538a9004caaa9396e33fdc5b2e1b78bcab44e8a0d013fb9990a28044847947"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-alternative-write-files.md",
+                      "bytes":  431,
+                      "sha256":  "982746e4909e15156aa94d262d033e67a8fab409a2b007a8dc5f505c27ecdab7"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-built-in-tools-note.md",
+                      "bytes":  552,
+                      "sha256":  "b1bd8a90da0c48a4d1c614ced7c45b8c54caf3e720864873df1db0c15785cfdc"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-command-description.md",
+                      "bytes":  606,
+                      "sha256":  "15f2523f89c2696197bd7efe107991188f0e94072a31526df3e44ac4402369d7"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-git-avoid-destructive-ops.md",
+                      "bytes":  601,
+                      "sha256":  "42fa215d83a2a341793f956727ed7d9533ee2619402181f92b36e3039c5bb8f6"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-git-commit-and-pr-creation-instructions.md",
+                      "bytes":  6895,
+                      "sha256":  "658ee6cb808e5635cd2eccfb629a892c29c1933db1628778681c8dbf257a79f8"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-git-never-skip-hooks.md",
+                      "bytes":  545,
+                      "sha256":  "44fff0f521361f680812b4c6640898d4529c90af4e91f3f17ea87d24216ce1f5"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-git-prefer-new-commits.md",
+                      "bytes":  400,
+                      "sha256":  "a8b6b75c64efd252880e4b937443f5007ad30512d66ae66e65b33f526a99efed"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-maintain-cwd.md",
+                      "bytes":  475,
+                      "sha256":  "ce9f292a34fb7c7ee5a0fbfeeca7f29b991b0efe7a5969c50bd0f025376cfb97"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-no-newlines.md",
+                      "bytes":  385,
+                      "sha256":  "c71fa0d53224d4720077d0151808cabf9807054701af828eb31264eaa8232f5b"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-overview.md",
+                      "bytes":  333,
+                      "sha256":  "51db61c0090c6023922433ef440e8fb0a6ec8cfd07b9ee688627193b66311cbb"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-parallel-commands.md",
+                      "bytes":  607,
+                      "sha256":  "ec8355da31000700db670a8049599d284a124be23ead8e929a6927f6b59ab2fb"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-prefer-dedicated-tools.md",
+                      "bytes":  682,
+                      "sha256":  "406b66c3dcf7d6912265d174a4880229b25379c43989bb88c22db8af7c1073f6"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-quote-file-paths.md",
+                      "bytes":  429,
+                      "sha256":  "f4f0d2abdd27a7b1e5111ec0145a38d9cd01616739a3c831623bc7bd03e410ff"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-adjust-settings.md",
+                      "bytes":  427,
+                      "sha256":  "5ab44b4f8c66332d921968a5aed91ed49df8fb9e265b5ca438508cd1c19810ce"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-default-to-sandbox.md",
+                      "bytes":  489,
+                      "sha256":  "8ef9dea692182bdde6090eae47f01666880aebd88116400dd6c6cc196ed6862a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-evidence-access-denied.md",
+                      "bytes":  415,
+                      "sha256":  "7058b99ec29d8275e3473b8d215350c8438e9b094323634cf97f15dc8f0afa8a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-evidence-list-header.md",
+                      "bytes":  378,
+                      "sha256":  "239fdc93d8b131e2f195183e06528be77db6eff1a58b374471460f340d5cd1ce"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-evidence-network-failures.md",
+                      "bytes":  416,
+                      "sha256":  "9851287219661098554df37c2c68e8f7dbfb71f48332c756f3df9574f0c9d69f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-evidence-operation-not-permitted.md",
+                      "bytes":  416,
+                      "sha256":  "03ad767ad3362e2e6c8a2ad60efef6bdfedb1ac601d2048193852d38716931d7"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-evidence-unix-socket-errors.md",
+                      "bytes":  374,
+                      "sha256":  "3185783a2fd671c041de330be094b9c306d160ef5c7d879d3d84e2a4d383dbb7"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-explain-restriction.md",
+                      "bytes":  488,
+                      "sha256":  "50daa390a61caffda2be42e7514527dd6ea79962e6f8dfce89dac78df4bef7a8"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-failure-evidence-condition.md",
+                      "bytes":  580,
+                      "sha256":  "f12975fff0fdb9189fa6954fa15a56afdd7faed14aa1d48977bd2232263c6f0a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-mandatory-mode.md",
+                      "bytes":  420,
+                      "sha256":  "6c4639e5d3de95823d86e8066d6f5ecfa827c0f1fdf6f88df0ed947a8190997b"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-no-exceptions.md",
+                      "bytes":  392,
+                      "sha256":  "6ba9d2d50b1425ca4a002b8fcb1d2b71b5f64832e40def33a4dd23366eba2ea9"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-no-sensitive-paths.md",
+                      "bytes":  456,
+                      "sha256":  "0bf7d32aa6f48db655e01faba3bbd82f353c91ca91d7e838e583165b1e4f3b63"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-per-command.md",
+                      "bytes":  544,
+                      "sha256":  "e466f5d2f53051c15e01f23232c1fc8cb475dd2d4cd2d64a95bc9526b04bbec4"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-response-header.md",
+                      "bytes":  382,
+                      "sha256":  "f5916da7467c3b975e31771ca90351ce120c84417ebe101fcd386a5e31bfdf86"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-retry-without-sandbox.md",
+                      "bytes":  432,
+                      "sha256":  "8895134dd42a04fe876097b7db3515a36f2d50bdc66944600b017787619147ac"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-tmpdir.md",
+                      "bytes":  613,
+                      "sha256":  "5be96997cccdbf7f050ca11d504b96ecbb8f541ffc48f7b531f712ad70a1126e"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sandbox-user-permission-prompt.md",
+                      "bytes":  386,
+                      "sha256":  "d928e7ac1eaa62f97b1a35f7e56d05c551e36e8161d17576608e1d033ad25357"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-semicolon-usage.md",
+                      "bytes":  437,
+                      "sha256":  "557b5ac163d0c495a6a9450eafcd471e255552b6746d983717cb98c94a5a61b4"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sequential-commands.md",
+                      "bytes":  479,
+                      "sha256":  "a3e123430881ac16234a7aa696f27d4b9a413670a7bbf8a3f060f8954b2fcd4c"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sleep-keep-short.md",
+                      "bytes":  400,
+                      "sha256":  "8e3557421dff443bd8297c5ea34e48ae1b7ae0212ce73b8b15c82340e54fc548"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sleep-no-polling-background-tasks.md",
+                      "bytes":  493,
+                      "sha256":  "16247e2c96b2ddadf19a9e7fffd22cf1050e2b8b7b053f9169e95e0ba5df4260"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sleep-run-immediately.md",
+                      "bytes":  419,
+                      "sha256":  "6751bb5a0234eae5342ba9b270d797b656d98a233a4b8f941484f75e805104c6"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-sleep-use-check-commands.md",
+                      "bytes":  456,
+                      "sha256":  "260759af864155ffd5586abcb1fcd8606ffde2507d1c169afa66f4beead8a3ae"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-timeout.md",
+                      "bytes":  596,
+                      "sha256":  "76df8838342578600b076f0a01871d8f65f640eb73b5895f9e569242e87b1f47"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-verify-parent-directory.md",
+                      "bytes":  489,
+                      "sha256":  "952bc489e2e6a2a5c7aaf4fe727fac8a8b62436e8e5ee74c8e7f983a965bf871"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-bash-working-directory.md",
+                      "bytes":  473,
+                      "sha256":  "2f3a722daca0eb5ba9d2feddc3f93624e03032f0bfe9ab8c9be41202fa984552"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-computer.md",
+                      "bytes":  969,
+                      "sha256":  "2fa4cbd60a3e811308183a50521f919f5b2a28bcf8d75bf7bec7b04b717ac864"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-croncreate.md",
+                      "bytes":  3629,
+                      "sha256":  "fa9d23ab31665196cbef1184a741bd2066342f67c6b57f8cbfe3cb6e163839c0"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-edit.md",
+                      "bytes":  1285,
+                      "sha256":  "b7bfe1abacad044983ae52785d68fdb5c9df072c17aa284eff1b640a095c4720"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-enterplanmode.md",
+                      "bytes":  4099,
+                      "sha256":  "0f2db2dc0016617ccee014a9ae7b7c2dd4b1a6e9cc3ad9bdc310c2052341cb98"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-enterworktree.md",
+                      "bytes":  1619,
+                      "sha256":  "c7164b50ce1adc9b9ad01af446bc5817378a5b671e8d88b84f37e851049b5959"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-exitplanmode.md",
+                      "bytes":  2174,
+                      "sha256":  "5428e2ae9a24127fca901d85d20c7a3d7254a5d08939c260f8d4e4ff60bda533"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-exitworktree.md",
+                      "bytes":  2203,
+                      "sha256":  "8dba1420a89d21226bbe3f87ff9cdb30c299b2b3cbc2a9081f7e3b0f58598cc5"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-grep.md",
+                      "bytes":  1252,
+                      "sha256":  "4af5a2a5e52ebe3fc09a13f6b3f8b628519a4589a8341cf3f83d17af189225a4"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-lsp.md",
+                      "bytes":  1285,
+                      "sha256":  "ff52fd580f63a1884f37b4056ee9575468737388eaa21d8c2589dd3de004aa45"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-notebookedit.md",
+                      "bytes":  799,
+                      "sha256":  "885e22af3acbd7002d65765ba7b5419c5390fa5badd7eb883c3669a49af81005"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-powershell.md",
+                      "bytes":  4188,
+                      "sha256":  "29e62f7b5bf3fd444643b307b7dcffd632314d3c3aebf176e508b504cbf5d790"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-readfile.md",
+                      "bytes":  1980,
+                      "sha256":  "02b89fd48e5b0818c17ed6e6dc5cb9c639095c47e0d5a9e892d85ba3b13cb54b"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-request_teach_access-part-of-teach-mode.md",
+                      "bytes":  1008,
+                      "sha256":  "88e17c9fcbbfb586012b0cbd5c3e03e360543c2fd66cf196d519c45fc4727db9"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-sendmessagetool.md",
+                      "bytes":  1598,
+                      "sha256":  "f833c51475df3a6a7c03571947be1c82a0fae8765cf5f3e0f461cec79cb55074"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-sendmessagetool-non-agent-teams.md",
+                      "bytes":  867,
+                      "sha256":  "981815b797a302356efc42d8e212f78e2b1ae8f4e5474b49c681597780a4dc0f"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-skill.md",
+                      "bytes":  1589,
+                      "sha256":  "a0b97509fe43716fde4abd83626cd40713bd3637e48b197e95129c3e6830079d"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-sleep.md",
+                      "bytes":  902,
+                      "sha256":  "4689e9cbc79642286dedf6cd860a8f298922e6586fd89c112a9f89c23cbf6ea8"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-taskcreate.md",
+                      "bytes":  2533,
+                      "sha256":  "47beb35084e3abb1b7ce8b3e9add164662e3551c5dfa3b6e49bf44eaa170b8e5"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-tasklist-teammate-workflow.md",
+                      "bytes":  824,
+                      "sha256":  "bc3fb5c98f733b99337a07de00beb93ccabb39d581d4148ad715d9ebde91d8ac"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-teamdelete.md",
+                      "bytes":  891,
+                      "sha256":  "1bd8e76b2affb8c6ddb6434bd4c73f17256ab5e7ae2535d08fa5a86a3a8c9948"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-teammatetool.md",
+                      "bytes":  7073,
+                      "sha256":  "6d5fe340e16830f04e5d678b611709775e94c8561abd759218eed98e8cce08ad"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-todowrite.md",
+                      "bytes":  9438,
+                      "sha256":  "6ff78d16f11810b97474ce69e13d327d475f165cc412eb043a17bec58559a24a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-toolsearch-second-part.md",
+                      "bytes":  1118,
+                      "sha256":  "90dcebfd1918b5f87b8e892c9d513bfa53ba378e7cb4794972ea30481392582a"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-webfetch.md",
+                      "bytes":  1487,
+                      "sha256":  "bf80ff7648ee9d06f36a65d5b28fc8129071d8e15f59851f8f7532cc9f694192"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-websearch.md",
+                      "bytes":  1646,
+                      "sha256":  "a6ce4842a54c0876aa5637c43c3d2f72654cc017acb955149f96c5e3eb31e8b3"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-description-write.md",
+                      "bytes":  795,
+                      "sha256":  "7d6ddb84ab04f9328b657a13b09c44ada34dc55dde729a7f3e0e50ac56958233"
+                  },
+                  {
+                      "path":  "v2026-07-26/system-prompts/tool-parameter-computer-action.md",
+                      "bytes":  1309,
+                      "sha256":  "98a2e355fcbfecb0880328f06273aa9598b2506ad78e2e6bee6311e13474551a"
+                  }
+              ]
+}
