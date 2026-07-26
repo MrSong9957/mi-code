@@ -14,6 +14,11 @@ import { existsSync } from 'fs';
 import type { Message } from '../agent/types.js';
 import type { ToolTranscriptValidation } from '../agent/tools/transcript-validator.js';
 import type { PendingSecurityDecision } from '../permission/runtime-gate.js';
+import {
+  deserializeMetaLifecycleRecord,
+  serializeMetaLifecycleRecord,
+  type MetaMessageLifecycleRecord,
+} from '../agent/context/retention.js';
 
 /** 会话文件里每行的记录（Message + 时间戳） */
 interface SessionRecord {
@@ -149,6 +154,84 @@ export class SessionStore {
     return join(this.sessionsDir, `${sessionId}.pending-decisions.jsonl`);
   }
 
+  // ═══════════════════════════════════════════
+  // Wave E Task 2 (M-038 / ERC-1 §7.5): meta-lifecycle sidecar 持久化
+  // ═══════════════════════════════════════════
+  // 物理本质:会话日志本旁边的"meta 生命周期存档柜"。
+  // 主日志 <id>.jsonl 只存 Provider 可见的消息(user/assistant turn);
+  // meta 生命周期记录 <id>.meta-lifecycle.jsonl 单独存放,
+  // 供 ERC-1 serializer round-trip 在 resume 时读出 resident/reload_required/invalidated 状态。
+  //
+  // 三条不变量(spec ERC-1 §7.5):
+  //   - meta message 不计入 user turn(countUserTurns 只看主日志 .jsonl)。
+  //   - load()/loadSync()/list() 绝不读 meta-lifecycle sidecar(隔离)。
+  //   - 写入侧永远用 serializeMetaLifecycleRecord 包成 envelope(fail closed 反序列化)。
+
+  /**
+   * 往 meta-lifecycle sidecar append 一条 lifecycle record。
+   * 文件不存在则创建。record 通过 `serializeMetaLifecycleRecord` 落盘,
+   * resume 时由 `loadMetaLifecycle` 反序列化并 fail-closed 校验。
+   */
+  async saveMetaLifecycle(
+    record: MetaMessageLifecycleRecord,
+    sessionId: string,
+  ): Promise<void> {
+    await mkdir(this.sessionsDir, { recursive: true });
+    const filePath = this.metaLifecyclePath(sessionId);
+    const line = serializeMetaLifecycleRecord(record) + '\n';
+    await appendFile(filePath, line, 'utf8');
+  }
+
+  /**
+   * 读取 meta-lifecycle sidecar 的所有 record(按 append 顺序)。
+   * 不存在返回空数组。每行通过 `deserializeMetaLifecycleRecord` 反序列化,
+   * 任何一行损坏/篡改/未知协议版本 → 整体 fail closed 抛错,
+   * 不静默降级为普通 user message(spec ERC-1 §7.5 rule 4 / §7.8)。
+   */
+  async loadMetaLifecycle(
+    sessionId: string,
+  ): Promise<MetaMessageLifecycleRecord[]> {
+    const filePath = this.metaLifecyclePath(sessionId);
+    if (!existsSync(filePath)) return [];
+    const text = await readFile(filePath, 'utf8');
+    const records: MetaMessageLifecycleRecord[] = [];
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      // fail closed: 不静默跳过任何损坏行。一行出错 → 整个 sidecar 不可信。
+      records.push(deserializeMetaLifecycleRecord(trimmed));
+    }
+    return records;
+  }
+
+  /**
+   * 统计主日志中的 user turn 数量。Meta lifecycle record 不计入
+   * (它落在独立 sidecar,从不进入主 conversation jsonl)。
+   * 不存在会话文件时返回 0。
+   */
+  async countUserTurns(sessionId: string): Promise<number> {
+    const filePath = this.sessionPath(sessionId);
+    if (!existsSync(filePath)) return 0;
+    const text = await readFile(filePath, 'utf8');
+    let count = 0;
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const rec = JSON.parse(trimmed) as SessionRecord;
+        if (rec.role === 'user') count += 1;
+      } catch {
+        // 跳过损坏行(与 load() 一致的行为)
+      }
+    }
+    return count;
+  }
+
+  /** meta-lifecycle sidecar 文件完整路径(与主日志同目录,不同后缀) */
+  private metaLifecyclePath(sessionId: string): string {
+    return join(this.sessionsDir, `${sessionId}.meta-lifecycle.jsonl`);
+  }
+
   /** 列出所有会话摘要（按 mtime 降序，最近在前）。 */
   async list(): Promise<SessionSummary[]> {
     if (!existsSync(this.sessionsDir)) return [];
@@ -159,6 +242,8 @@ export class SessionStore {
       // 它也是 .jsonl 后缀但绝不是主会话日志。
       if (!file.endsWith('.jsonl')) continue;
       if (file.endsWith('.pending-decisions.jsonl')) continue;
+      // Wave E Task 2: 同样过滤 meta-lifecycle sidecar(<id>.meta-lifecycle.jsonl)。
+      if (file.endsWith('.meta-lifecycle.jsonl')) continue;
       const id = file.slice(0, -6); // 去掉 .jsonl
       const filePath = join(this.sessionsDir, file);
       try {
@@ -226,6 +311,8 @@ export class SessionStore {
       if (!file.endsWith('.jsonl')) continue;
       // Wave B Task 13: 同 list(),过滤 sidecar。
       if (file.endsWith('.pending-decisions.jsonl')) continue;
+      // Wave E Task 2: 同样过滤 meta-lifecycle sidecar。
+      if (file.endsWith('.meta-lifecycle.jsonl')) continue;
       const id = file.slice(0, -6);
       try {
         const st = statSync(join(this.sessionsDir, file));

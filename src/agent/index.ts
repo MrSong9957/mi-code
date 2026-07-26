@@ -311,3 +311,33 @@ export {
   type TelemetryComponentRef,
   type TokenMeasurement,
 } from './observability/telemetry.js';
+
+// Wave E 公共契约导出(ERC-1 / ERC-3)。
+
+// ERC-1 Meta Retention (M-038)
+export {
+  decideMetaRetention,
+  createMetaLifecycleRecord,
+  serializeMetaLifecycleRecord,
+  deserializeMetaLifecycleRecord,
+  applyMetaRetentionToCompression,
+  canActivateMetaRetention,
+  type MetaRetentionPolicy,
+  type MetaRetentionDecision,
+  type MetaMessageLifecycleRecord,
+  type MetaRetentionCompressionResult,
+  type MetaRetentionActivationResult,
+} from './context/retention.js';
+
+// ERC-3 Local Diagnostic Buffer (M-052)
+export {
+  createLocalDiagnosticBuffer,
+  enqueueDiagnosticEvent,
+  flushDiagnosticBuffer,
+  shutdownDiagnosticBuffer,
+  type LocalDiagnosticBufferPolicy,
+  type LocalDiagnosticBuffer,
+  type EnqueueResult,
+  type DiagnosticFlushResult,
+  type DiagnosticSinkAdapter,
+} from './observability/local-buffer.js';

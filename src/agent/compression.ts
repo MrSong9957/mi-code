@@ -340,3 +340,66 @@ function generateSummary(messages: Message[]): string {
 
   return parts.join('\n') || 'No summary available.';
 }
+
+// ===========================================================================
+// Wave E Task 3 (M-038 / ERC-1 §7.6) — Meta compression directive hook.
+//
+// The directive itself is produced by `applyMetaRetentionToCompression` in
+// `agent/context/retention.ts`. This helper is the thin integration point a
+// future compaction pass would call to honor the directive. For Wave E T3 it
+// is intentionally a no-op pass-through: it does NOT change `runCompaction`
+// or any existing compaction strategy, so the 20 legacy compression tests
+// keep passing. Actual directive enforcement inside `snipCompact` /
+// `microCompact` is deferred to follow-on work that will thread a per-message
+// directive map through the compaction pipeline.
+//
+// What this hook will NEVER do (spec ERC-1 §7.6 / INV-E3 / INV-E5):
+//   - Read project files or source content.
+//   - Change Authority/Trust on any message.
+//   - Touch tool_use/tool_result pairing or the current-user Pinned Working
+//     Set.
+//   - Import FRC-1 (Wave F), trigger M-013, or declare M-049 reconstruction
+//     complete. Reload/invalidation markers are MARKERS ONLY.
+// ===========================================================================
+
+/**
+ * Directive a meta message must survive compaction under (spec ERC-1 §7.6).
+ * Mirrors `MetaCompressionDirective` from `retention.ts`; re-declared locally
+ * so `compression.ts` does not import from `context/` and stays a leaf module
+ * in the agent dependency graph.
+ */
+export type MetaCompressionDirective =
+  | 'preserve_body'
+  | 'emit_reload_marker'
+  | 'emit_invalidation_marker';
+
+/**
+ * Honor a meta compression directive for a single message.
+ *
+ * Wave E T3 behavior (pass-through):
+ *   - `preserve_body`            → return the message unchanged (the body
+ *                                  MUST survive eviction; the caller is
+ *                                  responsible for exempting it from
+ *                                  `snipCompact` / `microCompact`).
+ *   - `emit_reload_marker`       → return the message unchanged here; the
+ *                                  reload marker is emitted by the M-049
+ *                                  consumer of the lifecycle record, NOT by
+ *                                  this compressor hook.
+ *   - `emit_invalidation_marker` → return the message unchanged here; the
+ *                                  invalidation reason is carried by the
+ *                                  lifecycle record, NOT rewritten by this
+ *                                  hook.
+ *
+ * The function is exported so callers can pin the contract today; the body
+ * will gain real marker emission in follow-on work without changing its
+ * signature.
+ */
+export function applyMetaDirectiveToMessage(
+  message: Message,
+  _directive: MetaCompressionDirective,
+): Message {
+  // Pass-through: directive enforcement is the responsibility of the
+  // compaction strategies + M-049, not this hook. Returning the message
+  // verbatim keeps `runCompaction` semantics unchanged for Wave E T3.
+  return message;
+}

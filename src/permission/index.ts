@@ -69,3 +69,22 @@ export {
   type CommandPolicyMode,
   type ActivationGateInput,
 } from './command-policy.js';
+
+// Wave E ERC-4 (M-065): Executable Environment + Sanitized Execution
+export {
+  classifyInlineAssignments,
+  decideInlineEnvironment,
+  resolveExecutableIdentity,
+  buildSanitizedExecutionPlan,
+  revalidateExecutableIdentity,
+  executeSanitizedCommand,
+  getDefaultPlatformEnvironmentPolicy,
+  type PlatformFamily,
+  type InlineEnvironmentDecision,
+  type PlatformEnvironmentPolicy,
+  type ExecutableResolutionResult,
+  type SanitizedExecutionPlan,
+  type RevalidationResult,
+  type ExecuteSanitizedCommandResult,
+  type PlatformResolutionAdapter,
+} from './executable-environment.js';

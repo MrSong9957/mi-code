@@ -76,6 +76,15 @@ export interface ToolExecutionContext {
   toolUseId: string;
   // 未来扩展(当前不实现,仅预留):
   // signal?: AbortSignal;   // 用户取消 / turn 中断 / timeout
+  /**
+   * Wave E Task 14 (M-065 / ERC-4): Sanitized Execution Plan。
+   *
+   * 仅 run_bash 工具消费;cutover 后 enforced 路径缺 plan 直接拒绝。
+   * 其他工具忽略此字段。
+   * 不传时(LEGACY)run_bash 走原有 shell:true 路径,保持向后兼容。
+   * 生产路径在 ERC-4 Activation Gate 通过后由调用方注入。
+   */
+  sanitizedExecutionPlan?: unknown;  // SanitizedExecutionPlan 类型(避免 types.ts 反向依赖 permission/)
 }
 
 /** 工具执行函数。ctx 可选,旧 executor 零改动。返回类型固定 Promise<string>。 */

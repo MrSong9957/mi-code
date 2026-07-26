@@ -20,3 +20,38 @@ export {
   type MemoryUseInput,
   type MemoryUseDecision,
 } from './admission.js';
+
+// Wave E ERC-2 (M-045/M-046): Memory Persistence + Catalog + Selection
+export {
+  prepareMemoryPersistence,
+  commitMemoryDetails,
+  recoverMemoryPersistence,
+  persistAndSelectMemory,
+  type MemoryPersistenceRecord,
+  type MemoryPersistenceTransaction,
+  type MemoryLifecycleOperationRequest,
+  type MemoryLifecycleOperationResult,
+} from './persistence.js';
+
+export {
+  buildMemoryCatalogSnapshot,
+  commitMemoryCatalog,
+  type MemoryCatalogEntry,
+  type MemoryCatalogSnapshot,
+  type CatalogCommitResult,
+  type GovernedCatalogStore,
+} from './catalog.js';
+
+export {
+  buildMemorySearchQuery,
+  selectMemoryEntries,
+  retrieveSelectedMemory,
+  type MemorySearchQuery,
+  type MemorySelectionResult,
+  type MemoryRetrievalResult,
+} from './selection.js';
+
+export {
+  buildLegacyCatalogSnapshot,
+  type LegacyCatalogSnapshot,
+} from './legacy-adapter.js';
