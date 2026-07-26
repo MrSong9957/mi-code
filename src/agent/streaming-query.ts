@@ -301,6 +301,46 @@ export interface StreamingQueryOptions {
     diagnostics: string[];
     validation_id: string;
   };
+  /**
+   * Wave F Task 9 (M-013): Bounded Memory Integration hook。
+   *
+   * 物理本质:在 pre-compilation 阶段(把 systemPrompt 发给 provider 之前)注入
+   * Memory section。这是 FRC-1 bounded memory entrypoint 接入 streamingQuery 的
+   * 最小侵入式 hook —— 只在调用方主动提供 hook 时启用,否则 LEGACY 行为不变。
+   *
+   * 接入点:baseSystemPrompt 派生前。streamingQuery 会:
+   *   1. await hook()
+   *   2. 如果 result.prompt_section 非空,把 section.content 附加到 systemPrompt
+   *      (以 `\n\n---\n\n` 分隔)
+   *   3. 如果 section 为空,systemPrompt 不变
+   *   4. 如果 hook 抛错,静默失败(systemPrompt 不变;不改变 TurnOutcome)
+   *
+   * 关键不变量(规格 §7.18 / §7.19):
+   *   - 失败静默 不抛错 不回退 full-load(INV-F10)
+   *   - LEGACY:不传此 hook → 行为完全不变(向后兼容)
+   *   - 与 noToolContract 共存:两个 preamble 都生效(no-tool 在前,memory 在后)
+   *
+   * hook 返回 BoundedMemoryRequestIntegrationResult(来自 integrateBoundedMemoryIntoRequest);
+   * 类型故意不在这里硬约束(避免 streaming-query.ts 反向依赖 bounded-memory.ts)。
+   * 调用方负责保证返回值符合 interface。
+   */
+  boundedMemoryIntegration?: () =>
+    | {
+        integration_protocol_version: string;
+        prompt_section: {
+          content: string;
+          [key: string]: unknown;
+        } | null;
+        [key: string]: unknown;
+      }
+    | Promise<{
+        integration_protocol_version: string;
+        prompt_section: {
+          content: string;
+          [key: string]: unknown;
+        } | null;
+        [key: string]: unknown;
+      }>;
 }
 
 /**
@@ -342,6 +382,7 @@ export async function* streamingQuery(
     reserveFinalTextTurn = false,
     noToolContract,
     referenceValidationHook,
+    boundedMemoryIntegration,
   } = options;
 
   // Wave C Task 9 (M-031): No-Tool Contract 启用时, 本次 query 整体禁用工具。
@@ -356,9 +397,37 @@ export async function* streamingQuery(
   // System prompt 追加 no-tool 软指令 (preamble, 规格 §10.4 rule 6 说不计入 enforcement,
   // 但作为软防线有助于减少异常 tool call)。
   const noToolActive = !!noToolContract;
+
+  // ─── Wave F Task 9 (M-013): Bounded Memory Integration hook ────────
+  //
+  // 物理本质:在 baseSystemPrompt 派生前, 可选地把 Memory section 附加到 systemPrompt。
+  // 这是 pre-compilation 阶段的最小侵入式接入:不传 hook → LEGACY 行为不变;
+  // 传 hook → 把 section.content 以 `\n\n---\n\n` 分隔附加到 systemPrompt。
+  //
+  // 失败静默(spec §7.18):hook 抛错 → 不抛错, systemPrompt 不变。
+  // 不改变 TurnOutcome, 不回退 full-load(INV-F10)。
+  let memorySectionContent: string | null = null;
+  if (boundedMemoryIntegration) {
+    try {
+      const result = await boundedMemoryIntegration();
+      if (result.prompt_section && typeof result.prompt_section.content === 'string') {
+        memorySectionContent = result.prompt_section.content;
+      }
+    } catch {
+      // 静默失败: 不抛错, systemPrompt 不变(spec §7.18: failure 不改变 TurnOutcome)
+      memorySectionContent = null;
+    }
+  }
+
+  // 把 memory section 附加到 systemPrompt(以 `\n\n---\n\n` 分隔)
+  const systemPromptWithMemory =
+    memorySectionContent !== null
+      ? `${systemPrompt}\n\n---\n\n${memorySectionContent}`
+      : systemPrompt;
+
   const baseSystemPrompt = noToolActive
-    ? `${systemPrompt}\n\nThis request operates under a No-Tool Contract. Do not call any tools. Return only a text response based on the input.`
-    : systemPrompt;
+    ? `${systemPromptWithMemory}\n\nThis request operates under a No-Tool Contract. Do not call any tools. Return only a text response based on the input.`
+    : systemPromptWithMemory;
 
   const engine = new QueryEngine(client);
   // 初始历史：resume 时传入之前的会话 + 本次 user 消息；否则从单条 user 消息开始

@@ -271,3 +271,346 @@ describe('compactHistoryWithLLM', () => {
     expect(result[0]!.content).toContain('compacted for continuity');
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// Wave G Task 3 (M-049 / GRC-1 §7.5) — Compaction Result Adapter。
+//
+// 这一段只测试 createCompactionResultSnapshot / validateCompactSummaryShape
+// 两个 adapter helper。它们不调用任何 compactor —— compactor 输出已作为
+// 输入传入。adapter 只做形状校验和 hash/bytes/lines 计算。
+//
+// 不变式(spec §7.5):
+//   - Summary 必须是 user role + string content。
+//   - adapter 不评价 summary 质量,不接管 M-031。
+//   - adapter 不读取 transcript 正文,只接受 compacted_summary_message。
+//   - 相同输入产生相同 compaction_result_id(deterministic)。
+// ════════════════════════════════════════════════════════════════════════════
+
+import { createHash } from 'node:crypto';
+import {
+  capturePreCompactSnapshot,
+  createCompactionResultSnapshot,
+  createReconstructionPolicy,
+  runReconstructionPreflight,
+  validateCompactSummaryShape,
+  COMPACT_RESULT_PROTOCOL_VERSION,
+  type CompactionResultInput,
+  type PreflightInput,
+} from '../agent/context/reconstruction.js';
+import type {
+  ToolTranscriptValidation,
+  ToolTranscriptSnapshot,
+} from '../agent/tools/transcript-validator.js';
+import type { DurableAcknowledgement } from '../session/store.js';
+
+// ---- 公共 helpers (与 preflight 测试同构) ----
+
+function grcPolicyIdentity() {
+  return {
+    policy_id: 'mi.reconstruction.policy:default',
+    policy_version: '1.0.0',
+    request_budget_policy_ref: 'mi.budget/1:default',
+  };
+}
+
+function grcCaptureInput() {
+  return {
+    session_id: 'sess:abc',
+    turn_id: 'turn:1',
+    task_snapshot_id: 'task:snap-1',
+    current_context_snapshot_id: 'ctx:before-compact',
+    project_version_ref: 'proj:sha-1',
+    transcript_snapshot_id: 'tx:snap-1',
+    current_user_message_ref: 'msg:user-1',
+    current_user_message_hash: '0'.repeat(64),
+    active_project_activation_refs: ['act:proj-a'],
+    active_meta_lifecycle_refs: ['life:meta-a'],
+    memory_entrypoint_snapshot_ref: 'entry:mem-1',
+    execution_state_refs: ['exec:state-1'],
+    request_budget_snapshot_id: 'budget:snap-1',
+    captured_at: '2026-07-26T00:00:00.000Z',
+  };
+}
+
+function grcTranscriptSnapshot(): ToolTranscriptSnapshot {
+  return {
+    transcript_snapshot_id: 'tx:snap-1',
+    session_id: 'sess:abc',
+    turn_id: 'turn:1',
+    messages: [{ role: 'user', content: 'hello' }],
+  };
+}
+
+function grcValidation(
+  overrides: Partial<ToolTranscriptValidation> = {},
+): ToolTranscriptValidation {
+  return {
+    validation_protocol_version: '1',
+    validation_id: 'tv:preflight-1',
+    transcript_snapshot_id: 'tx:snap-1',
+    checkpoint: 'before_compaction',
+    status: 'accepted',
+    validator_policy_id: 'mi.transcript.policy:default',
+    validator_policy_version: '1.0.0',
+    pair_records: [],
+    reason_codes: [],
+    ...overrides,
+  };
+}
+
+function grcDurableAck(
+  overrides: Partial<DurableAcknowledgement> = {},
+): DurableAcknowledgement {
+  return {
+    ack_protocol_version: 'mi.durable/1',
+    ack_id: 'durable:abc',
+    record_id: 'precompact:xyz',
+    session_id: 'sess:abc',
+    committed_at: '2026-07-26T00:00:00.000Z',
+    sidecar_ref: 'reconstruction.jsonl',
+    ...overrides,
+  };
+}
+
+/** 构造一份全绿的 PreflightInput(用于喂 createCompactionResultSnapshot)。 */
+function grcAcceptedPreflightInput(): PreflightInput {
+  return {
+    precompact: capturePreCompactSnapshot(grcCaptureInput()),
+    transcript_snapshot: grcTranscriptSnapshot(),
+    validation: grcValidation(),
+    precompact_durable_ack: grcDurableAck(),
+    policy: createReconstructionPolicy(grcPolicyIdentity()),
+    request_budget_snapshot_id: 'budget:snap-1',
+    idempotency_key: 'recon-idem:deadbeef',
+  };
+}
+
+function expectedSha256Hex(s: string): string {
+  return createHash('sha256').update(s, 'utf8').digest('hex');
+}
+
+// ===========================================================================
+// validateCompactSummaryShape — text-only shape gate (spec §7.5 rule 8)
+// ===========================================================================
+
+describe('validateCompactSummaryShape — text-only shape validator (spec §7.5 rule 8)', () => {
+  it('accepts a valid user string message', () => {
+    const result = validateCompactSummaryShape({
+      role: 'user',
+      content: 'compacted for continuity. summary text.',
+    });
+    expect(result.status).toBe('accepted');
+    expect(result.reason_codes).toEqual([]);
+    expect(result.shape_validation_protocol_version).toBe('mi.summary_shape/1');
+    expect(result.shape_validation_id).toMatch(/^summary_shape:[0-9a-f]{16}$/);
+  });
+
+  it('rejects assistant role', () => {
+    const result = validateCompactSummaryShape({
+      role: 'assistant',
+      content: 'whatever',
+    });
+    expect(result.status).toBe('rejected');
+    expect(result.reason_codes).toContain('summary_shape.not_user_role');
+  });
+
+  it('rejects ContentBlock[] content', () => {
+    const result = validateCompactSummaryShape({
+      role: 'user',
+      content: [{ type: 'text', text: 'hello' }],
+    });
+    expect(result.status).toBe('rejected');
+    expect(result.reason_codes).toContain('summary_shape.content_not_string');
+  });
+
+  it('rejects empty string content', () => {
+    const result = validateCompactSummaryShape({
+      role: 'user',
+      content: '',
+    });
+    expect(result.status).toBe('rejected');
+    expect(result.reason_codes).toContain('summary_shape.empty_content');
+  });
+
+  it('does NOT do semantic checks: claim-like summary text is still shape-accepted', () => {
+    // 规格 §7.5 rule 3-4: summary 不能证明 action 已成功 / 不能替代 result。
+    // 但 shape validator 只看形状,不判语义 —— 这种 "claim-like" 文本应 accepted。
+    // 后续 postflight / M-031 才做语义判断。
+    const samples = [
+      'tool succeeded',
+      'permission granted',
+      'memory verified',
+      'action completed',
+      'file written',
+    ];
+    for (const s of samples) {
+      const result = validateCompactSummaryShape({ role: 'user', content: s });
+      expect(result.status).toBe('accepted');
+    }
+  });
+
+  it('is deterministic: same message produces same shape_validation_id', () => {
+    const msg = { role: 'user' as const, content: 'hello world' };
+    const a = validateCompactSummaryShape(msg);
+    const b = validateCompactSummaryShape(msg);
+    expect(a.shape_validation_id).toBe(b.shape_validation_id);
+  });
+});
+
+// ===========================================================================
+// createCompactionResultSnapshot — adapter (spec §7.5)
+// ===========================================================================
+
+describe('createCompactionResultSnapshot — adapter (spec §7.5)', () => {
+  function baseInput(
+    overrides: Partial<CompactionResultInput> = {},
+  ): CompactionResultInput {
+    const preflight = runReconstructionPreflight(grcAcceptedPreflightInput());
+    return {
+      precompact: grcAcceptedPreflightInput().precompact,
+      preflight,
+      compacted_summary_message: {
+        role: 'user',
+        content: 'This conversation was compacted for continuity.\n\nSummary body.',
+      },
+      method: 'deterministic_local',
+      method_version: 'l1l2.v1',
+      compactor_ack_payload: 'compactor-call:2026-07-26T00:00:00Z|client=v1',
+      created_at: '2026-07-26T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('produces a complete snapshot with all fields populated', () => {
+    const input = baseInput();
+    const result = createCompactionResultSnapshot(input);
+
+    expect(result.compaction_result_protocol_version).toBe(
+      COMPACT_RESULT_PROTOCOL_VERSION,
+    );
+    expect(result.compaction_result_id).toMatch(/^comp:[0-9a-f]{16}$/);
+    expect(result.precompact_snapshot_id).toBe(input.precompact.precompact_snapshot_id);
+    expect(result.source_transcript_snapshot_id).toBe(
+      input.precompact.transcript_snapshot_id,
+    );
+    expect(result.preflight_validation_id).toBe(input.preflight.validation_id);
+    expect(result.method).toBe('deterministic_local');
+    expect(result.method_version).toBe('l1l2.v1');
+    expect(result.compact_summary_ref).toMatch(/^summary:[0-9a-f]{16}$/);
+    expect(result.created_at).toBe('2026-07-26T00:00:00.000Z');
+    // compactor_ack_ref 形如 'compactor.ack:<16 hex>'
+    expect(result.compactor_ack_ref).toMatch(/^compactor\.ack:[0-9a-f]{16}$/);
+  });
+
+  it('throws when summary message has assistant role', () => {
+    const input = baseInput({
+      compacted_summary_message: { role: 'assistant', content: 'oops' },
+    });
+    expect(() => createCompactionResultSnapshot(input)).toThrow(
+      'compaction_result.summary_shape_invalid',
+    );
+  });
+
+  it('throws when summary content is ContentBlock[]', () => {
+    const input = baseInput({
+      compacted_summary_message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'oops' }],
+      },
+    });
+    expect(() => createCompactionResultSnapshot(input)).toThrow(
+      'compaction_result.summary_shape_invalid',
+    );
+  });
+
+  it('throws when summary content is empty string', () => {
+    const input = baseInput({
+      compacted_summary_message: { role: 'user', content: '' },
+    });
+    expect(() => createCompactionResultSnapshot(input)).toThrow(
+      'compaction_result.summary_shape_invalid',
+    );
+  });
+
+  it('computes compact_summary_hash === sha256(content)', () => {
+    const summaryText = 'This conversation was compacted for continuity.\n\nSummary body.';
+    const input = baseInput({
+      compacted_summary_message: { role: 'user', content: summaryText },
+    });
+    const result = createCompactionResultSnapshot(input);
+    expect(result.compact_summary_hash).toBe(expectedSha256Hex(summaryText));
+  });
+
+  it('computes compact_summary_bytes === Buffer.byteLength(content, "utf8")', () => {
+    // 多字节字符以验证 utf8 而非 utf16
+    const summaryText = 'café 中文 emoji 🎉';
+    const input = baseInput({
+      compacted_summary_message: { role: 'user', content: summaryText },
+    });
+    const result = createCompactionResultSnapshot(input);
+    expect(result.compact_summary_bytes).toBe(Buffer.byteLength(summaryText, 'utf8'));
+  });
+
+  it('computes compact_summary_lines correctly (single=1, multi=N)', () => {
+    // 注: empty content 会触发 shape reject(走单独的 throw 测试),
+    // 因此这里只测 single / multi。lines 用 \n 分割。
+    // single line
+    const singleInput = baseInput({
+      compacted_summary_message: { role: 'user', content: 'one line' },
+    });
+    expect(createCompactionResultSnapshot(singleInput).compact_summary_lines).toBe(1);
+    // multi line
+    const multiInput = baseInput({
+      compacted_summary_message: {
+        role: 'user',
+        content: 'line1\nline2\nline3',
+      },
+    });
+    expect(createCompactionResultSnapshot(multiInput).compact_summary_lines).toBe(3);
+  });
+
+  it('forwards method_version unchanged (both l1l2.v1 and l4.v1)', () => {
+    const a = createCompactionResultSnapshot(
+      baseInput({ method: 'deterministic_local', method_version: 'l1l2.v1' }),
+    );
+    expect(a.method).toBe('deterministic_local');
+    expect(a.method_version).toBe('l1l2.v1');
+
+    const b = createCompactionResultSnapshot(
+      baseInput({ method: 'model_summary', method_version: 'l4.v1' }),
+    );
+    expect(b.method).toBe('model_summary');
+    expect(b.method_version).toBe('l4.v1');
+  });
+
+  it('computes compactor_ack_ref as compactor.ack:<sha256(payload).slice(0,16)>', () => {
+    const payload = 'compactor-call:2026-07-26T00:00:00Z|client=v1';
+    const input = baseInput({ compactor_ack_payload: payload });
+    const result = createCompactionResultSnapshot(input);
+    const expectedHash = expectedSha256Hex(payload).slice(0, 16);
+    expect(result.compactor_ack_ref).toBe(`compactor.ack:${expectedHash}`);
+  });
+
+  it('throws when source_transcript_snapshot_id mismatches preflight', () => {
+    // 冗余保险:preflight 已通过,但 adapter 再次校验 transcript id 一致性
+    const base = baseInput();
+    // 故意把 precompact.transcript_snapshot_id 与 preflight 的 transcript_snapshot_id 改成不同
+    const tamperedPrecompact = {
+      ...base.precompact,
+      transcript_snapshot_id: 'tx:different',
+    } as typeof base.precompact;
+    const input: CompactionResultInput = { ...base, precompact: tamperedPrecompact };
+    expect(() => createCompactionResultSnapshot(input)).toThrow();
+  });
+
+  it('is deterministic: same inputs produce same compaction_result_id', () => {
+    const a = createCompactionResultSnapshot(baseInput());
+    const b = createCompactionResultSnapshot(baseInput());
+    expect(a.compaction_result_id).toBe(b.compaction_result_id);
+  });
+
+  it('deep-freezes the returned snapshot', () => {
+    const result = createCompactionResultSnapshot(baseInput());
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+});

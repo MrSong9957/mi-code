@@ -341,3 +341,82 @@ export {
   type DiagnosticFlushResult,
   type DiagnosticSinkAdapter,
 } from './observability/local-buffer.js';
+
+// Wave F 公共契约导出(FRC-1 Bounded Memory Entrypoint / M-013)。
+//
+// 只导出 FRC policy/input/output、core builder、activation result、compiler handoff
+// 和 rebuild identity。**不导出** Budget internals、escape helper、cache map、
+// claim lookup adapter —— 这些是 Wave F 内部实现细节,不属于公共稳定契约。
+//
+// 来源拆分(物理实现跨 4 个文件):
+//   - bounded-memory.ts        — T1/T2/T3/T6/T9 主入口 + policy/input/output 类型
+//   - bounded-memory-render.ts — T5 Render Profile + T8 Compiler Handoff
+//   - bounded-memory-cache.ts  — T7 Cache(可选优化)
+
+// === FRC-1 Bounded Memory Entrypoint ===
+// 值导出(函数 + 常量)— T1 policy/capture / T2+T3 projection / T6 Core Anchor /
+// T9 Activation+Integration / T8 Compiler Handoff / T7 Cache / Rebuild identity
+export {
+  // T1 policy + capture
+  captureMemoryEntrypointBuild,
+  // T2+T3 projection
+  projectMemoryNavigation,
+  projectVerifiedMemoryClaims,
+  // T6 Core Anchor
+  buildBoundedMemoryEntrypoint,
+  // T9 Activation + Integration
+  canActivateBoundedMemoryEntrypoint,
+  integrateBoundedMemoryIntoRequest,
+  createMemoryEntrypointRebuildInput,
+  // Constants — 各 protocol version 独立演进(INV-F14)
+  ENTRYPOINT_PROTOCOL_VERSION,
+  ENTRYPOINT_POLICY_PROTOCOL_VERSION,
+} from './context/bounded-memory.js';
+
+// T5 Render Profile + T8 Compiler Handoff —— 来自 render.ts
+export {
+  toMemoryPromptSection,
+  createRendererAdaptor,
+  DEFAULT_MEMORY_RENDER_PROFILE,
+} from './context/bounded-memory-render.js';
+
+// T7 Cache(可选优化)—— 来自 cache.ts
+export {
+  createMemoryEntrypointCache,
+  getOrBuildMemoryEntrypoint,
+} from './context/bounded-memory-cache.js';
+
+// 类型导出 — policy / input / output / activation / integration / rebuild
+export type {
+  // 共享身份与状态
+  WaveFContractRef,
+  MemoryEntrypointState,
+  // T1 policy + capture
+  MemoryEntrypointPolicy,
+  MemoryEntrypointBuildInput,
+  PreparedMemoryEntrypointBuild,
+  // T2+T3 projection
+  MemoryNavigationItem,
+  NavigationProjectionResult,
+  VerifiedMemoryClaimProjection,
+  VerifiedClaimProjectionResult,
+  // T6 Core Anchor
+  BoundedMemoryEntrypointItem,
+  BoundedMemoryEntrypointSnapshot,
+  BoundedMemoryEntrypointDependencies,
+  // T9 Activation + Integration
+  BoundedMemoryActivationEvidence,
+  BoundedMemoryActivationResult,
+  BoundedMemoryRequestIntegrationInput,
+  BoundedMemoryRequestIntegrationResult,
+  // T9 Rebuild identity(Wave G handoff)
+  MemoryEntrypointRebuildInput,
+} from './context/bounded-memory.js';
+
+// T5 Render Profile + T8 Compiler Handoff 类型 —— 来自 render.ts
+export type {
+  RenderProfileAsset,
+  RenderedMemorySection,
+  MemoryPromptHandoffInput,
+  MemoryPromptHandoffResult,
+} from './context/bounded-memory-render.js';

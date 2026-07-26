@@ -197,4 +197,67 @@ describe('SessionStore', () => {
       expect(list.find(s => s.id === sid)).toBeUndefined();
     });
   });
+
+  // ═══════════════════════════════════════════
+  // Wave G Task 2 (GRC-1 §7.21~§7.23): reconstruction sidecar 隔离不变量
+  // ═══════════════════════════════════════════
+  // 物理本质:重建账本 <id>.reconstruction.jsonl 必须与主日志严格隔离 ——
+  // list() / load() / loadSync() / getLastSessionId / getLastSessionIdSync()
+  // 绝不读 reconstruction.jsonl,否则会把"重建尝试"误算成会话或消息。
+  describe('reconstruction sidecar isolation', () => {
+    it('list() 只统计 .jsonl 主日志,不统计 .reconstruction.jsonl', async () => {
+      const sid = 'sess-recon-list';
+      // 只写 reconstruction sidecar,不写主日志
+      await store.savePreCompactSnapshot(
+        {
+          precompact_protocol_version: 'mi.precompact/1',
+          precompact_snapshot_id: 'precompact-1',
+          session_id: sid,
+          session_snapshot_id: 'ctx-1',
+          pinned_working_set_refs: ['ws-1'],
+          eviction_frontier_ref: 'ef-1',
+          captured_at: '2026-07-26T00:00:00Z',
+        },
+        sid,
+      );
+      const list = await store.list();
+      expect(list.find(s => s.id === sid)).toBeUndefined();
+    });
+
+    it('主日志 load() 绝不读 reconstruction sidecar', async () => {
+      const sid = 'sess-recon-load-iso';
+      await store.savePreCompactSnapshot(
+        {
+          precompact_protocol_version: 'mi.precompact/1',
+          precompact_snapshot_id: 'precompact-1',
+          session_id: sid,
+          session_snapshot_id: 'ctx-1',
+          pinned_working_set_refs: ['ws-1'],
+          eviction_frontier_ref: 'ef-1',
+          captured_at: '2026-07-26T00:00:00Z',
+        },
+        sid,
+      );
+      const messages = await store.load(sid);
+      expect(messages).toEqual([]);
+    });
+
+    it('reconstruction sidecar 文件落在 <dir>/sessions/<id>.reconstruction.jsonl', async () => {
+      const sid = 'sess-recon-path';
+      await store.savePreCompactSnapshot(
+        {
+          precompact_protocol_version: 'mi.precompact/1',
+          precompact_snapshot_id: 'precompact-1',
+          session_id: sid,
+          session_snapshot_id: 'ctx-1',
+          pinned_working_set_refs: ['ws-1'],
+          eviction_frontier_ref: 'ef-1',
+          captured_at: '2026-07-26T00:00:00Z',
+        },
+        sid,
+      );
+      const sidecarPath = join(tempDir, 'sessions', `${sid}.reconstruction.jsonl`);
+      expect(existsSync(sidecarPath)).toBe(true);
+    });
+  });
 });
