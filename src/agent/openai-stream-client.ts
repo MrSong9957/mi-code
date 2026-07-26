@@ -26,6 +26,11 @@ import type {
   StreamingLLMClient,
 } from './types.js';
 import { buildOpenAIImagePart, type OpenAIImagePart } from './image-utils.js';
+import {
+  createModelCapabilitySnapshot,
+  type ModelCapabilitySnapshot,
+} from './tools/capability-snapshot.js';
+import type { MetaContextActivation } from './context/activation.js';
 
 /** OpenAI ChatCompletionChunk 的最小子集(只用到的字段) */
 interface OAIChunk {
@@ -71,6 +76,38 @@ export class OpenAIStreamClient implements StreamingLLMClient {
       baseURL: options.baseUrl,
     });
     this.model = options.model || 'gpt-4o';
+  }
+
+  /**
+   * 返回本 adapter 的默认能力快照(M-058)。
+   *
+   * 关键不变量:
+   *   - 能力值由本 adapter 的代码路径实际支持什么决定,**不**从 model 名字推断。
+   *   - capability_snapshot_id 是确定性的 `cap:openai-compatible:<model>`,无随机 UUID。
+   *   - 输出经 createModelCapabilitySnapshot 深拷贝 + 深冻结。
+   *
+   * 当前声明依据(stream 代码路径已实现):
+   *   - native_tools: supported —— tools 参数转成 OpenAI function tools
+   *   - tool_result_identity: supported —— convertMessages 用 tool_call_id 透传
+   *   - system_instruction: supported —— systemPrompt 作为 system 消息插入
+   *   - provider_annotations: unknown —— 当前代码路径不携带 provider 特有标注,
+   *     显式标 unknown 而非 supported,避免乐观升级
+   */
+  getDefaultCapabilities(): ModelCapabilitySnapshot {
+    return createModelCapabilitySnapshot({
+      capability_protocol_version: '1',
+      capability_snapshot_id: `cap:openai-compatible:${this.model}`,
+      provider_id: 'openai-compatible',
+      model_id: this.model,
+      adapter_version: '1',
+      capabilities: {
+        native_tools: 'supported',
+        tool_result_identity: 'supported',
+        system_instruction: 'supported',
+        provider_annotations: 'unknown',
+      },
+      diagnostics: [],
+    });
   }
 
   async *stream(
@@ -286,4 +323,43 @@ export class OpenAIStreamClient implements StreamingLLMClient {
     }
     return null;
   }
+}
+
+// ===========================================================================
+// DRC-2 Task 4 — Meta context adapter conformance (spec §8.5-6).
+// ===========================================================================
+
+/**
+ * Project a batch of `MetaContextActivation`s into OpenAI-bound `Message[]`.
+ *
+ * The caller is expected to PREPEND the returned array to the conversation
+ * `messages` before invoking `stream()` — the `stream()` signature itself is
+ * unchanged (backward compatible). This helper only encodes the meta plane;
+ * it does not call the SDK.
+ *
+ * Contract (spec §8.5-6):
+ *   - Every output message has `role='user'` (mirrors
+ *     `MetaContextActivation.semantic_role='user'`). Meta is NEVER rewritten
+ *     to a system-role message — that would silently promote authority.
+ *   - Output is ordered by `ordinal` ascending, so meta precedes conversation
+ *     deterministically.
+ *   - `content` carries the activation's bounded content ref verbatim, so the
+ *     Provider-side request stays traceable to its activation. No second
+ *     silent truncation (spec §8.5-8).
+ *   - role / placement / authority / trust of the activation are not modified
+ *     here; only the Provider message-plane encoding is produced.
+ *
+ * Note: OpenAI's chat completions API has no first-class "meta" envelope.
+ * Encoding meta as early user-role messages is the Provider-neutral surface;
+ * the semantic distinction (`is_meta`) lives on the RC-2 snapshot, not in the
+ * wire request.
+ */
+export function encodeMetaContextAsMessages(
+  activations: ReadonlyArray<MetaContextActivation>,
+): Message[] {
+  const ordered = [...activations].sort((a, b) => a.ordinal - b.ordinal);
+  return ordered.map((a) => ({
+    role: a.semantic_role,
+    content: a.content_ref,
+  }));
 }

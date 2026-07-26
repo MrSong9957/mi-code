@@ -20,7 +20,21 @@ export interface PermissionRule {
   content?: string;
 }
 
-/** 权限决策结果 */
+/**
+ * 权限决策结果（LEGACY / COMPAT）
+ *
+ * 这是 Wave A 之前的口语化决策单 `{ behavior, reason }`，
+ * 被 streaming-executor.ts 与若干回归测试消费。
+ *
+ * RC-5 (Wave A) 引入了结构化的 `SecurityDecision`（见 ./decisions.js），
+ * 它带身份、原因码、provenance 引用、协议版本——更适合跨边界传递。
+ *
+ * 迁移期保留此类型与 `PermissionChecker.check()` 的旧行为，二者并行：
+ *   - check()         → PermissionDecision（legacy，不变）
+ *   - checkDecision() → SecurityDecision（new）
+ *
+ * 不要删除此类型，直到所有调用方迁移完成。
+ */
 export interface PermissionDecision {
   behavior: PermissionBehavior;
   reason: string;

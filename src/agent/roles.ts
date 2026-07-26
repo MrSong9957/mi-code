@@ -7,6 +7,7 @@
 // subagent.ts 与 self-organizing.ts 都从这里取配置，避免重复定义。
 
 import type { RegisteredTool } from './types.js';
+import type { AgentRoleProfile } from './prompt/profiles.js';
 
 /** 子代理角色 */
 export type Role = 'explore' | 'plan' | 'general';
@@ -144,4 +145,59 @@ export function filterToolsByRole(
     baseSubset.delete(disallowed);
   }
   return baseSubset;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Wave B Task 9 (M-014/M-035): AgentRoleProfile mapping (BRC-4).
+//
+// 把现有 ROLE_REGISTRY 的一个 entry 升级成带身份与协议版本的 AgentRoleProfile。
+// 物理本质:RoleConfig 是"工牌 + 工具箱 + 工种说明"的内部表示;
+// AgentRoleProfile 是同一份信息的"对外声明性记录"(带 asset 引用 + 协议版本),
+// 供 composeAgentPromptProfile 消费,产出 per-request 的 AgentPromptProfileSnapshot。
+//
+// 重要:本函数不创建新的 Prompt Library 资产对象,也不修改审批状态。它只是
+// 把既有 3 个 role prompt 的 inline 字符串在"精神上"映射为
+// `source.kind='mi-code'` 的资产引用 `{ asset_id: 'mi-code.role.<role>', asset_version: '1' }`。
+// 这些资产的存在性及其 prompt 内容,由以下回归测试守卫:
+//   - src/__tests__/role-agents.test.ts(角色注册表 / 工具过滤 / systemPrompt 内容)
+//   - src/__tests__/subagent-result-integrity.test.ts(子代理实际运行时使用 ROLE_REGISTRY)
+// 本迁移不新增 Prompt Library 资产,也不经此路径审批任何新资产。
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 把 {@link Role} 映射成对应的 {@link AgentRoleProfile}。
+ *
+ * 字段映射(frozen):
+ *  - role_id:角色字符串('explore' / 'plan' / 'general')。
+ *  - role_version:'1'(Wave B 首次定义这些 profile)。
+ *  - prompt_asset_ref:`{ asset_id: 'mi-code.role.<role>', asset_version: '1' }`
+ *    —— 在 mi-code 仓库内,这等价于 `source.kind='mi-code'` 资产,证据引用指向
+ *    role-agents.test.ts + subagent-result-integrity.test.ts。
+ *  - purpose:`ROLE_REGISTRY[role].whenToUse`。
+ *  - requested_tool_ids:`ROLE_REGISTRY[role].tools === '*' ? [] : [...tools]`。
+ *    '*' 表示"全量"(general 角色)—— 用空数组表示"未声明具体请求,全部交给
+ *    final tool view 决定"(defer to view),避免在 profile 层重复列举所有工具。
+ *  - required_capabilities:`[]`(现有 role 不声明 cap;未来 Wave 可扩展)。
+ *  - completion_protocol_version:'1'。
+ *  - verification_requirement:'V2'(Wave A Task 8:子代理必须 demonstrate V2)。
+ */
+export function roleToAgentRoleProfile(role: Role): AgentRoleProfile {
+  const cfg = ROLE_REGISTRY[role];
+  if (!cfg) {
+    // 类型层面 Role 已经收敛到 3 个字面量,这里只是防御性兜底。
+    throw new Error(`unknown role: ${role}`);
+  }
+  return {
+    role_id: role,
+    role_version: '1',
+    prompt_asset_ref: {
+      asset_id: `mi-code.role.${role}`,
+      asset_version: '1',
+    },
+    purpose: cfg.whenToUse,
+    requested_tool_ids: cfg.tools === '*' ? [] : [...cfg.tools],
+    required_capabilities: [],
+    completion_protocol_version: '1',
+    verification_requirement: 'V2',
+  };
 }

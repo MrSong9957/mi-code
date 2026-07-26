@@ -117,4 +117,84 @@ describe('SessionStore', () => {
       expect(last).toBeNull();
     });
   });
+
+  // ═══════════════════════════════════════════
+  // Wave B Task 13 (M-066): pending-decision sidecar 持久化
+  // ═══════════════════════════════════════════
+  // 物理本质:会话日志本旁边的"待审单据夹"。
+  // 主会话日志 <id>.jsonl 只存 Provider 可见的消息;
+  // 待审决策单 <id>.pending-decisions.jsonl 单独存放,绝不相混。
+  // resume 时读出 awaiting_user 状态的单据(本次 Wave B 仅记录,不重放——见 index.ts)。
+  describe('pending decisions sidecar', () => {
+    it('appendPendingDecision 写入 <id>.pending-decisions.jsonl,与主日志隔离', async () => {
+      const sid = 'sess-pending-1';
+      // 同时写主日志与 sidecar
+      await store.append(sid, { role: 'user', content: 'hello' });
+      await store.appendPendingDecision(sid, {
+        decision_id: 'd1',
+        action_snapshot_id: 'snap1',
+        session_id: sid,
+        status: 'awaiting_user',
+        created_at: '2026-07-26T00:00:00Z',
+        resolved_at: null,
+        user_decision_ref: null,
+      });
+
+      // 主日志读不出 pending(隔离)
+      const messages = await store.load(sid);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]!.content).toBe('hello');
+
+      // sidecar 文件存在且独立
+      const sidecarPath = join(tempDir, 'sessions', `${sid}.pending-decisions.jsonl`);
+      expect(existsSync(sidecarPath)).toBe(true);
+    });
+
+    it('loadPendingDecisions 读回所有 pending 记录', async () => {
+      const sid = 'sess-pending-2';
+      await store.appendPendingDecision(sid, {
+        decision_id: 'd1', action_snapshot_id: 's1', session_id: sid,
+        status: 'awaiting_user', created_at: 't1', resolved_at: null, user_decision_ref: null,
+      });
+      await store.appendPendingDecision(sid, {
+        decision_id: 'd2', action_snapshot_id: 's2', session_id: sid,
+        status: 'approved_once', created_at: 't2', resolved_at: 't3', user_decision_ref: 'ud2',
+      });
+
+      const pendings = await store.loadPendingDecisions(sid);
+      expect(pendings).toHaveLength(2);
+      expect(pendings[0]!.decision_id).toBe('d1');
+      expect(pendings[0]!.status).toBe('awaiting_user');
+      expect(pendings[1]!.decision_id).toBe('d2');
+      expect(pendings[1]!.status).toBe('approved_once');
+    });
+
+    it('loadPendingDecisions 不存在 → 空数组', async () => {
+      const pendings = await store.loadPendingDecisions('nonexistent');
+      expect(pendings).toEqual([]);
+    });
+
+    it('主日志 load() 绝不读 sidecar 文件', async () => {
+      const sid = 'sess-isolation';
+      // 不写任何主日志,只写 sidecar
+      await store.appendPendingDecision(sid, {
+        decision_id: 'd1', action_snapshot_id: 's1', session_id: sid,
+        status: 'awaiting_user', created_at: 't1', resolved_at: null, user_decision_ref: null,
+      });
+      // 主日志 load 应返回空(sidecar 不污染主日志)
+      const messages = await store.load(sid);
+      expect(messages).toEqual([]);
+    });
+
+    it('list() 只统计 .jsonl 主日志,不统计 .pending-decisions.jsonl', async () => {
+      const sid = 'sess-list-filter';
+      await store.appendPendingDecision(sid, {
+        decision_id: 'd1', action_snapshot_id: 's1', session_id: sid,
+        status: 'awaiting_user', created_at: 't1', resolved_at: null, user_decision_ref: null,
+      });
+      const list = await store.list();
+      // 只有 sidecar 文件,没有主日志 → 不应被当作会话列出
+      expect(list.find(s => s.id === sid)).toBeUndefined();
+    });
+  });
 });

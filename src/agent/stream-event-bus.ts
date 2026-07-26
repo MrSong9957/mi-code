@@ -8,6 +8,11 @@
 import { EventEmitter } from 'events';
 import type { StreamEvent, AssistantMessage } from './types.js';
 import type { StructuredAskResult } from './ask-user-types.js';
+import type { ObservabilityEventEnvelope } from './observability/envelopes.js';
+// Wave D T11 (DRC-4): 仅引入类型用于 telemetry batch channel 签名。
+// 使用 import type 避免运行时依赖(telemetry.ts 不反向依赖本模块,无循环)。
+// 真实 listener(写入 local buffer / flush 到 sink)由 Wave E M-052 接入。
+import type { ComponentTelemetryBatch } from './observability/telemetry.js';
 
 /** 流式事件类型 */
 export type StreamEventType =
@@ -16,7 +21,12 @@ export type StreamEventType =
   | 'tool_call'           // 工具调用开始（用于工具状态显示）
   | 'tool_result'         // 工具执行结果（用于工具结果显示）
   | 'error'               // 错误事件（用于错误显示）
-  | 'loop_end';           // 循环结束（用于清理 UI 状态）
+  | 'loop_end'            // 循环结束（用于清理 UI 状态）
+  | 'observability_event' // M-051: 可观测性信封（仅显式 emit,不自动抄送）
+  // Wave D T11 (DRC-4): 已通过 CRC-6 gate 的 telemetry batch。
+  // 本通道仅用于"显式投递"——caller 必须先用 buildComponentTelemetryBatch
+  // 构造 batch,然后显式调用 emitTelemetryBatch。真实 sink listener 由 Wave E 接入。
+  | 'telemetry_batch';
 
 /** 工具调用事件数据 */
 export interface ToolCallEvent {
@@ -131,6 +141,38 @@ export class StreamEventBus {
   }
   offLoopEnd(handler: (data: LoopEndEvent) => void): void {
     this.emitter.removeListener('loop_end', handler);
+  }
+
+  // ------ observability_event (M-051) ------
+  // 注意:本通道仅用于"显式投递"——caller 必须先用 createObservabilityEnvelope
+  // 构造信封,然后显式调用 emitObservabilityEvent。
+  // 本总线不会从其它通道(stream_event / tool_call ...)自动抄送到这里,
+  // 也不会构造任何 payload 内容。spec §13 BRC-7。
+  emitObservabilityEvent(envelope: ObservabilityEventEnvelope): void {
+    this.emitter.emit('observability_event', envelope);
+  }
+  onObservabilityEvent(handler: (envelope: ObservabilityEventEnvelope) => void): void {
+    this.emitter.on('observability_event', handler);
+  }
+  offObservabilityEvent(handler: (envelope: ObservabilityEventEnvelope) => void): void {
+    this.emitter.removeListener('observability_event', handler);
+  }
+
+  // ------ telemetry_batch (Wave D T11 / DRC-4) ------
+  // 注意:本通道仅用于"显式投递已通过 CRC-6 gate 的 batch"。caller 必须先用
+  // buildComponentTelemetryBatch 构造 batch(其内部已强制 redaction_result_ref 非空、
+  // event identity 完整、snapshot 一致),然后显式调用 emitTelemetryBatch。
+  // 本总线不会从其它通道(stream_event / tool_call / observability_event ...)自动抄送,
+  // 也不会构造 batch —— INV-D13: dropped event 原文不可由 bus 重新读取。
+  // 真实 listener(local buffer / flush / sink)由 Wave E M-052 接入。
+  emitTelemetryBatch(batch: ComponentTelemetryBatch): void {
+    this.emitter.emit('telemetry_batch', batch);
+  }
+  onTelemetryBatch(handler: (batch: ComponentTelemetryBatch) => void): void {
+    this.emitter.on('telemetry_batch', handler);
+  }
+  offTelemetryBatch(handler: (batch: ComponentTelemetryBatch) => void): void {
+    this.emitter.removeListener('telemetry_batch', handler);
   }
 
   /** 移除所有监听器 */

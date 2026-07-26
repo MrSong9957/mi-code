@@ -15,6 +15,9 @@ import type {
   Usage,
 } from './types.js';
 import { isStreamEvent } from './types.js';
+import type { ToolDefinitionSnapshot } from './tools/descriptor-snapshot.js';
+import type { RequestToolViewSnapshot } from './tools/overlay.js';
+import { materializeIncludedToolDefinitions } from './tool-registry.js';
 
 /** 规范化消息 */
 export interface NormalizedMessage {
@@ -26,13 +29,36 @@ export interface NormalizedMessage {
   timestamp: string;
 }
 
-/** 查询引擎选项 */
-export interface QueryEngineOptions {
-  systemPrompt: string;
-  tools: ToolDefinition[];
-  signal: AbortSignal;
-  maxTokens?: number;
-}
+/**
+ * 查询引擎选项 —— discriminated union(Wave B Task 4 / M-021)。
+ *
+ * 两条互斥路径:
+ *   1. NEW variant (`toolView` + `baseToolSnapshot`):走 overlay 派生的工具视图,
+ *      submit() 内部调用 materializeIncludedToolDefinitions() 把视图物化成
+ *      `ToolDefinition[]`,再转发给 provider。这是 Wave B 之后的推荐路径。
+ *   2. LEGACY variant (`tools` + `legacyToolInput: true`):老调用方直接传一个
+ *      `ToolDefinition[]` 数组,submit() 原样转发。`legacyToolInput: true` 是
+ *      discriminant,保持旧测试与旧调用点零改动。
+ *
+ * 由于是 discriminated union,结构上禁止同时提供 `tools` 与 `toolView` ——
+ * TypeScript 编译期会拒绝这种对象字面量(编译时即报错)。
+ */
+export type QueryEngineOptions =
+  | {
+      systemPrompt: string;
+      toolView: RequestToolViewSnapshot;
+      baseToolSnapshot: ToolDefinitionSnapshot;
+      signal: AbortSignal;
+      maxTokens?: number;
+    }
+  | {
+      systemPrompt: string;
+      tools: ToolDefinition[];
+      signal: AbortSignal;
+      maxTokens?: number;
+      /** discriminant:必须为 true 才走老路径 */
+      legacyToolInput: true;
+    };
 
 /**
  * QueryEngine
@@ -57,7 +83,23 @@ export class QueryEngine {
     messages: Message[],
     options: QueryEngineOptions,
   ): AsyncGenerator<NormalizedMessage | StreamEvent> {
-    const { systemPrompt, tools, signal, maxTokens = 8192 } = options;
+    const { systemPrompt, signal, maxTokens = 8192 } = options;
+
+    // Branch on variant (M-021):
+    //   - NEW variant (`toolView` 存在): 物化工具视图,得到 included 工具的
+    //     ToolDefinition[] 数组,转发给 provider。
+    //   - LEGACY variant (`legacyToolInput: true`): 直接透传 options.tools。
+    // 由于是 discriminated union,这里的类型 narrowing 让 TS 知道
+    // `options.toolView` 存在分支里 `options.tools` 不可访问,反之亦然。
+    const tools: ToolDefinition[] = (() => {
+      if ('toolView' in options) {
+        return materializeIncludedToolDefinitions(
+          options.toolView,
+          options.baseToolSnapshot,
+        );
+      }
+      return options.tools;
+    })();
 
     // 调用流式 API
     const stream = this.client.stream(messages, tools, {

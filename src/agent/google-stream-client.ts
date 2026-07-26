@@ -24,6 +24,11 @@ import type {
   StreamingLLMClient,
 } from './types.js';
 import { buildGeminiInlineData } from './image-utils.js';
+import {
+  createModelCapabilitySnapshot,
+  type ModelCapabilitySnapshot,
+} from './tools/capability-snapshot.js';
+import type { MetaContextActivation } from './context/activation.js';
 
 /** Gemini 流式 chunk 的最小子集(只用到的字段) */
 interface GeminiChunk {
@@ -64,6 +69,38 @@ export class GoogleStreamClient implements StreamingLLMClient {
       apiKey: options.apiKey || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY,
     });
     this.model = options.model || 'gemini-2.5-flash';
+  }
+
+  /**
+   * 返回本 adapter 的默认能力快照(M-058)。
+   *
+   * 关键不变量:
+   *   - 能力值由本 adapter 的代码路径实际支持什么决定,**不**从 model 名字推断。
+   *   - capability_snapshot_id 是确定性的 `cap:google:<model>`,无随机 UUID。
+   *   - 输出经 createModelCapabilitySnapshot 深拷贝 + 深冻结。
+   *
+   * 当前声明依据(stream 代码路径已实现):
+   *   - native_tools: supported —— tools 参数转成 Gemini functionDeclarations
+   *   - tool_result_identity: supported —— convertMessages 用 functionResponse.id 透传
+   *   - system_instruction: supported —— systemPrompt 传给 config.systemInstruction
+   *   - provider_annotations: unknown —— 当前代码路径不携带 provider 特有标注,
+   *     显式标 unknown 而非 supported,避免乐观升级
+   */
+  getDefaultCapabilities(): ModelCapabilitySnapshot {
+    return createModelCapabilitySnapshot({
+      capability_protocol_version: '1',
+      capability_snapshot_id: `cap:google:${this.model}`,
+      provider_id: 'google',
+      model_id: this.model,
+      adapter_version: '1',
+      capabilities: {
+        native_tools: 'supported',
+        tool_result_identity: 'supported',
+        system_instruction: 'supported',
+        provider_annotations: 'unknown',
+      },
+      diagnostics: [],
+    });
   }
 
   async *stream(
@@ -150,16 +187,21 @@ export class GoogleStreamClient implements StreamingLLMClient {
         // 工具调用(Gemini 返回完整 JSON,不是增量)
         if (part.functionCall) {
           const fc = part.functionCall;
+          // M-057: surface the provider tool-call identity verbatim. When Gemini
+          // omits functionCall.id, do NOT synthesize a random fallback — surface
+          // the missing identity as empty string consistently across both the
+          // content_block_start.blockId and the final ToolUseBlock.id.
+          const toolId = fc.id ?? '';
           const unifiedIndex = nextBlockIndex++;
           blocks.set(unifiedIndex, {
             type: 'tool_use',
-            toolId: fc.id || randomUUID(),
+            toolId,
             toolName: fc.name || '',
             toolArgs: fc.args ?? {},
             started: true,
           });
           // content_block_start + 一次性完整 JSON delta
-          yield { type: 'content_block_start', index: unifiedIndex, blockType: 'tool_use', blockId: fc.id };
+          yield { type: 'content_block_start', index: unifiedIndex, blockType: 'tool_use', blockId: toolId };
           const jsonStr = JSON.stringify(fc.args ?? {});
           yield { type: 'content_block_delta', index: unifiedIndex, deltaType: 'input_json', content: jsonStr };
         }
@@ -239,4 +281,44 @@ export class GoogleStreamClient implements StreamingLLMClient {
     }
     return null;
   }
+}
+
+// ===========================================================================
+// DRC-2 Task 4 — Meta context adapter conformance (spec §8.5-6).
+// ===========================================================================
+
+/**
+ * Project a batch of `MetaContextActivation`s into Google(Gemini)-bound `Message[]`.
+ *
+ * The caller is expected to PREPEND the returned array to the conversation
+ * `messages` before invoking `stream()` — the `stream()` signature itself is
+ * unchanged (backward compatible). This helper only encodes the meta plane;
+ * it does not call the SDK.
+ *
+ * Contract (spec §8.5-6):
+ *   - Every output message has `role='user'` (mirrors
+ *     `MetaContextActivation.semantic_role='user'`). Meta is NEVER rewritten
+ *     to a system-role message — that would silently promote authority.
+ *     (Gemini further maps `assistant`→`model` inside `convertMessages`, but
+ *     `user` is preserved as-is.)
+ *   - Output is ordered by `ordinal` ascending, so meta precedes conversation
+ *     deterministically.
+ *   - `content` carries the activation's bounded content ref verbatim, so the
+ *     Provider-side request stays traceable to its activation. No second
+ *     silent truncation (spec §8.5-8).
+ *   - role / placement / authority / trust of the activation are not modified
+ *     here; only the Provider message-plane encoding is produced.
+ *
+ * Note: Gemini's API has no first-class "meta" envelope. Encoding meta as
+ * early user-role messages is the Provider-neutral surface; the semantic
+ * distinction (`is_meta`) lives on the RC-2 snapshot, not in the wire request.
+ */
+export function encodeMetaContextAsMessages(
+  activations: ReadonlyArray<MetaContextActivation>,
+): Message[] {
+  const ordered = [...activations].sort((a, b) => a.ordinal - b.ordinal);
+  return ordered.map((a) => ({
+    role: a.semantic_role,
+    content: a.content_ref,
+  }));
 }

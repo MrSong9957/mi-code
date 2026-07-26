@@ -11,6 +11,10 @@ import { mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { randomBytes } from 'crypto';
 import type { RuntimeTaskRecord, Notification, TaskStatus } from './types.js';
+import {
+  decideChildProcessEnvironment,
+  getDefaultEnvironmentPolicy,
+} from '../permission/child-environment.js';
 
 const PREVIEW_MAX_LEN = 500;
 const DEFAULT_TIMEOUT_MS = 300_000; // 5 分钟
@@ -99,11 +103,41 @@ export class BackgroundManager {
     writeFileSync(jsonFile, JSON.stringify(record, null, 2), 'utf8');
     writeFileSync(logFile, '', 'utf8');
 
+    // BRC-6 / M-063：子进程环境清洗。
+    // 父进程 process.env 在此 ONCE 读取（sanctioned read point），交给
+    // decideChildProcessEnvironment 构造 sanitized env。spawn 必须显式传 env，
+    // 不得省略——省略等于隐式整包继承父环境（secret 会泄漏）。
+    // deny → throw（background 路径不能像 bash tool 那样返回错误字符串）。
+    const envPolicy = getDefaultEnvironmentPolicy(process.platform);
+    const envDecision = decideChildProcessEnvironment(
+      {
+        launch_snapshot_id: `bg:${id}`,
+        launcher_kind: 'background',
+        executable_ref: command,
+        parent_environment: process.env as Record<string, string>,
+        required_variable_names: [],
+        environment_policy_id: envPolicy.environment_policy_id,
+        environment_policy_version: envPolicy.environment_policy_version,
+      },
+      envPolicy,
+    );
+    if (envDecision.sanitized_environment === null) {
+      const reason = envDecision.missing_required_variable_names.length > 0
+        ? `missing required: ${envDecision.missing_required_variable_names.join(', ')}`
+        : `denied by policy ${envPolicy.environment_policy_id}@${envPolicy.environment_policy_version}`;
+      // 更新 record 反映失败状态，避免留下 running 僵尸
+      this.finishTask(id, 'error', `child environment denied: ${reason}`);
+      throw new Error(`child environment denied: ${reason}`);
+    }
+    // 捕获到局部 const：denied 路径已 throw，这里类型已收窄为 Record。
+    const sanitizedEnv = envDecision.sanitized_environment;
+
     // 在 shell 中执行命令，stdout/stderr 合并写入 log 文件
     const child = spawn(command, [], {
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
+      env: sanitizedEnv,
     });
     this.processes.set(id, child);
 

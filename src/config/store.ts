@@ -2,8 +2,9 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import type { MiCodeConfig, ProviderConfig, PermissionMode, PermissionRuleConfig, ThemeName, SpinnerVerbConfig } from './schema.js';
+import type { MiCodeConfig, ProviderConfig, PermissionMode, PermissionRuleConfig, ThemeName, SpinnerVerbConfig, CapabilityOverrideConfig, CapabilitySupportValue } from './schema.js';
 import { DEFAULT_CONFIG, DEFAULT_MODELS } from './schema.js';
+import type { CapabilityOverrideRecord } from './capability-override.js';
 
 export class ConfigStore {
   private config: MiCodeConfig;
@@ -71,6 +72,13 @@ export class ConfigStore {
         // plan 目录（向后兼容：旧文件无此字段时保留默认 undefined → ~/.micode/plans/）
         if (typeof saved.plansDirectory === 'string') {
           config.plansDirectory = saved.plansDirectory;
+        }
+        // capability overrides（CRC-2 / M-059，向后兼容：旧文件无此字段时保留 undefined）
+        // 这里只做"原始数组保存"，schema/key 校验在 getCapabilityOverrides() 做，
+        // 保证 load() 自身永不因一条坏 override 抛错（spec §8.5:override loader 异常
+        // 时使用 adapter default，不能猜测）。
+        if (Array.isArray(saved.capability_overrides)) {
+          config.capability_overrides = saved.capability_overrides;
         }
       } catch {
         // 配置文件损坏，使用默认
@@ -228,6 +236,35 @@ export class ConfigStore {
     this.save();
   }
 
+  /**
+   * 受信 loader 入口（CRC-2 / M-059，spec §8.2 + §8.3）。
+   *
+   * 从 config 读取 capability_overrides，逐条做 schema 校验（每个字段非空、changes 值
+   * 合法），返回 CapabilityOverrideRecord[]。
+   *
+   * 确定性语义:同一份 config 永远产出同样的 record 数组(顺序与文件中一致)。
+   * 安全语义:
+   *   - 任何一条 schema 不合法(字段缺失/类型错/changes value 非法)→ 直接丢弃该条,
+   *     不抛错(spec §8.5:loader 异常时使用 adapter default,不猜测)。
+   *   - 这里**只**做 schema 校验。Trust 判断(trusted_source/schema_valid/exact_scope_match)
+   *     由调用方在 applyCapabilityOverride 时通过 evidence 独立给出。
+   *   - 缺省 / 全部非法时返回空数组,保证向后兼容。
+   */
+  getCapabilityOverrides(): CapabilityOverrideRecord[] {
+    const raw = this.config.capability_overrides;
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    const out: CapabilityOverrideRecord[] = [];
+    for (const item of raw) {
+      const record = coerceOverrideRecord(item);
+      if (record !== null) {
+        out.push(record);
+      }
+    }
+    return out;
+  }
+
   /** 获取脱敏配置（用于显示） */
   getMasked(): MiCodeConfig {
     const masked = { ...this.config, providers: {} as Record<string, ProviderConfig> };
@@ -252,4 +289,75 @@ function maskApiKey(key: string): string {
   if (!key) return '';
   if (key.length <= 8) return '***';
   return key.slice(0, 8) + '***';
+}
+
+/** 合法的 capability support value 字面量集合(精确匹配)。 */
+const ALLOWED_CAPABILITY_SUPPORT_VALUES: ReadonlySet<string> = new Set([
+  'supported',
+  'unsupported',
+  'unknown',
+]);
+
+/**
+ * 把一个原始 JSON 值强制校验并转成 CapabilityOverrideRecord。
+ * 校验失败返回 null(调用方丢弃该条),不抛错(spec §8.5 loader 语义)。
+ *
+ * 校验项:
+ *   - 必须是 plain object。
+ *   - 所有身份/溯源字段非空字符串。
+ *   - changes 是 object,每个 value 必须是 supported/unsupported/unknown 之一。
+ */
+function coerceOverrideRecord(value: unknown): CapabilityOverrideRecord | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const obj = value as Record<string, unknown>;
+
+  // 身份/溯源字段:必须是非空字符串
+  const stringFields: ReadonlyArray<keyof CapabilityOverrideConfig> = [
+    'override_id',
+    'override_version',
+    'source_config_ref',
+    'source_trust_proof_ref',
+    'provider_id',
+    'endpoint_scope',
+    'model_scope',
+    'base_capability_snapshot_id',
+    'justification',
+  ];
+  for (const field of stringFields) {
+    const v = obj[field as string];
+    if (typeof v !== 'string' || v.trim().length === 0) {
+      return null;
+    }
+  }
+
+  // changes:必须是 object,每个 value 必须是合法字面量
+  const changesRaw = obj.changes;
+  if (changesRaw === null || typeof changesRaw !== 'object' || Array.isArray(changesRaw)) {
+    return null;
+  }
+  const changes: Record<string, CapabilitySupportValue> = {};
+  for (const [key, rawValue] of Object.entries(changesRaw as Record<string, unknown>)) {
+    if (
+      typeof rawValue !== 'string' ||
+      !ALLOWED_CAPABILITY_SUPPORT_VALUES.has(rawValue)
+    ) {
+      return null;
+    }
+    changes[key] = rawValue as CapabilitySupportValue;
+  }
+
+  return {
+    override_id: obj.override_id as string,
+    override_version: obj.override_version as string,
+    source_config_ref: obj.source_config_ref as string,
+    source_trust_proof_ref: obj.source_trust_proof_ref as string,
+    provider_id: obj.provider_id as string,
+    endpoint_scope: obj.endpoint_scope as string,
+    model_scope: obj.model_scope as string,
+    base_capability_snapshot_id: obj.base_capability_snapshot_id as string,
+    changes,
+    justification: obj.justification as string,
+  };
 }

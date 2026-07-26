@@ -12,6 +12,8 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
 import type { Message } from '../agent/types.js';
+import type { ToolTranscriptValidation } from '../agent/tools/transcript-validator.js';
+import type { PendingSecurityDecision } from '../permission/runtime-gate.js';
 
 /** 会话文件里每行的记录（Message + 时间戳） */
 interface SessionRecord {
@@ -49,6 +51,44 @@ export class SessionStore {
     await appendFile(filePath, line, 'utf8');
   }
 
+  /**
+   * Wave B Task 11 (M-070 / BRC-5): 结构化 append 路径,带 `before_persistence` checkpoint。
+   *
+   * 物理本质: "先体检再上账"。往会话日志本写一条之前,先要求调用方出示一份
+   * `before_persistence` checkpoint 上的 accepted validation —— 证明这条消息参与的
+   * transcript 配对完整(use/result 都成对)。配对不完整的消息不允许落盘成"成对"语义,
+   * 防止后续 resume 读到一个假装已配对、实则缺失 result 的历史。
+   *
+   * 要求(任意一条不满足都 fail-closed 抛错,不写盘):
+   *   - validation.checkpoint === 'before_persistence'
+   *   - validation.status === 'accepted'
+   *
+   * 失败时抛出结构化错误 `{ code: 'tool_transcript.invalid', checkpoint: 'before_persistence' }`。
+   *
+   * 注意:
+   *   - validator 不合成 result、不决定 partial/failed Outcome(RC-4 的事),它只校验配对。
+   *   - 老的 `append()` 方法保持不变,留给 legacy 调用方(尚未接入 checkpoint 的路径)。
+   *   - 这里只校验 validation 的身份字段,不重新扫描 messages —— validator 本身已做了
+   *     确定性校验,这里信任那份冻结的结果(frozen validation 不可变)。
+   */
+  async appendValidatedTranscript(
+    sessionId: string,
+    message: Message,
+    validation: ToolTranscriptValidation,
+  ): Promise<void> {
+    if (
+      validation.checkpoint !== 'before_persistence' ||
+      validation.status !== 'accepted'
+    ) {
+      throw {
+        code: 'tool_transcript.invalid',
+        checkpoint: 'before_persistence',
+      };
+    }
+    // 校验通过 —— 走与 append() 完全相同的落盘逻辑
+    await this.append(sessionId, message);
+  }
+
   /** 读取整个会话的消息列表（按 append 顺序）。不存在返回空数组。 */
   async load(sessionId: string): Promise<Message[]> {
     const filePath = this.sessionPath(sessionId);
@@ -68,13 +108,57 @@ export class SessionStore {
     return messages;
   }
 
+  // ═══════════════════════════════════════════
+  // Wave B Task 13 (M-066): pending-decision sidecar 持久化
+  // ═══════════════════════════════════════════
+  // 物理本质:会话日志本旁边的"待审单据夹"。
+  // 主日志 <id>.jsonl 只存 Provider 可见的消息(user/assistant turn);
+  // 待审单据 <id>.pending-decisions.jsonl 单独存放(每行一个 PendingSecurityDecision),
+  // 供 gate 在 ask 阻塞期间记录、resume 时读出 awaiting_user 单据。
+  //
+  // 两条文件 MUST NOT 混合:list() 只看 .jsonl(主日志),load() 只读 .jsonl。
+
+  /** 往 sidecar 文件 append 一条 pending decision。文件不存在则创建。 */
+  async appendPendingDecision(sessionId: string, pending: PendingSecurityDecision): Promise<void> {
+    await mkdir(this.sessionsDir, { recursive: true });
+    const filePath = this.pendingDecisionsPath(sessionId);
+    const line = JSON.stringify(pending) + '\n';
+    await appendFile(filePath, line, 'utf8');
+  }
+
+  /** 读取 sidecar 文件的所有 pending decisions(按 append 顺序)。不存在返回空数组。 */
+  async loadPendingDecisions(sessionId: string): Promise<readonly PendingSecurityDecision[]> {
+    const filePath = this.pendingDecisionsPath(sessionId);
+    if (!existsSync(filePath)) return [];
+    const text = await readFile(filePath, 'utf8');
+    const pendings: PendingSecurityDecision[] = [];
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        pendings.push(JSON.parse(trimmed) as PendingSecurityDecision);
+      } catch {
+        // 跳过损坏行(部分写入等)
+      }
+    }
+    return pendings;
+  }
+
+  /** sidecar 文件完整路径(与主日志 <id>.jsonl 同目录,不同后缀) */
+  private pendingDecisionsPath(sessionId: string): string {
+    return join(this.sessionsDir, `${sessionId}.pending-decisions.jsonl`);
+  }
+
   /** 列出所有会话摘要（按 mtime 降序，最近在前）。 */
   async list(): Promise<SessionSummary[]> {
     if (!existsSync(this.sessionsDir)) return [];
     const files = await readdir(this.sessionsDir);
     const summaries: SessionSummary[] = [];
     for (const file of files) {
+      // Wave B Task 13: 显式过滤 sidecar(<id>.pending-decisions.jsonl),
+      // 它也是 .jsonl 后缀但绝不是主会话日志。
       if (!file.endsWith('.jsonl')) continue;
+      if (file.endsWith('.pending-decisions.jsonl')) continue;
       const id = file.slice(0, -6); // 去掉 .jsonl
       const filePath = join(this.sessionsDir, file);
       try {
@@ -140,6 +224,8 @@ export class SessionStore {
     let latest: { id: string; mtime: number } | null = null;
     for (const file of readdirSync(this.sessionsDir)) {
       if (!file.endsWith('.jsonl')) continue;
+      // Wave B Task 13: 同 list(),过滤 sidecar。
+      if (file.endsWith('.pending-decisions.jsonl')) continue;
       const id = file.slice(0, -6);
       try {
         const st = statSync(join(this.sessionsDir, file));

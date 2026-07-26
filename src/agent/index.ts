@@ -50,3 +50,264 @@ export {
   type LoopEndEvent,
 } from './stream-event-bus.js';
 export { streamingQuery, type StreamMessage, type StreamingQueryOptions } from './streaming-query.js';
+
+// Wave A 公共契约导出（RC-1 ~ RC-4）。
+//
+// 这些导出是后续 Wave B 各机制的稳定输入。只导出 Root Contract 所需的公共类型和
+// 构造函数；不导出内部排序 helper、测试 factory 或 legacy adapter。
+//
+// RC-1 Prompt Asset Governance
+export {
+  buildPromptAssetRegistry,
+  type PromptAssetRecord,
+  type PromptAssetRegistrySnapshot,
+  type PromptEvaluationStatus,
+  type BuildPromptAssetRegistryInput,
+} from './prompt/registry.js';
+
+// RC-2 Semantic Request Boundary
+export {
+  buildSemanticRequestSnapshot,
+  type SemanticPlacement,
+  type SemanticSection,
+  type SemanticMessage,
+  type SemanticRequestSnapshot,
+  type BuildSemanticRequestSnapshotInput,
+} from './contracts/request-snapshot.js';
+
+export {
+  buildToolDefinitionSnapshot,
+  type ToolDescriptor,
+  type ToolDefinitionSnapshot,
+} from './tools/descriptor-snapshot.js';
+
+// RC-3 Project Rule Discovery
+export {
+  discoverProjectRuleSources,
+  type ProjectRuleDiscoveryInput,
+  type ProjectRuleSourcePolicy,
+  type DiscoveredRuleSource,
+} from './context/discovery.js';
+
+// RC-4 Completion & Agent Result
+export {
+  createCompletionReport,
+  createDispatchReceipt,
+  type CompletionReport,
+  type DispatchReceipt,
+  type CompletionOutcome,
+  type VerificationReport,
+  type VerificationLevel,
+  type VerificationStatus,
+  type VerificationFailureKind,
+  type DeliverableReport,
+  type SubjectRef,
+  type CreateCompletionReportInput,
+  type CreateDispatchReceiptInput,
+} from './contracts/completion-report.js';
+
+// 共享身份原语（被多个 RC 复用，作为公共工具暴露）
+export {
+  requireIdentity,
+  freezeSnapshot,
+} from './contracts/identities.js';
+
+// Wave B 公共契约导出（BRC-1 ~ BRC-7）。
+//
+// 只导出 Root Contract 所需的公共类型和 builder/validator/gate；不导出内部
+// hash helper、legacy adapter 或测试 factory。
+
+// BRC-1 Prompt Compilation
+export {
+  compilePromptSnapshot,
+  type PromptSectionInput,
+  type PromptCompilationInput,
+  type CompiledPromptSnapshot,
+  type PromptAssetApprovalLookup,
+} from './prompt/compiler.js';
+
+// BRC-2 Capability-Aware Tool View
+export {
+  createModelCapabilitySnapshot,
+  type CapabilitySupport,
+  type ModelCapabilitySnapshot,
+} from './tools/capability-snapshot.js';
+
+export {
+  deriveRequestToolView,
+  type RequestToolViewSnapshot,
+  type RequestToolViewEntry,
+  type ToolViewOverlayInput,
+} from './tools/overlay.js';
+
+export {
+  materializeIncludedToolDefinitions,
+} from './tool-registry.js';
+
+// BRC-3 Typed Context Intake
+export {
+  createContextSourceEnvelope,
+  runContextIntake,
+  buildBoundedContextSource,
+  type ContextSourceEnvelope,
+  type ContextWriterKind,
+  type ContextSourceClass,
+  type BoundedContextSource,
+  type SourceBudgetPolicy,
+  type ContextSanitizationResult,
+} from './context/intake.js';
+
+// BRC-4 Agent Prompt Profiles
+export {
+  composeAgentPromptProfile,
+  type AgentRoleProfile,
+  type TaskPromptTemplate,
+  type AgentPromptProfileSnapshot,
+  type ComposedAgentProfile,
+} from './prompt/profiles.js';
+
+// BRC-5 Tool Transcript Integrity
+export {
+  validateToolTranscript,
+  type ToolTranscriptValidation,
+  type ToolTranscriptSnapshot,
+  type ToolPairState,
+  type ToolPairRecord,
+  type TranscriptCheckpoint,
+} from './tools/transcript-validator.js';
+
+// BRC-7 Observability Planes
+export {
+  createObservabilityEnvelope,
+  canEnterPlane,
+  type ObservabilityEventEnvelope,
+  type ObservabilityPlane,
+  type ObservabilityPlanePolicies,
+} from './observability/envelopes.js';
+
+// Wave C 公共契约导出(CRC-1 ~ CRC-6)。
+//
+// 只导出 Root Contract 所需的公共 policy anchor 和类型;内部 rank、hash、formatter
+// 不导出。每个 CRC 的导出紧跟其 Wave B 前置,便于追溯依赖关系。
+
+// CRC-1 Prompt Resolution Policy (M-002/M-003/M-004)
+export {
+  resolvePromptPolicy,
+  compileResolvedPrompt,
+  evaluatePromptCondition,
+  classifyPromptScope,
+  type PromptResolutionPlan,
+  type PromptResolutionCandidate,
+  type PromptResolutionInput,
+  type PromptCondition,
+  type ConditionTruth,
+  type ConditionEvaluation,
+  type PromptScopeDecision,
+  type PromptScopeClass,
+  type ResolvedPromptCompileDeps,
+} from './prompt/resolution.js';
+
+// CRC-3 Context Routing (M-009/M-012) — environment block + markdown routing
+export {
+  buildEnvironmentContextBlock,
+  routeMarkdownSource,
+  type EnvironmentContextBlock,
+  type EnvironmentBlockUnavailable,
+  type MarkdownRouteDecision,
+  type MarkdownRouteTarget,
+  type MarkdownSourceRouteInput,
+  type MarkdownRouteTrustEvidence,
+} from './context/routing.js';
+
+// CRC-4 Tool Policy Projection (M-026)
+export {
+  projectToolPolicy,
+  type ToolPolicyProjection,
+  type ToolPolicyProjectionInput,
+  type ToolPolicyProjectionDeps,
+} from './tools/policy-projection.js';
+
+// CRC-4 No-Tool Request Contract (M-031)
+export {
+  createNoToolRequestContract,
+  validateNoToolRequest,
+  bindValidationToContract,
+  NO_TOOL_PROTOCOL_VERSION,
+  type NoToolRequestContract,
+  type NoToolRequestState,
+  type NoToolValidationResult,
+} from './tools/no-tool-contract.js';
+
+// CRC-5 Injection Suspicion Signal (M-069)
+export {
+  createInjectionSuspicionSignal,
+  shouldRecommendUserReport,
+  type InjectionSuspicionSignal,
+  type InjectionSuspicionSignalInput,
+} from './context/injection-signal.js';
+
+// CRC-6 Decision Trace (M-054)
+export {
+  createDecisionTraceEvent,
+  type DecisionTraceEvent,
+  type DecisionTraceEventInput,
+  type DecisionSubsystem,
+} from './observability/decision-trace.js';
+
+// CRC-6 Telemetry Redaction (M-056)
+export {
+  redactTelemetryEvent,
+  type TelemetryRedactionResult,
+  type TelemetryFieldPolicy,
+  type TelemetryEventInput,
+  type TelemetryFieldClass,
+  type TelemetryFieldAction,
+  type TelemetryPiiLabel,
+} from './observability/redaction.js';
+
+// Wave D 公共契约导出(DRC-1 ~ DRC-4)。
+//
+// 只导出 DRC 所需的公共 capability anchor 和类型;内部 helper、test corpus 不导出。
+
+// DRC-1 Mode Profile (M-048)
+export {
+  selectModeProfile,
+  compileProfiledPrompt,
+  type ModeProfileDefinition,
+  type ModeProfileRegistry,
+  type ModeProfileSelectionInput,
+  type ModeProfileSelection,
+  type ProfiledCompileDeps,
+} from './prompt/profiles.js';
+
+// DRC-2 Trusted Context Activation (M-008 + M-044 orchestration)
+export {
+  activateProjectInstruction,
+  attachMetaContext,
+  activateTrustedContext,
+  type ProjectInstructionActivationInput,
+  type MetaContextActivation,
+  type TrustedContextActivationInput,
+  type TrustedContextActivationResult,
+  type TrustedContextDependencies,
+} from './context/activation.js';
+
+// DRC-3 Tool Reference Integrity (M-028)
+export {
+  buildToolReferenceManifest,
+  validateToolReferences,
+  type ToolReferenceManifest,
+  type ToolReferenceValidation,
+  type ToolReferenceValidationInput,
+} from './tools/reference-validator.js';
+
+// DRC-4 Component Telemetry (M-055)
+export {
+  measureTelemetryComponent,
+  buildComponentTelemetryBatch,
+  type ComponentTelemetryEvent,
+  type ComponentTelemetryBatch,
+  type ComponentTelemetryBatchInput,
+  type TelemetryComponentRef,
+  type TokenMeasurement,
+} from './observability/telemetry.js';

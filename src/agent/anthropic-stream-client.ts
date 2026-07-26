@@ -18,6 +18,11 @@ import type {
   StreamingLLMClient,
 } from './types.js';
 import { ensureImageData } from './image-utils.js';
+import {
+  createModelCapabilitySnapshot,
+  type ModelCapabilitySnapshot,
+} from './tools/capability-snapshot.js';
+import type { MetaContextActivation } from './context/activation.js';
 
 /** 默认空闲超时（毫秒） */
 const DEFAULT_IDLE_TIMEOUT_MS = 90_000;
@@ -44,6 +49,37 @@ export class AnthropicStreamClient implements StreamingLLMClient {
     });
     this.model = options.model || 'claude-sonnet-4-20250514';
     this.idleTimeoutMs = options.idleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS;
+  }
+
+  /**
+   * 返回本 adapter 的默认能力快照(M-058)。
+   *
+   * 关键不变量:
+   *   - 能力值由本 adapter 的代码路径实际支持什么决定,**不**从 model 名字推断。
+   *   - capability_snapshot_id 是确定性的 `cap:anthropic:<model>`,无随机 UUID。
+   *   - 输出经 createModelCapabilitySnapshot 深拷贝 + 深冻结。
+   *
+   * 当前声明依据(stream 代码路径已实现):
+   *   - native_tools: supported —— tools 参数会转成 Anthropic tools schema
+   *   - tool_result_identity: supported —— convertMessages 透传 tool_use_id 原值
+   *   - system_instruction: supported —— systemPrompt 直接传给 system 字段
+   *   - provider_annotations: supported —— message_start 暴露 messageId/model 等 provider 元信息
+   */
+  getDefaultCapabilities(): ModelCapabilitySnapshot {
+    return createModelCapabilitySnapshot({
+      capability_protocol_version: '1',
+      capability_snapshot_id: `cap:anthropic:${this.model}`,
+      provider_id: 'anthropic',
+      model_id: this.model,
+      adapter_version: '1',
+      capabilities: {
+        native_tools: 'supported',
+        tool_result_identity: 'supported',
+        system_instruction: 'supported',
+        provider_annotations: 'supported',
+      },
+      diagnostics: [],
+    });
   }
 
   /**
@@ -288,4 +324,42 @@ export class AnthropicStreamClient implements StreamingLLMClient {
     // thinking 块不转为 ContentBlock（仅用于实时显示）
     return null;
   }
+}
+
+// ===========================================================================
+// DRC-2 Task 4 — Meta context adapter conformance (spec §8.5-6).
+// ===========================================================================
+
+/**
+ * Project a batch of `MetaContextActivation`s into Anthropic-bound `Message[]`.
+ *
+ * The caller is expected to PREPEND the returned array to the conversation
+ * `messages` before invoking `stream()` — the `stream()` signature itself is
+ * unchanged (backward compatible). This helper only encodes the meta plane;
+ * it does not call the SDK.
+ *
+ * Contract (spec §8.5-6):
+ *   - Every output message has `role='user'` (mirrors
+ *     `MetaContextActivation.semantic_role='user'`). Meta is NEVER rewritten
+ *     to a system-role message — that would silently promote authority.
+ *   - Output is ordered by `ordinal` ascending, so meta precedes conversation
+ *     deterministically.
+ *   - `content` carries the activation's bounded content ref verbatim, so the
+ *     Provider-side request stays traceable to its activation. No second
+ *     silent truncation (spec §8.5-8).
+ *   - role / placement / authority / trust of the activation are not modified
+ *     here; only the Provider message-plane encoding is produced.
+ *
+ * Note: Anthropic's SDK has no first-class "meta" envelope. Encoding meta as
+ * early user-role messages is the Provider-neutral surface; the semantic
+ * distinction (`is_meta`) lives on the RC-2 snapshot, not in the wire request.
+ */
+export function encodeMetaContextAsMessages(
+  activations: ReadonlyArray<MetaContextActivation>,
+): Message[] {
+  const ordered = [...activations].sort((a, b) => a.ordinal - b.ordinal);
+  return ordered.map((a) => ({
+    role: a.semantic_role,
+    content: a.content_ref,
+  }));
 }

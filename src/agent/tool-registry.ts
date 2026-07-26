@@ -18,6 +18,16 @@ import type { WorktreeManager } from '../worktree/worktree-manager.js';
 import { createTaskMatrixTool, createMarkTaskDoneTool } from './tools/task-board-tool.js';
 import { createWorktreeTool } from './tools/worktree-tool.js';
 import { READ_ONLY_TOOLS } from '../permission/types.js';
+import {
+  decideChildProcessEnvironment,
+  getDefaultEnvironmentPolicy,
+} from '../permission/child-environment.js';
+import {
+  buildToolDefinitionSnapshot,
+  type ToolDefinitionSnapshot,
+  type ToolDescriptor,
+} from './tools/descriptor-snapshot.js';
+import type { RequestToolViewSnapshot } from './tools/overlay.js';
 
 export class ToolRegistry {
   private _tools = new Map<string, RegisteredTool>();
@@ -29,12 +39,30 @@ export class ToolRegistry {
 
   /** 注册工具 */
   register(definition: ToolDefinition, executor: ToolExecutor): void {
+    // RC-2:tool_id 是身份(不可重复)。重复注册直接抛错,不再静默覆盖。
+    if (this._tools.has(definition.name)) {
+      throw new Error(`Duplicate tool id: ${definition.name}`);
+    }
     this._tools.set(definition.name, { definition, executor });
   }
 
   /** 获取工具定义列表（传给 LLM） */
   getDefinitions(): ToolDefinition[] {
     return Array.from(this._tools.values()).map(t => t.definition);
+  }
+
+  /**
+   * 构建一份不可变的工具定义快照(RC-2)。
+   *
+   * 物理本质:曝光底片。把当前注册表的所有工具定义 + 注册顺序深拷贝 +
+   * 三层冻结,后续注册表增删或原始 definition 被 mutate 都不影响返回值。
+   * 模型请求应从快照构建,避免一次 turn 内工具集漂移。
+   *
+   * 注意:Wave B(M-021/M-024)会让请求构建器改用此方法,getDefinitions()
+   * 当前保留不动作为兼容路径。
+   */
+  getDefinitionSnapshot(registrySnapshotId: string): ToolDefinitionSnapshot {
+    return buildToolDefinitionSnapshot(registrySnapshotId, this._tools);
   }
 
   /** 执行工具(透传 ctx 给 executor,旧 executor 忽略该可选参数) */
@@ -59,6 +87,105 @@ export class ToolRegistry {
   get size(): number {
     return this._tools.size;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wave B Task 4 (M-021): materializeIncludedToolDefinitions
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// 物理本质:把"per-request 工具视图"(哪些工具 included/excluded)+ 一份 base
+// 工具定义快照,显影成一份可发送给 provider 的 `ToolDefinition[]`。
+//
+// 这是 overlay/capability 层与 QueryEngine 之间的最后一段接驳:
+//   - 上游 overlay 层(decision)决定"哪些工具可见"
+//   - 本函数(execution 路径)负责"把可见工具的 schema 抠出来 deep-copy 后发出去"
+//
+// 关键不变量(BRC-2):
+//   1. view 与 base 的身份必须一致(view.base_tool_snapshot_id === base.registry_snapshot_id)
+//   2. 只输出 visibility === 'included' 的工具,excluded 工具不出现
+//   3. included 工具必须在 base 中存在
+//   4. canonical_order 不能漂移(view entry 与 base descriptor 必须一致)
+//   5. included 工具的 description_asset_ref 状态由 overlay 决定 —— overlay 把
+//      metadata 缺失的工具视为 approved-by-default,此时 entry 的 description_asset_ref
+//      合法地为 null(常见于无显式 metadata 的内置工具)。本 materializer 不二次解释
+//      overlay 的 approval 决策:view 说 included 即 included。
+//   6. 输出是 NEW 数组 + 深拷贝,调用方 mutate 不影响 base / Registry
+//   7. 输出按 canonical_order 升序(view.entries 已按此序,但显式排序保证稳健)
+//   8. 不修改 Registry 或 base 快照
+//
+// 不感知 Provider / Capability / Permission:本函数只是"按视图剪一份 schema"。
+
+/**
+ * 把一份 RequestToolViewSnapshot + 对应的 base ToolDefinitionSnapshot,
+ * 物化成发给 provider 的 `ToolDefinition[]`。
+ *
+ * @throws 当 view 与 base 的身份不一致时。
+ * @throws 当某个 included tool_id 不在 base 中时。
+ * @throws 当 canonical_order 在 view entry 与 base descriptor 之间漂移时。
+ */
+export function materializeIncludedToolDefinitions(
+  view: RequestToolViewSnapshot,
+  base: ToolDefinitionSnapshot,
+): ToolDefinition[] {
+  // 规则 1:身份一致性校验。view 必须引用同一份 base snapshot。
+  if (view.base_tool_snapshot_id !== base.registry_snapshot_id) {
+    throw new Error(
+      `tool view base_tool_snapshot_id mismatch: ` +
+        `view=${view.base_tool_snapshot_id} base=${base.registry_snapshot_id}`,
+    );
+  }
+
+  // 规则 3 预备:base descriptor 按 tool_id 索引,便于 O(1) 查找。
+  // 同时存原 descriptor 用于规则 4 的 canonical_order 一致性断言。
+  const baseByToolId: Map<string, Readonly<ToolDescriptor>> = new Map();
+  for (const d of base.descriptors) {
+    baseByToolId.set(d.tool_id, d);
+  }
+
+  const out: ToolDefinition[] = [];
+
+  // entries 已按 canonical_order 升序(overlay 保证);为稳健起见,这里仍然
+  // 按 canonical_order 显式排序一次,避免上游某天顺序变化导致 Provider 收到乱序。
+  const sortedEntries = [...view.entries].sort((a, b) => {
+    if (a.canonical_order < b.canonical_order) return -1;
+    if (a.canonical_order > b.canonical_order) return 1;
+    return 0;
+  });
+
+  for (const entry of sortedEntries) {
+    // 规则 2:只输出 included。
+    if (entry.visibility !== 'included') continue;
+
+    // 规则 3:included 工具必须在 base 中。
+    const baseDescriptor = baseByToolId.get(entry.tool_id);
+    if (!baseDescriptor) {
+      throw new Error(
+        `included tool "${entry.tool_id}" not found in base snapshot ` +
+          `(base_tool_snapshot_id=${base.registry_snapshot_id})`,
+      );
+    }
+
+    // 规则 4:canonical_order 不能漂移(view entry 与 base descriptor 必须一致)。
+    if (entry.canonical_order !== baseDescriptor.canonical_order) {
+      throw new Error(
+        `canonical_order drift for "${entry.tool_id}": ` +
+          `view=${entry.canonical_order} base=${baseDescriptor.canonical_order}`,
+      );
+    }
+
+    // 规则 5:不在 materializer 层判断 description_asset_ref 是否为 null。
+    // overlay 把 metadata 缺失的工具视为 approved-by-default,此时 entry 合法地
+    // 带 null description_asset_ref(常见于无显式 metadata 的内置工具)。
+    // view 说 included 即 included —— approval 的真值在 overlay 层,不在这里。
+
+    // 规则 6:深拷贝一份 ToolDefinition(隔离调用方 mutate)。
+    // base descriptor 的 definition 已经在 buildToolDefinitionSnapshot 里深拷贝过一次,
+    // 这里再拷一次,确保返回数组与 base / Registry 完全无引用耦合。
+    out.push(structuredClone(baseDescriptor.definition) as ToolDefinition);
+  }
+
+  // 规则 7:输出 NEW 数组(深拷贝完毕,顺序正确)。规则 8:无副作用。
+  return out;
 }
 
 /**
@@ -137,6 +264,33 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
     executor: async (input) => {
       const command = input.command as string;
 
+      // BRC-6 / M-063：子进程环境清洗。
+      // 父进程 process.env 在此 ONCE 读取（sanctioned read point），交给
+      // decideChildProcessEnvironment 构造 sanitized env。spawn 必须显式传 env，
+      // 不得省略——省略等于隐式整包继承父环境（secret 会泄漏）。
+      const envPolicy = getDefaultEnvironmentPolicy(process.platform);
+      const envDecision = decideChildProcessEnvironment(
+        {
+          launch_snapshot_id: `bash:${command.slice(0, 32)}`,
+          launcher_kind: 'shell_tool',
+          executable_ref: command,
+          parent_environment: process.env as Record<string, string>,
+          required_variable_names: [],
+          environment_policy_id: envPolicy.environment_policy_id,
+          environment_policy_version: envPolicy.environment_policy_version,
+        },
+        envPolicy,
+      );
+      if (envDecision.sanitized_environment === null) {
+        const reason = envDecision.missing_required_variable_names.length > 0
+          ? `missing required: ${envDecision.missing_required_variable_names.join(', ')}`
+          : `denied by policy ${envPolicy.environment_policy_id}@${envPolicy.environment_policy_version}`;
+        return `Error: child environment denied: ${reason}`;
+      }
+      // 捕获到局部 const，避免 Promise closure 内的 narrowing 丢失（sanitized_environment
+      // 在类型上仍是 Record | null，closure 看不到上面的 null 收窄）。
+      const sanitizedEnv = envDecision.sanitized_environment;
+
       // 异步 spawn + 手动超时 + 进程树终止（替代 spawnSync 的孤儿进程泄漏）
       // 物理本质：spawnSync 超时只杀门面接待员（cmd.exe），孙进程（dev server）变孤儿。
       // 改用 spawn + killProcessTree 做"全楼清场"，超时后整棵进程树请走。
@@ -145,6 +299,7 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
           shell: true,
           stdio: ['pipe', 'pipe', 'pipe'],
           windowsHide: true,
+          env: sanitizedEnv,
         });
 
         // 流式收集 stdout/stderr（Buffer[]，末尾 concat 后 decodeBuffer 保留 GBK 处理）

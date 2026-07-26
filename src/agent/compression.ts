@@ -9,6 +9,7 @@
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Message, ContentBlock, StreamingLLMClient, StreamEvent, AssistantMessage } from './types.js';
+import type { ToolTranscriptValidation } from './tools/transcript-validator.js';
 
 /** 大结果阈值：超过此长度写磁盘 */
 const PERSIST_THRESHOLD = 5000;
@@ -243,8 +244,34 @@ function serializeMessagesForSummary(messages: Message[]): string {
  * 组合压缩：按 L1 → L2 顺序执行
  *
  * 返回压缩后的消息和是否需要 L4。
+ *
+ * Wave B Task 11 (M-070 / BRC-5): 加了可选的 `before_compaction` checkpoint preflight。
+ *
+ * 物理本质: "整理办公桌前先体检"。压缩会把旧消息裁/换占位,在动刀前要求调用方
+ * 出示一份 `before_compaction` checkpoint 上的 accepted validation,证明这份 transcript
+ * 的 use/result 配对完整。压缩一份配对残缺的 transcript 会让"缺失 result 的 use"被
+ * 裁掉后永远查不回因果,所以 fail-closed。
+ *
+ * 行为:
+ *   - 不传 options: 走 legacy 路径,完全不校验,保持向后兼容(老的错误恢复 / 测试都走这条)。
+ *   - 传 preflightValidation: 要求 checkpoint === 'before_compaction' AND status === 'accepted',
+ *     否则抛 `{ code: 'tool_transcript.invalid', checkpoint: 'before_compaction' }`,不压缩。
+ *
+ * 注意: validator 不合成 result、不决定 Outcome,这里只信任 validator 冻结的判定。
  */
-export function runCompaction(messages: Message[]): { messages: Message[]; needsL4: boolean } {
+export function runCompaction(
+  messages: Message[],
+  options?: { preflightValidation?: ToolTranscriptValidation },
+): { messages: Message[]; needsL4: boolean } {
+  if (options?.preflightValidation !== undefined) {
+    const v = options.preflightValidation;
+    if (v.checkpoint !== 'before_compaction' || v.status !== 'accepted') {
+      throw {
+        code: 'tool_transcript.invalid',
+        checkpoint: 'before_compaction',
+      };
+    }
+  }
   let result = snipCompact(messages);
   result = microCompact(result);
   return { messages: result, needsL4: estimateContextSize(result) > CONTEXT_LIMIT };

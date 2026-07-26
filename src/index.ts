@@ -151,6 +151,15 @@ const currentProject = process.cwd();
 // CLI argv 解析（--resume/--continue/--list）
 import { parseCliArgs } from './cli.js';
 import { SessionStore } from './session/store.js';
+import { RuntimeSecurityGate } from './permission/runtime-gate.js';
+import type {
+  PendingDecisionStore,
+  PendingSecurityDecision,
+  UserDecisionChannel,
+} from './permission/runtime-gate.js';
+import type { SecurityDecision, UserDecision } from './permission/decisions.js';
+import { SECURITY_PROTOCOL_VERSION } from './permission/decisions.js';
+import type { AskQuestionRequest, AskQuestionOutcome } from './agent/ask-user-types.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
 const cliOpts = parseCliArgs();
@@ -313,6 +322,92 @@ const askManager = new AskUserManager({
 // 注册 ask_user_question 工具（依赖 askManager）
 const askTool = createAskUserTool(askManager);
 toolRegistry.register(askTool.definition, askTool.executor);
+
+// ═══════════════════════════════════════════
+// Wave B Task 13 (M-066): RuntimeSecurityGate 装配
+// ═══════════════════════════════════════════
+// 物理本质:把 AskUserManager(UI 问卷通道)适配成 UserDecisionChannel(权限决策通道),
+// 把 SessionStore(JSONL 持久层)适配成 PendingDecisionStore(待审单据夹),
+// 然后组装一个 RuntimeSecurityGate,接入 streamingQuery 的 ask 阻塞路径。
+//
+// 关键:permission ask 用与 ask_user_question tool **不同的 schema**(BRC-6 要求不能伪装成
+// tool result)。这里把 SecurityDecision 转成一个简短的二选一问卷(Allow once / Reject),
+// outcome=submitted → approved_once;outcome=cancelled/chat → rejected。
+//
+// adapterSessionIdReader:延迟读取当前 sessionId(因为 sessionId 是 mutable let,
+// gate 构造时还不知道 resume 后的值)。
+
+function getDecisionChannel(): UserDecisionChannel {
+  return {
+    async request(decision: SecurityDecision): Promise<UserDecision> {
+      // 把 SecurityDecision 转成问卷(Allow once / Reject)。这是**独立的 permission ask
+      // schema**,不伪装成 tool result。
+      const request: AskQuestionRequest = {
+        questions: [{
+          question:
+            `Allow this action once?\n\n` +
+            `Tool: ${decision.action.subject_id}\n` +
+            `Reason: ${decision.human_reason}`,
+          header: 'Permission',
+          options: [
+            { label: 'Allow once', description: 'Run this action exactly once. It will not be remembered.' },
+            { label: 'Reject', description: 'Do not run this action.' },
+          ],
+          multiSelect: false,
+        }],
+      };
+      let outcome: AskQuestionOutcome;
+      try {
+        outcome = await askManager.ask(request);
+      } catch (err) {
+        // UI 抛错 → 视为通道故障(由 gate 转成 denied,绝不放行)
+        throw err;
+      }
+      const response: UserDecision['response'] =
+        outcome.kind === 'submitted' ? 'approved_once' : 'rejected';
+      return {
+        protocol_version: SECURITY_PROTOCOL_VERSION,
+        decision_id: decision.decision_id,
+        response,
+        decided_at: new Date().toISOString(),
+      };
+    },
+  };
+}
+
+// PendingDecisionStore 适配器:包装 SessionStore + 当前 sessionId reader。
+// update() 在 SessionStore 上无原生对应方法,Wave B 采取最简正确实现:
+// 把"更新"等价为"再 append 一条同 decision_id 的新记录"(sidecar 是 append-only,
+// 读侧以最新记录为准——本 Wave 的 resume 逻辑只关心 awaiting_user 状态,
+// 不消费 update 记录,因此 append-only 不会引起歧义)。
+function makePendingStore(sessionIdReader: () => string): PendingDecisionStore {
+  return {
+    async save(pending: PendingSecurityDecision): Promise<void> {
+      await sessionStore.appendPendingDecision(sessionIdReader(), pending);
+    },
+    async load(sid: string): Promise<readonly PendingSecurityDecision[]> {
+      return sessionStore.loadPendingDecisions(sid);
+    },
+    async update(decisionId: string, update: Partial<PendingSecurityDecision>): Promise<void> {
+      // append-only sidecar:读回原 pending,merge update 后再 append 一条新版本。
+      try {
+        const existing = await sessionStore.loadPendingDecisions(sessionIdReader());
+        const latest = [...existing].reverse().find(p => p.decision_id === decisionId);
+        if (latest) {
+          const merged: PendingSecurityDecision = { ...latest, ...update };
+          await sessionStore.appendPendingDecision(sessionIdReader(), merged);
+        }
+      } catch {
+        // update 失败不影响授权决策(gate 的内存状态已正确),只影响审计完整性。
+      }
+    },
+  };
+}
+
+const runtimeGate = new RuntimeSecurityGate({
+  pendingStore: makePendingStore(() => sessionId),
+  channel: getDecisionChannel(),
+});
 
 /**
  * PlanStore：plan 文件落盘（plan 模式产出物的档案柜）。
@@ -724,6 +819,10 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     for await (const msg of streamingQuery(streamClient, toolRegistry, userMessageForAgent ?? userInput, {
       systemPrompt, tools, signal: ac.signal,
       eventBus, compactClient, permissionChecker,
+      // Wave B Task 13 (M-066): 接入 RuntimeSecurityGate。
+      // ask 在 approved_once 到位前会真正阻塞(经 askManager UI 问卷),
+      // 无 channel 时 fail closed(no_channel),绝不降级为 allow。
+      runtimeGate,
       initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
       onMessages: (finalMessages) => {
         const newMsgs = finalMessages.slice(persistedCount);
@@ -864,6 +963,20 @@ if (cliOpts.list) {
   if (resumeId) {
     sessionMessages = sessionStore.loadSync(resumeId);
     sessionId = resumeId;
+    // Wave B Task 13 (M-066): 加载该会话遗留的 pending decisions。
+    //
+    // *** Wave B 最简正确行为 ***:status === 'awaiting_user' 的单据在 resume 时
+    // **无法重新挂起用户**(原 decision 的 SecurityDecision 已不在内存,action snapshot
+    // 也无权威源可重验),因此一律视为已过期(expired)——直接丢弃,不重放、不重问。
+    // 真实实现需要把 decision + action snapshot 一起持久化才能 resume 重问,
+    // 这超出 Wave B 范围(后续 Wave 处理)。这里只读一次记日志,保证 sidecar 不被悄悄忽略。
+    void sessionStore.loadPendingDecisions(resumeId).then(pendings => {
+      const awaiting = pendings.filter(p => p.status === 'awaiting_user');
+      if (awaiting.length > 0) {
+        // 仅打印一次提示(resume 后用户可见),不重放、不阻塞 resume。
+        printLine(`── ${awaiting.length} pending permission decision(s) from prior session expired (action snapshot no longer re-validatable) ──`);
+      }
+    });
   }
 
   // 装配 Ink 渲染层：stores + PipelineToStoreAdapter + BlockPipeline + render(<ConnectedApp/>)。
