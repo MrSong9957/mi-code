@@ -10,6 +10,7 @@
 import 'dotenv/config';
 import { execSync } from 'child_process';
 import { join } from 'path';
+import { readFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { createDefaultRegistry } from './agent/tool-registry.js';
 import { AnthropicStreamClient } from './agent/anthropic-stream-client.js';
@@ -37,7 +38,7 @@ import { createTaskTool } from './agent/tools/task-tool.js';
 import { createSpawnAgentTool } from './agent/tools/spawn-agent-tool.js';
 import { createSpawnSelfOrganizingTool } from './agent/tools/spawn-self-organizing-tool.js';
 import { runSubagent } from './agent/subagent.js';
-import { plannerPrompt } from './prompts/index.js';
+import { plannerPrompt, systemPrompt as systemPromptTemplate } from './prompts/index.js';
 import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
 import { parseBlockPrefix } from './commands/parser.js';
@@ -697,14 +698,24 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     ? `\n\n${plannerPrompt}`
     : '';
 
+  // 加载项目级 AGENTS.md(全量运行时读取)。
+  // 项目规则随项目演进,直接读原文件而非 codegen 化的精炼版,保证 AGENTS.md 改动自动生效。
+  // 注意:fork=true 子代理会继承完整 system prompt(subagent.ts:238-246),role-based
+  // 子代理走 ROLE_REGISTRY 不继承。fork 是长任务场景本就需要完整上下文,可接受。
+  const projectRulesPath = join(process.cwd(), 'AGENTS.md');
+  const projectRules = existsSync(projectRulesPath)
+    ? readFileSync(projectRulesPath, 'utf8')
+    : '';
+
   const systemPrompt = [
-    'You are a helpful assistant. Answer questions directly with text — do NOT use tools for simple conversation.',
-    'You have tools (run_bash, read_file, write_file, etc.) for when you need to perform real operations on the system.',
-    'Only use tools when the user asks you to do something concrete (run a command, read/edit a file, search code).',
-    'For questions, explanations, and advice, respond with plain text — never wrap your reply in a Bash echo command.',
+    // 主代理 system prompt:身份 + 工具决策表 + 输出格式 + 安全边界 + 完成验证。
+    // 源文件 src/prompts/system.md,经 gen-prompts.mjs 生成。
+    systemPromptTemplate,
+    // 项目级规则(AGENTS.md 全量):基础原则 / 解释模式 / 设计规则 / 测试体系 / 工作流等。
+    projectRules ? `\n\n# Project Rules (AGENTS.md)\n\n${projectRules}` : '',
     '',
-    // 意图检测层：探索型/规划型任务优先 spawn 子代理，避免主上下文膨胀。
-    // 在任何模式下生效（不限于 plan 模式），让"生成改造计划"等请求自动触发委派。
+    // 意图检测层:探索型/规划型任务优先 spawn 子代理,避免主上下文膨胀。
+    // 在任何模式下生效(不限于 plan 模式),让"生成改造计划"等请求自动触发委派。
     'When the user\'s request implies a multi-step investigation, planning, architecture analysis,',
     'or restructuring task (e.g. "generate a plan", "改造", "分析架构", "refactor"), spawn explore',
     'sub-agents (spawn_agent role="explore") to investigate in parallel FIRST, before reading files',

@@ -249,13 +249,33 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
   return {
     definition: {
       name: 'run_bash',
-      description: 'Execute a shell command and return its output',
+      description: [
+        'Execute a shell command and return its output.',
+        '',
+        'Prefer specialized tools when they fit — they carry line numbers, sandboxing,',
+        'and truncation guards that bash does not:',
+        '  - read_file (not `cat`) to view a file — gives line numbers + auto-truncation.',
+        '  - glob (not `find`) to list files by name pattern.',
+        '  - grep (not `grep`/`rg`) to search file contents.',
+        '',
+        'Working directory is the project root. The shell is Git Bash on Windows.',
+        '',
+        'Rules:',
+        '- Chain multiple commands with `&&` or `;` rather than spawning many calls.',
+        '- Long-running commands have a timeout; do not wait on interactive prompts.',
+        '- NEVER run interactive commands (vim, less, top, a REPL). Use non-interactive',
+        '  equivalents or stop and ask.',
+        '- NEVER run destructive ops unless the user explicitly asks:',
+        '  rm -rf, sudo, git push --force, git reset --hard, git clean -fd.',
+        '- git commit / git push only when the user asks. Never auto-commit.',
+        '- Output beyond ~50KB is auto-truncated; pipe through head/grep if you need less.',
+      ].join('\n'),
       parameters: {
         type: 'object',
         properties: {
           command: {
             type: 'string',
-            description: 'The shell command to execute',
+            description: 'The shell command to execute (Git Bash syntax on Windows).',
           },
         },
         required: ['command'],

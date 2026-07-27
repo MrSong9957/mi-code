@@ -104,8 +104,18 @@ export function createGlobTool(): { definition: ToolDefinition; executor: ToolEx
   return {
     definition: {
       name: 'glob',
-      description:
-        'Find files by glob pattern. Returns matching file paths relative to workspace. node_modules/.git/dist are excluded automatically. Examples: "**/*.ts", "src/**/*.test.ts", "*.md".',
+      description: [
+        'Find files by NAME pattern (ripgrep-style glob).',
+        '',
+        '- Returns matching file paths relative to workspace.',
+        '- `**` matches any depth, `*` matches within one directory.',
+        '- `node_modules`, `.git`, and `dist` are excluded automatically.',
+        '',
+        'Use this when you know the FILENAME pattern. For searching file CONTENTS,',
+        'use `grep` instead. Do not use `run_bash find`.',
+        '',
+        'Examples: "**/*.ts", "src/**/*.test.ts", "*.md".',
+      ].join('\n'),
       parameters: {
         type: 'object',
         properties: {
@@ -143,8 +153,16 @@ export function createGrepTool(): { definition: ToolDefinition; executor: ToolEx
   return {
     definition: {
       name: 'grep',
-      description:
-        'Search file contents by regex. Returns matches as "path:line: matched-text". Searches the whole workspace by default, or scope to a sub-directory with path. node_modules/.git/dist are excluded automatically.',
+      description: [
+        'Search file CONTENTS by regex (ripgrep semantics).',
+        '',
+        '- Returns matches as `path:line: matched-text`.',
+        '- Searches the whole workspace by default; pass `path` to scope to a sub-directory.',
+        '- `node_modules`, `.git`, and `dist` are excluded automatically.',
+        '',
+        'Use this when you want to find WHERE some text/symbol lives. For finding files',
+        'by NAME pattern, use `glob`. Do not use `run_bash grep` / `run_bash rg`.',
+      ].join('\n'),
       parameters: {
         type: 'object',
         properties: {

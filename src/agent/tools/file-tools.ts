@@ -18,18 +18,27 @@ export function createReadFileTool(): { definition: ToolDefinition; executor: To
   return {
     definition: {
       name: 'read_file',
-      description:
-        'Read a file or directory from the local filesystem. If path is a directory, returns its entries (directories end with /). Returns first N lines if limit specified.',
+      description: [
+        'Read a file (with line numbers) or list a directory from the local filesystem.',
+        '',
+        '- If `path` is a directory, returns its entries sorted (directories end with `/`).',
+        '- If `path` is a file, returns its content with line-number prefixes.',
+        '- Use `limit` to read only the first N lines of a large file (avoids dumping',
+        '  huge content into context). Page through big files instead of reading all at once.',
+        '- Single read is capped at ~50KB; longer output is auto-truncated.',
+        '',
+        'Prefer this over `run_bash cat` — cat gives no line numbers and no truncation guard.',
+      ].join('\n'),
       parameters: {
         type: 'object',
         properties: {
           path: {
             type: 'string',
-            description: 'File path relative to workspace',
+            description: 'File or directory path (relative to workspace).',
           },
           limit: {
             type: 'number',
-            description: 'Maximum number of lines to read (optional)',
+            description: 'Maximum number of lines to read (optional). Use for large files.',
           },
         },
         required: ['path'],
@@ -85,17 +94,25 @@ export function createWriteFileTool(): { definition: ToolDefinition; executor: T
   return {
     definition: {
       name: 'write_file',
-      description: 'Write content to file. Creates parent directories if needed.',
+      description: [
+        'Write content to a file (creates or OVERWRITES entirely).',
+        '',
+        '- Creates parent directories if needed.',
+        '- Use this to create a NEW file, or to fully rewrite an existing file whose entire',
+        '  new content you already know.',
+        '- Do NOT use this to patch part of an existing file — it overwrites the whole file',
+        '  and silently drops whatever you had not read. Use `edit_file` for partial changes.',
+      ].join('\n'),
       parameters: {
         type: 'object',
         properties: {
           path: {
             type: 'string',
-            description: 'File path relative to workspace',
+            description: 'File path relative to workspace.',
           },
           content: {
             type: 'string',
-            description: 'Content to write',
+            description: 'Full content to write.',
           },
         },
         required: ['path', 'content'],
@@ -124,21 +141,33 @@ export function createEditFileTool(): { definition: ToolDefinition; executor: To
   return {
     definition: {
       name: 'edit_file',
-      description: 'Replace text in file. Finds old_text and replaces with new_text.',
+      description: [
+        'Replace text in a file by exact match (replaces the FIRST match only).',
+        '',
+        '- Finds `old_text` and replaces it with `new_text`. Only the first occurrence',
+        '  in the file is replaced — plan accordingly if the text appears multiple times.',
+        '- `old_text` MUST be unique in the file. If it is not, expand `old_text` to',
+        '  include enough surrounding lines to make it unique.',
+        '- If `old_text` is not found, the file has changed under you — `read_file` it',
+        '  again before retrying. Never retry from memory.',
+        '',
+        'Best for small, precise changes (a few lines to ~30 lines).',
+        'For creating a new file or rewriting one entirely, use `write_file`.',
+      ].join('\n'),
       parameters: {
         type: 'object',
         properties: {
           path: {
             type: 'string',
-            description: 'File path relative to workspace',
+            description: 'File path relative to workspace.',
           },
           old_text: {
             type: 'string',
-            description: 'Text to find and replace',
+            description: 'Exact text to find (must be unique in the file).',
           },
           new_text: {
             type: 'string',
-            description: 'Replacement text',
+            description: 'Text to replace it with.',
           },
         },
         required: ['path', 'old_text', 'new_text'],
