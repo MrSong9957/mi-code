@@ -36,8 +36,11 @@ function appendSpan(line: LogicalLine, text: string, styles: readonly TableTextS
   line.push({ text, styles: [...styles] });
 }
 
-function hasTokenArray(token: Token): token is Token & { tokens: Token[] } {
-  return 'tokens' in token && Array.isArray(token.tokens);
+function hasInlineTokenArray(
+  token: Token,
+): token is Tokens.Strong | Tokens.Em | Tokens.Link | Tokens.Del {
+  return (token.type === 'strong' || token.type === 'em' || token.type === 'link' || token.type === 'del')
+    && Array.isArray(token.tokens);
 }
 
 function tokenFallbackText(token: Token): string {
@@ -76,7 +79,7 @@ function inlineTokenLines(
       appendSpan(lines.at(-1)!, token.text, styles);
     } else if (token.type === 'image') {
       appendSpan(lines.at(-1)!, token.text, inherited);
-    } else if (hasTokenArray(token) && token.tokens.length > 0) {
+    } else if (hasInlineTokenArray(token) && token.tokens.length > 0) {
       appendNested(inlineTokenLines(token.tokens, styles));
     } else {
       appendSpan(lines.at(-1)!, tokenFallbackText(token), styles);
