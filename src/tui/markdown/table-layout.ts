@@ -67,7 +67,7 @@ function inlineTokenLines(
       continue;
     }
 
-    const style = token.type === 'strong' ? 'strong'
+    const style: TableTextStyle | undefined = token.type === 'strong' ? 'strong'
       : token.type === 'em' ? 'em'
       : token.type === 'codespan' ? 'code'
       : token.type === 'link' ? 'link'
@@ -111,17 +111,90 @@ function borderLine(widths: readonly number[], left: string, join: string, right
   return { spans };
 }
 
-function contentLine(cells: readonly LogicalCell[], lineIndex: number, widths: readonly number[]): TableLayoutLine {
+function totalTableWidth(widths: readonly number[]): number {
+  return widths.reduce((total, width) => total + width + 2, 0) + widths.length + 1;
+}
+
+function shrinkWidths(
+  optimal: readonly number[],
+  minimum: readonly number[],
+  availableWidth: number,
+): number[] {
+  const widths = [...optimal];
+  let total = totalTableWidth(widths);
+  while (total > availableWidth) {
+    let candidate = -1;
+    for (let index = 0; index < widths.length; index += 1) {
+      if (widths[index]! <= minimum[index]!) continue;
+      if (candidate === -1 || widths[index]! > widths[candidate]!) candidate = index;
+    }
+    if (candidate === -1) {
+      throw new TypeError('table widths cannot shrink to the available width');
+    }
+    widths[candidate] -= 1;
+    total -= 1;
+  }
+  return widths;
+}
+
+function foldLogicalLine(line: LogicalLine, width: number): LogicalCell {
+  const output: LogicalCell = [[]];
+  let used = 0;
+  for (const span of line) {
+    for (const character of span.text) {
+      const characterWidth = displayWidth(character);
+      if (used > 0 && used + characterWidth > width) {
+        output.push([]);
+        used = 0;
+      }
+      appendSpan(output.at(-1)!, character, span.styles);
+      used += characterWidth;
+    }
+  }
+  return output;
+}
+
+function foldLogicalCell(cell: LogicalCell, width: number): LogicalCell {
+  return cell.flatMap((line) => foldLogicalLine(line, width));
+}
+
+function alignLine(
+  line: LogicalLine,
+  width: number,
+  align: Tokens.Table['align'][number],
+): LogicalLine {
+  const remaining = width - logicalLineWidth(line);
+  const left = align === 'right' ? remaining
+    : align === 'center' ? Math.floor(remaining / 2)
+      : 0;
+  const right = remaining - left;
+  return [
+    { text: ' '.repeat(left), styles: EMPTY_STYLES },
+    ...line,
+    { text: ' '.repeat(right), styles: EMPTY_STYLES },
+  ];
+}
+
+function contentLine(
+  cells: readonly LogicalCell[],
+  lineIndex: number,
+  widths: readonly number[],
+  alignments: readonly Tokens.Table['align'][number][],
+): TableLayoutLine {
   const spans: LogicalLine = [];
   appendUnstyled(spans, '│');
   cells.forEach((cell, column) => {
-    const content = cell[lineIndex] ?? [];
+    const content = alignLine(cell[lineIndex] ?? [], widths[column]!, alignments[column]!);
     appendUnstyled(spans, ' ');
     for (const span of content) appendSpan(spans, span.text, span.styles);
-    appendUnstyled(spans, ' '.repeat(widths[column]! - logicalLineWidth(content) + 1));
+    appendUnstyled(spans, ' ');
     appendUnstyled(spans, '│');
   });
   return { spans };
+}
+
+function layoutKeyValueTable(_table: Tokens.Table, _availableWidth: number): TableLayout {
+  throw new TypeError('key-value layout not implemented');
 }
 
 function validateTable(table: Tokens.Table, availableWidth: number): void {
@@ -146,22 +219,32 @@ export function layoutMarkdownTable(table: Tokens.Table, availableWidth: number)
 
   const header = table.header.map((cell) => inlineTokenLines(cell.tokens));
   const rows = table.rows.map((row) => row.map((cell) => inlineTokenLines(cell.tokens)));
-  const columnWidths = table.header.map((_, column) => Math.max(
+  const minimumWidths = header.map((cell) => Math.max(1, logicalCellWidth(cell)));
+  if (totalTableWidth(minimumWidths) > availableWidth) {
+    return layoutKeyValueTable(table, availableWidth);
+  }
+  const optimalWidths = table.header.map((_, column) => Math.max(
     1,
-    logicalCellWidth(header[column]!),
+    minimumWidths[column]!,
     ...rows.map((row) => logicalCellWidth(row[column]!)),
+  ));
+  const columnWidths = shrinkWidths(optimalWidths, minimumWidths, availableWidth);
+  const alignments = table.align;
+  const wrappedHeader = header.map((cell, column) => foldLogicalCell(cell, columnWidths[column]!));
+  const wrappedRows = rows.map((row) => row.map(
+    (cell, column) => foldLogicalCell(cell, columnWidths[column]!),
   ));
   const lines: TableLayoutLine[] = [borderLine(columnWidths, '┌', '┬', '┐')];
 
   lines.push(...Array.from(
-    { length: Math.max(...header.map((cell) => cell.length)) },
-    (_, lineIndex) => contentLine(header, lineIndex, columnWidths),
+    { length: Math.max(...wrappedHeader.map((cell) => cell.length)) },
+    (_, lineIndex) => contentLine(wrappedHeader, lineIndex, columnWidths, alignments),
   ));
   lines.push(borderLine(columnWidths, '├', '┼', '┤'));
-  for (const row of rows) {
+  for (const row of wrappedRows) {
     lines.push(...Array.from(
       { length: Math.max(...row.map((cell) => cell.length)) },
-      (_, lineIndex) => contentLine(row, lineIndex, columnWidths),
+      (_, lineIndex) => contentLine(row, lineIndex, columnWidths, alignments),
     ));
   }
   lines.push(borderLine(columnWidths, '└', '┴', '┘'));
