@@ -68,6 +68,20 @@ describe('layoutMarkdownTable inline token semantics', () => {
     expect(rendered).toContain('<fallback>');
   });
 
+  it('uses text instead of nested tokens for an unknown token', () => {
+    const table = tableFrom('| Value |\n| --- |\n| known |');
+    table.rows[0]![0]!.tokens = [{
+      type: 'extension-token',
+      raw: '<raw>',
+      text: 'visible',
+      tokens: [{ type: 'text', raw: 'nested', text: 'nested' }],
+    } as unknown as Tokens.Text];
+
+    const rendered = texts(layoutMarkdownTable(table, 80)).join('\n');
+    expect(rendered).toContain('visible');
+    expect(rendered).not.toContain('nested');
+  });
+
   it('counts CJK as two display columns and ignores ANSI SGR width', () => {
     const table = tableFrom('| 项目 | 值 |\n| --- | --- |\n| 中文 | A |');
     const layout = layoutMarkdownTable(table, 40);
