@@ -1166,3 +1166,67 @@ describe('<InlineAppV2> 独立 block 间距 (PR2 review Issue 3)', () => {
     expect(lines[idx1 + 1]!.trim()).toBe('');
   });
 });
+describe('<InlineAppV2> finalized Markdown table lifecycle', () => {
+  const markdown = '| Tool | Purpose |\n| --- | --- |\n| glob | Find files |';
+
+  it('shows raw Markdown while streaming, then one bordered table after finish', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().startAssistant(markdown);
+
+    const streamingRender = render(<InlineAppV2 {...makeProps(stores)} />);
+    expect(stripAnsi(streamingRender.lastFrame() ?? '')).toContain('| Tool | Purpose |');
+    expect(stripAnsi(streamingRender.lastFrame() ?? '')).not.toContain('┌');
+    streamingRender.unmount();
+
+    stores.messagesStore.getState().finishAssistant();
+    const finalizedRender = render(<InlineAppV2 {...makeProps(stores)} />);
+    const finalized = stripAnsi(finalizedRender.lastFrame() ?? '');
+    expect(finalized).toContain('┌');
+    expect(finalized.match(/glob/g)).toHaveLength(1);
+    expect(finalized.match(/●/g)).toHaveLength(1);
+  });
+
+  it('keeps raw Markdown in the finalized AssistantBlock', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().startAssistant(markdown);
+    stores.messagesStore.getState().finishAssistant();
+
+    const assistant = stores.messagesStore.getState().model.items.find(
+      (item) => item.kind === 'assistant',
+    );
+    expect(assistant?.text).toBe(markdown);
+    expect(assistant?.text).not.toContain('┌');
+  });
+
+  it('keeps interrupted assistant Markdown raw after finalization', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().startAssistant(markdown);
+    stores.messagesStore.getState().finalizeStreamingAsInterrupted();
+
+    const output = stripAnsi(render(
+      <InlineAppV2 {...makeProps(stores)} />,
+    ).lastFrame() ?? '');
+    expect(output).toContain('| Tool | Purpose |');
+    expect(output).not.toContain('┌');
+  });
+
+  it('remounts a finalized table against a narrower cols value', () => {
+    const stores = createStores();
+    stores.messagesStore.getState().startAssistant(
+      '| H | Description |\n| --- | --- |\n| x | abcdefghijklmnop |',
+    );
+    stores.messagesStore.getState().finishAssistant();
+
+    const wideRender = render(<InlineAppV2 {...makeProps(stores)} cols={80} />);
+    const wide = stripAnsi(wideRender.lastFrame() ?? '');
+    wideRender.unmount();
+    const narrow = stripAnsi(render(
+      <InlineAppV2 {...makeProps(stores)} cols={22} />,
+    ).lastFrame() ?? '');
+
+    expect(narrow).not.toBe(wide);
+    expect(narrow).toContain('┌');
+    expect(narrow.split('\n').filter((line) => line.includes('│')).length)
+      .toBeGreaterThan(wide.split('\n').filter((line) => line.includes('│')).length);
+  });
+});
