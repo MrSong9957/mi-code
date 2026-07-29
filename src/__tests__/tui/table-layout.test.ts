@@ -90,3 +90,74 @@ describe('layoutMarkdownTable inline token semantics', () => {
     }
   });
 });
+
+describe('layoutMarkdownTable bordered modes', () => {
+  it('uses optimal widths when the complete table fits', () => {
+    const table = tableFrom(
+      '| Tool | Purpose |\n| --- | --- |\n'
+      + '| read_file | Read a file |\n| glob | Find files |',
+    );
+    const layout = layoutMarkdownTable(table, 80);
+    const lines = texts(layout);
+
+    expect(layout.mode).toBe('bordered');
+    expect(layout.columnWidths).toEqual([9, 11]);
+    expect(lines).toEqual([
+      '┌───────────┬─────────────┐',
+      '│ Tool      │ Purpose     │',
+      '├───────────┼─────────────┤',
+      '│ read_file │ Read a file │',
+      '│ glob      │ Find files  │',
+      '└───────────┴─────────────┘',
+    ]);
+  });
+
+  it('shrinks the widest eligible column first and wraps cell content', () => {
+    const table = tableFrom(
+      '| A | Description |\n| --- | --- |\n'
+      + '| x | abcdefghijklmnop |',
+    );
+    const layout = layoutMarkdownTable(table, 22);
+    const lines = texts(layout);
+
+    expect(layout.mode).toBe('bordered');
+    expect(lines.every((line) => displayWidth(line) === 22)).toBe(true);
+    expect(lines.some((line) => line.includes('abcdefghijk'))).toBe(true);
+    expect(lines.some((line) => line.includes('op'))).toBe(true);
+  });
+
+  it('keeps every border at the same display column for mixed CJK rows', () => {
+    const table = tableFrom(
+      '| 工具 | Description |\n| --- | --- |\n'
+      + '| 读取 | mixed 中文 and English text |',
+    );
+    const lines = texts(layoutMarkdownTable(table, 28));
+    expect(new Set(lines.map(displayWidth))).toEqual(new Set([28]));
+    expect(lines.filter((line) => line.includes('│')).every(
+      (line) => line.indexOf('│') >= 0,
+    )).toBe(true);
+  });
+
+  it('applies left, center, and right alignment inside content widths', () => {
+    const table = tableFrom(
+      '| Left | Center | Right |\n'
+      + '| :--- | :---: | ---: |\n'
+      + '| x | y | z |',
+    );
+    const lines = texts(layoutMarkdownTable(table, 80));
+    const row = lines.find((line) => line.includes(' x '));
+    expect(row).toBe('│ x    │   y    │     z │');
+  });
+
+  it('keeps style spans attached after a styled value wraps', () => {
+    const table = tableFrom(
+      '| H | Description |\n| --- | --- |\n'
+      + '| x | **abcdefghijklmnop** |',
+    );
+    const layout = layoutMarkdownTable(table, 22);
+    const styledFragments = layout.lines.flatMap((line) => line.spans)
+      .filter((span) => span.text === 'abcdefghijklmn' || span.text === 'op');
+    expect(styledFragments).toHaveLength(2);
+    expect(styledFragments.every((span) => span.styles.includes('strong'))).toBe(true);
+  });
+});
