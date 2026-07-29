@@ -214,8 +214,54 @@ function contentLine(
   return { spans };
 }
 
-function layoutKeyValueTable(_table: Tokens.Table, _availableWidth: number): TableLayout {
-  throw new TypeError('key-value layout not implemented');
+function layoutKeyValueTable(table: Tokens.Table, availableWidth: number): TableLayout {
+  const lines: TableLayoutLine[] = [];
+  const headers = table.header.map((cell) => inlineTokenLines(cell.tokens));
+
+  table.rows.forEach((row, rowIndex) => {
+    row.forEach((cell, columnIndex) => {
+      const label = headers[columnIndex] ?? [[]];
+      const value = inlineTokenLines(cell.tokens);
+      const labelText = label.flat().map((span) => span.text).join('');
+      const prefix = `${labelText}: `;
+      const prefixWidth = displayWidth(prefix);
+
+      if (prefixWidth >= availableWidth) {
+        lines.push({ spans: [{ text: prefix.trimEnd(), styles: EMPTY_STYLES }] });
+        for (const logicalLine of value) {
+          for (const folded of foldLogicalLine(logicalLine, availableWidth)) {
+            lines.push({ spans: folded });
+          }
+        }
+        return;
+      }
+
+      const firstBudget = availableWidth - prefixWidth;
+      const foldedValue = value.flatMap((logicalLine) => foldLogicalLine(logicalLine, firstBudget));
+      const first = foldedValue.shift() ?? [];
+      lines.push({
+        spans: [{ text: prefix, styles: EMPTY_STYLES }, ...first],
+      });
+      for (const continuation of foldedValue) {
+        lines.push({
+          spans: [
+            { text: ' '.repeat(prefixWidth), styles: EMPTY_STYLES },
+            ...continuation,
+          ],
+        });
+      }
+    });
+    if (rowIndex < table.rows.length - 1) lines.push({ spans: [] });
+  });
+
+  return {
+    mode: 'key-value',
+    lines,
+    columnWidths: table.header.map((cell) => Math.max(
+      1,
+      ...inlineTokenLines(cell.tokens).map(logicalLineWidth),
+    )),
+  };
 }
 
 function validateTable(table: Tokens.Table, availableWidth: number): void {
