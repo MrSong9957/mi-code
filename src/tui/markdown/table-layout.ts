@@ -96,6 +96,27 @@ function logicalCellWidth(cell: LogicalCell): number {
   return Math.max(0, ...cell.map(logicalLineWidth));
 }
 
+function logicalCellMaxCharacterWidth(cell: LogicalCell): number {
+  let maximum = 0;
+  for (const line of cell) {
+    for (const span of line) {
+      for (const character of span.text) maximum = Math.max(maximum, displayWidth(character));
+    }
+  }
+  return maximum;
+}
+
+function maxSingleCharWidthInColumn(
+  header: LogicalCell,
+  rows: readonly LogicalCell[][],
+  column: number,
+): number {
+  return Math.max(
+    logicalCellMaxCharacterWidth(header),
+    ...rows.map((row) => logicalCellMaxCharacterWidth(row[column]!)),
+  );
+}
+
 function appendUnstyled(line: LogicalLine, text: string): void {
   appendSpan(line, text, EMPTY_STYLES);
 }
@@ -219,7 +240,11 @@ export function layoutMarkdownTable(table: Tokens.Table, availableWidth: number)
 
   const header = table.header.map((cell) => inlineTokenLines(cell.tokens));
   const rows = table.rows.map((row) => row.map((cell) => inlineTokenLines(cell.tokens)));
-  const minimumWidths = header.map((cell) => Math.max(1, logicalCellWidth(cell)));
+  const minimumWidths = header.map((cell, column) => Math.max(
+    1,
+    logicalCellWidth(cell),
+    maxSingleCharWidthInColumn(cell, rows, column),
+  ));
   if (totalTableWidth(minimumWidths) > availableWidth) {
     return layoutKeyValueTable(table, availableWidth);
   }

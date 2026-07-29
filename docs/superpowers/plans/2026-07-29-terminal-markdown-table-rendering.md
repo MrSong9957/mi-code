@@ -416,7 +416,19 @@ function shrinkWidths(
 }
 ```
 
-Before calling `shrinkWidths`, calculate header-derived `minimumWidths` and:
+Before calling `shrinkWidths`, calculate `minimumWidths` from each header's display width,
+the maximum `displayWidth` of every visible character in that column's header and data
+cells, and `1`:
+
+```ts
+const minimumWidths = header.map((cell, column) => Math.max(
+  logicalCellWidth(cell),
+  maxSingleCharWidthInColumn(column),
+  1,
+));
+```
+
+This prevents a width-2 CJK character from reaching a width-1 bordered cell. Then:
 
 ```ts
 if (totalTableWidth(minimumWidths) > availableWidth) {
@@ -542,7 +554,7 @@ describe('layoutMarkdownTable key-value fallback', () => {
     ]);
   });
 
-  it('keeps empty cells and uses a minimum width of one for empty headers', () => {
+  it('keeps empty cells and preserves the minimum width of one for empty headers', () => {
     const table = tableFrom('|  | B |\n| --- | --- |\n|  | value |');
     const layout = layoutMarkdownTable(table, 7);
     expect(layout.columnWidths[0]).toBeGreaterThanOrEqual(1);

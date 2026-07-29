@@ -138,6 +138,17 @@ describe('layoutMarkdownTable bordered modes', () => {
     )).toBe(true);
   });
 
+  it('falls back when a wide cell character cannot fit the header-derived width', () => {
+    const table = tableFrom(
+      '| A | B |\n| --- | --- |\n'
+      + '| 中 | x |',
+    );
+
+    expect(() => layoutMarkdownTable(table, 9)).toThrow(
+      new TypeError('key-value layout not implemented'),
+    );
+  });
+
   it('applies left, center, and right alignment inside content widths', () => {
     const table = tableFrom(
       '| Left | Center | Right |\n'
