@@ -138,15 +138,13 @@ describe('layoutMarkdownTable bordered modes', () => {
     )).toBe(true);
   });
 
-  it('falls back when a wide cell character cannot fit the header-derived width', () => {
+  it('falls back to key-value rows when a wide cell character cannot fit the header-derived width', () => {
     const table = tableFrom(
       '| A | B |\n| --- | --- |\n'
       + '| 中 | x |',
     );
 
-    expect(() => layoutMarkdownTable(table, 9)).toThrow(
-      new TypeError('key-value layout not implemented'),
-    );
+    expect(texts(layoutMarkdownTable(table, 9))).toEqual(['A: 中', 'B: x']);
   });
 
   it('applies left, center, and right alignment inside content widths', () => {
@@ -170,5 +168,61 @@ describe('layoutMarkdownTable bordered modes', () => {
       .filter((span) => span.text === 'abcdefghijklmn' || span.text === 'op');
     expect(styledFragments).toHaveLength(2);
     expect(styledFragments.every((span) => span.styles.includes('strong'))).toBe(true);
+  });
+});
+
+describe('layoutMarkdownTable key-value fallback', () => {
+  it('falls back when header minimum widths plus borders do not fit', () => {
+    const table = tableFrom(
+      '| Tool | Description |\n| --- | --- |\n'
+      + '| x | abcdef |',
+    );
+    const layout = layoutMarkdownTable(table, 18);
+    expect(layout.mode).toBe('key-value');
+    expect(texts(layout)).toEqual([
+      'Tool: x',
+      'Description: abcde',
+      '             f',
+    ]);
+    expect(texts(layout).every((line) => displayWidth(line) <= 18)).toBe(true);
+  });
+
+  it('indents wrapped values to the value start column', () => {
+    const table = tableFrom(
+      '| Key | Value |\n| --- | --- |\n'
+      + '| a | 123456789012345 |',
+    );
+    const lines = texts(layoutMarkdownTable(table, 12));
+    expect(lines).toEqual([
+      'Key: a',
+      'Value: 12345',
+      '       67890',
+      '       12345',
+    ]);
+  });
+
+  it('emits every field for three columns and separates records', () => {
+    const table = tableFrom(
+      '| A | B | C |\n| --- | --- | --- |\n'
+      + '| 1 | 2 | 3 |\n| 4 | 5 | 6 |',
+    );
+    expect(texts(layoutMarkdownTable(table, 8))).toEqual([
+      'A: 1', 'B: 2', 'C: 3', '',
+      'A: 4', 'B: 5', 'C: 6',
+    ]);
+  });
+
+  it('keeps empty cells and preserves the minimum width of one for empty headers', () => {
+    const table = tableFrom('|  | B |\n| --- | --- |\n|  | value |');
+    const layout = layoutMarkdownTable(table, 7);
+    expect(layout.columnWidths[0]).toBeGreaterThanOrEqual(1);
+    expect(texts(layout).join('\n')).toContain(': ');
+  });
+
+  it('rejects unavailable width and malformed row shapes', () => {
+    const table = tableFrom('| A | B |\n| --- | --- |\n| 1 | 2 |');
+    expect(() => layoutMarkdownTable(table, 0)).toThrow(TypeError);
+    table.rows[0]!.pop();
+    expect(() => layoutMarkdownTable(table, 40)).toThrow(TypeError);
   });
 });
