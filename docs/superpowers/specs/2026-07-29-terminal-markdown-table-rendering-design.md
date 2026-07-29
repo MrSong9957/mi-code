@@ -147,6 +147,13 @@ resize 时不改 store，只重新执行最后三步。
 - `codespan` 使用 `token.text`。
 - `link` 使用链接标签的可见文本，不计 URL。
 - `br` 形成单元格内部换行，各逻辑行分别测量。
+- `image` 使用替代文本 `token.text`。
+- 未明确列出的 inline token 优先递归测量其子 `tokens`；没有子 tokens 时，
+  使用字符串类型的 `token.text`，否则使用 `token.raw`。渲染兜底使用
+  `token.raw`，避免静默丢失未知 token。
+
+单个单元格对列宽的贡献，是该单元格所有逻辑行中最大的显示宽度；因此包含多个
+`br` 的单元格不会把各逻辑行宽度相加。
 
 复用现有 `displayWidth` 规则：
 
@@ -297,6 +304,8 @@ store 保留 raw Markdown，选区复制和 store 数据是独立的两条路径
 - 三列键值降级不丢字段。
 - left、center、right 对齐正确。
 - 空单元格、空标题、ANSI 和 inline Markdown 测量正确。
+- `br` 产生的多条逻辑行按其中最宽一行贡献列宽。
+- image、裸链接和未知 inline token 的测宽兜底不会漏算或抛异常。
 
 ### 12.2 组件测试
 
