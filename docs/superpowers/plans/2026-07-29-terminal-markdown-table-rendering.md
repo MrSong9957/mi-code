@@ -171,7 +171,10 @@ const EMPTY_STYLES: readonly TableTextStyle[] = [];
 function appendSpan(line: LogicalLine, text: string, styles: readonly TableTextStyle[]): void {
   if (text === '') return;
   const previous = line.at(-1);
-  if (previous && previous.styles.join('|') === styles.join('|')) {
+  const sameStyles = previous
+    && previous.styles.length === styles.length
+    && previous.styles.every((style, index) => style === styles[index]);
+  if (sameStyles) {
     previous.text += text;
     return;
   }
@@ -235,6 +238,16 @@ export function tableLineText(line: TableLayoutLine): string {
   return line.spans.map((span) => span.text).join('');
 }
 ```
+
+The style array order is canonical: recursive traversal appends the current token's style to its
+ancestor styles, so equal nesting produces equal array order. The element-by-element comparison
+avoids temporary strings and makes that invariant explicit.
+
+For the installed `marked@18`, both `<https://example.com>` autolinks and bare
+`https://example.com` URLs are emitted as `link` tokens, whose visible label is processed by the
+recursive child-token branch. Any extension-provided or future inline token not covered by the
+explicit branches reaches `tokenFallbackText(token)`, which uses string `token.text` when
+available and otherwise `token.raw`; it must never be silently skipped.
 
 Implement the first minimal `layoutMarkdownTable` slice for optimal-width, non-wrapping tables only. It must:
 
@@ -352,7 +365,10 @@ describe('layoutMarkdownTable bordered modes', () => {
 });
 ```
 
-If exact spacing in the alignment fixture differs after calculating the real header widths, print `texts(layout)` once, correct the expected literal from the width formula, then remove the diagnostic output. Do not weaken the assertion to `toContain`.
+Keep the exact alignment literal. Its widths are `[4, 6, 5]`: left `x` receives 0/3 content
+padding, centered `y` receives 2/3 because the odd remainder goes on the right, and right-aligned
+`z` receives 4/0. Each cell then receives one additional outer space on both sides. Do not weaken
+the assertion to `toContain`.
 
 - [ ] **Step 2: Run the focused tests and confirm RED**
 
@@ -373,6 +389,10 @@ function totalTableWidth(widths: readonly number[]): number {
   return widths.reduce((total, width) => total + width + 2, 0) + widths.length + 1;
 }
 
+/**
+ * Precondition: totalTableWidth(minimum) <= availableWidth.
+ * The caller routes narrower terminals to layoutKeyValueTable before calling this helper.
+ */
 function shrinkWidths(
   optimal: readonly number[],
   minimum: readonly number[],
@@ -849,9 +869,9 @@ function StyledSpan({ span }: { span: TableSpan }): React.ReactElement {
       bold={span.styles.includes('strong')}
       italic={span.styles.includes('em')}
       underline={span.styles.includes('link')}
+      strikethrough={span.styles.includes('del')}
       color={span.styles.includes('code') ? theme.mdCode
         : span.styles.includes('link') ? theme.mdLink
-        : span.styles.includes('del') ? theme.mdStrikethrough
         : undefined}
     >
       {span.text}
@@ -1060,6 +1080,10 @@ npm test
 ```
 
 Expected: build exits 0 and the full suite passes. If unrelated dirty-worktree tests fail, record the exact failing test names and prove the complete affected slice from Step 3 still passes; do not modify unrelated files.
+
+Only label a full-suite failure as **pre-existing** when the same test and assertion can be
+reproduced in an isolated clean worktree at the implementation-start commit. If that comparison
+cannot be run, report the failure as unclassified rather than assuming it predates this feature.
 
 - [ ] **Step 6: Inspect the final diff for scope and accidental store changes**
 
