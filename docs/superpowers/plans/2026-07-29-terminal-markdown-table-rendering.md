@@ -436,7 +436,7 @@ if (totalTableWidth(minimumWidths) > availableWidth) {
 }
 ```
 
-The `layoutKeyValueTable` symbol is implemented in Task 3. Until then, add a private function that throws `TypeError('key-value layout not implemented')`; Task 2 fixtures must all remain at or above minimum width, so they do not enter it.
+The `layoutKeyValueTable` symbol is implemented in Task 3. Until then, add a private function that throws `TypeError('key-value layout not implemented')`. The CJK effective-minimum-width regression is the sole Task 2 fixture that enters this placeholder to prove the fallback branch is selected; all other Task 2 fixtures remain at or above their minimum width. Task 3 replaces the placeholder implementation.
 
 - [ ] **Step 4: Implement style-preserving wrapping, padding, and row height**
 
