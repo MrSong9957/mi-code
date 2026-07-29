@@ -47,7 +47,7 @@ describe('TranscriptBlockLine', () => {
     expect(frame).toContain('hello');
   });
 
-  it('routes finalized assistant text without parsing Markdown', () => {
+  it('routes finalized assistant tables → AssistantBlockLine', () => {
     const block: AssistantBlock = {
       id: 'a1',
       kind: 'assistant',
@@ -56,9 +56,8 @@ describe('TranscriptBlockLine', () => {
     const frame = stripAnsi(render(
       <TranscriptBlockLine block={block} cols={80} />,
     ).lastFrame() ?? '');
-    expect(frame).toContain('| Tool | Use |');
+    expect(frame).toContain('┌');
     expect(frame).toContain('glob');
-    expect(frame).not.toContain('┌');
     expect(frame.match(/●/g)).toHaveLength(1);
   });
 

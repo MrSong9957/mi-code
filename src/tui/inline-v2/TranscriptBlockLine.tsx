@@ -21,6 +21,7 @@ import { Box, Text } from 'ink';
 import type { TranscriptBlock } from '../transcript-types.js';
 import { ToolBlockLine } from './ToolBlockLine.js';
 import { AskBlockLine } from './AskBlockLine.js';
+import { AssistantBlockLine } from './AssistantBlockLine.js';
 import { formatSpinnerDuration } from '../state/spinner-store.js';
 
 export interface TranscriptBlockLineProps {
@@ -46,14 +47,7 @@ export function TranscriptBlockLine({ block, cols }: TranscriptBlockLineProps): 
       );
 
     case 'assistant':
-      return (
-        <Box width={cols} flexDirection="row">
-          <Text color="magenta">● </Text>
-          <Box width={Math.max(1, cols - 2)} flexDirection="column">
-            <Text>{block.text}</Text>
-          </Box>
-        </Box>
-      );
+      return <AssistantBlockLine block={block} cols={cols} />;
 
     case 'tool':
       return <ToolBlockLine block={block} cols={cols} />;
