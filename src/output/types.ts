@@ -18,6 +18,8 @@ export enum MessagePriority {
   TOOL_OUTPUT = 1,
   ASSISTANT = 2,
   TOOL_CALL = 3,
+  // TOOL_CALL 与 TOOL_RESULT 必须同优先级，由 MessageQueue 的稳定插入顺序维持 FIFO。
+  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
   TOOL_RESULT = 3,
   INPUT = 4,
   THINKING = 5,
