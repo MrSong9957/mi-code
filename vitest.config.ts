@@ -36,5 +36,11 @@ export default defineConfig({
     env: {
       FORCE_COLOR: '1',
     },
+    // 高负载下默认 5000ms 不足：history 全量跑实测耗时膨胀至 5s 量级触发超时。
+    // 10s 作为全局兜底，覆盖未显式设置 timeout 的测试；重 IO/冷启动用例由 per-test 覆盖更高值。
+    testTimeout: 10000,
+    // 预防性设置：本轮未观察到 hook 超时失败（三个 flaky 全部是 testTimeout），
+    // 但 history 的 beforeEach 含 mkdirSync + writeFileSync，极端负载下存在同类风险，成本为零。
+    hookTimeout: 10000,
   },
 });
