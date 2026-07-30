@@ -235,6 +235,27 @@ describe('runCompaction (before_compaction preflight)', () => {
     // 输出应是裁剪过的:head + snip 标记 + tail
     expect(a.messages.length).toBeLessThan(msgs.length);
   });
+
+  it('accepted transcript remains accepted after L1/L2 compaction', () => {
+    const messages: Message[] = [userText('start')];
+    for (let index = 1; index <= 5; index++) {
+      messages.push(use(`call_${index}`, index <= 2 ? 'spawn_agent' : 'echo'));
+      messages.push(result(`call_${index}`, 'x'.repeat(200)));
+    }
+
+    const preflight = acceptedValidation('before_compaction', messages);
+    const compacted = runCompaction(messages, {
+      preflightValidation: preflight,
+    }).messages;
+    const postflight = validateToolTranscript(snapshot(compacted), {
+      checkpoint: 'before_provider_send',
+      ...POLICY,
+    });
+
+    expect(postflight.status).toBe('accepted');
+    expect(postflight.reason_codes).toEqual([]);
+    expect(postflight.pair_records.every(pair => pair.state === 'paired')).toBe(true);
+  });
 });
 
 // ============================================================
@@ -347,5 +368,33 @@ describe('streamingQuery before_provider_send integration', () => {
     // 配对完整 → provider 应被调用
     expect(client.streamCalled).toBe(true);
     expect(client.streamCallCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('continues to the next provider turn after old long tool results are compacted', async () => {
+    const scripts: ContentBlock[][] = [
+      [{ type: 'tool_use', id: 'call_1', name: 'echo', input: {} }],
+      [{ type: 'tool_use', id: 'call_2', name: 'echo', input: {} }],
+      [{ type: 'tool_use', id: 'call_3', name: 'echo', input: {} }],
+      [{ type: 'tool_use', id: 'call_4', name: 'echo', input: {} }],
+      [{ type: 'text', text: 'done' }],
+    ];
+    const client = new CapturingStreamClient(scripts);
+    const registry = new ToolRegistry();
+    const echo: ToolDefinition = {
+      name: 'echo',
+      description: 'returns a long deterministic result',
+      parameters: { type: 'object', properties: {} },
+    };
+    registry.register(echo, async () => 'x'.repeat(200));
+
+    await drain(streamingQuery(client, registry, 'continue', {
+      systemPrompt: 'sys',
+      tools: registry.getDefinitions(),
+      signal: new AbortController().signal,
+      maxTurns: 6,
+      enableStreamingExecution: false,
+    }));
+
+    expect(client.streamCallCount).toBe(5);
   });
 });

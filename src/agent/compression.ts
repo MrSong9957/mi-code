@@ -29,6 +29,16 @@ const SNIP_KEEP_TAIL = 47;
 /** 旧工具结果占位的最小长度 */
 const COMPACT_MIN_LENGTH = 120;
 
+/**
+ * L2 微压缩时写回 tool_result 块的占位文本。
+ *
+ * 关键约束:压缩只缩短 content,必须保留 block 的 type 和 tool_use_id,
+ * 否则 tool_use / tool_result 配对会被破坏,触发 before_provider_send
+ * 的 pair.missing_result 拒绝。因此占位仍写在 tool_result 块里,而非 text 块。
+ */
+const COMPACTED_TOOL_RESULT =
+  '[Earlier tool result compacted. Re-run if needed.]';
+
 /** 持久化目录 */
 const OUTPUT_DIR = '.task_outputs/tool-results';
 
@@ -58,34 +68,85 @@ export function persistLargeOutput(toolUseId: string, output: string, toolName?:
  * L1: 裁掉旧对话 (snip_compact)
  *
  * 消息数超过阈值时，保留前 3 条 + 后 47 条，中间裁掉。
- * 边界保护：不拆散 tool_use/tool_result 对。
+ * 边界保护：不拆散 tool_use/tool_result 对（即使两半不相邻）。
  */
+
+/**
+ * 收集所有已配对的 tool_use/tool_result 在 messages 中的完整跨度。
+ *
+ * 物理本质：给每对"工具调用 → 结果"画一条不可切断的连接线。
+ * use 和 result 可能相隔多条消息（并行调用、多轮探索），所以必须用
+ * [useIndex, resultIndex] 的闭区间表达跨度，而不是只看相邻消息。
+ *
+ * 仅识别已存在的配对，不合成缺失的 result，不改变 validator 行为。
+ */
+function collectToolPairSpans(
+  messages: Message[],
+): Array<{ start: number; end: number }> {
+  const uses = new Map<string, number>();
+  const results = new Map<string, number>();
+
+  for (let index = 0; index < messages.length; index++) {
+    const content = messages[index]!.content;
+    if (!Array.isArray(content)) continue;
+
+    for (const block of content) {
+      if (block.type === 'tool_use') uses.set(block.id, index);
+      if (block.type === 'tool_result') {
+        results.set(block.tool_use_id, index);
+      }
+    }
+  }
+
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const [id, useIndex] of uses) {
+    const resultIndex = results.get(id);
+    if (resultIndex === undefined) continue;
+    spans.push({
+      start: Math.min(useIndex, resultIndex),
+      end: Math.max(useIndex, resultIndex),
+    });
+  }
+  return spans;
+}
+
 export function snipCompact(messages: Message[]): Message[] {
   if (messages.length <= SNIP_THRESHOLD) return messages;
 
-  const headCount = 3;
-  let cutPoint = messages.length - SNIP_KEEP_TAIL;
+  // 默认裁剪区间:固定前 3 条 head + 尾部 SNIP_KEEP_TAIL 条。
+  let cutStart = 3;
+  let cutEnd = messages.length - SNIP_KEEP_TAIL;
 
-  // 安全裁剪点：不拆散 tool_use/tool_result 对
-  while (cutPoint > headCount) {
-    const msg = messages[cutPoint];
-    if (msg?.role === 'user' && Array.isArray(msg.content)) {
-      const hasToolResult = (msg.content as ContentBlock[]).some(b => b.type === 'tool_result');
-      if (hasToolResult) { cutPoint--; continue; }
+  // 把 cutStart / cutEnd 推离任何被它切中的配对跨度,直到闭包稳定。
+  // 一个边界若落在某对 [start, end] 内部,就会把配对拆成两半 → 必须外推:
+  //   cutStart 落在跨度内 → 推到该跨度 end + 1(整对留在 head)
+  //   cutEnd   落在跨度内 → 推到该跨度 start(整对留在 tail)
+  // 多个跨度重叠时,外推可能把边界推入另一个跨度,所以用 changed 循环求闭包。
+  const spans = collectToolPairSpans(messages);
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const span of spans) {
+      if (span.start < cutStart && cutStart <= span.end) {
+        cutStart = span.end + 1;
+        changed = true;
+      }
+      if (span.start < cutEnd && cutEnd <= span.end) {
+        cutEnd = span.start;
+        changed = true;
+      }
     }
-    const prev = messages[cutPoint - 1];
-    if (prev?.role === 'assistant' && Array.isArray(prev.content)) {
-      const hasToolUse = (prev.content as ContentBlock[]).some(b => b.type === 'tool_use');
-      if (hasToolUse) { cutPoint--; continue; }
-    }
-    break;
   }
 
-  const snipped = messages.length - headCount - (messages.length - cutPoint);
+  // 外推后区间消失(无中间可裁) → 不动,原样返回。
+  if (cutStart >= cutEnd) return messages;
+
+  const snipped = cutEnd - cutStart;
   return [
-    ...messages.slice(0, headCount),
+    ...messages.slice(0, cutStart),
     { role: 'user', content: `[snipped ${snipped} messages...]` },
-    ...messages.slice(cutPoint),
+    ...messages.slice(cutEnd),
   ];
 }
 
@@ -118,9 +179,17 @@ export function microCompact(messages: Message[]): Message[] {
       : JSON.stringify(msg.content);
     if (contentStr.length <= COMPACT_MIN_LENGTH) continue;
 
+    // 块级重写:只替换 tool_result 的 content,保留 type 和 tool_use_id。
+    // 把 tool_result 改成 text 会丢失 tool_use_id,破坏 tool_use/tool_result 配对,
+    // 导致 before_provider_send 拒绝(pair.missing_result)。混合块数组中的非结果块原样保留。
+    const blocks = msg.content as ContentBlock[];
     compacted[idx] = {
-      role: 'user',
-      content: [{ type: 'text', text: '[Earlier tool result compacted. Re-run if needed.]' }],
+      ...msg,
+      content: blocks.map(block => (
+        block.type === 'tool_result'
+          ? { ...block, content: COMPACTED_TOOL_RESULT }
+          : block
+      )),
     };
   }
 

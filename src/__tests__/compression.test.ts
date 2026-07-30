@@ -56,14 +56,44 @@ describe('snipCompact', () => {
     expect(result[2]).toEqual(messages[2]);
   });
 
-  it('should not split tool_use/tool_result pairs', () => {
+  it('should keep a pair intact when the fixed head would split it', () => {
     const messages: Message[] = [];
-    for (let i = 0; i < 55; i++) messages.push(makeMsg('user', `msg ${i}`));
-    messages[10] = makeToolUse('call_1', 'bash');
-    messages[11] = makeToolResult('call_1', 'output');
+    for (let i = 0; i < 60; i++) messages.push(makeMsg('user', `msg ${i}`));
+    messages[2] = makeToolUse('call_head', 'bash');
+    messages[10] = makeToolResult('call_head', 'output');
 
-    const result = snipCompact(messages);
-    expect(result.length).toBeLessThan(60);
+    const compacted = snipCompact(messages);
+    const ids = compacted.flatMap(message =>
+      Array.isArray(message.content)
+        ? message.content.flatMap(block => {
+            if (block.type === 'tool_use') return [block.id];
+            if (block.type === 'tool_result') return [block.tool_use_id];
+            return [];
+          })
+        : [],
+    );
+
+    expect(ids.filter(id => id === 'call_head')).toHaveLength(2);
+  });
+
+  it('should keep a pair intact when the tail boundary would split it', () => {
+    const messages: Message[] = [];
+    for (let i = 0; i < 60; i++) messages.push(makeMsg('user', `msg ${i}`));
+    messages[10] = makeToolUse('call_tail', 'bash');
+    messages[14] = makeToolResult('call_tail', 'output');
+
+    const compacted = snipCompact(messages);
+    const ids = compacted.flatMap(message =>
+      Array.isArray(message.content)
+        ? message.content.flatMap(block => {
+            if (block.type === 'tool_use') return [block.id];
+            if (block.type === 'tool_result') return [block.tool_use_id];
+            return [];
+          })
+        : [],
+    );
+
+    expect(ids.filter(id => id === 'call_tail')).not.toHaveLength(1);
   });
 });
 
@@ -77,7 +107,7 @@ describe('microCompact', () => {
     expect(microCompact(messages)).toEqual(messages);
   });
 
-  it('should compact old tool results longer than 120 chars', () => {
+  it('should compact old tool result content without deleting its identity', () => {
     const longContent = 'x'.repeat(200);
     const messages = [
       makeToolResult('r1', longContent),
@@ -88,11 +118,47 @@ describe('microCompact', () => {
       makeToolResult('r6', 'keep'),
     ];
 
-    const result = microCompact(messages);
+    const compacted = microCompact(messages);
+    const first = (compacted[0]!.content as ContentBlock[])[0]!;
 
-    const content0 = (result[0]!.content as ContentBlock[])[0]!;
-    expect(content0).toHaveProperty('text', '[Earlier tool result compacted. Re-run if needed.]');
-    expect(result[3]).toEqual(messages[3]);
+    expect(first).toEqual({
+      type: 'tool_result',
+      tool_use_id: 'r1',
+      content: '[Earlier tool result compacted. Re-run if needed.]',
+    });
+    expect(compacted[3]).toEqual(messages[3]);
+  });
+
+  it('should preserve every tool_use_id in a compacted parallel result message', () => {
+    const parallel: Message = {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'spawn_1', content: 'x'.repeat(200) },
+        { type: 'tool_result', tool_use_id: 'spawn_2', content: 'y'.repeat(200) },
+      ],
+    };
+    const messages = [
+      parallel,
+      makeToolResult('r2', 'x'.repeat(200)),
+      makeToolResult('r3', 'x'.repeat(200)),
+      makeToolResult('r4', 'keep'),
+    ];
+
+    const compacted = microCompact(messages);
+    const blocks = compacted[0]!.content as ContentBlock[];
+
+    expect(blocks).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'spawn_1',
+        content: '[Earlier tool result compacted. Re-run if needed.]',
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'spawn_2',
+        content: '[Earlier tool result compacted. Re-run if needed.]',
+      },
+    ]);
   });
 
   it('should not compact short old results', () => {
