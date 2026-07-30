@@ -192,6 +192,7 @@ function foldLogicalLine(line: LogicalLine, width: number): LogicalCell {
       appendCharacter(character, span.styles);
     }
   }
+  if (activeSgr !== '') appendSpan(output.at(-1)!, '\x1b[0m', EMPTY_STYLES);
   return output;
 }
 
