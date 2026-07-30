@@ -8,6 +8,7 @@
 // 所以从 request.questions 反查 question→header 映射做配对。
 
 import type { StructuredAskResult } from '../agent/ask-user-types.js';
+import type { AskBlock } from '../tui/transcript-types.js';
 
 /** ask_user_question 展示模型(仿 SubagentCompletionPresentation)。 */
 export interface AskUserPresentation {
@@ -54,4 +55,44 @@ export function buildAskUserPresentation(result: StructuredAskResult): AskUserPr
   const lines = entries.map(e => `${e.header} → ${e.answer}`);
 
   return { summary, lines };
+}
+
+/**
+ * 把任意值安全转成 AskBlock。
+ *
+ * 包装 {@link buildAskUserPresentation}:接受 unknown,非 version-1 StructuredAskResult
+ * 或畸形嵌套时返回 null(不抛穿 pipeline)。保留 submitted/cancelled/chat 三种 outcome
+ * 的精确 summary/items。
+ *
+ * @param id     AskBlock 的唯一 id(通常用 toolUseId)
+ * @param result 任意值(通常是 StructuredAskResult)
+ * @returns AskBlock 或 null(null → 调用方走通用 tool fallback)
+ */
+export function buildAskBlock(id: string, result: unknown): AskBlock | null {
+  if (result === null || typeof result !== 'object') return null;
+  const r = result as { version?: unknown; request?: unknown; outcome?: unknown };
+  if (r.version !== 1 || !r.request || !r.outcome) return null;
+
+  let presentation: AskUserPresentation | null = null;
+  try {
+    presentation = buildAskUserPresentation(r as StructuredAskResult);
+  } catch {
+    return null;
+  }
+  if (!presentation) return null;
+
+  const block: AskBlock = {
+    id,
+    kind: 'ask',
+    summary: presentation.summary,
+    items: presentation.lines,
+  };
+
+  // 保留原始 outcome(submitted/cancelled/chat),供下游消费。
+  const outcome = r.outcome as StructuredAskResult['outcome'];
+  if (outcome) {
+    block.outcome = outcome;
+  }
+
+  return block;
 }
