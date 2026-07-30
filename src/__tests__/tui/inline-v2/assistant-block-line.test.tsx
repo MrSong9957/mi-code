@@ -72,6 +72,26 @@ describe('AssistantBlockLine', () => {
     )).toBe(true);
   });
 
+  it('resets an unclosed ANSI SGR before the final right border', () => {
+    const raw = render(
+      <AssistantBlockLine
+        block={{
+          id: 'unclosed-ansi',
+          kind: 'assistant',
+          text: '| H | Description |\n| --- | --- |\n| x | \x1b[31mabcdefghijklmnop |',
+        }}
+        cols={22}
+      />,
+    ).lastFrame() ?? '';
+    const finalStyledLine = raw.split('\n').find((line) => line.includes('op'));
+
+    expect(finalStyledLine).toBeDefined();
+    expect(finalStyledLine!.indexOf('\x1b[39m')).toBeGreaterThanOrEqual(0);
+    expect(finalStyledLine!.indexOf('\x1b[39m')).toBeLessThan(
+      finalStyledLine!.lastIndexOf('│'),
+    );
+  });
+
   it('keeps a physical blank line between key-value records', () => {
     expect(frame(
       '| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |',
