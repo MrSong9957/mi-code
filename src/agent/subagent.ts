@@ -374,12 +374,18 @@ export function enhanceSubagentSystemPrompt(
  *
  * 物理本质：临时工走正门，和正式员工用同一套门禁（provider 分发）。
  */
+interface SubagentExecutionProgress {
+  toolCallCount: number;
+  successfulToolResultCount: number;
+}
+
 async function runSubagentWithClient(
   client: StreamingLLMClient,
   toolSubset: Map<string, RegisteredTool>,
   prompt: string,
   system: string,
   options: SubagentOptions,
+  progress: SubagentExecutionProgress,
 ): Promise<{ text: string; toolCallCount: number; successfulToolResultCount: number; terminationReason: string; finalTurnSynthesized?: boolean }> {
   const controller = new AbortController();
   // 子代理作为有限步循环：显式 maxSteps 作为安全网（默认 10，对齐 Vercel 回退路径）
@@ -390,8 +396,6 @@ async function runSubagentWithClient(
   let resultText = '';
   // 收集工具调用信息，用于 maxTurns 耗尽且无文本输出时的 fallback 摘要
   const toolCallNames: string[] = [];
-  let toolCallCount = 0;
-  let successfulToolResultCount = 0;
   // AUTO-0025 Task 4:子代理默认启用"无工具最终总结轮"(仅在 maxTurns 已定义时生效)。
   // 物理本质:让临时工在工时耗尽前,用已收集的证据写一份正式总结,
   // 而不是把"Now let me check..."这种过程句当成交付物。
@@ -429,7 +433,7 @@ async function runSubagentWithClient(
                 const name = (block as { name?: string }).name;
                 if (name) {
                   toolCallNames.push(name);
-                  toolCallCount++;
+                  progress.toolCallCount++;
                 }
               }
             }
@@ -439,7 +443,7 @@ async function runSubagentWithClient(
       } else if (message.type === 'tool_result') {
         const tr = message as { name?: string; output?: string };
         if (tr.name && tr.output && isSuccessfulEvidence(tr.name, tr.output)) {
-          successfulToolResultCount++;
+          progress.successfulToolResultCount++;
         }
       }
     }
@@ -470,13 +474,19 @@ async function runSubagentWithClient(
     const summary = Object.entries(counts).map(([n, c]) => `${n}${c > 1 ? `×${c}` : ''}`).join(', ');
     return {
       text: `Sub-agent completed ${toolCallNames.length} tool call(s) [${summary}] — no explicit text summary produced.`,
-      toolCallCount,
-      successfulToolResultCount,
+      toolCallCount: progress.toolCallCount,
+      successfulToolResultCount: progress.successfulToolResultCount,
       terminationReason,
       finalTurnSynthesized,
     };
   }
-  return { text: resultText || '(no final text)', toolCallCount, successfulToolResultCount, terminationReason, finalTurnSynthesized };
+  return {
+    text: resultText || '(no final text)',
+    toolCallCount: progress.toolCallCount,
+    successfulToolResultCount: progress.successfulToolResultCount,
+    terminationReason,
+    finalTurnSynthesized,
+  };
 }
 
 /**
@@ -604,8 +614,10 @@ export async function runSubagent(
 
   // 证据变量提到 try 外：catch 和正常返回共享它们。
   // provider 异常发生时，本轮已积累的工具调用证据仍应反映在回执里。
-  let toolCallCount = 0;
-  let successfulToolResultCount = 0;
+  const executionProgress: SubagentExecutionProgress = {
+    toolCallCount: 0,
+    successfulToolResultCount: 0,
+  };
   let finalTurnSynthesized: boolean | undefined;
 
   try {
@@ -613,10 +625,15 @@ export async function runSubagent(
     let terminationReason = 'end_turn';
     if (options.client) {
       // 多 provider 路径：走主 agent 的 streamingQuery，支持 OpenAI/MiMo 等
-      const exec = await runSubagentWithClient(options.client, toolSubset, prompt, effectiveSystem, options);
+      const exec = await runSubagentWithClient(
+        options.client,
+        toolSubset,
+        prompt,
+        effectiveSystem,
+        options,
+        executionProgress,
+      );
       text = exec.text;
-      toolCallCount = exec.toolCallCount;
-      successfulToolResultCount = exec.successfulToolResultCount;
       terminationReason = exec.terminationReason;
       finalTurnSynthesized = exec.finalTurnSynthesized;
     } else {
@@ -638,8 +655,8 @@ export async function runSubagent(
     }
 
     return finalizeSubagentExecution(text, false, options.role, {
-      toolCallCount,
-      successfulToolResultCount,
+      toolCallCount: executionProgress.toolCallCount,
+      successfulToolResultCount: executionProgress.successfulToolResultCount,
       terminationReason,
       finalTurnSynthesized,
     });
@@ -651,8 +668,8 @@ export async function runSubagent(
       false,
       options.role,
       {
-        toolCallCount,
-        successfulToolResultCount,
+        toolCallCount: executionProgress.toolCallCount,
+        successfulToolResultCount: executionProgress.successfulToolResultCount,
         terminationReason: 'error',
         finalTurnSynthesized,
       },
@@ -675,7 +692,14 @@ async function runSubagentBackground(
     let text: string;
     if (options.client) {
       // 多 provider 路径（后台执行同样支持 OpenAI/MiMo 等）
-      const exec = await runSubagentWithClient(options.client, toolSubset, prompt, system, options);
+      const exec = await runSubagentWithClient(
+        options.client,
+        toolSubset,
+        prompt,
+        system,
+        options,
+        { toolCallCount: 0, successfulToolResultCount: 0 },
+      );
       text = exec.text;
     } else {
       const result = await runWithVercelAI(prompt, toolSubset, {

@@ -8,6 +8,34 @@ describe('formatUnknownError', () => {
     expect(output).not.toContain(' at ');
   });
 
+  it('脱敏 Error message 中的 Authorization bearer token', () => {
+    const output = formatUnknownError(
+      new Error('request failed: Authorization: Bearer sk-secret-value'),
+    );
+
+    expect(output).toContain('[REDACTED]');
+    expect(output).not.toContain('sk-secret-value');
+  });
+
+  it('完整脱敏带引号的 Authorization bearer token', () => {
+    const output = formatUnknownError(
+      'request failed: Authorization: "Bearer sk-quoted-secret"',
+    );
+
+    expect(output).toContain('[REDACTED]');
+    expect(output).not.toContain('sk-quoted-secret');
+  });
+
+  it('脱敏直接抛出的字符串中的凭证值', () => {
+    const output = formatUnknownError(
+      'provider rejected api_key=raw-secret and cookie=session-secret',
+    );
+
+    expect(output).toContain('[REDACTED]');
+    expect(output).not.toContain('raw-secret');
+    expect(output).not.toContain('session-secret');
+  });
+
   it('序列化 provider 普通对象并保留分类字段', () => {
     const output = formatUnknownError({
       status: 429,

@@ -13,6 +13,24 @@ const DEFAULT_MAX_LENGTH = 300;
  */
 const SENSITIVE_FIELD = /^(?:apiKey|api_key|api-key|authorization|token|accessToken|access_token|access-token|refreshToken|refresh_token|refresh-token|password|privateKey|private_key|private-key|secret|clientSecret|client_secret|client-secret|(?:set-)?cookie)$/i;
 
+const SENSITIVE_TEXT_KEY = String.raw`(?:api[_-]?key|apikey|authorization|token|access[_-]?token|refresh[_-]?token|password|private[_-]?key|secret|client[_-]?secret|(?:set-)?cookie|credentials?)`;
+
+function redactSensitiveText(message: string): string {
+  return message
+    .replace(
+      /\b(authorization\s*[:=]\s*)(?:"[^"]*"|'[^']*'|(?:bearer\s+)?[^\s,;]+)/gi,
+      '$1[REDACTED]',
+    )
+    .replace(/\b(bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(
+      new RegExp(
+        String.raw`\b(${SENSITIVE_TEXT_KEY}\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`,
+        'gi',
+      ),
+      '$1[REDACTED]',
+    );
+}
+
 /**
  * 把普通对象序列化为 JSON 文本。
  * - 命中敏感字段的值 → '[REDACTED]'
@@ -62,6 +80,8 @@ export function formatUnknownError(
   } else {
     message = String(error);
   }
+
+  message = redactSensitiveText(message);
 
   const safeMaxLength = Number.isFinite(maxLength)
     ? Math.max(0, Math.floor(maxLength))

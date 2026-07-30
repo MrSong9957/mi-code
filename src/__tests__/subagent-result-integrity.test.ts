@@ -6,7 +6,7 @@
 // 这些测试锁定：未验证的正文被丢弃、中途退出被标记、交互工具被隔离。
 
 import { describe, it, expect } from 'vitest';
-import { runSubagent, type SubagentOptions } from '../agent/subagent.js';
+import { runSubagent } from '../agent/subagent.js';
 import { streamingQuery } from '../agent/streaming-query.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
 import type {
@@ -166,6 +166,35 @@ describe('subagent result integrity', () => {
     expect(result.text).toContain('provider temporarily unavailable');
     expect(result.text).not.toContain('[object Object]');
     expect(result.text).not.toContain('ERR_UNHANDLED_ERROR');
+  });
+
+  it('provider 在工具成功后失败时保留已积累的工具证据', async () => {
+    const firstTurn = new ScriptedStreamClient([[
+      { type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } },
+    ]]);
+    let callCount = 0;
+    const client: StreamingLLMClient = {
+      async *stream(messages, tools, options) {
+        callCount++;
+        if (callCount === 2) {
+          throw new Error('provider failed on second turn');
+        }
+        yield* firstTurn.stream(messages, tools, options);
+      },
+    };
+
+    const result = await runSubagent('inspect files', makeReadRegistry(), {
+      role: 'explore',
+      client,
+      maxSteps: 3,
+    });
+
+    expect(result.status).toBe('incomplete');
+    expect(result.terminationReason).toBe('error');
+    expect(result.evidence).toEqual({
+      toolCallCount: 1,
+      successfulToolResultCount: 1,
+    });
   });
 });
 
