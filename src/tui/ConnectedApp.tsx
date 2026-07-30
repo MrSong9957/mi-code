@@ -326,33 +326,34 @@ export function ConnectedApp({
   // 已固化内容行号会随新消息滚动变化,rowTextMap 无法稳定映射,故 inline 路径
   // （含 V0 和 V2）整体禁用 SGR 鼠标路由。后续若要在 inline 模式支持应用层选区,
   // 需要重新设计行号映射方案。
-  if (!isInline) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useInput((input: string) => {
+  //
+  // Hook 必须无条件调用以保持 render 间 Hook 顺序稳定；通过 useInput 的 isActive
+  // 开关和 effect 内的 isInline guard 控制 alt-screen 专属副作用。
+  useInput(
+    (input: string) => {
       if (!SGR_FRAGMENT_RE.test(input)) return;
       const events = parserRef.current.feed('\x1b' + input);
       for (const ev of events) {
         routeMouseEvent(ev);
       }
-    });
+    },
+    { isActive: !isInline },
+  );
 
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    const { stdin, setRawMode } = useStdin();
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useEffect(() => {
-      if (!stdin) return;
-      setRawMode(true);
-      // 鼠标 all-motion + SGR 鼠标（仅 alt-screen 需要）。
-      // bracketed paste（\x1b[?2004h）由 usePaste 自动管理，不在此处开启。
-      process.stdout.write('\x1b[?1003h\x1b[?1006h');
+  const { stdin, setRawMode } = useStdin();
+  useEffect(() => {
+    if (isInline || !stdin) return;
+    setRawMode(true);
+    // 鼠标 all-motion + SGR 鼠标（仅 alt-screen 需要）。
+    // bracketed paste（\x1b[?2004h）由 usePaste 自动管理，不在此处开启。
+    process.stdout.write('\x1b[?1003h\x1b[?1006h');
 
-      return () => {
-        process.stdout.write('\x1b[?1003l\x1b[?1006l');
-        setRawMode(false);
-        stopAutoScroll();
-      };
-    }, [stdin, setRawMode]);
-  }
+    return () => {
+      process.stdout.write('\x1b[?1003l\x1b[?1006l');
+      setRawMode(false);
+      stopAutoScroll();
+    };
+  }, [isInline, stdin, setRawMode]);
 
   // ── early return 只影响 JSX 输出，不影响 hooks ──
 
