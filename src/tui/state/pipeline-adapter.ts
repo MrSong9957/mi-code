@@ -115,15 +115,19 @@ export class PipelineToStoreAdapter implements PipelineRenderer {
     isFinal: boolean,
     _opts?: { firstLinePrefix?: string },
   ): void {
+    const state = this.store.getState();
+    const has = state.model.items.some(item => item.kind === 'streaming-assistant');
     if (isFinal) {
       // 固化:更新末条 streaming-assistant 的 text 再 finish。
-      this.updateAssistant(text);
+      if (has) {
+        this.updateAssistant(text);
+      } else {
+        this.startAssistant(text);
+      }
       this.finishAssistant();
       return;
     }
     // 非终态:若无 streaming-assistant 则 start,否则 update。
-    const state = this.store.getState();
-    const has = state.model.items.some(item => item.kind === 'streaming-assistant');
     if (has) {
       this.updateAssistant(text);
     } else {
