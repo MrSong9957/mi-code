@@ -9,6 +9,9 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { BackgroundManager } from '../background/background-manager.js';
 
+const slowCommand = (durationMs: number): string =>
+  `"${process.execPath}" -e "setTimeout(() => {}, ${durationMs})"`;
+
 describe('BackgroundManager', () => {
   let workDir: string;
   let manager: BackgroundManager;
@@ -101,8 +104,8 @@ describe('BackgroundManager', () => {
   });
 
   it('timeout: 超时任务标记为 timeout', async () => {
-    // 用一个会超时的命令（sleep 10s，超时设为 500ms）
-    manager.run('sleep 10', { timeoutMs: 500 });
+    // 用跨平台 Node 长任务触发超时（任务 2s，超时设为 500ms）
+    manager.run(slowCommand(2_000), { timeoutMs: 500 });
 
     await waitFor(() => manager.pendingCount() > 0, 5000);
 
@@ -139,7 +142,7 @@ describe('BackgroundManager', () => {
     const TRIALS = 5;
     const results: string[] = [];
     for (let i = 0; i < TRIALS; i++) {
-      manager.run('sleep 30', { timeoutMs: 100 });
+      manager.run(slowCommand(1_000), { timeoutMs: 100 });
       await waitFor(() => manager.pendingCount() > 0, 5000);
       const notifs = manager.drainNotifications();
       results.push(notifs[0]?.status ?? '(none)');
@@ -174,7 +177,7 @@ describe('BackgroundManager', () => {
     // 幂等保护确保最终恰好 1 条 timeout 通知（不会被后续 close/error 覆盖或追加）。
     const TRIALS = 8;
     for (let i = 0; i < TRIALS; i++) {
-      manager.run('sleep 30', { timeoutMs: 80 });
+      manager.run(slowCommand(1_000), { timeoutMs: 80 });
       await waitFor(() => manager.pendingCount() > 0, 5000);
       const notifs = manager.drainNotifications();
       // 不变量：每轮恰好 1 条通知，状态必为 timeout
