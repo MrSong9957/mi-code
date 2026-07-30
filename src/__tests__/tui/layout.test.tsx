@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
+import stripAnsi from 'strip-ansi';
 import { App } from '../../tui/App.js';
 import { createSelectionStore } from '../../tui/state/selection-store.js';
 import { createSpinnerStore } from '../../tui/state/spinner-store.js';
@@ -81,7 +82,7 @@ describe('App 顶层布局（flexbox footer 紧贴 + LOGO 固定区）', () => {
 
   it('StatusBar 格式：mode | model | dir | branch | [进度条] pct%', () => {
     const { lastFrame } = makeApp([]);
-    const frame = lastFrame() ?? '';
+    const frame = stripAnsi(lastFrame() ?? '');
     // 25% → 10 格条 = ███░░░░░░░（round(0.25*10)=3 满）
     // 分隔符为 box-drawing │（见 StatusBar 多色高亮），进度条无括号
     expect(frame).toContain('build │ sonnet │ Projects/mi-code │ main │');
@@ -93,7 +94,7 @@ describe('App 顶层布局（flexbox footer 紧贴 + LOGO 固定区）', () => {
     const { lastFrame } = render(
       React.createElement(App, { messages: [], status: status50, logo: LOGO, selectionStore: createSelectionStore(), spinnerStore: createSpinnerStore(), completionStore: createCompletionStore(), overlayStore: createOverlayStore(), input: '', cursor: 0, scrollTop: 0, flatLines: [] }),
     );
-    const frame = lastFrame() ?? '';
+    const frame = stripAnsi(lastFrame() ?? '');
     // 50% → round(0.5*10)=5 满（进度条无括号，见 StatusBar 多色高亮）
     expect(frame).toContain('█████░░░░░ 50%');
   });
