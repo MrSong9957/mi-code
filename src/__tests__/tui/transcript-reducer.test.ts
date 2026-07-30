@@ -11,7 +11,6 @@ import {
   startTool,
   resolveTool,
   deferThinking,
-  flushDeferredThinking,
   appendBoundaryBlock,
   selectCommittedTranscript,
   orderToolPresentations,
