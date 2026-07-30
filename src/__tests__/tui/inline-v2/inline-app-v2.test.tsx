@@ -1173,15 +1173,15 @@ describe('<InlineAppV2> finalized Markdown table lifecycle', () => {
     const stores = createStores();
     stores.messagesStore.getState().startAssistant(markdown);
 
-    const streamingRender = render(<InlineAppV2 {...makeProps(stores)} />);
-    expect(stripAnsi(streamingRender.lastFrame() ?? '')).toContain('| Tool | Purpose |');
-    expect(stripAnsi(streamingRender.lastFrame() ?? '')).not.toContain('┌');
-    streamingRender.unmount();
+    const app = render(<InlineAppV2 {...makeProps(stores)} />);
+    expect(stripAnsi(app.lastFrame() ?? '')).toContain('| Tool | Purpose |');
+    expect(stripAnsi(app.lastFrame() ?? '')).not.toContain('┌');
 
     stores.messagesStore.getState().finishAssistant();
-    const finalizedRender = render(<InlineAppV2 {...makeProps(stores)} />);
-    const finalized = stripAnsi(finalizedRender.lastFrame() ?? '');
+    app.rerender(<InlineAppV2 {...makeProps(stores)} />);
+    const finalized = stripAnsi(app.lastFrame() ?? '');
     expect(finalized).toContain('┌');
+    expect(finalized).not.toContain('| Tool | Purpose |');
     expect(finalized.match(/glob/g)).toHaveLength(1);
     expect(finalized.match(/●/g)).toHaveLength(1);
   });
