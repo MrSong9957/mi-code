@@ -139,7 +139,7 @@ export class GoogleStreamClient implements StreamingLLMClient {
     let nextBlockIndex = 0;
     let textUnifiedIndex = -1;
 
-    let usage: Usage = { input_tokens: 0, output_tokens: 0 };
+    const usage: Usage = { input_tokens: 0, output_tokens: 0 };
     let stopReason: string | null = null;
     let messageStartYielded = false;
 

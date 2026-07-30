@@ -149,7 +149,7 @@ export class OpenAIStreamClient implements StreamingLLMClient {
     let nextBlockIndex = 0;  // 统一 StreamEvent 用的 index
     let textUnifiedIndex = -1;  // 文本 block 的统一 index(首次文本时分配)
 
-    let usage: Usage = { input_tokens: 0, output_tokens: 0 };
+    const usage: Usage = { input_tokens: 0, output_tokens: 0 };
     let stopReason: string | null = null;
     let messageStartYielded = false;
 
