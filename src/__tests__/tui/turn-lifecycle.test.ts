@@ -152,9 +152,11 @@ describe('turn lifecycle 集成', () => {
       const state = startTurnThinking(idleTurnThinking(), 0);
       finishTurnThinking(lifecycle, state);
 
-      const allLines = messagesStore.getState().messages.flatMap(m => m.lines);
+      // Task 6:thinking summary 被 defer,需 flush 才进 items。
+      // finishTurnThinking 只 emit thinking_end(不 stopSpinner),故检查 deferred。
+      const deferred = messagesStore.getState().model.deferredThinking;
       // floor(1500/1000)=1,摘要显示 Thought for 1s
-      expect(allLines.some(l => l.content.includes('Thought for 1s'))).toBe(true);
+      expect(deferred.some(s => s.text.includes('Thought for 1s'))).toBe(true);
     } finally {
       vi.useRealTimers();
     }

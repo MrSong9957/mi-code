@@ -1,172 +1,145 @@
 // src/tui/state/pipeline-adapter.ts
-// PipelineToStoreAdapter：实现 PipelineRenderer，把 BlockPipeline 调用翻译成 messages-store 操作
+// PipelineToStoreAdapter:实现 PipelineRenderer,把 BlockPipeline 调用翻译成语义 store 操作
 //
-// 物理本质：旧 Renderer 接口的「store 版替身」。
-// BlockPipeline 内部把 Block 格式化成 FormattedLine / 流式累积文本，再调 PipelineRenderer
-// 的方法。旧实现是手写 ANSI Renderer（printMessage 写屏）；本 adapter 不写屏，而是把这些
-// 数据推进 zustand store，由 React + Ink 渲染。
-//
-// 映射：
-// - printMessage(text, role, style, raw) → appendLine(role, FormattedLine)
-// - appendStreamingMarkdown(text, isFinal, opts):
-//     首次(isFinal=false 且无流式) → startStreaming(prefix + text)
-//     后续(isFinal=false)         → updateStreaming(prefix + text)
-//     isFinal=true                 → finalizeStreaming(用 prefix+text 造一行)
-// - sealStreaming → finalizeStreaming（用当前 streamingText）
-// - clearMessages → store.clear()
-// - flushNow → 无操作（store 响应式，Ink 自动重渲染）
-//
-// 注意：本 adapter 不做 Markdown 渲染（Phase 5 接 StreamingMarkdown 时，固化行的渲染
-// 由 React 侧完成；adapter 只把 streamingText 透传，固化时造一个含 prefix 的占位行）。
+// 物理本质:旧 pipeline 接口的「语义 store 版替身」。
+// BlockPipeline 配对 call/result 后构建 ToolPresentation,通过本 adapter
+// 调用 store 的语义 actions(startTool/resolveTool/finishAsk/startAssistant…)。
+// adapter 是薄桥接:不解析工具输出、不订阅 store 变化、不生成字形。
 
 import type { PipelineRenderer } from '../../ui/block-pipeline.js';
-import type { FormattedLine, UIMessageStyle } from '../../ui/types.js';
+import type { AskBlock, ToolPresentation } from '../transcript-types.js';
+import type { BoundaryBlock, ThinkingSummaryBlock } from './transcript-reducer.js';
 import type { MessagesStore } from './messages-store.js';
-import type { MessageRole } from './messages-store.js';
-
-/** system/banner 等 role 字符串 → TuiMessage.role 映射 */
-function mapRole(role: string | undefined): MessageRole {
-  switch (role) {
-    case 'user': return 'user';
-    case 'assistant': return 'assistant';
-    case 'tool': return 'tool';
-    default: return 'system'; // system / banner / error / undefined
-  }
-}
 
 export class PipelineToStoreAdapter implements PipelineRenderer {
   private store: MessagesStore;
-  /** 流式块的 firstLinePrefix（首次 appendStreamingMarkdown 时记录，后续复用） */
-  private streamingPrefix = '';
 
   constructor(store: MessagesStore) {
     this.store = store;
   }
 
-  printMessage(
-    text: string,
-    role?: string,
-    style?: Record<string, unknown>,
-    _raw?: boolean,
-  ): void {
-    // AUTO-0025 空消息修复:拦截 block-pipeline 产出的纯布局空行。
-    // openModelBlock()/ensureGap() 会调 printMessage('', 'system') 在块间插物理空行,
-    // 这是 ANSI renderer 时代的布局机制(那时直接写 stdout,只能靠空行控间距)。
-    // 在 message-based store + <Static> 模型下,空字符串行会被渲染成真实空白行,
-    // 造成 thinking summary 与 assistant 间出现多余空白。adapter 是"旧输出模型→新
-    // message 模型"的边界层,在此拦截:空 system 行不创建 message,间距交给渲染层。
-    // 范围严格限定 text==='' && role==='system',不影响其他 system 文本或非 system 角色。
-    if (text === '' && role === 'system') {
-      return;
-    }
+  // ── 工具调用(语义) ──
 
-    const line: FormattedLine = {
-      content: text,
-      style: (style ?? {}) as UIMessageStyle,
-      indent: 0,
-    };
-    if (_raw) line.raw = true;
-
-    // AUTO-0025 修复:thinking_summary 必须创建独立 finalized message。
-    // 原因:若走 mapRole→'system'→appendLine,会被续接进 thinking_start 时
-    // openModelBlock() 输出的 system 空行分隔符消息,summary 沉到该空白块第 2 行,
-    // 肉眼不可见。thinking_summary 是"一条完整摘要行",语义上应作为独立消息进入 <Static>,
-    // 不参与普通 system 行的续接合并。用 appendMessage 强制新建(新 uuid)。
-    if (role === 'thinking_summary') {
-      this.store.getState().appendMessage('system', [line]);
-      return;
-    }
-
-    this.store.getState().appendLine(mapRole(role), line);
+  startToolCall(call: {
+    toolUseId: string;
+    name: string;
+    input: Record<string, unknown>;
+  }): void {
+    this.store.getState().startTool({
+      toolUseId: call.toolUseId,
+      toolName: call.name,
+      input: call.input,
+    });
   }
+
+  finishToolCall(toolUseId: string, presentation: ToolPresentation): boolean {
+    return this.store.getState().resolveTool(toolUseId, presentation);
+  }
+
+  finishAsk(toolUseId: string, block: AskBlock): boolean {
+    return this.store.getState().finishAsk(toolUseId, block);
+  }
+
+  closeOpenToolGroup(): void {
+    this.store.getState().closeOpenToolGroup();
+  }
+
+  // ── assistant 流式(语义) ──
+
+  startAssistant(text: string): string {
+    return this.store.getState().startAssistant(text);
+  }
+
+  updateAssistant(text: string): void {
+    // 更新末条 streaming-assistant 的 text。
+    // store 没有单独的 updateAssistant action,这里直接操作 model。
+    // 但为保持 store 封装,我们通过一个轻量 set 完成。
+    this.store.setState((s) => {
+      const items = [...s.model.items];
+      const idx = items.findIndex(item => item.kind === 'streaming-assistant');
+      if (idx < 0) return s;
+      const sa = items[idx]!;
+      if (sa.kind !== 'streaming-assistant') return s;
+      items[idx] = { ...sa, text };
+      return { model: { ...s.model, items } };
+    });
+  }
+
+  finishAssistant(): void {
+    this.store.getState().finishAssistant();
+  }
+
+  // ── thinking 流式(语义) ──
+
+  startThinking(text: string): string {
+    return this.store.getState().startThinking(text);
+  }
+
+  updateThinking(text: string): void {
+    this.store.setState((s) => {
+      const items = [...s.model.items];
+      const idx = items.findIndex(item => item.kind === 'pending-thinking');
+      if (idx < 0) return s;
+      const pt = items[idx]!;
+      if (pt.kind !== 'pending-thinking') return s;
+      items[idx] = { ...pt, text };
+      return { model: { ...s.model, items } };
+    });
+  }
+
+  eraseThinking(): void {
+    // 移除 pending-thinking 活动项。
+    this.store.setState((s) => ({
+      model: {
+        ...s.model,
+        items: s.model.items.filter(item => item.kind !== 'pending-thinking'),
+      },
+    }));
+  }
+
+  finishThinking(summary: ThinkingSummaryBlock): void {
+    this.store.getState().finishThinking(summary);
+  }
+
+  // ── 通用 transcript 追加(用于 user_input / system notification) ──
+
+  appendTranscriptBlock(block: BoundaryBlock): void {
+    this.store.getState().appendTranscript(block);
+  }
+
+  // ── PipelineRenderer 兼容方法(过渡期) ──
+  // 这些在 Task 6 渲染层切换后会被移除。目前 BlockPipeline 仍通过它们驱动。
 
   appendStreamingMarkdown(
     text: string,
     isFinal: boolean,
-    opts?: { indent?: number; firstLinePrefix?: string; firstLineStyle?: UIMessageStyle },
+    _opts?: { firstLinePrefix?: string },
   ): void {
-    const prefix = opts?.firstLinePrefix ?? '';
-    const fullText = prefix + text;
-
     if (isFinal) {
-      // 固化：用 prefix + text 造最终行（MVP：单行；Phase 5 接 Markdown 后精化）
-      const style = opts?.firstLineStyle ?? {};
-      const lines: FormattedLine[] = text === ''
-        ? []
-        : [{ content: fullText, style, indent: opts?.indent ?? 0 }];
-      // 若已有流式块，finalizeStreaming 固化它；否则新建
-      const msgs = this.store.getState().messages;
-      const last = msgs[msgs.length - 1];
-      if (last && !last.finalized && last.role === 'assistant') {
-        this.store.getState().finalizeStreaming(lines.length > 0 ? lines : [{ content: '', style: {}, indent: 0 }]);
-      } else if (lines.length > 0) {
-        this.store.getState().appendMessage('assistant', lines);
-      }
-      this.streamingPrefix = '';
+      // 固化:更新末条 streaming-assistant 的 text 再 finish。
+      this.updateAssistant(text);
+      this.finishAssistant();
       return;
     }
-
-    // 非终态：首次 startStreaming，后续 updateStreaming
-    const msgs = this.store.getState().messages;
-    const last = msgs[msgs.length - 1];
-    if (last && !last.finalized && last.role === 'assistant') {
-      this.store.getState().updateStreaming(fullText);
+    // 非终态:若无 streaming-assistant 则 start,否则 update。
+    const state = this.store.getState();
+    const has = state.model.items.some(item => item.kind === 'streaming-assistant');
+    if (has) {
+      this.updateAssistant(text);
     } else {
-      this.streamingPrefix = prefix;
-      this.store.getState().startStreaming(fullText);
+      this.startAssistant(text);
     }
   }
 
   sealStreaming(): void {
-    // 用当前 streamingText 固化（封口）
-    const msgs = this.store.getState().messages;
-    const last = msgs[msgs.length - 1];
-    if (last && !last.finalized && last.role === 'assistant' && last.streamingText !== undefined) {
-      const line: FormattedLine = {
-        content: last.streamingText,
-        style: { fg: 'brand' },
-        indent: 0,
-      };
-      this.store.getState().finalizeStreaming([line]);
-    }
-    this.streamingPrefix = '';
+    this.finishAssistant();
   }
 
   flushNow(): void {
-    // 无操作：store 是响应式的，Ink 自动重渲染。
-    // 保留方法以满足 PipelineRenderer 接口契约。
-  }
-
-  startToolCall(toolUseId: string, lines: FormattedLine[]): void {
-    this.store.getState().appendPendingTool(toolUseId, lines);
-  }
-
-  finishToolCall(toolUseId: string, lines: FormattedLine[], finalKind?: 'tool-progress' | 'agent-completion'): boolean {
-    return this.store.getState().resolvePendingTool(toolUseId, lines, finalKind);
-  }
-
-  appendToolHook(toolUseId: string, lines: FormattedLine[]): boolean {
-    return this.store.getState().appendToolHook(toolUseId, lines);
-  }
-
-  appendStreamingThinking(text: string): void {
-    // 流式 thinking：首次 startStreamingThinking，后续 updateStreamingThinking
-    const msgs = this.store.getState().messages;
-    const last = msgs[msgs.length - 1];
-    if (last && !last.finalized && last.role === 'thinking') {
-      this.store.getState().updateStreamingThinking(text);
-    } else {
-      this.store.getState().startStreamingThinking(text);
-    }
-  }
-
-  eraseStreamingThinking(): void {
-    // 折叠：移除流式 thinking 消息，摘要行由 printMessage 追加
-    this.store.getState().removeStreamingThinking();
+    // 无操作:store 响应式。
   }
 
   clearMessages(): void {
     this.store.getState().clear();
-    this.streamingPrefix = '';
   }
 }

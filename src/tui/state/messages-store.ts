@@ -1,302 +1,363 @@
 // src/tui/state/messages-store.ts
-// 消息列表 store（zustand vanilla）：TuiMessage 列表 + 流式累加
+// 语义时间线 store(zustand vanilla):TimelineItem 列表 + 流式累加
 //
-// 物理本质：对话消息的「账本」。
-// BlockPipeline 产出 FormattedLine（格式化好的单行），本 store 把它们聚合成 TuiMessage：
-// - appendLine(role, line)：同 role 续接末条消息，不同 role 断块新建
-// - startStreaming/updateStreaming/finalizeStreaming：assistant 流式（streamingText 累积，
-//   finalize 时把 StreamingMarkdown 渲染结果固化为 lines）
+// 物理本质:对话的「语义账本」。
+// 不再存储 FormattedLine 字符串行,而是存储生命周期安全的 TimelineItem:
+// - 已固化块(TranscriptBlock):user / assistant / tool / ask / system / turn-duration
+// - 活动项(ActivityItem):streaming-assistant / pending-tool / pending-thinking
 //
-// 性能：流式 delta 只更新末条 message 的 streamingText；React 侧用 selector
-// 只订阅末条 assistant，避免整列表 re-render（Phase 5/6 优化）。
+// 所有工具分组/配对逻辑委托给 transcript-reducer;本 store 只管 id 生成、
+// 流式 assistant/thinking 状态,以及把 reducer 产物暴露给渲染层。
+//
+// 过渡兼容(Task 6 删除):messages / appendLine / appendMessage 是旧 TuiMessage
+// 形态的派生视图/桥接,供尚未迁移的渲染层使用。Task 6 渲染层切到 TimelineItem 后移除。
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { FormattedLine } from '../../ui/types.js';
 import type { TuiMessage } from '../types.js';
-import { createTurnDurationMessage } from './turn-duration-message.js';
+import type {
+  ActivityItem,
+  AskBlock,
+  AssistantBlock,
+  ToolPresentation,
+} from '../transcript-types.js';
+import {
+  appendBoundaryBlock,
+  closeOpenToolGroup,
+  deferThinking,
+  emptyModel,
+  flushDeferredThinking,
+  resolveTool,
+  startTool,
+  type BoundaryBlock,
+  type ThinkingSummaryBlock,
+  type TranscriptModel,
+} from './transcript-reducer.js';
+import { createTurnDurationBlock, TurnDurationMessage } from './turn-duration-message.js';
 
-export type MessageRole = TuiMessage['role'];
 export type MessagesStore = StoreApi<MessagesState>;
 
 /**
- * 判断消息是否允许被 appendLine 续接（同 role 追加新行）。
- *
- * 专用固化消息（如 turn-duration 完成消息）一旦写入就锁定行数，
- * 不应被后续 appendLine 合并——否则会让 "✻ Cooked for 9s" 之后的内容
- * 沉默地挤进完成消息。
- *
- * 当前实现里只有 turn-duration 一种专用 kind；未来若新增其他专用 kind
- * （例如 'error'、'system-banner'），必须在此 type guard 里显式排除，
- * 否则 TS narrowing 不会自动报错——这是「显式优于隐式」的防御边界。
+ * 过渡兼容:把 TimelineItem[] 投影成旧 TuiMessage[]。
+ * Task 6 渲染层切到语义块后删除。
  */
-export function isAppendableMessage(message: TuiMessage): boolean {
-  return message.kind === undefined;
+function projectLegacyMessages(model: TranscriptModel): TuiMessage[] {
+  const out: TuiMessage[] = [];
+  for (const item of model.items) {
+    switch (item.kind) {
+      case 'user':
+        out.push({ uuid: item.id, role: 'user', lines: [{ content: `❯ ${item.text}`, style: { fg: 'success', bold: true, bg: 'gray' }, indent: 0 }], finalized: true });
+        break;
+      case 'assistant':
+        out.push({ uuid: item.id, role: 'assistant', lines: [{ content: item.text, style: { fg: 'brand' }, indent: 0 }], finalized: true });
+        break;
+      case 'streaming-assistant':
+        out.push({ uuid: item.id, role: 'assistant', lines: [], finalized: false, streamingText: item.text });
+        break;
+      case 'pending-thinking':
+        out.push({ uuid: item.id, role: 'thinking', kind: 'thinking-progress', lines: [], finalized: false, streamingText: item.text });
+        break;
+      case 'pending-tool':
+        out.push({ uuid: item.id, role: 'tool', kind: 'tool-progress', lines: [{ content: `● ${item.toolName}…`, style: { fg: 'brand' }, indent: 0 }], finalized: !item.closed ? false : true, toolUseId: item.entries[0]?.toolUseId });
+        break;
+      case 'tool':
+        out.push({ uuid: item.id, role: 'tool', kind: 'tool-progress', lines: [{ content: `● ${item.toolName}`, style: { fg: 'brand' }, indent: 0 }, ...item.presentations.map(p => ({ content: `  ⎿ ${p.summary}`, style: { dim: true }, indent: 2 }))], finalized: true });
+        break;
+      case 'ask':
+        out.push({ uuid: item.id, role: 'system', kind: 'agent-completion', lines: [{ content: `● ${item.summary}`, style: { fg: 'brand' }, indent: 0 }, ...item.items.map(i => ({ content: `  ⎿ ${i}`, style: { dim: true }, indent: 2 }))], finalized: true });
+        break;
+      case 'system':
+        if (item.subkind === 'thinking-summary') {
+          out.push({ uuid: item.id, role: 'system', lines: [{ content: `  ${item.text}`, style: { dim: true }, indent: 2 }], finalized: true });
+        } else {
+          out.push({ uuid: item.id, role: 'system', lines: [{ content: item.text, style: item.tone === 'error' ? { fg: 'error' } : {}, indent: 0 }], finalized: true });
+        }
+        break;
+      case 'turn-duration': {
+        const tdLine = TurnDurationMessage(item.verb, item.durationMs);
+        const tdLines = item.prependBlankLine
+          ? [{ content: '', style: {}, indent: 0 }, tdLine]
+          : [tdLine];
+        const tdMsg: TuiMessage = {
+          uuid: item.id, role: 'system', kind: 'turn-duration',
+          lines: tdLines, finalized: true,
+        };
+        // SystemTurnDurationMessage 扩展了 verb/durationMs,这里补上(类型转换)。
+        (tdMsg as TuiMessage & { verb: string; durationMs: number }).verb = item.verb;
+        (tdMsg as TuiMessage & { verb: string; durationMs: number }).durationMs = item.durationMs;
+        out.push(tdMsg);
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 export interface MessagesState {
-  messages: TuiMessage[];
-  /** 自增 id（生成 uuid） */
+  /** 语义时间线(reducer 模型)。 */
+  model: TranscriptModel;
+  /** 自增 id(生成稳定 React key)。 */
   _idCounter: number;
-  /** 追加一条完整消息（多行，finalized=true） */
-  appendMessage: (role: MessageRole, lines: FormattedLine[]) => void;
-  /** 追加一行到末条消息（同 role）；不同 role 或空时新建 */
-  appendLine: (role: MessageRole, line: FormattedLine) => void;
-  /** 追加一条独立的固化完成时长消息 */
-  appendTurnDurationMessage: (durationMs: number) => void;
-  /** \u8ffd\u52a0\u53ef\u89c1\u7684\u5f85\u5b8c\u6210\u5de5\u5177\u6d88\u606f\uff0c\u8fd4\u56de\u5176 uuid */
-  appendPendingTool: (toolUseId: string, lines: FormattedLine[]) => string;
-  /** \u53ea\u5b8c\u6210\u5339\u914d\u7684 pending \u5de5\u5177\u6d88\u606f\u3002
-   *  AUTO-0025-transient:finalKind 决定固化消息的专用 kind(默认 tool-progress)。 */
-  resolvePendingTool: (toolUseId: string, lines: FormattedLine[], finalKind?: 'tool-progress' | 'agent-completion') => boolean;
-  /** \u5c06 hook \u9644\u5230\u5df2\u5b8c\u6210\u7684\u5de5\u5177\u6d88\u606f */
-  appendToolHook: (toolUseId: string, lines: FormattedLine[]) => boolean;
-  /** 开一条流式 assistant（finalized=false, streamingText=initialText） */
-  startStreaming: (initialText: string) => void;
-  /** 开一条流式 thinking（role='thinking', 灰色 dim）。
-   *  AUTO-0025-transient:kind='thinking-progress' 单例,重复调用幂等,返回 uuid。 */
-  startStreamingThinking: (initialText: string) => string;
-  /** 更新末条流式 assistant 的 streamingText（累加全文） */
-  updateStreaming: (text: string) => void;
-  /** 更新末条流式 thinking 的 streamingText */
-  updateStreamingThinking: (text: string) => void;
-  /** 移除 thinking-progress 消息（按 kind,不依赖末条位置）。
-   *  AUTO-0025-transient:返回是否实际移除了一条消息(幂等,无则 false)。 */
-  removeStreamingThinking: () => boolean;
-  /** 固化末条流式（finalized=true，固化 lines，清 streamingText） */
-  finalizeStreaming: (lines: FormattedLine[]) => void;
-  /** 清空所有消息 */
-  clear: () => void;
-  /** 硬撤回:删除末条 user 消息及其后所有消息(幂等:无 user 时空操作)。 */
-  rewindLastUserTurn: () => void;
-  /** 软中断:末条流式 assistant 固化(保留 streamingText 为 line + 追加 [interrupted] 标记)。
-   *  无流式消息时空操作。 */
-  finalizeStreamingAsInterrupted: () => void;
+
+  // ── 语义 store actions(Task 4 接口) ──
+
+  /** 开始一个工具调用,返回该 PendingTool 的 activityId(仅新建组时生效)。 */
+  startTool(call: {
+    toolUseId: string;
+    toolName: string;
+    input: Record<string, unknown>;
+  }): string;
+  /** 解析一个工具调用的展示;返回是否命中。 */
+  resolveTool(toolUseId: string, presentation: ToolPresentation): boolean;
+  /** 完成 Ask,写入 AskBlock;返回是否成功。 */
+  finishAsk(toolUseId: string, block: AskBlock): boolean;
+  /** 开始流式 assistant,返回 id。 */
+  startAssistant(text: string): string;
+  /** 固化流式 assistant。 */
+  finishAssistant(): void;
+  /** 开始流式 thinking,返回 id。 */
+  startThinking(text: string): string;
+  /** 完成 thinking,生成 thinking-summary SystemBlock 并 defer。 */
+  finishThinking(summary: ThinkingSummaryBlock): void;
+  /** 追加一个已固化 transcript 块(非 tool)。 */
+  appendTranscript(block: BoundaryBlock): void;
+  /** 关闭当前 open tool group。 */
+  closeOpenToolGroup(): void;
+
+  // ── 过渡兼容(Task 6 删除) ──
+
+  /** 旧 TuiMessage[] 派生视图(从 model 投影)。Task 6 渲染层切到 items 后删。 */
+  readonly messages: TuiMessage[];
+  /** 旧兼容:追加一条完整消息。 */
+  appendMessage(role: 'user' | 'assistant' | 'system' | 'tool' | 'thinking', lines: FormattedLine[]): void;
+  /** 旧兼容:追加一行(同 role 续接,不同 role 断块)。 */
+  appendLine(role: 'user' | 'assistant' | 'system' | 'tool' | 'thinking', line: FormattedLine): void;
+
+  // ── 兼容/辅助 actions ──
+
+  /** 追加 turn-duration 块。 */
+  appendTurnDurationMessage(durationMs: number): void;
+  /** 软中断:固化流式 assistant 为 interrupted。 */
+  finalizeStreamingAsInterrupted(): void;
+  /** 清空。 */
+  clear(): void;
+  /** 硬撤回:删除末条 user 块及其后所有。 */
+  rewindLastUserTurn(): void;
 }
 
 export function createMessagesStore(): MessagesStore {
-  return createStore<MessagesState>((set) => ({
+  return createStore<MessagesState>((baseSet, get) => {
+    // 包装 set:每次更新后自动从 model 投影 messages(过渡兼容,Task 6 删)。
+    const set = (partial: Partial<MessagesState> | ((s: MessagesState) => Partial<MessagesState>)) => {
+      baseSet((s) => {
+        const next = typeof partial === 'function' ? partial(s) : partial;
+        const model = next.model ?? s.model;
+        return { ...next, messages: projectLegacyMessages(model) };
+      });
+    };
+
+    return {
+    model: emptyModel(),
     messages: [],
     _idCounter: 0,
 
-    appendMessage: (role, lines) => set((s) => ({
-      _idCounter: s._idCounter + 1,
-      messages: [...s.messages, {
-        uuid: `msg-${s._idCounter + 1}`,
-        role,
-        lines,
-        finalized: true,
-      }],
-    })),
-
-    appendLine: (role, line) => set((s) => {
-      const last = s.messages[s.messages.length - 1];
-      // 同 role 且末条已固化且非专用消息（非流式中）→ 续接
-      if (last && last.role === role && last.finalized && isAppendableMessage(last)) {
-        const updated = { ...last, lines: [...last.lines, line] };
-        return { messages: [...s.messages.slice(0, -1), updated] };
-      }
-      // 否则新建
-      const id = s._idCounter + 1;
-      return {
-        _idCounter: id,
-        messages: [...s.messages, {
-          uuid: `msg-${id}`,
-          role,
-          lines: [line],
-          finalized: true,
-        }],
-      };
-    }),
-
-    appendTurnDurationMessage: (durationMs) => set((s) => {
-      const lastLine = [...s.messages].reverse()
-        .find(message => message.lines.length > 0)?.lines.at(-1);
-      const id = s._idCounter + 1;
-      const message = createTurnDurationMessage({
-        uuid: `msg-${id}`,
-        durationMs,
-        prependBlankLine: Boolean(lastLine && lastLine.content !== ''),
-      });
-      return { _idCounter: id, messages: [...s.messages, message] };
-    }),
-
-    appendPendingTool: (toolUseId, lines) => {
-      let uuid = '';
-      set((s) => {
-        const id = s._idCounter + 1;
-        uuid = `msg-${id}`;
-        return {
-          _idCounter: id,
-          messages: [...s.messages, {
-            uuid,
-            role: 'tool',
-            kind: 'tool-progress',
-            toolUseId,
-            lines,
-            finalized: false,
-          }],
-        };
-      });
-      return uuid;
+    startTool(call) {
+      const id = `activity-${get()._idCounter + 1}`;
+      set((s) => ({
+        _idCounter: s._idCounter + 1,
+        model: startTool(s.model, {
+          activityId: id,
+          toolUseId: call.toolUseId,
+          toolName: call.toolName,
+          input: call.input,
+        }),
+      }));
+      return id;
     },
 
-    resolvePendingTool: (toolUseId, lines, finalKind = 'tool-progress') => {
+    resolveTool(toolUseId, presentation) {
       let resolved = false;
       set((s) => {
-        const index = s.messages.findIndex(message =>
-          message.kind === 'tool-progress'
-          && message.toolUseId === toolUseId
-          && !message.finalized,
-        );
-        if (index < 0) return s;
-        resolved = true;
-        const message = s.messages[index]!;
-        // AUTO-0025-transient:finalKind 决定固化后的 kind(agent-completion 走单行展示渲染)。
-        const updated: TuiMessage = { ...message, lines, finalized: true, kind: finalKind };
-        return { messages: [...s.messages.slice(0, index), updated, ...s.messages.slice(index + 1)] };
+        const next = resolveTool(s.model, toolUseId, presentation);
+        if (next !== s.model) resolved = true;
+        return { model: next };
       });
       return resolved;
     },
 
-    appendToolHook: (toolUseId, lines) => {
-      let appended = false;
-      set((s) => {
-        const index = s.messages.findIndex(message =>
-          message.kind === 'tool-progress' && message.toolUseId === toolUseId,
-        );
-        if (index < 0) return s;
-        appended = true;
-        const message = s.messages[index]!;
-        const updated: TuiMessage = { ...message, lines: [...message.lines, ...lines] };
-        return { messages: [...s.messages.slice(0, index), updated, ...s.messages.slice(index + 1)] };
-      });
-      return appended;
+    finishAsk(_toolUseId, block) {
+      // Ask 是边界块:先关闭 open tool group,再 flush deferred thinking,再追加。
+      set((s) => ({
+        model: appendBoundaryBlock(s.model, block),
+      }));
+      return true;
     },
 
-    startStreaming: (initialText) => set((s) => {
-      const id = s._idCounter + 1;
-      return {
-        _idCounter: id,
-        messages: [...s.messages, {
-          uuid: `msg-${id}`,
-          role: 'assistant',
-          lines: [],
-          finalized: false,
-          streamingText: initialText,
-        }],
-      };
-    }),
-
-    /** 开一条流式 thinking 消息（灰色 dim，role='thinking'）。
-     *  AUTO-0025-transient:kind='thinking-progress' 单例——已存在未固化 thinking-progress
-     *  时幂等返回其 uuid,不重复创建。 */
-    startStreamingThinking: (initialText) => {
-      let uuid = '';
+    startAssistant(text) {
+      const id = `activity-${get()._idCounter + 1}`;
       set((s) => {
-        const existing = s.messages.find(message =>
-          message.kind === 'thinking-progress' && !message.finalized,
+        // assistant 是边界:先关闭 open tool group + flush deferred。
+        const flushed = closeOpenToolGroup(s.model);
+        const afterFlush = flushDeferredThinking(flushed);
+        const item: ActivityItem = {
+          id,
+          kind: 'streaming-assistant',
+          text,
+        };
+        return {
+          _idCounter: s._idCounter + 1,
+          model: { ...afterFlush, items: [...afterFlush.items, item] },
+        };
+      });
+      return id;
+    },
+
+    finishAssistant() {
+      set((s) => {
+        const items = [...s.model.items];
+        const idx = items.findIndex(
+          item => item.kind === 'streaming-assistant',
         );
-        if (existing) {
-          uuid = existing.uuid;
-          return s;
+        if (idx < 0) return s;
+        const sa = items[idx]!;
+        if (sa.kind !== 'streaming-assistant') return s;
+        const block: AssistantBlock = {
+          id: sa.id,
+          kind: 'assistant',
+          text: sa.text,
+        };
+        items[idx] = block;
+        return { model: { ...s.model, items } };
+      });
+    },
+
+    startThinking(text) {
+      const id = `activity-${get()._idCounter + 1}`;
+      set((s) => {
+        const item: ActivityItem = {
+          id,
+          kind: 'pending-thinking',
+          text,
+        };
+        return {
+          _idCounter: s._idCounter + 1,
+          model: { ...s.model, items: [...s.model.items, item] },
+        };
+      });
+      return id;
+    },
+
+    finishThinking(summary) {
+      set((s) => {
+        // 移除 pending-thinking 活动项,defer summary。
+        const items = s.model.items.filter(
+          item => item.kind !== 'pending-thinking',
+        );
+        return {
+          model: deferThinking({ ...s.model, items }, summary),
+        };
+      });
+    },
+
+    appendTranscript(block) {
+      set((s) => ({
+        model: appendBoundaryBlock(s.model, block),
+      }));
+    },
+
+    closeOpenToolGroup() {
+      set((s) => ({ model: closeOpenToolGroup(s.model) }));
+    },
+
+    appendTurnDurationMessage(durationMs) {
+      set((s) => {
+        const id = `activity-${s._idCounter + 1}`;
+        // prependBlankLine 判断:items 有内容,或 deferred thinking 将被 flush(也会产生内容)。
+        const hasContent = s.model.items.length > 0 || s.model.deferredThinking.length > 0;
+        const block = createTurnDurationBlock({
+          uuid: id,
+          durationMs,
+          prependBlankLine: hasContent,
+          random: Math.random,
+        });
+        return {
+          _idCounter: s._idCounter + 1,
+          model: appendBoundaryBlock(s.model, block),
+        };
+      });
+    },
+
+    finalizeStreamingAsInterrupted() {
+      set((s) => {
+        const items = [...s.model.items];
+        const idx = items.findIndex(
+          item => item.kind === 'streaming-assistant',
+        );
+        if (idx < 0) return s;
+        const sa = items[idx]!;
+        if (sa.kind !== 'streaming-assistant') return s;
+        const block: AssistantBlock = {
+          id: sa.id,
+          kind: 'assistant',
+          text: sa.text,
+          interrupted: true,
+        };
+        items[idx] = block;
+        return { model: { ...s.model, items } };
+      });
+    },
+
+    clear() {
+      set({ model: emptyModel(), _idCounter: 0 });
+    },
+
+    // ── 过渡兼容 appendMessage/appendLine(Task 6 删除) ──
+    appendMessage(role, lines) {
+      // 把旧 appendMessage 映射成语义 boundary block。
+      const id = `legacy-${get()._idCounter + 1}`;
+      const text = lines.map(l => l.content).join('\n');
+      if (role === 'user') {
+        set((s) => ({
+          _idCounter: s._idCounter + 1,
+          model: appendBoundaryBlock(s.model, { id, kind: 'user', text }),
+        }));
+      } else if (role === 'assistant') {
+        set((s) => ({
+          _idCounter: s._idCounter + 1,
+          model: appendBoundaryBlock(s.model, { id, kind: 'assistant', text }),
+        }));
+      } else {
+        set((s) => ({
+          _idCounter: s._idCounter + 1,
+          model: appendBoundaryBlock(s.model, { id, kind: 'system', subkind: 'notification', text, groupBoundary: 'break' }),
+        }));
+      }
+    },
+
+    appendLine(role, line) {
+      // 旧 appendLine:逐行追加。过渡期映射为单条 system/user/assistant block。
+      // 注意:旧 appendLine 有续接逻辑(同 role 合并),语义模型里每行都是独立 block。
+      // 这会改变视觉间距,但过渡期可接受(Task 6 渲染层接管后删除)。
+      this.appendMessage(role, [line]);
+    },
+
+    rewindLastUserTurn() {
+      set((s) => {
+        const items = s.model.items;
+        let userIdx = -1;
+        for (let i = items.length - 1; i >= 0; i--) {
+          if (items[i]!.kind === 'user') { userIdx = i; break; }
         }
-        const id = s._idCounter + 1;
-        uuid = `msg-${id}`;
+        if (userIdx === -1) return s;
         return {
-          _idCounter: id,
-          messages: [...s.messages, {
-            uuid,
-            role: 'thinking',
-            kind: 'thinking-progress',
-            lines: [],
-            finalized: false,
-            streamingText: initialText,
-          }],
+          model: {
+            ...s.model,
+            items: items.slice(0, userIdx),
+            deferredThinking: [],
+          },
         };
       });
-      return uuid;
     },
-
-    updateStreaming: (text) => set((s) => {
-      const last = s.messages[s.messages.length - 1];
-      if (!last || last.finalized || last.role !== 'assistant') return s;
-      const updated = { ...last, streamingText: text };
-      return { messages: [...s.messages.slice(0, -1), updated] };
-    }),
-
-    /** 更新末条流式 thinking 的 streamingText */
-    updateStreamingThinking: (text) => set((s) => {
-      const last = s.messages[s.messages.length - 1];
-      if (!last || last.finalized || last.role !== 'thinking') return s;
-      const updated = { ...last, streamingText: text };
-      return { messages: [...s.messages.slice(0, -1), updated] };
-    }),
-
-    /** 移除 thinking-progress 消息（按 kind,不依赖末条位置）。
-     *  AUTO-0025-transient:返回是否实际移除了一条消息(幂等,无则 false)。 */
-    removeStreamingThinking: () => {
-      let removed = false;
-      set((s) => {
-        const index = s.messages.findIndex(message =>
-          message.kind === 'thinking-progress' && !message.finalized,
-        );
-        if (index < 0) return s;
-        removed = true;
-        return { messages: [...s.messages.slice(0, index), ...s.messages.slice(index + 1)] };
-      });
-      return removed;
-    },
-
-    finalizeStreaming: (lines) => set((s) => {
-      const last = s.messages[s.messages.length - 1];
-      if (!last || last.finalized) {
-        // 无流式消息：当作普通 append
-        const id = s._idCounter + 1;
-        return {
-          _idCounter: id,
-          messages: [...s.messages, {
-            uuid: `msg-${id}`, role: 'assistant', lines, finalized: true,
-          }],
-        };
-      }
-      const { streamingText: _removed, ...rest } = last;
-      void _removed;
-      const updated: TuiMessage = { ...rest, lines, finalized: true };
-      return { messages: [...s.messages.slice(0, -1), updated] };
-    }),
-
-    clear: () => set({ messages: [], _idCounter: 0 }),
-
-    rewindLastUserTurn: () => set((s) => {
-      const msgs = s.messages;
-      // 从末尾向前找最后一条 user
-      let userIdx = -1;
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i]!.role === 'user') { userIdx = i; break; }
-      }
-      if (userIdx === -1) return s; // 幂等:无 user
-      return { messages: msgs.slice(0, userIdx) };
-    }),
-
-    finalizeStreamingAsInterrupted: () => set((s) => {
-      const last = s.messages[s.messages.length - 1];
-      // 只处理流式中的 assistant(finalized=false, role='assistant')
-      if (!last || last.finalized || last.role !== 'assistant') return s;
-      const text = (last.streamingText ?? '').trim();
-      const { streamingText: _drop, ...rest } = last;
-      void _drop;
-      const newLines = text
-        ? [
-            ...last.lines,
-            { content: text, style: {}, indent: 0 },
-            { content: '[interrupted]', style: { fg: 'error' }, indent: 0 },
-          ]
-        : [
-            ...last.lines,
-            { content: '[interrupted]', style: { fg: 'error' }, indent: 0 },
-          ];
-      const updated: TuiMessage = { ...rest, lines: newLines, finalized: true };
-      return { messages: [...s.messages.slice(0, -1), updated] };
-    }),
-  }));
+    };
+  });
 }
