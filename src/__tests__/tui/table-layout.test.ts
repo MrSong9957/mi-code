@@ -225,4 +225,57 @@ describe('layoutMarkdownTable key-value fallback', () => {
     table.rows[0]!.pop();
     expect(() => layoutMarkdownTable(table, 40)).toThrow(TypeError);
   });
+
+  it('rejects a header-only table before key-value fallback drops it', () => {
+    const table = tableFrom('| Long header | Other header |\n| --- | --- |');
+    expect(() => layoutMarkdownTable(table, 8)).toThrow(TypeError);
+  });
+
+  it('preserves styled header spans and br-delimited values in key-value mode', () => {
+    const table = tableFrom('| **Label** | Value |\n| --- | --- |\n| x | first |');
+    table.rows[0]![1]!.tokens = [
+      { type: 'text', raw: 'first', text: 'first' },
+      { type: 'br', raw: '<br>' },
+      { type: 'text', raw: 'second', text: 'second' },
+    ];
+    const layout = layoutMarkdownTable(table, 13);
+    const labelLine = layout.lines.find((line) => tableLineText(line).includes('Label: x'));
+    expect(labelLine?.spans.some(
+      (span) => span.text === 'Label' && span.styles.includes('strong'),
+    )).toBe(true);
+    expect(texts(layout)).toContain('Value: first');
+    expect(texts(layout)).toContain('       second');
+  });
+});
+
+describe('layoutMarkdownTable ANSI SGR', () => {
+  it('keeps complete ANSI SGR sequences in an optimal-width cell', () => {
+    const table = tableFrom('| H | Value |\n| --- | --- |\n| x | value |');
+    table.rows[0]![1]!.tokens = [{
+      type: 'text', raw: '\x1b[31mred\x1b[0m', text: '\x1b[31mred\x1b[0m',
+    } as Tokens.Text];
+
+    const lines = texts(layoutMarkdownTable(table, 40));
+    const joined = lines.join('\n');
+    expect(joined).toContain('\x1b[31mred\x1b[0m');
+    const sgr = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+    expect(joined.match(sgr)).toEqual(['\x1b[31m', '\x1b[0m']);
+    expect(new Set(lines.map(displayWidth))).toEqual(new Set([displayWidth(lines[0]!)]));
+  });
+
+  it('closes and restores ANSI SGR around wrapped cell fragments', () => {
+    const table = tableFrom('| H | Description |\n| --- | --- |\n| x | value |');
+    table.rows[0]![1]!.tokens = [{
+      type: 'text', raw: '\x1b[31mabcdefghijklmnop\x1b[0m', text: '\x1b[31mabcdefghijklmnop\x1b[0m',
+    } as Tokens.Text];
+
+    const lines = texts(layoutMarkdownTable(table, 22));
+    expect(lines.filter((line) => line.includes('abcdefghijk'))).toContain(
+      '│ x │ \x1b[31mabcdefghijklmn\x1b[0m │',
+    );
+    expect(lines.filter((line) => line.includes('op'))).toContain(
+      '│   │ \x1b[31mop\x1b[0m             │',
+    );
+    expect(lines.every((line) => displayWidth(line) === 22)).toBe(true);
+  });
 });

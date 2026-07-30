@@ -22,6 +22,7 @@ type LogicalLine = TableSpan[];
 type LogicalCell = LogicalLine[];
 
 const EMPTY_STYLES: readonly TableTextStyle[] = [];
+const ANSI_SGR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 
 function appendSpan(line: LogicalLine, text: string, styles: readonly TableTextStyle[]): void {
   if (text === '') return;
@@ -161,15 +162,34 @@ function shrinkWidths(
 function foldLogicalLine(line: LogicalLine, width: number): LogicalCell {
   const output: LogicalCell = [[]];
   let used = 0;
+  let activeSgr = '';
+
+  const appendCharacter = (character: string, styles: readonly TableTextStyle[]): void => {
+    const characterWidth = displayWidth(character);
+    if (used > 0 && used + characterWidth > width) {
+      if (activeSgr !== '') appendSpan(output.at(-1)!, '\x1b[0m', styles);
+      output.push([]);
+      if (activeSgr !== '') appendSpan(output.at(-1)!, activeSgr, styles);
+      used = 0;
+    }
+    appendSpan(output.at(-1)!, character, styles);
+    used += characterWidth;
+  };
+
   for (const span of line) {
-    for (const character of span.text) {
-      const characterWidth = displayWidth(character);
-      if (used > 0 && used + characterWidth > width) {
-        output.push([]);
-        used = 0;
+    let textIndex = 0;
+    for (const match of span.text.matchAll(ANSI_SGR)) {
+      const matchIndex = match.index ?? 0;
+      for (const character of span.text.slice(textIndex, matchIndex)) {
+        appendCharacter(character, span.styles);
       }
-      appendSpan(output.at(-1)!, character, span.styles);
-      used += characterWidth;
+      const sgr = match[0];
+      appendSpan(output.at(-1)!, sgr, span.styles);
+      activeSgr = sgr === '\x1b[0m' ? '' : `${activeSgr}${sgr}`;
+      textIndex = matchIndex + sgr.length;
+    }
+    for (const character of span.text.slice(textIndex)) {
+      appendCharacter(character, span.styles);
     }
   }
   return output;
@@ -222,12 +242,15 @@ function layoutKeyValueTable(table: Tokens.Table, availableWidth: number): Table
     row.forEach((cell, columnIndex) => {
       const label = headers[columnIndex] ?? [[]];
       const value = inlineTokenLines(cell.tokens);
-      const labelText = label.flat().map((span) => span.text).join('');
+      const labelSpans = label.flat();
+      const labelText = labelSpans.map((span) => span.text).join('');
       const prefix = `${labelText}: `;
       const prefixWidth = displayWidth(prefix);
 
       if (prefixWidth >= availableWidth) {
-        lines.push({ spans: [{ text: prefix.trimEnd(), styles: EMPTY_STYLES }] });
+        lines.push({
+          spans: [...labelSpans, { text: ':', styles: EMPTY_STYLES }],
+        });
         for (const logicalLine of value) {
           for (const folded of foldLogicalLine(logicalLine, availableWidth)) {
             lines.push({ spans: folded });
@@ -240,7 +263,7 @@ function layoutKeyValueTable(table: Tokens.Table, availableWidth: number): Table
       const foldedValue = value.flatMap((logicalLine) => foldLogicalLine(logicalLine, firstBudget));
       const first = foldedValue.shift() ?? [];
       lines.push({
-        spans: [{ text: prefix, styles: EMPTY_STYLES }, ...first],
+        spans: [...labelSpans, { text: ': ', styles: EMPTY_STYLES }, ...first],
       });
       for (const continuation of foldedValue) {
         lines.push({
@@ -292,6 +315,9 @@ export function layoutMarkdownTable(table: Tokens.Table, availableWidth: number)
     maxSingleCharWidthInColumn(cell, rows, column),
   ));
   if (totalTableWidth(minimumWidths) > availableWidth) {
+    if (table.rows.length === 0) {
+      throw new TypeError('header-only table cannot use key-value fallback');
+    }
     return layoutKeyValueTable(table, availableWidth);
   }
   const optimalWidths = table.header.map((_, column) => Math.max(

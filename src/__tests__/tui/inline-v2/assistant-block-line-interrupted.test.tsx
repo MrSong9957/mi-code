@@ -23,6 +23,7 @@ describe('AssistantBlockLine interrupted branch', () => {
 
     expect(output).toContain('| A | B |');
     expect(output).not.toContain('┌');
+    expect(output.match(/●/g)).toHaveLength(1);
     expect(lexerSpy).not.toHaveBeenCalled();
   });
 
@@ -39,6 +40,21 @@ describe('AssistantBlockLine interrupted branch', () => {
     ).lastFrame() ?? '');
     expect(output).toContain('| A | B |');
     expect(output).not.toContain('┌');
+    expect(output.match(/●/g)).toHaveLength(1);
     expect(lexerSpy).toHaveBeenCalledOnce();
+  });
+
+  it('skips marked.lexer when the content width is unavailable', () => {
+    lexerSpy.mockClear();
+    const text = '| A | B |\n| --- | --- |\n| 1 | 2 |';
+    const output = stripAnsi(render(
+      <AssistantBlockLine
+        block={{ id: 'a3', kind: 'assistant', text }}
+        cols={2}
+      />,
+    ).lastFrame() ?? '');
+
+    expect(output).toContain('| A | B |');
+    expect(lexerSpy).not.toHaveBeenCalled();
   });
 });
