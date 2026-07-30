@@ -50,4 +50,32 @@ describe('AssistantBlockLine', () => {
     expect(narrow.split('\n').filter((line) => line.includes('│')).length)
       .toBeGreaterThan(wide.split('\n').filter((line) => line.includes('│')).length);
   });
+
+  it('keeps table borders uncolored after an ANSI-styled wrapped cell', () => {
+    const raw = render(
+      <AssistantBlockLine
+        block={{
+          id: 'ansi',
+          kind: 'assistant',
+          text: '| H | Description |\n| --- | --- |\n| x | \x1b[31mabcdefghijklmnop\x1b[0m |',
+        }}
+        cols={20}
+      />,
+    ).lastFrame() ?? '';
+    const visible = stripAnsi(raw);
+
+    const firstRed = raw.indexOf('\x1b[31m');
+    expect(firstRed).toBeGreaterThanOrEqual(0);
+    expect(raw.slice(firstRed)).toContain('\x1b[39m');
+    expect(visible.split('\n').filter((line) => line.includes('│')).every(
+      (line) => line.endsWith('│'),
+    )).toBe(true);
+  });
+
+  it('keeps a physical blank line between key-value records', () => {
+    expect(frame(
+      '| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |',
+      8,
+    )).toContain('● A: 1\n  B: 2\n\n  A: 3\n  B: 4');
+  });
 });

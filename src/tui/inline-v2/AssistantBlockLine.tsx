@@ -34,27 +34,41 @@ function StyledSpan({ span }: { span: TableSpan }): React.ReactElement {
 function TableLine({ line }: { line: TableLayoutLine }): React.ReactElement {
   return (
     <Text>
-      {line.spans.map((span, index) => (
-        <StyledSpan key={index} span={span} />
-      ))}
+      {line.spans.length === 0
+        ? ' '
+        : line.spans.map((span, index) => (
+          <StyledSpan key={index} span={span} />
+        ))}
     </Text>
   );
 }
 
-function rawContent(text: string): React.ReactElement {
-  return <Text>{text}</Text>;
+function assistantShell(content: React.ReactNode, cols: number): React.ReactElement {
+  return (
+    <Box width={cols} flexDirection="row">
+      <Text color="magenta">● </Text>
+      <Box width={Math.max(1, cols - 2)} flexDirection="column">
+        {content}
+      </Box>
+    </Box>
+  );
+}
+
+function rawContent(text: string, cols: number): React.ReactElement {
+  return assistantShell(<Text>{text}</Text>, cols);
 }
 
 export function AssistantBlockLine(
   { block, cols }: AssistantBlockLineProps,
 ): React.ReactElement {
-  if (block.interrupted || cols - 2 < 1) return rawContent(block.text);
+  if (cols - 2 < 1) return <Text>{block.text}</Text>;
+  if (block.interrupted) return rawContent(block.text, cols);
 
   let tokens: Token[];
   try {
     tokens = lexer(block.text);
   } catch {
-    return rawContent(block.text);
+    return rawContent(block.text, cols);
   }
 
   const content = tokens.flatMap((token, index) => {
@@ -69,12 +83,5 @@ export function AssistantBlockLine(
     }
   });
 
-  return (
-    <Box width={cols} flexDirection="row">
-      <Text color="magenta">● </Text>
-      <Box width={Math.max(1, cols - 2)} flexDirection="column">
-        {content}
-      </Box>
-    </Box>
-  );
+  return assistantShell(content, cols);
 }

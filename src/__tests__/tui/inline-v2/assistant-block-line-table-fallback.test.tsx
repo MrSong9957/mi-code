@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import stripAnsi from 'strip-ansi';
+import { lexer, type Tokens } from 'marked';
 
 const { layoutSpy } = vi.hoisted(() => ({ layoutSpy: vi.fn() }));
 vi.mock('../../../tui/markdown/table-layout.js', async () => {
@@ -31,5 +32,27 @@ describe('AssistantBlockLine table-local fallback', () => {
     expect(output).toContain('second');
     expect(output).toContain('┌');
     expect(layoutSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a header-only marked table raw when layout rejects its empty rows', () => {
+    layoutSpy.mockClear();
+    const text = '| Header one | Header two |\n| --- | --- |';
+    const token = lexer(text).find(
+      (candidate): candidate is Tokens.Table => candidate.type === 'table',
+    );
+    expect(token?.rows).toEqual([]);
+    const output = stripAnsi(render(
+      <AssistantBlockLine
+        block={{ id: 'header-only', kind: 'assistant', text }}
+        cols={12}
+      />,
+    ).lastFrame() ?? '');
+
+    expect(output).toContain('| Header');
+    expect(output).toContain('Header two');
+    expect(output).toContain('| --- |');
+    expect(output).not.toContain('┌');
+    expect(output.match(/●/g)).toHaveLength(1);
+    expect(layoutSpy).toHaveBeenCalledOnce();
   });
 });
