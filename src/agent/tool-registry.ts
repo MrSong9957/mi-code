@@ -2,6 +2,7 @@
 import { spawn } from 'child_process';
 import { Encoder } from '../output/encoder.js';
 import { killProcessTree } from './process-tree.js';
+import { formatUnknownError } from '../utils/error-message.js';
 import type { ToolDefinition, ToolExecutor, RegisteredTool, ToolExecutionContext } from './types.js';
 import { createReadFileTool, createWriteFileTool, createEditFileTool } from './tools/index.js';
 import { createGlobTool, createGrepTool } from './tools/search-tools.js';
@@ -78,7 +79,7 @@ export class ToolRegistry {
     try {
       return await tool.executor(input, ctx);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatUnknownError(err);
       return `Error executing tool "${name}": ${message}`;
     }
   }

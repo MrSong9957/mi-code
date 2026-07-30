@@ -5,6 +5,7 @@
 // 如果修了 3 次还是不行 → 放弃自救，报告上级（抛出异常）。
 
 import type { Message } from './types.js';
+import { formatUnknownError } from '../utils/error-message.js';
 
 /** 错误类型枚举 */
 export type ErrorType =
@@ -106,7 +107,9 @@ export class FailureInbox {
  * 物理本质：急诊分诊台——先判断是什么病，再分配到对应科室。
  */
 export function classifyError(error: unknown): ErrorType {
-  const msg = error instanceof Error ? error.message : String(error);
+  // 先用共享格式化函数规范化：普通对象会被 JSON 序列化（含 "status":429 等），
+  // 使后续关键字匹配能命中 provider 抛出的非 Error 异常。
+  const msg = formatUnknownError(error);
   const lower = msg.toLowerCase();
 
   if (lower.includes('max_tokens') || lower.includes('max tokens')) {

@@ -33,6 +33,7 @@ import {
   handleError,
   FailureInbox,
 } from './recovery.js';
+import { formatUnknownError } from '../utils/error-message.js';
 import { jitteredBackoff, sleep } from './backoff.js';
 import type { StructuredAskResult } from './ask-user-types.js';
 import { askOutcomeStore } from './ask-outcome-store.js';
@@ -699,7 +700,7 @@ export async function* streamingQuery(
         // 记录错误并继续循环重试
         eventBus?.emitError({
           errorType,
-          message: String(error),
+          message: formatUnknownError(error),
           recoverable: true,
         });
         // 429 限流需要退避延迟，否则立即重试会触发二次限流甚至封禁
@@ -712,7 +713,7 @@ export async function* streamingQuery(
         // 无法恢复，抛出错误
         eventBus?.emitError({
           errorType,
-          message: String(error),
+          message: formatUnknownError(error),
           recoverable: false,
         });
         eventBus?.emitLoopEnd({ reason: 'error' });
@@ -850,7 +851,7 @@ export async function* streamingQuery(
             structuredOutcome,
           };
         } catch (error) {
-          const output = `[Tool Error] ${String(error)}`;
+          const output = `[Tool Error] ${formatUnknownError(error)}`;
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,

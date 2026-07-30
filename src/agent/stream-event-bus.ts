@@ -70,6 +70,16 @@ export interface LoopEndEvent {
 /** 默认最大监听器数量 */
 const DEFAULT_MAX_LISTENERS = 20;
 
+/**
+ * 内部 error 通道名。
+ *
+ * Node EventEmitter 对裸 `"error"` 事件有特殊语义：若无监听器，emit 会重新抛出
+ * (ERR_UNHANDLED_ERROR)，从而把"投递错误事件"变成"终止当前控制流"。这对类型安全
+ * 包装层是不可接受的副作用——bus 的职责只是"投递信号"，控制流应由消费者决定。
+ * 因此内部 channel 必须使用非保留名称；公共 StreamEventType 中的 'error' 语义不变。
+ */
+const INTERNAL_ERROR_EVENT = 'agent_error';
+
 export class StreamEventBus {
   private emitter = new EventEmitter();
 
@@ -123,13 +133,13 @@ export class StreamEventBus {
 
   // ------ error ------
   emitError(data: ErrorEvent): void {
-    this.emitter.emit('error', data);
+    this.emitter.emit(INTERNAL_ERROR_EVENT, data);
   }
   onError(handler: (data: ErrorEvent) => void): void {
-    this.emitter.on('error', handler);
+    this.emitter.on(INTERNAL_ERROR_EVENT, handler);
   }
   offError(handler: (data: ErrorEvent) => void): void {
-    this.emitter.removeListener('error', handler);
+    this.emitter.removeListener(INTERNAL_ERROR_EVENT, handler);
   }
 
   // ------ loop_end ------

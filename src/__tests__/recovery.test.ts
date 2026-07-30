@@ -38,6 +38,13 @@ describe('classifyError', () => {
     expect(classifyError('string error')).toBe('unknown');
     expect(classifyError(42)).toBe('unknown');
   });
+
+  it('应从 provider 普通对象识别 429', () => {
+    expect(classifyError({
+      status: 429,
+      error: { message: 'Too many requests' },
+    })).toBe('rate_limited_429');
+  });
 });
 
 // ============================================================

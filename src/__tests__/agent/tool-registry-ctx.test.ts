@@ -37,4 +37,23 @@ describe('registry.execute ctx 透传', () => {
     const result = await registry.execute('legacy_tool', {});
     expect(result).toBe('legacy-ok');
   });
+
+  it('普通对象异常保留诊断字段而不是 [object Object]', async () => {
+    const registry = new ToolRegistry();
+    registry.register(
+      {
+        name: 'failing_tool',
+        description: 'test',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+      async () => {
+        throw { status: 503, error: { message: 'upstream unavailable' } };
+      },
+    );
+
+    const output = await registry.execute('failing_tool', {});
+    expect(output).toContain('"status":503');
+    expect(output).toContain('upstream unavailable');
+    expect(output).not.toContain('[object Object]');
+  });
 });

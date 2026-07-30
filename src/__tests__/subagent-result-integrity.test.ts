@@ -139,6 +139,34 @@ describe('subagent result integrity', () => {
     expect(result.text).toContain('[Subagent incomplete: reached max turns');
     expect(result.text).toContain('Now let me check the test files...');
   });
+
+  it('provider 抛普通对象时返回 incomplete/error 而不是 reject', async () => {
+    const client: StreamingLLMClient = {
+      // 模拟 provider 在产出任何流事件前就抛出普通对象异常。
+      // eslint-disable-next-line require-yield
+      async *stream() {
+        throw {
+          status: 503,
+          code: 'upstream_unavailable',
+          error: { message: 'provider temporarily unavailable' },
+        };
+      },
+    };
+
+    const result = await runSubagent('inspect files', makeReadRegistry(), {
+      role: 'explore',
+      client,
+      maxSteps: 2,
+    });
+
+    expect(result.status).toBe('incomplete');
+    expect(result.terminationReason).toBe('error');
+    expect(result.isBackground).toBe(false);
+    expect(result.text).toContain('"status":503');
+    expect(result.text).toContain('provider temporarily unavailable');
+    expect(result.text).not.toContain('[object Object]');
+    expect(result.text).not.toContain('ERR_UNHANDLED_ERROR');
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════

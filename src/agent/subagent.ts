@@ -15,6 +15,7 @@ import { runWithVercelAI } from './llm-vercel.js';
 import { streamingQuery } from './streaming-query.js';
 import { StreamEventBus } from './stream-event-bus.js';
 import { ToolRegistry } from './tool-registry.js';
+import { formatUnknownError } from '../utils/error-message.js';
 import type { RegisteredTool, StreamingLLMClient } from './types.js';
 import { ROLE_REGISTRY, filterToolsByRole, type Role } from './roles.js';
 import type { PermissionChecker } from '../permission/checker.js';
@@ -600,13 +601,16 @@ export async function runSubagent(
   // 同步执行（在指定 cwd 下运行，结束后恢复）
   const prevCwd = options.cwd ? process.cwd() : null;
   if (options.cwd) process.chdir(options.cwd);
+
+  // 证据变量提到 try 外：catch 和正常返回共享它们。
+  // provider 异常发生时，本轮已积累的工具调用证据仍应反映在回执里。
+  let toolCallCount = 0;
+  let successfulToolResultCount = 0;
+  let finalTurnSynthesized: boolean | undefined;
+
   try {
     let text: string;
-    let toolCallCount = 0;
-    let successfulToolResultCount = 0;
     let terminationReason = 'end_turn';
-    // AUTO-0025 Task 4:仅 client 路径会设置 finalTurnSynthesized;Vercel 回退路径不设置(undefined)。
-    let finalTurnSynthesized: boolean | undefined;
     if (options.client) {
       // 多 provider 路径：走主 agent 的 streamingQuery，支持 OpenAI/MiMo 等
       const exec = await runSubagentWithClient(options.client, toolSubset, prompt, effectiveSystem, options);
@@ -639,6 +643,20 @@ export async function runSubagent(
       terminationReason,
       finalTurnSynthesized,
     });
+  } catch (error) {
+    // 核心生命周期边界：provider/流式异常统一转换为 incomplete/error 回执，
+    // 而非让 promise reject。runSubagent 的契约是"始终返回 SubagentResult"。
+    return finalizeSubagentExecution(
+      formatUnknownError(error),
+      false,
+      options.role,
+      {
+        toolCallCount,
+        successfulToolResultCount,
+        terminationReason: 'error',
+        finalTurnSynthesized,
+      },
+    );
   } finally {
     if (prevCwd) process.chdir(prevCwd);
   }
@@ -673,7 +691,7 @@ async function runSubagentBackground(
     }
   } catch (err) {
     if (options.onBackgroundComplete) {
-      options.onBackgroundComplete(`[Subagent error] ${err instanceof Error ? err.message : String(err)}`);
+      options.onBackgroundComplete(`[Subagent error] ${formatUnknownError(err)}`);
     }
   }
 }

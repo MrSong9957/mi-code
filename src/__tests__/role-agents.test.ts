@@ -7,7 +7,8 @@ import { createSpawnAgentTool } from '../agent/tools/spawn-agent-tool.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
 import type { ToolDefinition, ToolExecutor, RegisteredTool } from '../agent/types.js';
 import type { SubagentOptions, SubagentResult } from '../agent/subagent.js';
-import { enhanceSubagentSystemPrompt } from '../agent/subagent.js';
+import { runSubagent, enhanceSubagentSystemPrompt } from '../agent/subagent.js';
+import type { StreamingLLMClient } from '../agent/types.js';
 import { PermissionChecker } from '../permission/checker.js';
 
 describe('ROLE_REGISTRY 角色注册表', () => {
@@ -357,6 +358,38 @@ describe('createSpawnAgentTool', () => {
     const tool = createSpawnAgentTool(fakeRegistry);
     const result = await tool.executor({ role: 'general', prompt: 'do something', fork: true });
     expect(result).toContain('Error');
+  });
+
+  it('provider 异常通过 spawn_agent 输出 incomplete/error envelope', async () => {
+    const registry = makeRegistry();
+    const failingClient: StreamingLLMClient = {
+      // 模拟 provider 在产出任何流事件前就抛出普通对象异常。
+      // eslint-disable-next-line require-yield
+      async *stream() {
+        throw {
+          status: 503,
+          error: { message: 'upstream unavailable' },
+        };
+      },
+    };
+    const { executor } = createSpawnAgentTool(
+      registry,
+      () => failingClient,
+      undefined,
+      runSubagent,
+    );
+
+    const output = await executor({
+      role: 'explore',
+      prompt: 'inspect files',
+      description: '检查文件',
+    });
+
+    expect(output).toContain('[Subagent status=incomplete reason=error]');
+    expect(output).toContain('"status":503');
+    expect(output).toContain('upstream unavailable');
+    expect(output).not.toContain('[object Object]');
+    expect(output).not.toContain('ERR_UNHANDLED_ERROR');
   });
 });
 
