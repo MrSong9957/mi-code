@@ -361,13 +361,8 @@ function getDecisionChannel(): UserDecisionChannel {
           multiSelect: false,
         }],
       };
-      let outcome: AskQuestionOutcome;
-      try {
-        outcome = await askManager.ask(request);
-      } catch (err) {
-        // UI 抛错 → 视为通道故障(由 gate 转成 denied,绝不放行)
-        throw err;
-      }
+      // UI 抛错 → 视为通道故障(由 gate 转成 denied,绝不放行)
+      const outcome: AskQuestionOutcome = await askManager.ask(request);
       const response: UserDecision['response'] =
         outcome.kind === 'submitted' ? 'approved_once' : 'rejected';
       return {
