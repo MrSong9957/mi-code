@@ -36,7 +36,9 @@ describe('bootstrap inline/alt-screen 模式', () => {
     });
     // 不崩 + cleanup 不崩 = pass
     expect(() => handle.cleanup()).not.toThrow();
-  });
+    // 动态 import bootstrap.js + 真实 Ink render 冷启动；inline 用例单跑实测 5021ms（逼近默认 5s），
+    // 全量负载下进一步膨胀。15s 对齐 child-env-scrub 的既有 timeout，约 3 倍余量。
+  }, 15000);
 
   it('alt-screen 模式启动不崩', async () => {
     const { bootstrap } = await import('../../../tui/bootstrap.js');
@@ -48,7 +50,7 @@ describe('bootstrap inline/alt-screen 模式', () => {
       renderMode: 'alt-screen',
     });
     expect(() => handle.cleanup()).not.toThrow();
-  });
+  }, 15000);
 
   it('MICODE_INLINE_V2 env 不再生效(V0 已删,inline 恒走 V2)', async () => {
     // 设成任何值都不应该影响行为(向后兼容 no-op)
@@ -64,5 +66,5 @@ describe('bootstrap inline/alt-screen 模式', () => {
     // 不崩即可(V2 路径,忽略 env)
     expect(() => handle.cleanup()).not.toThrow();
     delete process.env.MICODE_INLINE_V2;
-  });
+  }, 15000);
 });
