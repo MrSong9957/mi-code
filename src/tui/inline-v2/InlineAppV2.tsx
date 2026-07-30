@@ -23,9 +23,7 @@ import React from 'react';
 import { Box, Static, Text } from 'ink';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
-import { MessageLine } from './MessageLine.js';
-import { renderFinalizedLine } from '../inline/text-layout.js';
-import type { FormattedLine } from '../../ui/types.js';
+import { TranscriptBlockLine } from './TranscriptBlockLine.js';
 import { PendingToolMessage } from './PendingToolMessage.js';
 import { PendingThinkingMessage } from './PendingThinkingMessage.js';
 import { SpinnerMemo } from './spinner-memo.js';
@@ -40,6 +38,8 @@ import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-vi
 import { cursorScreenPos } from '../state/cursor-position.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../types.js';
 import type { MessagesStore } from '../state/messages-store.js';
+import type { TranscriptBlock, ActivityItem } from '../transcript-types.js';
+import { selectCommittedTranscript } from '../state/transcript-reducer.js';
 import type { InputStore } from '../state/input-store.js';
 import type { StatusStore } from '../state/status-store.js';
 import type { SpinnerStore } from '../state/spinner-store.js';
@@ -66,71 +66,35 @@ function LogoLineV2({ logo }: { logo: LogoData }): React.ReactElement {
   );
 }
 
-/** 聚合预览的最大 path 行数(超出折叠为 +N more)。 */
-const READ_GROUP_PREVIEW_LINES = 4;
-
 /**
- * 从 read_file message 的首行 `● Read(path)` 解析出 path。
- * 解析失败回退原 content(防御,不阻塞渲染)。
+ * PendingToolSemantic:把语义 PendingTool 活动项适配到 PendingToolMessage。
+ *
+ * Task 6 过渡:PendingToolMessage 仍消费旧 TuiMessage 形状,
+ * 本组件构造一个兼容的 msg 对象传入。Task 7 可让 PendingToolMessage 直接消费 PendingTool。
  */
-function extractReadPath(msg: TuiMessage): string {
-  const content = msg.lines[0]?.content ?? '';
-  // 匹配 ● Read(path) 提取 path(任务约束:稳定判断前缀,不依赖路径格式)
-  const match = content.match(/^● Read\((.*)\)$/);
-  return match ? match[1]! : content;
-}
-
-/**
- * ReadGroupLine:连续 read_file 的聚合渲染组件。
- *
- * 物理本质:把多个 ● Read(path) 块压缩成一个:
- *   ● Read 3 items
- *     ⎿ src/
- *     ⎿ src/agent/
- *     ⎿ src/utils/
- *     +0 more (ctrl+o to expand)   ← 仅超出预览行数时
- *
- * 渲染契约与 MessageLine 一致:用 renderFinalizedLine 转 ANSI,
- * 每行 + '\n',复用 tool role 的样式映射。
- *
- * 本期不实现 ctrl+o 展开(任务范围:只做预览折叠)。
- */
-function ReadGroupLine({ msgs, cols }: { msgs: TuiMessage[]; cols: number }): React.ReactElement {
-  const paths = msgs.map(extractReadPath);
-  // 标题行:● Read N items(复用 magenta 样式,与单个 Read 的 ● 一致)
-  const titleLine: FormattedLine = {
-    content: `● Read ${msgs.length} items`,
-    style: { fg: 'brand' },
-    indent: 0,
+function PendingToolSemantic({
+  item,
+  cols,
+  spinnerStore,
+}: {
+  item: Extract<ActivityItem, { kind: 'pending-tool' }>;
+  cols: number;
+  spinnerStore: SpinnerStore;
+}): React.ReactElement {
+  // 构造兼容 TuiMessage:用 toolName + 首个 entry 的 input 显示。
+  const firstEntry = item.entries[0];
+  const callText = firstEntry
+    ? `${item.toolName}(${Object.keys(firstEntry.input).length > 0 ? '...' : ''})`
+    : item.toolName;
+  const msg: TuiMessage = {
+    uuid: item.id,
+    role: 'tool',
+    kind: 'tool-progress',
+    toolUseId: firstEntry?.toolUseId,
+    lines: [{ content: `● ${callText}`, style: { fg: 'brand' }, indent: 0 }],
+    finalized: false,
   };
-  // path 预览行:⎿ path /    path(首行 ⎿,续行对齐空格,与 formatToolResult 风格一致)
-  const truncated = paths.length > READ_GROUP_PREVIEW_LINES;
-  const previewPaths = paths.slice(0, READ_GROUP_PREVIEW_LINES);
-  const pathLines: FormattedLine[] = previewPaths.map((p, i) => ({
-    content: `${i === 0 ? '⎿  ' : '   '}${p}`,
-    style: { dim: true },
-    indent: 2,
-    raw: true,
-  }));
-  if (truncated) {
-    const hidden = paths.length - READ_GROUP_PREVIEW_LINES;
-    pathLines.push({
-      content: `   +${hidden} more (ctrl+o to expand)`,
-      style: { dim: true },
-      indent: 2,
-      raw: true,
-    });
-  }
-  const allLines = [titleLine, ...pathLines];
-  return (
-    <Text>
-      {allLines.flatMap((line, lineIdx) =>
-        renderFinalizedLine('tool', line, cols).map((ansiLine, i) => (
-          <Text key={`${lineIdx}-${i}`}>{ansiLine + '\n'}</Text>
-        ))
-      )}
-    </Text>
-  );
+  return <PendingToolMessage msg={msg} cols={cols} spinnerStore={spinnerStore} />;
 }
 
 export interface InlineAppV2Stores {
@@ -154,28 +118,29 @@ export interface InlineAppV2Props {
   rows: number;
 }
 
-export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props): React.ReactElement {
-  const finalized = messages.filter((m) => m.finalized);
+export function InlineAppV2({ logo, stores, cols }: InlineAppV2Props): React.ReactElement {
+  // 语义时间线:从 store 直接读 model.items(Task 6 切换)。
+  // messages props 不再消费(渲染层已完全切到语义 TimelineItem)。
+  const modelItems = useStore(stores.messagesStore, useShallow((s) => s.model.items));
+  const committedTranscript: TranscriptBlock[] = selectCommittedTranscript(modelItems);
+  const activityItems: ActivityItem[] = modelItems.slice(committedTranscript.length) as ActivityItem[];
 
-  // AUTO-0025 修复:pending 工具调用(未拿到结果、kind='tool-progress')必须在活动区可见。
-  // 物理本质:慢工具(spawn_agent / read_file 等)执行时,其 call 行应立即出现在终端,
-  // 让用户看到"● spawn_agent(...) 正在运行",而不是等结果回来才一次性显示。
-  // 不写入 <Static> —— 否则结果到达后无法原地更新(resolvePendingTool 需要可变 pending 消息)。
-  const pendingTools = messages.filter((m) => !m.finalized && m.kind === 'tool-progress');
+  // 已固化块直接用 TranscriptBlockLine 渲染(语义,无字符串匹配)。
+  const finalized = committedTranscript;
 
-  // AUTO-0025-transient:thinking 临时行(最多一条)。单例由 messages-store 保证。
-  const pendingThinking = messages.find((m) => !m.finalized && m.kind === 'thinking-progress');
+  // pending 工具(pending-tool 活动项):运行中工具的稳定指示器。
+  const pendingTools = activityItems.filter((i): i is Extract<ActivityItem, { kind: 'pending-tool' }> => i.kind === 'pending-tool');
 
-  // 订阅末条未固化 assistant 消息的 streamingText + role(流式 token 到达触发重渲染——必要)。
-  // AUTO-0025-transient:限制为 role === 'assistant'——thinking-progress 也是未固化末条消息,
-  // 但它的渲染走 PendingThinkingMessage(固定文本),不能进 StreamingText。
-  // 用 useShallow 让 selector 输出引用稳定(浅比较相等时返回同一对象),
-  // 避免每次都返回新对象触发 React "getSnapshot should be cached" 警告。
-  const streaming = useStore(stores.messagesStore, useShallow((s) => {
-    const last = s.messages[s.messages.length - 1];
-    if (!last || last.finalized || last.role !== 'assistant') return null;
-    return { uuid: last.uuid, streamingText: last.streamingText, role: last.role };
-  }));
+  // thinking 临时行(pending-thinking 活动项)。
+  const pendingThinkingActivity = activityItems.find((i): i is Extract<ActivityItem, { kind: 'pending-thinking' }> => i.kind === 'pending-thinking');
+
+  // streaming-assistant 活动项。
+  const streamingActivity = activityItems.find((i): i is Extract<ActivityItem, { kind: 'streaming-assistant' }> => i.kind === 'streaming-assistant');
+
+  // streaming-assistant:从语义活动项读取(Task 6 切换)。
+  const streaming = streamingActivity
+    ? { uuid: streamingActivity.id, streamingText: streamingActivity.text, role: 'assistant' as const }
+    : null;
 
   // 订阅 input(输入变化触发重渲染,这是必要的)
   const inputText = useStore(stores.inputStore, (s) => s.text);
@@ -212,7 +177,9 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
   // (staticNode !== previousStaticNode)会清空 fullStaticOutput,导致 logo + 已固化消息丢失。
   // 父元素类型切换(Box→Overlay→Box)会让 <Static> 卸载重挂载 → identity 变化 → bug。
   // 保持根元素稳定(<Box>),Overlay 作为内部条件渲染,避免 <Static> 卸载。
-  const overlayVisible = useStore(stores.overlayStore, (s) => s.visible);
+  // overlayVisible 订阅保持 OverlayHost 与活动区渲染同步(OverlayHost 自管 visible,
+  // 但订阅确保 overlay 状态变化时活动区也重渲染)。值本身不直接消费。
+  void useStore(stores.overlayStore, (s) => s.visible);
 
   // 输入框视口:光标居中滚动,超出 MAX_VISIBLE_INPUT_LINES 时 viewportTop 跟随。
   const totalInputLines = inputText.split('\n').length;
@@ -231,33 +198,28 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
   const pendingToolsRowCount = pendingTools.length;
 
   // AUTO-0025-transient:thinking 临时行固定占一物理行(0 或 1)。
-  const thinkingRowCount = pendingThinking ? 1 : 0;
+  const thinkingRowCount = pendingThinkingActivity ? 1 : 0;
 
   // 有 pending 活动时,pending 区与 spinner 间留一空行分隔(视觉间距)。
-  const pendingGapRowCount = (pendingThinking || pendingToolsRowCount > 0) ? 1 : 0;
+  const pendingGapRowCount = (pendingThinkingActivity || pendingToolsRowCount > 0) ? 1 : 0;
 
   // inputRowY(活动区内坐标,<Static> 不占活动区):
   //   流式文本 + thinking 行 + pending 工具行 + pending/spinner 间距 + spinner 行 + 上边框 1 行
   const inputRowY = streamingRowCount + thinkingRowCount + pendingToolsRowCount + pendingGapRowCount + spinnerRowCount + 1;
 
-  // <Static> items:logo 作为首项(只写一次进 scrollback)+ 已固化消息。
-  // Read 聚合:连续 read_file 经 groupConsecutiveReadMessages 合并成 read-group,
-  // 渲染成 ● Read N items + ⎿ path 预览,减少垂直占用。
-  // logo 不参与聚合(单独处理,保证首位不变量)。
+  // <Static> items:logo 作为首项(只写一次进 scrollback)+ 已固化语义块。
+  // Task 6:已固化块用 TranscriptBlockLine 渲染(语义,无字符串匹配)。
+  // 工具分组由 reducer 完成,不再需要 groupConsecutiveReadMessages。
   type StaticItem =
     | { kind: 'logo'; id: typeof LOGO_STATIC_ID; logo: LogoData }
-    | { kind: 'message'; id: string; msg: TuiMessage }
-    | { kind: 'read-group'; id: string; msgs: TuiMessage[] };
-  const displayItems = groupConsecutiveReadMessages(finalized);
+    | { kind: 'block'; id: string; block: TranscriptBlock };
   const staticItems: StaticItem[] = [
     { kind: 'logo', id: LOGO_STATIC_ID, logo },
-    ...displayItems.map((item): StaticItem => {
-      if (item.kind === 'read-group') {
-        // 组 id 用成员 uuid 拼接,保证唯一且稳定(Static 需要稳定 key)
-        return { kind: 'read-group', id: 'rg-' + item.msgs.map(m => m.uuid).join('-'), msgs: item.msgs };
-      }
-      return { kind: 'message', id: item.msg.uuid, msg: item.msg };
-    }),
+    ...finalized.map((block): StaticItem => ({
+      kind: 'block',
+      id: block.id,
+      block,
+    })),
   ];
 
   // 防御性断言:logo 必须在 staticItems 首位。
@@ -277,9 +239,11 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
       <Static items={staticItems}>
         {(item) => item.kind === 'logo'
           ? <LogoLineV2 key={item.id} logo={item.logo} />
-          : item.kind === 'read-group'
-            ? <ReadGroupLine key={item.id} msgs={item.msgs} cols={cols} />
-            : <MessageLine key={item.id} msg={item.msg} cols={cols} />}
+          : (
+            <Box key={item.id} marginBottom={1}>
+              <TranscriptBlockLine block={item.block} cols={cols} />
+            </Box>
+          )}
       </Static>
       {/* OverlayHost:visible 时进终端备用屏直接写 stdout(不走 Ink 渲染),
           避免覆盖 footer 或盖不住 scrollback。返回 null,无可见 React 元素。 */}
@@ -299,23 +263,22 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
         )}
         {/* AUTO-0025-transient:thinking 临时行(闪烁 ● Thinking…)。
             单例,固定一行,在 pending 工具之前渲染。 */}
-        {pendingThinking && (
+        {pendingThinkingActivity && (
           <PendingThinkingMessage cols={cols} spinnerStore={stores.spinnerStore} />
         )}
         {/* AUTO-0025-stable:pending 工具用专用稳定指示器渲染(固定一行 + 闪烁 ●)。
-            叶子组件自订阅 spinnerStore.time/active,tick 不拖动本组件重渲染。
-            子代理内部工具明细不进入这里(见 Task 3 删除进度桥接)。 */}
-        {pendingTools.map((msg) => (
-          <PendingToolMessage
-            key={msg.uuid}
-            msg={msg}
+            Task 6:pendingTools 现在是语义 PendingTool 活动项。 */}
+        {pendingTools.map((pt) => (
+          <PendingToolSemantic
+            key={pt.id}
+            item={pt}
             cols={cols}
             spinnerStore={stores.spinnerStore}
           />
         ))}
         {/* 有 pending 活动(thinking 或工具)时,与 spinner 留一行空行分隔,
             避免 spawn_agent 紧贴 spinner 动画行。 */}
-        {(pendingThinking || pendingTools.length > 0) && (
+        {(pendingThinkingActivity || pendingTools.length > 0) && (
           <Box height={1}>
             <Text>{' '}</Text>
           </Box>
@@ -348,116 +311,3 @@ export function InlineAppV2({ messages, logo, stores, cols }: InlineAppV2Props):
     </Box>
   );
 }
-
-// ─────────────────────────────────────────────────────────────
-// Read 聚合显示适配器(display adapter,纯函数)
-//
-// 物理本质:渲染前的"分组翻译器"。不改 message 数据,只把连续的
-// read_file tool message 合并成一个 read-group 显示条目。
-//
-// 解决问题:连续多个 Read 各占一个 ● 块,占用垂直空间。
-// 聚合后渲染成 ● Read N items + ⎿ path 预览。
-//
-// 关键约束 —— <Static> append-only:
-//   Ink <Static> 已渲染的 item 不可变(内部用 index 跳过已渲染项)。
-//   因此聚合基于"已 finalized 的连续段"做回溯合并——段被非 Read 打断时
-//   锁定,生成后不再变。这与 Static 的 append-only 语义契合。
-//
-// 聚合规则(严格):
-//   连续满足 role==='tool' && lines[0].content 以 '● Read(' 开头
-//   段被以下任一打断:role!=='tool'、content 不以 ● Read( 开头
-//   仅 ≥2 个才聚合成 read-group;单个 Read 保持原样(行为不变)
-//
-// 工具名识别:解析 lines[0].content 前缀 '● Read('。
-// 不新增 message 字段(任务约束:纯显示优化,不改 schema)。
-// ─────────────────────────────────────────────────────────────
-
-/** 显示条目:聚合后的渲染单元,区分单条消息与 Read 聚合组。 */
-export type DisplayItem =
-  | { kind: 'message'; msg: TuiMessage }
-  | { kind: 'read-group'; msgs: TuiMessage[] };
-
-/** 判断 message 是否是 read_file 工具调用(用于聚合识别)。 */
-function isReadToolMessage(msg: TuiMessage): boolean {
-  // 仅 tool role 参与;system/assistant 等即使内容巧合也不聚合(防御)
-  if (msg.role !== 'tool') return false;
-  const firstLine = msg.lines[0];
-  // 稳定判断:content 以 '● Read(' 开头。不依赖路径格式。
-  return firstLine?.content.startsWith('● Read(') ?? false;
-}
-
-/**
- * 判断 message 是否是 thinking_summary(模型思考摘要)。
- *
- * 真实时序:模型每次工具调用前会 thinking,产生 role=system 的摘要行
- * (如 "Thought for 1s (ctrl+o to expand)")。它是工具调用的伴随状态,
- * 不属于用户内容流,因此不应阻止同批 Read 聚合。
- *
- * 判定:role=system 且首行 content 含 "Thought for"。
- * (与 formatThinkingSummary 输出一致,不依赖精确格式)
- */
-function isThinkingSummary(msg: TuiMessage): boolean {
-  if (msg.role !== 'system') return false;
-  const firstLine = msg.lines[0];
-  return firstLine?.content.includes('Thought for') ?? false;
-}
-
-/**
- * 把 finalized messages 分组为显示条目。
- *
- * 连续的 read_file message 合并成 read-group;其余原样保留为 message。
- * 纯函数,无副作用,不改输入。
- *
- * 聚合规则(适配真实 Agent runtime 时序 thinking→tool→thinking→tool):
- *   - 连续 Read 段允许中间夹 thinking_summary(不打断聚合)
- *   - thinking_summary 保留为独立 message item(不合并进 group,不丢弃)
- *   - 段被非 Read、非 thinking_summary 的 message 打断(如 Bash/assistant/user)
- *   - 仅段内 Read ≥2 才聚合成 read-group;单个 Read 保持原样
- *
- * 输出顺序:read-group 放段首位置,段内被跨越的 thinking_summary 紧随其后
- * (保持相对顺序,不丢失 thinking 信息)。
- */
-export function groupConsecutiveReadMessages(messages: TuiMessage[]): DisplayItem[] {
-  const result: DisplayItem[] = [];
-  let i = 0;
-  while (i < messages.length) {
-    const msg = messages[i]!;
-    if (!isReadToolMessage(msg)) {
-      // 非 Read:原样保留,前进 1(thinking_summary 也走这里,独立输出)
-      result.push({ kind: 'message', msg });
-      i++;
-      continue;
-    }
-    // Read:收集连续段(允许中间夹 thinking_summary,它们不进 group 但属本段)
-    const group: TuiMessage[] = [msg];
-    const interspersedThoughts: TuiMessage[] = [];
-    let j = i + 1;
-    while (j < messages.length) {
-      const next = messages[j]!;
-      if (isReadToolMessage(next)) {
-        group.push(next);
-        j++;
-      } else if (isThinkingSummary(next)) {
-        // thinking_summary 不打断段,但不并入 group(保留独立显示)
-        interspersedThoughts.push(next);
-        j++;
-      } else {
-        // 其他 message(Bash/assistant/user/system非thinking)打断段
-        break;
-      }
-    }
-    // ≥2 个 Read 才聚合;单个 Read 保持原样(验收:单个 Read 行为不变)
-    if (group.length >= 2) {
-      result.push({ kind: 'read-group', msgs: group });
-    } else {
-      result.push({ kind: 'message', msg: group[0]! });
-    }
-    // 段内被跨越的 thinking_summary 紧随 group 输出(保留信息,不移动到段外)
-    for (const t of interspersedThoughts) {
-      result.push({ kind: 'message', msg: t });
-    }
-    i = j;
-  }
-  return result;
-}
-

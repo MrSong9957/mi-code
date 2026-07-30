@@ -21,7 +21,7 @@ import { ConnectedApp } from '../../../tui/ConnectedApp.js';
 import { RenderModeProvider } from '../../../tui/state/render-mode.js';
 import { ThemeStoreProvider } from '../../../tui/state/theme-context.js';
 import { createThemeStore } from '../../../tui/state/theme-store.js';
-import { createMessagesStore } from '../../../tui/state/messages-store.js';
+import { createMessagesStore, type MessagesStore } from '../../../tui/state/messages-store.js';
 import { createInputStore } from '../../../tui/state/input-store.js';
 import { createStatusStore } from '../../../tui/state/status-store.js';
 import { createLogoStore } from '../../../tui/state/logo-store.js';
@@ -34,6 +34,28 @@ import { createSelectionStore } from '../../../tui/state/selection-store.js';
 import { createClearScreenStore } from '../../../tui/state/clear-screen-store.js';
 import { EMPTY_SPINNER_CONTEXT } from '../../../tui/state/spinner-store.js';
 import { useTerminalSize } from '../../../tui/hooks/useTerminalSize.js';
+
+/**
+ * updateStreaming 的语义等价:直接改 streaming-assistant 活动项的 text。
+ * 生产代码用 startAssistant 后通过 store.setState 累积流式 token。
+ */
+function updateStreamingText(store: MessagesStore, newText: string): void {
+  store.setState((s) => {
+    const items = [...s.model.items];
+    const idx = items.findIndex((i) => i.kind === 'streaming-assistant');
+    if (idx < 0) return s;
+    const sa = items[idx];
+    if (sa!.kind !== 'streaming-assistant') return s;
+    items[idx] = { ...sa, text: newText };
+    return { model: { ...s.model, items } };
+  });
+}
+
+/** 读取当前 streaming-assistant 的 text(无则返回 undefined)。 */
+function getStreamingText(store: MessagesStore): string | undefined {
+  const sa = store.getState().model.items.find((i) => i.kind === 'streaming-assistant');
+  return sa && sa.kind === 'streaming-assistant' ? sa.text : undefined;
+}
 
 const LOGO = { version: '1.2.3', dir: '/tmp/proj' };
 const STATUS = { mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 };
@@ -68,9 +90,11 @@ describe('<InlineAppV2> LOGO 不变量', () => {
 
   it('单条已固化消息时 logo 仍在最顶', () => {
     const stores = makeStores();
-    stores.messagesStore.getState().appendMessage('user', [
-      { content: 'hello', style: {}, indent: 0 },
-    ]);
+    stores.messagesStore.getState().appendTranscript({
+      id: 'u1',
+      kind: 'user',
+      text: 'hello',
+    });
     const { lastFrame } = render(
       <InlineAppV2
         messages={stores.messagesStore.getState().messages}
@@ -87,9 +111,11 @@ describe('<InlineAppV2> LOGO 不变量', () => {
   it('多条已固化消息(20 条)logo 仍在最顶', () => {
     const stores = makeStores();
     for (let i = 0; i < 20; i++) {
-      stores.messagesStore.getState().appendMessage('assistant', [
-        { content: `msg-${i}`, style: {}, indent: 0 },
-      ]);
+      stores.messagesStore.getState().appendTranscript({
+        id: `a${i}`,
+        kind: 'assistant',
+        text: `msg-${i}`,
+      });
     }
     const { lastFrame } = render(
       <InlineAppV2
@@ -106,7 +132,7 @@ describe('<InlineAppV2> LOGO 不变量', () => {
 
   it('流式消息存在时 logo 仍在最顶', () => {
     const stores = makeStores();
-    stores.messagesStore.getState().startStreaming('partial\n');
+    stores.messagesStore.getState().startAssistant('partial\n');
     stores.spinnerStore.getState().start('responding');
     const { lastFrame } = render(
       <InlineAppV2
@@ -181,12 +207,16 @@ describe('<ConnectedApp> 整树 LOGO 不变量', () => {
     await new Promise((r) => setTimeout(r, 20));
 
     for (let i = 0; i < 10; i++) {
-      stores.messagesStore.getState().appendMessage('user', [
-        { content: `u${i}`, style: {}, indent: 0 },
-      ]);
-      stores.messagesStore.getState().appendMessage('assistant', [
-        { content: `a${i}`, style: {}, indent: 0 },
-      ]);
+      stores.messagesStore.getState().appendTranscript({
+        id: `u${i}`,
+        kind: 'user',
+        text: `u${i}`,
+      });
+      stores.messagesStore.getState().appendTranscript({
+        id: `a${i}`,
+        kind: 'assistant',
+        text: `a${i}`,
+      });
       await new Promise((r) => setTimeout(r, 5));
     }
     await new Promise((r) => setTimeout(r, 30));
@@ -220,9 +250,11 @@ describe('<ConnectedApp> 整树 LOGO 不变量', () => {
 
   it('Resize 重挂载后 logo 仍在', async () => {
     const stores = makeFullStores();
-    stores.messagesStore.getState().appendMessage('user', [
-      { content: 'before resize', style: {}, indent: 0 },
-    ]);
+    stores.messagesStore.getState().appendTranscript({
+      id: 'u-resize',
+      kind: 'user',
+      text: 'before resize',
+    });
     mockedUseTerminalSize.mockReturnValue({ cols: 80, rows: 24 });
     const { lastFrame, rerender } = renderConnected(stores);
     await new Promise((r) => setTimeout(r, 30));
@@ -271,18 +303,15 @@ describe('<ConnectedApp> 整树 LOGO 不变量', () => {
     const { lastFrame } = renderConnected(stores);
     await new Promise((r) => setTimeout(r, 20));
 
-    stores.messagesStore.getState().startStreaming('partial reply\n');
+    stores.messagesStore.getState().startAssistant('partial reply\n');
     stores.spinnerStore.getState().start('responding');
     // 模拟 spinner tick + 流式追加
     for (let i = 0; i < 10; i++) {
       stores.spinnerStore.getState().tick();
       if (i % 3 === 0) {
-        const cur = stores.messagesStore.getState().messages;
-        const last = cur[cur.length - 1];
-        if (last && !last.finalized) {
-          stores.messagesStore.getState().updateStreaming(
-            (last.streamingText ?? '') + `token${i}\n`,
-          );
+        const cur = getStreamingText(stores.messagesStore);
+        if (cur !== undefined) {
+          updateStreamingText(stores.messagesStore, cur + `token${i}\n`);
         }
       }
       await new Promise((r) => setTimeout(r, 8));
@@ -298,13 +327,13 @@ describe('<ConnectedApp> 整树 LOGO 不变量', () => {
     const { lastFrame } = renderConnected(stores);
     await new Promise((r) => setTimeout(r, 20));
 
-    stores.messagesStore.getState().startStreaming('draft\n');
+    stores.messagesStore.getState().startAssistant('draft\n');
     stores.spinnerStore.getState().start('responding');
     await new Promise((r) => setTimeout(r, 20));
 
-    stores.messagesStore.getState().finalizeStreaming([
-      { content: 'final answer', style: {}, indent: 0 },
-    ]);
+    // 把流式草稿改为最终内容并固化(原 finalizeStreaming 用 FormattedLine[] 覆盖)
+    updateStreamingText(stores.messagesStore, 'final answer');
+    stores.messagesStore.getState().finishAssistant();
     stores.spinnerStore.getState().stop();
     await new Promise((r) => setTimeout(r, 30));
 

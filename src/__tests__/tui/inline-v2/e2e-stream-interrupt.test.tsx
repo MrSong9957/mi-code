@@ -4,8 +4,12 @@
 //
 // 覆盖:
 // - 流式中按 ESC → onAbortStream 触发 → 调 finalizeStreamingAsInterrupted
-//   半成品进 <Static>,含 [interrupted] 标记
+//   半成品进 <Static>,标记 interrupted:true
 // - 双击 ESC → onRewindLastTurn 触发
+//
+// 注:本测试面向新的语义 store API(startAssistant + finalizeStreamingAsInterrupted),
+// 不再使用旧 startStreaming。断言改为读 model.items 的 assistant 块(interrupted 标记),
+// 不再断言旧 messages 投影的 lines/streamingText。
 
 import { describe, it, expect } from 'vitest';
 import { createE2EHarness, KEYS, waitMs } from './helpers/e2e-harness.js';
@@ -23,7 +27,7 @@ describe('V2 inline E2E - 流式中断', () => {
     });
     try {
       // 开流式
-      h.stores.messagesStore.getState().startStreaming('partial answer\n');
+      h.stores.messagesStore.getState().startAssistant('partial answer\n');
       h.stores.spinnerStore.getState().start('responding');
       await waitMs(30);
 
@@ -38,17 +42,23 @@ describe('V2 inline E2E - 流式中断', () => {
       expect(abortCount).toBe(1);
       // spinner 停了
       expect(h.stores.spinnerStore.getState().active).toBe(false);
-      // 末条消息已固化,含 [interrupted]
-      const last = h.stores.messagesStore.getState().messages.slice(-1)[0]!;
-      expect(last.finalized).toBe(true);
-      expect(last.streamingText).toBeUndefined();
-      expect(last.lines.some((l) => l.content.includes('interrupted'))).toBe(true);
+
+      // 末项已固化为 assistant 块,带 interrupted 标记
+      const items = h.stores.messagesStore.getState().model.items;
+      const last = items[items.length - 1]!;
+      expect(last.kind).toBe('assistant');
+      if (last.kind !== 'assistant') throw new Error('unreachable');
+      expect(last.interrupted).toBe(true);
       // 半成品作为已固化消息保留(进入 <Static>):
-      //   - 流式时的草稿文本 'partial answer' 现在作为 finalized line 仍在
-      //   - '[interrupted]' 标记附加在末尾
+      //   - 流式时的草稿文本 'partial answer' 现在作为 assistant 块 text 仍在
+      //   - interrupted:true 标记该消息被中断
+      expect(last.text).toContain('partial answer');
+      // 无残留 streaming-assistant 活动项
+      const stillStreaming = items.some((i) => i.kind === 'streaming-assistant');
+      expect(stillStreaming).toBe(false);
+
       const frame = h.lastFrame() ?? '';
       expect(frame).toContain('partial answer');
-      expect(frame).toContain('interrupted');
     } finally {
       h.unmount();
     }
