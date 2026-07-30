@@ -4,7 +4,13 @@
 // TDD:先写失败测试,再实现 image-utils.ts。
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
+import {
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  statSync,
+} from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -173,14 +179,7 @@ describe('saveImageCache', () => {
     const cachePath = saveImageCache('test-session', 1, block);
     expect(existsSync(cachePath)).toBe(true);
     expect(cachePath).toContain('test-session');
-    // 读回验证内容一致
-    const readBack = Buffer.from(
-      // saveImageCache 把 base64 解码回二进制存盘
-      // 这里验证文件存在即可,具体读法在实现里定
-      '', 'base64',
-    );
     // 文件非空
-    const { statSync } = require('fs');
     expect(statSync(cachePath).size).toBeGreaterThan(0);
   });
 });
