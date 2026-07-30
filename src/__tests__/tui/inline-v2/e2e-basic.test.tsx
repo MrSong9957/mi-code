@@ -204,12 +204,12 @@ describe('V2 inline E2E - 基础场景', () => {
   it('场景:流式消息渲染 + spinner 同时显示', async () => {
     const h = createE2EHarness();
     try {
-      // 先有一条已固化消息
-      h.stores.messagesStore.getState().appendMessage('assistant', [
-        { content: 'previous answer', style: {}, indent: 0 },
-      ]);
-      // 开新流式
-      h.stores.messagesStore.getState().startStreaming('partial reply\n');
+      // 先有一条已固化消息(语义 API)
+      h.stores.messagesStore.getState().appendTranscript({
+        id: 'a1', kind: 'assistant', text: 'previous answer',
+      });
+      // 开新流式(语义 API:startAssistant)
+      h.stores.messagesStore.getState().startAssistant('partial reply\n');
       h.stores.spinnerStore.getState().start('responding');
       await waitMs(50);
 

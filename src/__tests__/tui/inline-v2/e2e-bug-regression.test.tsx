@@ -18,32 +18,58 @@
 // 注:ink-testing-library 的 frames 收集的是 Ink reconciler 渲染输出
 // (而非真实终端 stdout 写入),所以"字节量"指标与 incremental-rendering.test.tsx
 // 不直接可比。本测试关注"重复文本"——这是原始 bug 的可视标志。
+//
+// 注 2:本测试面向新的语义 store API(startAssistant/finishAssistant/appendTranscript
+// + 通过 store.setState 累积流式 text),不再使用旧的 startStreaming/updateStreaming/
+// finalizeStreaming/appendMessage。
 
 import { describe, it, expect } from 'vitest';
 import { createE2EHarness, waitMs } from './helpers/e2e-harness.js';
+import type { MessagesStore } from '../../../tui/state/messages-store.js';
+
+/**
+ * updateStreaming 的语义等价:直接改 streaming-assistant 活动项的 text。
+ * 生产代码用 startAssistant 后通过 store.setState 累积流式 token。
+ */
+function updateStreamingText(store: MessagesStore, newText: string): void {
+  store.setState((s) => {
+    const items = [...s.model.items];
+    const idx = items.findIndex((i) => i.kind === 'streaming-assistant');
+    if (idx < 0) return s;
+    const sa = items[idx];
+    if (sa!.kind !== 'streaming-assistant') return s;
+    items[idx] = { ...sa, text: newText };
+    return { model: { ...s.model, items } };
+  });
+}
+
+/** 读取当前 streaming-assistant 的 text(无则返回 undefined)。 */
+function getStreamingText(store: MessagesStore): string | undefined {
+  const sa = store.getState().model.items.find((i) => i.kind === 'streaming-assistant');
+  return sa && sa.kind === 'streaming-assistant' ? sa.text : undefined;
+}
 
 describe('V2 inline E2E - 原始 bug 端到端回归', () => {
   it('流式 + spinner 并发下,已固化消息文本不重复出现', async () => {
     const h = createE2EHarness();
     try {
       // 已固化消息(原始 bug 标志:此文本会被重写几十次)
-      h.stores.messagesStore.getState().appendMessage('assistant', [
-        { content: 'FINALIZED_UNIQUE_TOKEN_X12345', style: {}, indent: 0 },
-      ]);
+      h.stores.messagesStore.getState().appendTranscript({
+        id: 'a-final',
+        kind: 'assistant',
+        text: 'FINALIZED_UNIQUE_TOKEN_X12345',
+      });
       // 开流式 + spinner
-      h.stores.messagesStore.getState().startStreaming('');
+      h.stores.messagesStore.getState().startAssistant('');
       h.stores.spinnerStore.getState().start('responding');
       await waitMs(30);
 
       // 模拟流式 token 多次到达 + spinner 多次 tick
       for (let i = 0; i < 15; i++) {
         h.stores.spinnerStore.getState().tick();
-        const cur = h.stores.messagesStore.getState().messages;
-        const last = cur[cur.length - 1];
-        if (last && !last.finalized && last.streamingText !== undefined) {
-          h.stores.messagesStore.getState().updateStreaming(
-            (last.streamingText ?? '') + 'token' + i + '\n',
-          );
+        const cur = getStreamingText(h.stores.messagesStore);
+        if (cur !== undefined) {
+          updateStreamingText(h.stores.messagesStore, cur + 'token' + i + '\n');
         }
         await waitMs(15);
       }
@@ -89,12 +115,16 @@ describe('V2 inline E2E - 原始 bug 端到端回归', () => {
     try {
       // 3 轮对话
       for (let round = 1; round <= 3; round++) {
-        h.stores.messagesStore.getState().appendMessage('user', [
-          { content: `USER_TURN_${round}`, style: {}, indent: 0 },
-        ]);
-        h.stores.messagesStore.getState().appendMessage('assistant', [
-          { content: `ASSISTANT_TURN_${round}`, style: {}, indent: 0 },
-        ]);
+        h.stores.messagesStore.getState().appendTranscript({
+          id: `u-${round}`,
+          kind: 'user',
+          text: `USER_TURN_${round}`,
+        });
+        h.stores.messagesStore.getState().appendTranscript({
+          id: `a-${round}`,
+          kind: 'assistant',
+          text: `ASSISTANT_TURN_${round}`,
+        });
       }
       // 模拟 spinner 跑一会(制造 tick + 重渲染压力)
       h.stores.spinnerStore.getState().start('responding');
@@ -118,17 +148,16 @@ describe('V2 inline E2E - 原始 bug 端到端回归', () => {
     }
   });
 
-  it('流式 finalize 后,草稿消失,固化消息只出现 1 次', async () => {
+  it('流式 finish 后,草稿消失,固化消息只出现 1 次', async () => {
     const h = createE2EHarness();
     try {
-      h.stores.messagesStore.getState().startStreaming('stream draft content\n');
+      h.stores.messagesStore.getState().startAssistant('stream draft content\n');
       h.stores.spinnerStore.getState().start('responding');
       await waitMs(30);
 
-      // finalize:草稿变固化
-      h.stores.messagesStore.getState().finalizeStreaming([
-        { content: 'FINAL_CONTENT_UNIQUE', style: {}, indent: 0 },
-      ]);
+      // 把流式草稿改为最终内容,然后固化(原 finalizeStreaming 用 FormattedLine[] 覆盖)
+      updateStreamingText(h.stores.messagesStore, 'FINAL_CONTENT_UNIQUE');
+      h.stores.messagesStore.getState().finishAssistant();
       h.stores.spinnerStore.getState().stop();
       await waitMs(30);
 

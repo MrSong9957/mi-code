@@ -267,11 +267,15 @@ function refreshSpinnerContext(): void {
 /** 统一输出管道（bootstrap 内构造，所有 agent 逻辑 emit Block 到此）。
  *  声明为 let，bootstrap 后赋值；agent loop 使用前必已赋值。 */
 let pipeline = new BlockPipeline({
-  printMessage: () => {},
+  startToolCall: () => {},
+  finishToolCall: () => false,
   appendStreamingMarkdown: () => {},
-  appendStreamingThinking: () => {},
-  eraseStreamingThinking: () => {},
   sealStreaming: () => {},
+  startThinking: () => '',
+  updateThinking: () => {},
+  eraseThinking: () => {},
+  finishThinking: () => {},
+  appendTranscriptBlock: () => {},
   flushNow: () => {},
   clearMessages: () => {},
 });

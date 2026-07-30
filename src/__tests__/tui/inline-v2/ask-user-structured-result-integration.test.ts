@@ -1,105 +1,97 @@
 // src/__tests__/tui/inline-v2/ask-user-structured-result-integration.test.ts
-// AUTO-0025 Phase B (Task 16b):端到端集成测试(BlockPipeline integration 层级)。
+// ask_user_question structured result e2e(语义版)。
 //
-// 这是 PR2 最重要的 FR 保险:把 Task 13(block-pipeline 分支)+ Task 14(透传)
-// 的协作一次性验证,证明完整数据链路语义正确。
-//
-// 断言范围约束(防脆性):只验证数据链路语义,禁止绑定 Ink 行布局、ANSI 转义码、
-// 具体颜色值、空格数量等 UI 细节。断言针对 mockRenderer 收到的 resultLines 文本内容。
+// 验证 BlockPipeline 把 ask_user_question + structuredOutcome 路由到 finishAsk(AskBlock),
+// 而非通用 finishToolCall。断言 AskBlock 的 summary/items/outcome,不绑定渲染细节。
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { BlockPipeline } from '../../../ui/block-pipeline.js';
+import { BlockPipeline, type PipelineRenderer } from '../../../ui/block-pipeline.js';
+import type { ToolPresentation, AskBlock } from '../../../tui/transcript-types.js';
+import type { ThinkingSummaryBlock, BoundaryBlock } from '../../../tui/state/transcript-reducer.js';
 import { askOutcomeStore } from '../../../agent/ask-outcome-store.js';
 import type { StructuredAskResult } from '../../../agent/ask-user-types.js';
 
-/** mock Renderer:记录所有 finishToolCall 调用的 lines(参考 block-pipeline.test.ts 的 mockRenderer) */
-function mockRenderer() {
-  const finishToolCalls: { toolUseId: string; lines: { content: string }[]; finalKind?: string }[] = [];
-  const prints: { text: string }[] = [];
-  const renderer = {
-    printMessage: vi.fn((text: string) => { prints.push({ text }); }),
-    appendStreamingMarkdown: vi.fn(),
-    appendStreamingThinking: vi.fn(),
-    eraseStreamingThinking: vi.fn(),
-    sealStreaming: vi.fn(),
+/** recording renderer:记录 finishAsk / finishToolCall 调用。 */
+function createRecordingRenderer(): PipelineRenderer & {
+  askBlocks: AskBlock[];
+  toolPresentations: { toolUseId: string; presentation: ToolPresentation }[];
+} {
+  const askBlocks: AskBlock[] = [];
+  const toolPresentations: { toolUseId: string; presentation: ToolPresentation }[] = [];
+  const renderer: PipelineRenderer = {
     startToolCall: vi.fn(),
-    finishToolCall: vi.fn((toolUseId: string, lines: { content: string }[], finalKind?: string) => {
-      finishToolCalls.push({ toolUseId, lines, finalKind });
-      // 模拟真实 Ink adapter:把 lines 内容推进 prints(供文本断言)
-      for (const l of lines) prints.push({ text: l.content });
+    finishToolCall(toolUseId, presentation) {
+      toolPresentations.push({ toolUseId, presentation });
       return true;
-    }),
-    appendToolHook: vi.fn(() => true),
+    },
+    finishAsk(_toolUseId, block) {
+      askBlocks.push(block);
+      return true;
+    },
+    appendStreamingMarkdown: vi.fn(),
+    sealStreaming: vi.fn(),
+    startThinking: vi.fn(() => ''),
+    updateThinking: vi.fn(),
+    eraseThinking: vi.fn(),
+    finishThinking: vi.fn((_summary: ThinkingSummaryBlock) => {}),
+    appendTranscriptBlock: vi.fn((_block: BoundaryBlock) => {}),
     flushNow: vi.fn(),
     clearMessages: vi.fn(),
   };
-  return { renderer, finishToolCalls, prints };
+  return Object.assign(renderer, { askBlocks, toolPresentations });
 }
 
-describe('AUTO-0025 Phase B (Task 16b):ask_user_question structured result e2e', () => {
+describe('ask_user_question structured result e2e (semantic)', () => {
   beforeEach(() => askOutcomeStore.clear());
 
-  it('submitted 完整链路:structuredOutcome → presentation → 结构化渲染(非 Bash 折叠)', () => {
-    const { renderer, finishToolCalls, prints } = mockRenderer();
+  it('submitted 完整链路 → finishAsk(AskBlock),非 finishToolCall', () => {
+    const renderer = createRecordingRenderer();
     const pipeline = new BlockPipeline(renderer);
 
-    // 模拟 streaming-query 阶段1:tool_call
     pipeline.emit({
       kind: 'tool_call', name: 'ask_user_question', toolUseId: 'tuu-e2e-1',
       input: { questions: [] },
     });
 
-    // 模拟 Task 14 透传后的 tool_result(带 structuredOutcome,UI 通道)
     const structured: StructuredAskResult = {
       version: 1,
       request: {
         questions: [
-          {
-            header: 'Auth',
-            question: 'Which auth method?',
-            options: [{ label: 'OAuth', description: 'd' }, { label: 'Key', description: 'd' }],
-            multiSelect: false,
-          },
-          {
-            header: 'Lib',
-            question: 'Which library?',
-            options: [{ label: 'A', description: 'd' }, { label: 'B', description: 'd' }],
-            multiSelect: true,
-          },
+          { header: 'Auth', question: 'Which auth method?', options: [{ label: 'OAuth', description: 'd' }, { label: 'Key', description: 'd' }], multiSelect: false },
+          { header: 'Lib', question: 'Which library?', options: [{ label: 'A', description: 'd' }, { label: 'B', description: 'd' }], multiSelect: true },
         ],
       },
       outcome: { kind: 'submitted', answers: { 'Which auth method?': 'OAuth', 'Which library?': 'A, B' } },
     };
     pipeline.emit({
       kind: 'tool_result', name: 'ask_user_question', toolUseId: 'tuu-e2e-1',
-      output: 'User has answered your questions: ...',  // API 通道字符串(仍存在,但 UI 不展示它)
+      output: 'User has answered your questions: ...',
       structuredOutcome: structured,
     });
 
-    // ── 必断 1:主消息区(prints)含父标题 ● Answered(证明走结构化路径,非 Bash 折叠)
-    const allText = prints.map(p => p.text).join('\n');
-    expect(allText).toContain('Answered');
+    // 走 finishAsk,不走 finishToolCall
+    expect(renderer.askBlocks).toHaveLength(1);
+    expect(renderer.toolPresentations).toHaveLength(0);
 
-    // ── 必断 2:子项 header → answer 配对默认显示在主消息区(非 Ctrl+O 展开)
-    expect(allText).toContain('Auth → OAuth');
-    expect(allText).toContain('Lib → A, B');
+    const block = renderer.askBlocks[0]!;
+    expect(block.kind).toBe('ask');
+    expect(block.summary).toBe('Answered 2 questions');
+    expect(block.items).toEqual(['Auth → OAuth', 'Lib → A, B']);
+    expect(block.outcome).toEqual({ kind: 'submitted', answers: { 'Which auth method?': 'OAuth', 'Which library?': 'A, B' } });
 
-    // ── 必断 3:不含 question 全文(证明走 header 配对,非 raw answers)
-    expect(allText).not.toContain('Which auth method?');
+    // items 用 header 配对(不含 question 全文);outcome 保留原始 answers key(question 全文)
+    expect(block.items.join('\n')).not.toContain('Which auth method?');
+    // 不含 API 字符串
+    expect(JSON.stringify(block)).not.toContain('User has answered');
+    // 不含 agent-completion(旧 kind 已移除)
+    expect(JSON.stringify(block)).not.toContain('agent-completion');
 
-    // ── 必断 4:finishToolCall 用了 agent-completion(跳过 call 行)
-    expect(finishToolCalls).toHaveLength(1);
-    expect(finishToolCalls[0]?.finalKind).toBe('agent-completion');
-    // agent-completion 的 lines 是 [父标题, 子项...] (不含 ● ask_user_question call 行)
-    const resultLineContents = finishToolCalls[0]!.lines.map(l => l.content).join('\n');
-    expect(resultLineContents).not.toContain('ask_user_question');
-
-    // ── 必断 5:不再注册 Ctrl+O expandable(子项已在主消息区默认展示)
+    // 不注册 expandable
     expect(pipeline.getLastExpandableFullLines()).toBeNull();
   });
 
-  it('cancelled outcome 渲染 ● Declined(父标题)', () => {
-    const { renderer, prints } = mockRenderer();
+  it('cancelled outcome → AskBlock with Declined summary', () => {
+    const renderer = createRecordingRenderer();
     const pipeline = new BlockPipeline(renderer);
     pipeline.emit({
       kind: 'tool_call', name: 'ask_user_question', toolUseId: 'tuu-e2e-2',
@@ -114,16 +106,14 @@ describe('AUTO-0025 Phase B (Task 16b):ask_user_question structured result e2e',
         outcome: { kind: 'cancelled' },
       },
     });
-    const allText = prints.map(p => p.text).join('\n');
-    // cancelled 无子项,只有父标题行(● 前缀)
-    expect(allText).toContain('● ');
-    expect(allText.toLowerCase()).toContain('declined');
+
+    expect(renderer.askBlocks).toHaveLength(1);
+    expect(renderer.askBlocks[0]!.summary).toBe('Declined to answer');
+    expect(renderer.askBlocks[0]!.items).toEqual(['User declined to answer questions']);
   });
 
-  it('API 通道零污染:block.output(API 字符串)与 structuredOutcome(UI 对象)并存但不混淆', () => {
-    // 此测试验证设计契约:同一个 tool_result 事件携带两个通道的数据,
-    // 但 block-pipeline 渲染时只用 structuredOutcome(UI),output(API)不进渲染。
-    const { renderer, prints } = mockRenderer();
+  it('API 通道零污染:output(API 字符串)不进 AskBlock', () => {
+    const renderer = createRecordingRenderer();
     const pipeline = new BlockPipeline(renderer);
     pipeline.emit({
       kind: 'tool_call', name: 'ask_user_question', toolUseId: 'tuu-e2e-3',
@@ -132,18 +122,18 @@ describe('AUTO-0025 Phase B (Task 16b):ask_user_question structured result e2e',
     const apiString = 'User has answered your questions: "q"="A". You can now continue...';
     pipeline.emit({
       kind: 'tool_result', name: 'ask_user_question', toolUseId: 'tuu-e2e-3',
-      output: apiString,  // 这是 API 通道的内容
+      output: apiString,
       structuredOutcome: {
         version: 1,
         request: { questions: [{ header: 'Cfg', question: 'q', options: [{ label: 'A', description: 'd' }, { label: 'B', description: 'd' }], multiSelect: false }] },
         outcome: { kind: 'submitted', answers: { q: 'A' } },
       },
     });
-    const allText = prints.map(p => p.text).join('\n');
-    // UI 渲染走结构化:主消息区含父标题 + 子项配对,不含 API 字符串原文
-    expect(allText).toContain('Answered');
-    expect(allText).toContain('Cfg → A');
-    expect(allText).not.toContain(apiString);
-    expect(allText).not.toContain('You can now continue');
+
+    const block = renderer.askBlocks[0]!;
+    expect(block.summary).toBe('Answered 1 question');
+    expect(block.items).toEqual(['Cfg → A']);
+    expect(JSON.stringify(block)).not.toContain(apiString);
+    expect(JSON.stringify(block)).not.toContain('You can now continue');
   });
 });

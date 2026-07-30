@@ -9,7 +9,7 @@ import { PipelineToStoreAdapter } from '../../tui/state/pipeline-adapter.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { renderFinalizedLine } from './text-layout.js';
 
-/** 构造完整流程的 store（user → thinking → assistant），返回 messages */
+/** 构造完整流程的 store（user → thinking → final-only assistant），返回 semantic model。 */
 function setupFullConversation() {
   const store = createMessagesStore();
   const adapter = new PipelineToStoreAdapter(store);
@@ -19,27 +19,24 @@ function setupFullConversation() {
   pipeline.emit({ kind: 'thinking_delta', content: '思考' });
   pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
   pipeline.emit({ kind: 'assistant_text', text: '你好！', isFinal: true });
-  return store.getState().messages;
+  return store.getState().model;
 }
 
-describe('thinking_end → assistant 间距数据契约', () => {
-  it('完整流程后，Thought for 与 assistant 之间在数据上有 gap 空行', () => {
-    const msgs = setupFullConversation();
-    // 展开所有消息的所有行
-    const allLines = msgs.flatMap(m => m.lines.map(l => ({ role: m.role, content: l.content })));
-
-    const thoughtIdx = allLines.findIndex(l => l.content.includes('Thought for'));
-    const assistantIdx = allLines.findIndex(l =>
-      l.content.startsWith('●') && !l.content.includes('Thinking') && !l.content.includes('thought')
+describe('thinking_end → final-only assistant semantic lifecycle', () => {
+  it('flushes the thinking summary before creating the finalized assistant', () => {
+    const model = setupFullConversation();
+    const thoughtIdx = model.items.findIndex(
+      item => item.kind === 'system'
+        && item.subkind === 'thinking-summary'
+        && item.text === 'Thought for 1s',
+    );
+    const assistantIdx = model.items.findIndex(
+      item => item.kind === 'assistant' && item.text === '你好！',
     );
 
     expect(thoughtIdx).toBeGreaterThanOrEqual(0);
     expect(assistantIdx).toBeGreaterThan(thoughtIdx);
-
-    // 关键：Thought for 和 assistant 之间至少有一个空行
-    const between = allLines.slice(thoughtIdx + 1, assistantIdx);
-    const hasGap = between.some(l => l.content === '');
-    expect(hasGap).toBe(true);
+    expect(model.deferredThinking).toEqual([]);
   });
 });
 

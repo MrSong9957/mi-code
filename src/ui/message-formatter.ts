@@ -87,7 +87,7 @@ export class MessageFormatter {
    */
   private static formatThinkingEnd(meta: UIMessageMeta): FormattedLine {
     return {
-      // 2 空格缩进烤进 content（indent 字段是死数据，printMessage 不消费；
+      // 2 空格缩进烤进 content（indent 字段是死数据，渲染层不消费；
       // 这里直接前置空格保证渲染时缩进生效，与 ⎿ 结果行对齐）
       content: '  ' + formatThinkingSummary(meta.duration ?? 0, meta.filesRead ?? 0),
       style: BLOCK_STYLES.dim,
