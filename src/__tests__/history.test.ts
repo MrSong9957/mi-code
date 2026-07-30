@@ -146,7 +146,10 @@ describe('HistoryManager', () => {
         expect(h[2]!.input).toBe('first')
         rmSync(tdir, { recursive: true, force: true })
       }
-    })
+      // 20 轮 × (mkdtemp + 3×appendFile + readFile + rmSync) = 100+ 次真实磁盘 IO。
+      // 单跑 1089ms，全量负载下膨胀至 5s 量级；30s 约为全量实测峰值的 6 倍余量，
+      // 覆盖 Windows Defender 扫描等极端干扰。
+    }, 30000)
 
     it('should cache results per project', async () => {
       await manager.addEntry('hello', 'proj1')
