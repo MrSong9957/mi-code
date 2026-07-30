@@ -210,7 +210,6 @@ describe('INV-D7: Confidence 不等于事实', () => {
       candidate_claim: 'test',
       candidate_confidence: 1.0, // 满分 confidence
       candidate_scope_ref: 'scope-1',
-      candidate_evidence_refs: [],
       candidate_context_refs: [],
       candidate_invalidation_conditions: [],
       candidate_sensitivity_labels: [],
