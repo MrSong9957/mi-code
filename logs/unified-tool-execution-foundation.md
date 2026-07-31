@@ -162,3 +162,33 @@ CallbackError 保持导出
 - 无 Hook 发现/配置、验证账本、委派子授权、AJV 或投机抽象被加入。
 - `ToolRegistry.execute()` 保持 public 且未改，服务显式推迟的 legacy 路径。
 - P1-P5 迁移后无 `registry.execute()` 直调（ESLint + 源边界测试双重守卫）。
+
+## 合并前代码审查（code-review 技能）
+
+PR #3 发布后做了一次独立代码审查（5 路并行代理 + 集中事实核查），发现 4 个问题，按置信度打分：
+
+| # | 问题 | 分数 | 阻塞? | 定性 |
+|---|------|------|-------|------|
+| 4 | 流式/串行 duration 时钟源不一致（`Date.now()` vs `performance.now()`），流式起点含排队等待 | 82 | **是** | 迁移遗漏，已修复 |
+| 1 | 权限拒绝输出丢失 `[Blocked by permission]` 前缀，UI 对被拦截的写入工具可能虚报行数 | 75 | 否 | 真实缺陷，有 `Error:` 前缀兜底，记录待后续 |
+| 3 | `classifyExecutorError` 的 `code` 检查在 AbortError/TimeoutError 之前，顺序脆弱 | 70 | 否 | 理论性，代码库无实际触发源 |
+| 2 | 流式单工具抛错丢弃后续兄弟结果 | **55**（从85下调） | 否 | **重评**：`TypeError` 冒泡是有意设计，`streaming-executor.test.ts:207-227` 明确锁定为预期行为，非回归 |
+
+### 阻塞项修复（commit `5f3cefb`）
+
+**问题4：duration 口径不一致。**
+
+契约调查：消费方（`subagent-presentation.ts:69` 注释明确"工具执行耗时"、`index.ts:798` 映射为 `durationMs` 供 UI 展示）期望**纯工具执行耗时**，无证据要求流式路径含排队等待时间。串行路径已用 `executionResult.durationMs`（`performance.now()` 在 `executeToolCall` 内部测）。前提条件满足，可安全统一。
+
+TDD：
+- RED：新增测试断言流式 `emitToolResult.duration === executionResult.durationMs`（同源），失败于 `35 (Date.now) vs 36.075 (performance.now)`，证明两时钟源不同。
+- GREEN：流式分支改用 `tool.executionResult?.durationMs ?? 0`（`TrackedTool.executionResult` 已存储完整结果）。
+- 清理：`toolStartTimes` Map 仅服务于旧计时，无其他用途（`emitToolCall.startTime` 用独立局部变量），删除声明与写入。
+
+验证：新测试 + `streaming-executor` + `streaming-query` 共 26/26 通过，typecheck、build 通过。
+
+### 未处理项（评分 < 80，记录但不阻塞本 PR）
+
+- 问题1（前缀）：统一执行路径的 `permission_denied` 输出是裸 `gated.human_reason`，而 `block-format.ts:284` 的 `isNonSuccessOutput` 依赖 `[Blocked by permission]` 前缀。`Error:` 兜底覆盖执行错误但不含权限拒绝。建议后续在 `tool-execution.ts` permission_denied 分支加前缀，或改 `isNonSuccessOutput` 识别 `failure.kind`。
+- 问题3（顺序）：`classifyExecutorError` 应把 `name` 精确匹配（AbortError/TimeoutError）放在 `code` 宽松匹配之前，符合"先具体后通用"。
+- 问题2（fail-fast 代价）：单工具未分类错误终止 `getRemainingResults()` generator 是有意设计，但会连带丢弃出错工具之后已完成的兄弟结果。当前测试只覆盖单工具，未覆盖多工具并发场景。如需让模型从单点故障恢复，应在 throw 前 flush 已完成兄弟结果。
