@@ -11,6 +11,8 @@
 
 import { computeScrollState, clampScrollTop } from '../components/scroll-state.js';
 import stringWidth from 'string-width';
+import { wrapLineWithSpans, type WrappedSpan } from './wrap-line.js';
+import { getUsableWidth } from './wrap-line.js';
 
 /** Footer 输入框固定显示的最大行数。超过则启用视口滚动。 */
 export const MAX_VISIBLE_INPUT_LINES = 5;
@@ -24,6 +26,141 @@ export const PROMPT = '❯ ';
 export const CONTINUATION_INDENT = '  ';
 export const PROMPT_WIDTH = stringWidth(PROMPT);
 export const CONTINUATION_INDENT_WIDTH = stringWidth(CONTINUATION_INDENT);
+
+/**
+ * 输入框的一个物理行（应用层折行后）。光标/选区/渲染/viewport 共用此结构。
+ *
+ * 物理本质：用户输入文本经 wrapLineWithSpans 折行后的单行，携带源区间与光标列映射，
+ * 这样光标定位、选区高亮、Footer 渲染、viewport 滚动都基于同一份数据，不存在算法分叉。
+ */
+export interface InputPhysicalRow {
+  /** 该物理行的可渲染文本（不含前缀，来自 WrappedSpan.text） */
+  text: string;
+  /** 该物理行覆盖的源输入码点区间起始（含，跨逻辑行累计） */
+  sourceStart: number;
+  /** 该物理行覆盖的源输入码点区间结束（不含） */
+  sourceEnd: number;
+  /** 所属逻辑行（input.split('\n') 下标） */
+  logicalLineIndex: number;
+  /** 前缀种类：仅整个输入第 0 物理行 prompt，其余 continuation */
+  prefixKind: 'prompt' | 'continuation';
+  /** 折行种类：'none'=整个输入首物理行，'hard'=\n 后新逻辑行首物理行，'soft'=软折续行 */
+  breakKind: 'soft' | 'hard' | 'none';
+  /**
+   * 光标列映射：全局源 cursor offset → 本物理行内显示列（不含前缀）。
+   * 由 WrappedSpan.cursorColMap（相对逻辑行）转为全局 offset（加 lineOffset）。
+   * 在 wrapping 断行过程中生成，覆盖被丢弃空格。
+   * cursorVisibleCol = prefixKind 宽度 + cursorColMap[cursor]（Step 6 用）。
+   */
+  cursorColMap: Record<number, number>;
+}
+
+/**
+ * 输入框视口布局（物理行模型）。渲染、高度、viewport、光标定位的唯一数据源。
+ *
+ * 接口分阶段（Step 4 → Step 6）：
+ * - Step 4：产出 physicalRowCount/visibleRowCount/viewportTop/visibleRows（visibleRows[i] 已含 cursorColMap）。
+ * - Step 6：新增 cursorVisibleRow/cursorVisibleCol 并实现 cursor 定位。
+ */
+export interface InputViewportLayout {
+  /** 物理行总数（折行后，≥1） */
+  physicalRowCount: number;
+  /** 实际渲染的可见行数 = clamp(physicalRowCount, 1, maxVisible) */
+  visibleRowCount: number;
+  /** 视口顶部物理行号（0-based） */
+  viewportTop: number;
+  /** 视口内的物理行（已切片，Footer 直接 map） */
+  visibleRows: InputPhysicalRow[];
+  // ↓ 仅以下两字段由 Step 6 新增；Step 4 接口暂不含。InputPhysicalRow.cursorColMap 在 Step 4 即有。
+  // cursorVisibleRow: number;  // 相对视口（Step 6 新增）
+  // cursorVisibleCol: number;  // 含前缀（Step 6 新增）
+}
+
+/**
+ * 计算输入框视口布局（物理行模型）。
+ *
+ * 算法：
+ * 1. input.split('\n') 得逻辑行；
+ * 2. 每个逻辑行按其首物理行宽度调 wrapLineWithSpans，产出 WrappedSpan[]；
+ *    - 整个输入的第 0 物理行用 firstWidth（扣 prompt budget）；
+ *    - 其余逻辑行的首物理行也用 contWidth（扣 continuation budget）；
+ *    - 续物理行一律 contWidth。
+ * 3. 每个 span 转 InputPhysicalRow（charStart/End 加逻辑行全局偏移 → sourceStart/End；
+ *    cursorColMap 同样转全局 offset）。
+ * 4. visibleRowCount = clamp(physicalRowCount, 1, maxVisible)；viewportTop（Step 7 实现，暂为 0）。
+ *
+ * @param input 完整输入文本（可能多行）
+ * @param _cursor 光标码点索引（Step 4 暂不读取，Step 6 启用做 cursor 定位）
+ * @param cols 终端列数
+ * @param firstLinePrefixWidth 首行 prompt 宽度（PROMPT_WIDTH）
+ * @param continuationPrefixWidth 续行缩进宽度（CONTINUATION_INDENT_WIDTH）
+ * @param maxVisible 视口高度上限（默认 MAX_VISIBLE_INPUT_LINES）
+ */
+export function computeInputViewportLayout(
+  input: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _cursor: number,
+  cols: number,
+  firstLinePrefixWidth: number,
+  continuationPrefixWidth: number,
+  maxVisible: number = MAX_VISIBLE_INPUT_LINES,
+): InputViewportLayout {
+  const usable = getUsableWidth(cols);
+  const firstWidth = Math.max(1, usable - firstLinePrefixWidth);
+  const contWidth = Math.max(1, usable - continuationPrefixWidth);
+
+  const logicalLines = input.split('\n');
+  const allRows: InputPhysicalRow[] = [];
+
+  let lineOffset = 0;                    // 该逻辑行在整输入中的码点偏移（累计，含已过的 \n）
+  let isVeryFirstPhysicalRow = true;     // 整个输入的第 0 物理行（只有它用 firstWidth + prompt）
+
+  for (let li = 0; li < logicalLines.length; li++) {
+    const line = logicalLines[li]!;
+    // 首物理行宽度：仅整个输入的第 0 物理行用 firstWidth；其余逻辑行首物理行也用 contWidth
+    const logicalFirstWidth = isVeryFirstPhysicalRow ? firstWidth : contWidth;
+    const spans: WrappedSpan[] = wrapLineWithSpans(line, logicalFirstWidth, contWidth);
+
+    for (let si = 0; si < spans.length; si++) {
+      const span = spans[si]!;
+      const prefixKind = isVeryFirstPhysicalRow ? 'prompt' : 'continuation';
+      // breakKind：整个输入首物理行 none；\n 后新逻辑行首物理行 hard；软折续行 soft
+      const breakKind: InputPhysicalRow['breakKind'] =
+        (si === 0 && li === 0) ? 'none'
+        : (si === 0 && li > 0) ? 'hard'
+        : span.breakKind;   // 'soft'
+
+      // cursorColMap 全局转换：相对逻辑行 offset → 全局 offset（加 lineOffset）。作为字段传入，不展开到顶层。
+      const cursorColMap = Object.fromEntries(
+        Object.entries(span.cursorColMap).map(([offset, column]) => [
+          lineOffset + Number(offset),
+          column,
+        ]),
+      );
+
+      allRows.push({
+        text: span.text,
+        sourceStart: lineOffset + span.charStart,
+        sourceEnd: lineOffset + span.charEnd,
+        logicalLineIndex: li,
+        prefixKind,
+        breakKind,
+        cursorColMap,
+      });
+      isVeryFirstPhysicalRow = false;
+    }
+
+    lineOffset += [...line].length + 1;   // +1 跳过 \n（末逻辑行无 \n 但 +1 不影响其 sourceEnd）
+  }
+
+  const physicalRowCount = allRows.length;
+  const visibleRowCount = Math.min(Math.max(1, physicalRowCount), maxVisible);
+  // viewportTop 由 Step 7 实现光标居中滚动；Step 4 暂为 0（Step 7 接入前 visibleRows 仍正确切片）
+  const viewportTop = 0;
+  const visibleRows = allRows.slice(viewportTop, viewportTop + visibleRowCount);
+
+  return { physicalRowCount, visibleRowCount, viewportTop, visibleRows };
+}
 
 export interface InputViewport {
   /** 输入文本总行数 */
