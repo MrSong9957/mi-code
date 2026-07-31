@@ -135,6 +135,57 @@ describe('streamingQuery structuredOutcome 透传', () => {
     expect(askOutcomeStore.size()).toBe(0);
   });
 
+  it('流式路径 emitToolResult 的 duration 与 executionResult.durationMs 同源(纯执行耗时,不含排队等待)', async () => {
+    // 契约:duration 字段供 UI 展示"工具执行耗时"(subagent-presentation.ts:69 注释明确),
+    // 应取 executeToolCall 内部用 performance.now() 测的 executionResult.durationMs,
+    // 而非从 addTool 派发时刻起算的 Date.now() 壁钟差(后者含并发排队等待时间)。
+    // 本测试用一个可观测执行耗时的工具,断言两者数值一致(同源),而非断言时间范围(避免 flaky)。
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'dur-1', name: 'slow_echo', input: { text: 'x' } }],
+      [{ type: 'text', text: 'done' }],
+    ]);
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'slow_echo',
+      description: 'echo with observable duration',
+      parameters: { type: 'object', properties: { text: { type: 'string' } } },
+    }, async (input) => {
+      // 真实执行耗时:约 30ms,足以与排队/壁钟误差区分
+      await new Promise(r => setTimeout(r, 30));
+      return `echo: ${(input as { text: string }).text}`;
+    });
+
+    const eventBus = new StreamEventBus();
+    let capturedDuration: number | undefined;
+    let capturedExecDuration: number | undefined;
+    eventBus.onToolResult(d => {
+      capturedDuration = d.duration;
+    });
+
+    const gen = streamingQuery(client, registry, 'hi', {
+      systemPrompt: 'sys',
+      tools: [{
+        name: 'slow_echo',
+        description: 'echo with observable duration',
+        parameters: { type: 'object', properties: { text: { type: 'string' } } },
+      }],
+      signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime(),
+      eventBus,
+    });
+
+    for await (const msg of gen) {
+      if (msg.type === 'tool_result' && msg.executionResult) {
+        capturedExecDuration = msg.executionResult.durationMs;
+      }
+    }
+
+    expect(capturedDuration).toBeDefined();
+    expect(capturedExecDuration).toBeDefined();
+    // 核心断言:两条路径的 duration 必须同源(严格相等),而非各自独立计时
+    expect(capturedDuration).toBe(capturedExecDuration);
+  });
+
   it('普通工具的 tool_result 不携带 structuredOutcome(undefined)', async () => {
     const client = new ScriptedStreamClient([
       [{ type: 'tool_use', id: 'tuu-2', name: 'plain_tool', input: {} }],

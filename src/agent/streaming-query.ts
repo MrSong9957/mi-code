@@ -465,7 +465,6 @@ export async function* streamingQuery(
     // Wave C Task 9: toolResults 提前声明为 per-turn 累积器, 让 no-tool runtime gate
     // 能在阶段 1 收到 tool_use 时立即 push protocol rejection (不依赖阶段 3 才存在)。
     const toolResults: ToolResultBlock[] = [];
-    const toolStartTimes = new Map<string, number>();
     let needsFollowUp = false;
 
     // 创建流式工具执行器
@@ -615,7 +614,6 @@ export async function* streamingQuery(
               if (streamingExecutor) {
                 streamingExecutor.addTool(block as ToolUseBlock);
                 const startTime = Date.now();
-                toolStartTimes.set(block.id, startTime);
                 eventBus?.emitToolCall({
                   toolUseId: (block as ToolUseBlock).id,
                   name: (block as ToolUseBlock).name,
@@ -725,7 +723,7 @@ export async function* streamingQuery(
             toolUseId: tool.id,
             name: tool.block.name,
             output,
-            duration: Date.now() - (toolStartTimes.get(tool.id) ?? Date.now()),
+            duration: tool.executionResult?.durationMs ?? 0,
             structuredOutcome,
           });
 
