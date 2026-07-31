@@ -125,9 +125,20 @@ npx vitest run src/__tests__/regression/unified-tool-execution-paths.test.ts
 ```
 npm run typecheck  → exit 0（无错误）
 npm run build      → exit 0（planner/system.generated.ts 重新生成）
-npm test           → 299 files, 4351 passed | 4 skipped | 0 failed
+npm test           → 299 files, 4351 passed | 4 skipped | 0 failed（见下方 flaky 说明）
 npm run lint       → 64 errors, 106 warnings（全部为基线既有，见下）
 ```
+
+> **`npm test` flaky 说明（非本次引入，未闭环）：**
+> 实测时 `src/__tests__/regression/child-process-env-scrub.test.ts` 曾出现 3 例间歇性失败，报
+> `child environment denied: missing required: SystemRoot, ComSpec`。已确认：
+> - 该测试文件及被测代码（`background-manager.ts`、`permission/child-environment.ts`）**均不在本次分支 diff 内**（非 unified-tool-execution 引入）。
+> - 单独运行该文件 4/4 通过；同一分支连续两次全量运行均 4351 通过 → **间歇性 flaky，非确定性 bug**。
+> - Vitest 配置为 `pool: 'forks', singleFork: true`（单进程串行），故非并发污染，而是**同进程内某测试修改 `process.env` 未恢复的串行状态泄漏**。
+> - **未闭环**：具体污染源尚未定位（grep 未找到删除 `SystemRoot`/`ComSpec` 未恢复的测试）。
+> - **当前未发现被测代码缺陷证据**，但 `background-manager.ts` 直接读 `process.env`（非启动快照）的设计在长生命周期进程下存在脆弱性，不能完全排除。
+>
+> 建议处理方式（独立 issue，P2，不阻塞本 PR）：在测试入口加 env-leak 探针 `afterEach` 守卫（比对启动时 `SystemRoot`/`ComSpec`/`PATH` 快照）以精确定位污染源，而非继续 grep。
 
 **lint 基线证明**（计划 10.2 方法）：
 基线提交 `206f4f7`（Task 1 之前）源码已含本次改动文件中仅有的两个问题：
