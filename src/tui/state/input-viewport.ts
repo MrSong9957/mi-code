@@ -155,9 +155,6 @@ export function computeInputViewportLayout(
 
   const physicalRowCount = allRows.length;
   const visibleRowCount = Math.min(Math.max(1, physicalRowCount), maxVisible);
-  // viewportTop 由 Step 7 实现光标居中滚动；Step 6/7 之前暂为 0。
-  const viewportTop = 0;
-  const visibleRows = allRows.slice(viewportTop, viewportTop + visibleRowCount);
 
   // === cursor 定位（Step 6）===
   // 钳 cursor 到合法码点范围 [0, 输入码点长度]。
@@ -190,6 +187,14 @@ export function computeInputViewportLayout(
   }
 
   const cursorAbsRow = cursorRow;
+
+  // === viewportTop 光标居中滚动（Step 7）===
+  // 复用 computeScrollState/clampScrollTop：居中起点 = cursorRow - floor(visibleRowCount/2)，钳到 [0, maxScroll]。
+  const scrollState = computeScrollState({ total: physicalRowCount, visibleRows: visibleRowCount, scrollTop: 0 });
+  const centered = cursorAbsRow - Math.floor(visibleRowCount / 2);
+  const viewportTop = clampScrollTop(centered, scrollState.maxScroll);
+  const visibleRows = allRows.slice(viewportTop, viewportTop + visibleRowCount);
+
   const cursorVisibleRow = Math.max(0, Math.min(cursorAbsRow - viewportTop, visibleRowCount - 1));
   // 光标列 = 该行前缀宽 + cursorColMap[cursor]（直接查询映射，禁止从 row.text 反推）。
   const prefixWidth = allRows[cursorAbsRow]!.prefixKind === 'prompt' ? firstLinePrefixWidth : continuationPrefixWidth;

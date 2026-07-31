@@ -187,3 +187,28 @@ describe('computeInputViewportLayout 全局 offset + cursor 集成覆盖 (Step 6
     expect(l.cursorVisibleCol).toBe(CONTINUATION_INDENT_WIDTH + 0);
   });
 });
+
+// Step 7:viewport 滚动 + >5 物理行。
+// visibleRowCount=clamp(physicalRowCount,1,maxVisible);超 maxVisible 时 viewportTop 跟随光标居中。
+describe('computeInputViewportLayout viewport 滚动 (Step 7)', () => {
+  it('6 逻辑行:visibleRowCount=5,光标居中,cursorVisibleRow∈[0,5)', () => {
+    const input = Array.from({ length: 6 }, (_, i) => `l${i}`).join('\n');
+    const l = L(input, input.length);  // cursor 在末尾(第 5 逻辑行末)
+    expect(l.visibleRowCount).toBe(5);
+    expect(l.cursorVisibleRow).toBeGreaterThanOrEqual(0);
+    expect(l.cursorVisibleRow).toBeLessThan(5);
+    // 末尾光标:viewportTop 应使末行可见
+    expect(l.viewportTop + l.visibleRowCount).toBe(l.physicalRowCount);
+  });
+
+  it('一逻辑行折 >5 物理行:visibleRowCount=5,光标恒在视口', () => {
+    const budget = (80 - 1) - PROMPT_WIDTH;
+    const text = 'a'.repeat(budget * 7);  // 折成 ≥7 物理行
+    const l = L(text, text.length);  // cursor 在末尾
+    expect(l.physicalRowCount).toBeGreaterThan(5);
+    expect(l.visibleRowCount).toBe(5);
+    expect(l.cursorVisibleRow).toBeGreaterThanOrEqual(0);
+    expect(l.cursorVisibleRow).toBeLessThan(5);
+    expect(l.viewportTop + l.visibleRowCount).toBe(l.physicalRowCount);
+  });
+});
