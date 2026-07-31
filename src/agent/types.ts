@@ -74,8 +74,8 @@ export interface ToolDefinition {
  */
 export interface ToolExecutionContext {
   toolUseId: string;
-  // 未来扩展(当前不实现,仅预留):
-  // signal?: AbortSignal;   // 用户取消 / turn 中断 / timeout
+  /** 用户取消、turn 中断或 timeout 信号。 */
+  signal?: AbortSignal;
   /**
    * Wave E Task 14 (M-065 / ERC-4): Sanitized Execution Plan。
    *
