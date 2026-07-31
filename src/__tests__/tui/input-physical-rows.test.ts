@@ -98,3 +98,64 @@ describe('computeInputViewportLayout 物理行边界 (Step 5)', () => {
     expect(helloRow.sourceEnd).toBe(worldRow.sourceStart); // 连续,空格在 helloRow 区间内
   });
 });
+
+// Step 6:cursor 定位(cursorVisibleRow/Col + 三条边界契约 + 匹配优先级)。
+// 三条契约:
+//  1. 软折行边界归下一物理行行首;
+//  2. 硬换行字符位置归前一行末;
+//  3. \n 后 cursor 归下一逻辑行行首。
+// 优先级:开区间内(1) > 行首 sourceStart(2,从前往后) > 行末 sourceEnd(3,从后往前归前一行) > 末行兜底(4)。
+describe('computeInputViewportLayout cursor 定位 (Step 6)', () => {
+  // === 契约1:软折行边界归下一物理行行首 ===
+  it('软折行边界:cursor 在折行点归下一物理行行首(cursorVisibleCol=前缀宽+0)', () => {
+    const firstBudget = (80 - 1) - PROMPT_WIDTH; // 77
+    const text = 'a'.repeat(firstBudget + 1);     // 折成 [0,77)+[77,78)
+    const l = L(text, firstBudget, 80);           // cursor=77 在折行点
+    expect(l.cursorVisibleRow).toBe(1);           // 归下一物理行(行1)
+    expect(l.cursorVisibleCol).toBe(CONTINUATION_INDENT_WIDTH + 0); // 行首,内容列=0
+  });
+
+  // === 契约2:硬换行字符位置归前一行末 ===
+  it('硬换行:cursor 指向 \\n(cursor=3 in "AAA\\n888")归前一行末(cursorVisibleRow=0)', () => {
+    const l = L('AAA\n888', 3);
+    expect(l.cursorVisibleRow).toBe(0);
+    expect(l.cursorVisibleCol).toBe(PROMPT_WIDTH + 3); // 'AAA' 末,内容列=3
+  });
+  it('硬换行:cursor 在源区间内("AAA\\n888" cursor=5)→ cursorVisibleRow=1', () => {
+    expect(L('AAA\n888', 5).cursorVisibleRow).toBe(1);
+  });
+
+  // === 契约3:\n 后的 cursor 归下一逻辑行行首 ===
+  it('\\n 后 cursor:AAA\\n888 cursor=4(下一逻辑行行首)→ cursorVisibleRow=1,内容列=0', () => {
+    const l = L('AAA\n888', 4);
+    expect(l.cursorVisibleRow).toBe(1);
+    expect(l.cursorVisibleCol).toBe(CONTINUATION_INDENT_WIDTH + 0);
+  });
+
+  // === 零长度空行 / 连续空行 / 尾随空行(优先级2 行首命中)===
+  it('零长度空行:AAA\\n\\n888 cursor=4 → cursorVisibleRow=1', () => {
+    const l = L('AAA\n\n888', 4);
+    expect(l.cursorVisibleRow).toBe(1);
+    expect(l.cursorVisibleCol).toBe(CONTINUATION_INDENT_WIDTH);
+  });
+  it('连续空行:\\n\\n cursor=1 → cursorVisibleRow=1(第二行行首)', () => {
+    expect(L('\n\n', 1).cursorVisibleRow).toBe(1);
+  });
+  it('连续空行:\\n\\n cursor=2 → cursorVisibleRow=2(第三行行首)', () => {
+    expect(L('\n\n', 2).cursorVisibleRow).toBe(2);
+  });
+  it('尾随空行:AAA\\n cursor=4 → cursorVisibleRow=1', () => {
+    expect(L('AAA\n', 4).cursorVisibleRow).toBe(1);
+  });
+  it('输入末尾:AAA cursor=3 → cursorVisibleRow=0(优先级3 末行)', () => {
+    const l = L('AAA', 3);
+    expect(l.cursorVisibleRow).toBe(0);
+    expect(l.cursorVisibleCol).toBe(PROMPT_WIDTH + 3);
+  });
+
+  // === CJK 列定位(查 cursorColMap)===
+  it('CJK cursorVisibleCol:cursorColMap 查询(中=2),不落字符中间', () => {
+    const l = L('你好世界', 2, 80); // cursor=2 在 '你好' 后
+    expect(l.cursorVisibleCol).toBe(PROMPT_WIDTH + 4);
+  });
+});

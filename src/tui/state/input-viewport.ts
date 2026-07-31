@@ -71,9 +71,10 @@ export interface InputViewportLayout {
   viewportTop: number;
   /** 视口内的物理行（已切片，Footer 直接 map） */
   visibleRows: InputPhysicalRow[];
-  // ↓ 仅以下两字段由 Step 6 新增；Step 4 接口暂不含。InputPhysicalRow.cursorColMap 在 Step 4 即有。
-  // cursorVisibleRow: number;  // 相对视口（Step 6 新增）
-  // cursorVisibleCol: number;  // 含前缀（Step 6 新增）
+  /** 光标所在的可见物理行号（相对视口，用于光标 y 定位）。Step 6 起有。 */
+  cursorVisibleRow: number;
+  /** 光标在可见物理行内的列（含前缀，用于光标 x 定位）。Step 6 起有。 */
+  cursorVisibleCol: number;
 }
 
 /**
@@ -98,8 +99,7 @@ export interface InputViewportLayout {
  */
 export function computeInputViewportLayout(
   input: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _cursor: number,
+  cursor: number,
   cols: number,
   firstLinePrefixWidth: number,
   continuationPrefixWidth: number,
@@ -155,11 +155,48 @@ export function computeInputViewportLayout(
 
   const physicalRowCount = allRows.length;
   const visibleRowCount = Math.min(Math.max(1, physicalRowCount), maxVisible);
-  // viewportTop 由 Step 7 实现光标居中滚动；Step 4 暂为 0（Step 7 接入前 visibleRows 仍正确切片）
+  // viewportTop 由 Step 7 实现光标居中滚动；Step 6/7 之前暂为 0。
   const viewportTop = 0;
   const visibleRows = allRows.slice(viewportTop, viewportTop + visibleRowCount);
 
-  return { physicalRowCount, visibleRowCount, viewportTop, visibleRows };
+  // === cursor 定位（Step 6）===
+  // 钳 cursor 到合法码点范围 [0, 输入码点长度]。
+  const cpLen = [...input].length;
+  const clampedCursor = Math.max(0, Math.min(cursor, cpLen));
+
+  // findCursorRow：四优先级在 allRows 中定位 cursor 所在物理行（绝对索引）。
+  // 优先级：开区间内(1) > 行首 sourceStart(2,从前往后) > 行末 sourceEnd(3,从后往前归前一行) > 末行兜底(4)。
+  let cursorRow = allRows.length - 1; // 优先级 4 兜底
+  // 优先级 2：cursor == 某行 sourceStart（行首；含零长度空行 sourceStart==sourceEnd）。
+  //   覆盖：软折行边界（归下一物理行行首）、\n 后归下一逻辑行行首、零长度空行。
+  for (let i = 0; i < allRows.length; i++) {
+    if (clampedCursor === allRows[i]!.sourceStart) { cursorRow = i; break; }
+  }
+  // 优先级 1：cursor 严格落在某行开区间 (sourceStart, sourceEnd) 内 → 该行（最高优先级）。
+  for (let i = 0; i < allRows.length; i++) {
+    if (allRows[i]!.sourceStart < clampedCursor && clampedCursor < allRows[i]!.sourceEnd) { cursorRow = i; break; }
+  }
+  // 优先级 3：cursor == 某行 sourceEnd（行末；从后往前归前一行）。
+  //   覆盖：硬换行字符位置归前一行末、输入末尾。
+  //   仅在优先级 1/2 未命中（cursorRow 不以 cursor 为 sourceStart，且 cursor 不在其开区间内）时才调整。
+  //   否则优先级 2（行首）保留——软折行边界归下一物理行行首。
+  const cur = allRows[cursorRow]!;
+  const priority12Hit = cur.sourceStart === clampedCursor
+    || (cur.sourceStart < clampedCursor && clampedCursor < cur.sourceEnd);
+  if (!priority12Hit) {
+    for (let i = allRows.length - 1; i >= 0; i--) {
+      if (clampedCursor === allRows[i]!.sourceEnd) { cursorRow = i; break; }
+    }
+  }
+
+  const cursorAbsRow = cursorRow;
+  const cursorVisibleRow = Math.max(0, Math.min(cursorAbsRow - viewportTop, visibleRowCount - 1));
+  // 光标列 = 该行前缀宽 + cursorColMap[cursor]（直接查询映射，禁止从 row.text 反推）。
+  const prefixWidth = allRows[cursorAbsRow]!.prefixKind === 'prompt' ? firstLinePrefixWidth : continuationPrefixWidth;
+  const colInRow = allRows[cursorAbsRow]!.cursorColMap[clampedCursor] ?? 0;
+  const cursorVisibleCol = prefixWidth + colInRow;
+
+  return { physicalRowCount, visibleRowCount, viewportTop, visibleRows, cursorVisibleRow, cursorVisibleCol };
 }
 
 export interface InputViewport {
