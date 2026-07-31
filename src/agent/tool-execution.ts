@@ -1,5 +1,13 @@
+import { createHash } from 'node:crypto';
 import type { PermissionChecker } from '../permission/checker.js';
 import type { RuntimeSecurityGate } from '../permission/runtime-gate.js';
+import { freezeSnapshot } from './contracts/identities.js';
+import type { ToolRegistry } from './tool-registry.js';
+import type {
+  ToolExecutionContext,
+  ToolParameter,
+  ToolUseBlock,
+} from './types.js';
 
 export interface CallbackError {
   name: string;
@@ -89,4 +97,178 @@ export class PreCallbackInputViolation extends Error {
     super(message);
     this.name = 'PreCallbackInputViolation';
   }
+}
+
+type ValidationResult =
+  | { valid: true }
+  | { valid: false; message: string };
+
+function invalid(path: string, message: string): ValidationResult {
+  return { valid: false, message: `${path}: ${message}` };
+}
+
+function validateToolInput(
+  value: unknown,
+  schema: ToolParameter,
+  path = '$',
+): ValidationResult {
+  switch (schema.type) {
+    case 'null':
+      return value === null ? { valid: true } : invalid(path, 'expected null');
+    case 'string':
+      return typeof value === 'string'
+        ? { valid: true }
+        : invalid(path, 'expected string');
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value)
+        ? { valid: true }
+        : invalid(path, 'expected number');
+    case 'boolean':
+      return typeof value === 'boolean'
+        ? { valid: true }
+        : invalid(path, 'expected boolean');
+    case 'array': {
+      if (!Array.isArray(value)) return invalid(path, 'expected array');
+      if (!schema.items) return { valid: true };
+      for (let index = 0; index < value.length; index += 1) {
+        const result = validateToolInput(
+          value[index],
+          schema.items,
+          `${path}[${index}]`,
+        );
+        if (!result.valid) return result;
+      }
+      return { valid: true };
+    }
+    case 'object': {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        return invalid(path, 'expected object');
+      }
+      const record = value as Record<string, unknown>;
+      for (const key of schema.required ?? []) {
+        if (!Object.hasOwn(record, key)) {
+          return invalid(`${path}.${key}`, 'required property missing');
+        }
+      }
+      for (const [key, propertySchema] of Object.entries(schema.properties ?? {})) {
+        if (!Object.hasOwn(record, key)) continue;
+        const result = validateToolInput(
+          record[key],
+          propertySchema,
+          `${path}.${key}`,
+        );
+        if (!result.valid) return result;
+      }
+      return { valid: true };
+    }
+  }
+}
+
+function stageHits(): ToolExecutionStageHits {
+  return {
+    preExecute: false,
+    postExecute: false,
+    failure: false,
+  };
+}
+
+export async function executeToolCall(
+  registry: ToolRegistry,
+  call: ToolUseBlock,
+  runtime: ToolExecutionRuntime,
+  context: Omit<ToolExecutionContext, 'toolUseId'> = {},
+): Promise<ToolExecutionResult> {
+  const startedAt = performance.now();
+  const originalInput = structuredClone(call.input);
+  const registered = registry.get(call.name);
+  if (!registered) {
+    const message = `Unknown tool "${call.name}"`;
+    return {
+      status: 'failure',
+      toolUseId: call.id,
+      toolName: call.name,
+      inputUsed: freezeSnapshot(originalInput),
+      durationMs: performance.now() - startedAt,
+      stageHits: stageHits(),
+      output: `Error: ${message}`,
+      failure: {
+        kind: 'unknown_tool',
+        stage: 'lookup',
+        message,
+      },
+    };
+  }
+
+  const validation = validateToolInput(
+    originalInput,
+    registered.definition.parameters,
+  );
+  if (!validation.valid) {
+    return {
+      status: 'failure',
+      toolUseId: call.id,
+      toolName: call.name,
+      inputUsed: freezeSnapshot(originalInput),
+      durationMs: performance.now() - startedAt,
+      stageHits: stageHits(),
+      output: `Error: Invalid input for "${call.name}": ${validation.message}`,
+      failure: {
+        kind: 'invalid_input',
+        stage: 'validation',
+        message: validation.message,
+      },
+    };
+  }
+
+  const finalInput = structuredClone(originalInput);
+  const inputUsed = freezeSnapshot(structuredClone(finalInput));
+  const actionSnapshotId = `snap:${createHash('sha256')
+    .update(JSON.stringify({ name: call.name, input: finalInput }))
+    .digest('hex')
+    .slice(0, 16)}`;
+  const decision = runtime.permissionChecker.checkDecision(
+    call.name,
+    finalInput,
+    {
+      decision_id: `exec:${call.id}`,
+      action_snapshot_id: actionSnapshotId,
+      policy_id: 'permission-default',
+      policy_version: '1',
+    },
+  );
+  const gated = await runtime.runtimeGate.execute(
+    decision,
+    async () => registered.executor(finalInput, {
+      ...context,
+      toolUseId: call.id,
+    }),
+  );
+
+  if (typeof gated !== 'string') {
+    return {
+      status: 'failure',
+      toolUseId: call.id,
+      toolName: call.name,
+      inputUsed,
+      durationMs: performance.now() - startedAt,
+      stageHits: stageHits(),
+      output: gated.human_reason,
+      failure: {
+        kind: 'permission_denied',
+        stage: 'permission',
+        message: gated.human_reason,
+        code: gated.reason_code,
+      },
+    };
+  }
+
+  return {
+    status: 'success',
+    toolUseId: call.id,
+    toolName: call.name,
+    inputUsed,
+    durationMs: performance.now() - startedAt,
+    stageHits: stageHits(),
+    output: gated,
+  };
 }
