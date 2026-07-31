@@ -242,6 +242,65 @@ type ExecutorOutcome =
   | { kind: 'returned'; output: string }
   | { kind: 'threw'; error: unknown };
 
+function safeString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized !== undefined) return serialized;
+    return String(value);
+  } catch {
+    return '[unserializable thrown value]';
+  }
+}
+
+function toCallbackError(value: unknown): CallbackError {
+  if (value instanceof Error) {
+    const result: CallbackError = {
+      name: value.name || 'Error',
+      message: value.message,
+    };
+    if (
+      'code' in value
+      && typeof (value as NodeJS.ErrnoException).code === 'string'
+    ) {
+      result.code = (value as NodeJS.ErrnoException).code;
+    }
+    return result;
+  }
+  return {
+    name: 'NonErrorThrown',
+    message: safeString(value),
+  };
+}
+
+async function finalizeSuccess(
+  result: ToolExecutionSuccess,
+  callback?: ToolExecutionCallbacks['onPostExecute'],
+): Promise<ToolExecutionSuccess> {
+  if (!callback) return result;
+  result.stageHits.postExecute = true;
+  try {
+    await callback(result);
+  } catch (error) {
+    result.postExecuteError = toCallbackError(error);
+  }
+  return result;
+}
+
+async function finalizeFailure(
+  result: ToolExecutionFailure,
+  callback?: ToolExecutionCallbacks['onFailure'],
+): Promise<ToolExecutionFailure> {
+  if (!callback) return result;
+  result.stageHits.failure = true;
+  try {
+    await callback(result);
+  } catch (error) {
+    result.failureCallbackError = toCallbackError(error);
+  }
+  return result;
+}
+
 export async function executeToolCall(
   registry: ToolRegistry,
   call: ToolUseBlock,
@@ -254,7 +313,7 @@ export async function executeToolCall(
   const registered = registry.get(call.name);
   if (!registered) {
     const message = `Unknown tool "${call.name}"`;
-    return {
+    return finalizeFailure({
       status: 'failure',
       toolUseId: call.id,
       toolName: call.name,
@@ -267,7 +326,7 @@ export async function executeToolCall(
         stage: 'lookup',
         message,
       },
-    };
+    }, runtime.callbacks?.onFailure);
   }
 
   const validation = validateToolInput(
@@ -275,7 +334,7 @@ export async function executeToolCall(
     registered.definition.parameters,
   );
   if (!validation.valid) {
-    return {
+    return finalizeFailure({
       status: 'failure',
       toolUseId: call.id,
       toolName: call.name,
@@ -288,7 +347,7 @@ export async function executeToolCall(
         stage: 'validation',
         message: validation.message,
       },
-    };
+    }, runtime.callbacks?.onFailure);
   }
 
   let finalInput = structuredClone(originalInput);
@@ -347,7 +406,7 @@ export async function executeToolCall(
   );
 
   if (gated.kind === 'denied') {
-    return {
+    return finalizeFailure({
       status: 'failure',
       toolUseId: call.id,
       toolName: call.name,
@@ -361,13 +420,13 @@ export async function executeToolCall(
         message: gated.human_reason,
         code: gated.reason_code,
       },
-    };
+    }, runtime.callbacks?.onFailure);
   }
 
   if (gated.kind === 'threw') {
     const failure = classifyExecutorError(gated.error);
     if (!failure) throw gated.error;
-    return {
+    return finalizeFailure({
       status: 'failure',
       toolUseId: call.id,
       toolName: call.name,
@@ -376,10 +435,10 @@ export async function executeToolCall(
       stageHits: hits,
       output: `Error executing tool "${call.name}": ${failure.message}`,
       failure,
-    };
+    }, runtime.callbacks?.onFailure);
   }
 
-  return {
+  return finalizeSuccess({
     status: 'success',
     toolUseId: call.id,
     toolName: call.name,
@@ -387,5 +446,5 @@ export async function executeToolCall(
     durationMs: performance.now() - startedAt,
     stageHits: hits,
     output: gated.output,
-  };
+  }, runtime.callbacks?.onPostExecute);
 }

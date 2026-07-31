@@ -4,6 +4,7 @@ import {
   PreCallbackInputViolation,
   ToolOperationalError,
   type ToolExecutionCallbacks,
+  type ToolExecutionResult,
   type ToolPreExecuteResult,
 } from '../../agent/tool-execution.js';
 import { ToolRegistry } from '../../agent/tool-registry.js';
@@ -45,6 +46,17 @@ const echoDefinition: ToolDefinition = {
     required: ['text'],
   },
 };
+
+function deferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 describe('ToolRegistry.get', () => {
   it('returns the complete registered tool without replacing its executor', () => {
@@ -541,5 +553,279 @@ describe('executeToolCall executor error classification', () => {
   it('does not classify errors from timeout-like message text', async () => {
     const error = new Error('request timeout after 30 seconds');
     await expect(executeThrowing(error)).rejects.toBe(error);
+  });
+});
+
+describe('executeToolCall callback exception post-processing', () => {
+  it('bubbles a Pre Error and does not authorize or execute', async () => {
+    const preError = new Error('pre failed');
+    const executor = vi.fn(async () => 'unreachable');
+    const runtime = createToolExecutionRuntime({
+      callbacks: {
+        onPreExecute: () => {
+          throw preError;
+        },
+      },
+    });
+    const decisionSpy = vi.spyOn(runtime.permissionChecker, 'checkDecision');
+
+    await expect(executeToolCall(
+      register(echoDefinition, executor),
+      call('echo', { text: 'hello' }),
+      runtime,
+    )).rejects.toBe(preError);
+    expect(decisionSpy).not.toHaveBeenCalled();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('bubbles a non-Error thrown by Pre unchanged', async () => {
+    const thrown = { stage: 'pre', reason: 'contract failed' };
+    const runtime = createToolExecutionRuntime({
+      callbacks: {
+        onPreExecute: () => {
+          throw thrown;
+        },
+      },
+    });
+
+    await expect(executeToolCall(
+      register(echoDefinition),
+      call('echo', { text: 'hello' }),
+      runtime,
+    )).rejects.toBe(thrown);
+  });
+
+  it('preserves success and attaches an Error thrown by Post', async () => {
+    let callbackResult: ToolExecutionResult | undefined;
+    const postError = Object.assign(new Error('post failed'), {
+      code: 'POST_FAILED',
+    });
+    const runtime = createToolExecutionRuntime({
+      callbacks: {
+        onPostExecute: (result) => {
+          callbackResult = result;
+          throw postError;
+        },
+      },
+    });
+
+    const result = await executeToolCall(
+      register(echoDefinition, async () => 'success output'),
+      call('echo', { text: 'hello' }),
+      runtime,
+    );
+
+    expect(callbackResult).toMatchObject({
+      status: 'success',
+      output: 'success output',
+      stageHits: { postExecute: true },
+    });
+    expect(result).toMatchObject({
+      status: 'success',
+      output: 'success output',
+      postExecuteError: {
+        name: 'Error',
+        message: 'post failed',
+        code: 'POST_FAILED',
+      },
+    });
+  });
+
+  it('safely serializes a non-Error thrown by Post', async () => {
+    const circular: Record<string, unknown> = { reason: 'post failed' };
+    circular.self = circular;
+    const runtime = createToolExecutionRuntime({
+      callbacks: {
+        onPostExecute: () => {
+          throw circular;
+        },
+      },
+    });
+
+    const result = await executeToolCall(
+      register(echoDefinition),
+      call('echo', { text: 'hello' }),
+      runtime,
+    );
+
+    expect(result).toMatchObject({
+      status: 'success',
+      postExecuteError: {
+        name: 'NonErrorThrown',
+        message: '[unserializable thrown value]',
+      },
+    });
+  });
+
+  it('notifies Failure for every structured failure stage', async () => {
+    const observed: Array<{ kind: string; stage: string; stageHit: boolean }> = [];
+    const callbacks: ToolExecutionCallbacks = {
+      onFailure: (result) => {
+        observed.push({
+          kind: result.failure.kind,
+          stage: result.failure.stage,
+          stageHit: result.stageHits.failure,
+        });
+      },
+    };
+    const runtime = () => createToolExecutionRuntime({ callbacks });
+
+    await executeToolCall(
+      new ToolRegistry(),
+      call('missing', {}),
+      runtime(),
+    );
+    await executeToolCall(
+      register(echoDefinition),
+      call('echo', {}),
+      runtime(),
+    );
+    await executeToolCall(
+      register({
+        name: 'write_file',
+        description: 'write',
+        parameters: { type: 'object' },
+      }),
+      call('write_file', {}),
+      createToolExecutionRuntime({ mode: 'plan', callbacks }),
+    );
+    await executeToolCall(
+      register(echoDefinition, async () => {
+        throw new ToolOperationalError('offline');
+      }),
+      call('echo', { text: 'hello' }),
+      runtime(),
+    );
+
+    expect(observed).toEqual([
+      { kind: 'unknown_tool', stage: 'lookup', stageHit: true },
+      { kind: 'invalid_input', stage: 'validation', stageHit: true },
+      { kind: 'permission_denied', stage: 'permission', stageHit: true },
+      { kind: 'operational_error', stage: 'execution', stageHit: true },
+    ]);
+  });
+
+  it('preserves failure and attaches an Error thrown by Failure notification', async () => {
+    const runtime = createToolExecutionRuntime({
+      callbacks: {
+        onFailure: () => {
+          throw new Error('failure notification failed');
+        },
+      },
+    });
+
+    const result = await executeToolCall(
+      register(echoDefinition),
+      call('echo', {}),
+      runtime,
+    );
+
+    expect(result).toMatchObject({
+      status: 'failure',
+      failure: { kind: 'invalid_input', stage: 'validation' },
+      stageHits: { failure: true },
+      failureCallbackError: {
+        name: 'Error',
+        message: 'failure notification failed',
+      },
+    });
+  });
+
+  it('preserves failure when Failure notification throws a non-Error', async () => {
+    const thrown = { reason: 'notification transport failed' };
+    const result = await executeToolCall(
+      new ToolRegistry(),
+      call('missing', {}),
+      createToolExecutionRuntime({
+        callbacks: {
+          onFailure: () => {
+            throw thrown;
+          },
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'failure',
+      failure: { kind: 'unknown_tool', stage: 'lookup' },
+      failureCallbackError: {
+        name: 'NonErrorThrown',
+        message: '{"reason":"notification transport failed"}',
+      },
+    });
+  });
+
+  it('excludes blocked Post time from durationMs', async () => {
+    const postEntered = deferred();
+    const releasePost = deferred();
+    const nowSpy = vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(100)
+      .mockReturnValueOnce(125);
+    let releaseIfBlocked = false;
+
+    try {
+      const execution = executeToolCall(
+        register(echoDefinition),
+        call('echo', { text: 'hello' }),
+        createToolExecutionRuntime({
+          callbacks: {
+            onPostExecute: async () => {
+              releaseIfBlocked = true;
+              postEntered.resolve();
+              await releasePost.promise;
+            },
+          },
+        }),
+      );
+      const first = await Promise.race([
+        postEntered.promise.then(() => 'post-entered' as const),
+        execution.then(() => 'execution-returned' as const),
+      ]);
+
+      expect(first).toBe('post-entered');
+      releasePost.resolve();
+      const result = await execution;
+      expect(result.durationMs).toBe(25);
+    } finally {
+      if (releaseIfBlocked) releasePost.resolve();
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('excludes blocked Failure notification time from durationMs', async () => {
+    const failureEntered = deferred();
+    const releaseFailure = deferred();
+    const nowSpy = vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(200)
+      .mockReturnValueOnce(240);
+    let releaseIfBlocked = false;
+
+    try {
+      const execution = executeToolCall(
+        register(echoDefinition),
+        call('echo', {}),
+        createToolExecutionRuntime({
+          callbacks: {
+            onFailure: async () => {
+              releaseIfBlocked = true;
+              failureEntered.resolve();
+              await releaseFailure.promise;
+            },
+          },
+        }),
+      );
+      const first = await Promise.race([
+        failureEntered.promise.then(() => 'failure-entered' as const),
+        execution.then(() => 'execution-returned' as const),
+      ]);
+
+      expect(first).toBe('failure-entered');
+      releaseFailure.resolve();
+      const result = await execution;
+      expect(result.durationMs).toBe(40);
+    } finally {
+      if (releaseIfBlocked) releaseFailure.resolve();
+      nowSpy.mockRestore();
+    }
   });
 });
