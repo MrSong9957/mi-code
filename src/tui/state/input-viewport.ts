@@ -15,6 +15,16 @@ import stringWidth from 'string-width';
 /** Footer 输入框固定显示的最大行数。超过则启用视口滚动。 */
 export const MAX_VISIBLE_INPUT_LINES = 5;
 
+/**
+ * 输入框首行 prompt 与续行缩进。
+ * 宽度由 stringWidth(字符串) 计算——若 prompt 改样式,宽度自动跟随,不硬编码。
+ * Footer/FooterV2 与 layout 函数都从这些常量取值,单一真理源(迁移在后续 Step)。
+ */
+export const PROMPT = '❯ ';
+export const CONTINUATION_INDENT = '  ';
+export const PROMPT_WIDTH = stringWidth(PROMPT);
+export const CONTINUATION_INDENT_WIDTH = stringWidth(CONTINUATION_INDENT);
+
 export interface InputViewport {
   /** 输入文本总行数 */
   totalLines: number;
