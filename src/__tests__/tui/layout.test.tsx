@@ -11,17 +11,19 @@ import { createSpinnerStore } from '../../tui/state/spinner-store.js';
 import { createCompletionStore } from '../../tui/state/completion-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import { flattenMessages } from '../../tui/selection/flatten-messages.js';
+import { computeInputViewportLayout, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH } from '../../tui/state/input-viewport.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../../tui/types.js';
 
 const STATUS: StatusBarData = {
   mode: 'build', model: 'sonnet', dir: 'Projects/mi-code', branch: 'main', contextPct: 0.25,
 };
 const LOGO: LogoData = { version: '1.0.0', dir: '/tmp/proj' };
+const EMPTY_LAYOUT = computeInputViewportLayout('', 0, 80, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH);
 
 function makeApp(messages: TuiMessage[] = []): { lastFrame: () => string | undefined } {
   const flatLines = flattenMessages(messages);
   return render(
-    React.createElement(App, { messages, status: STATUS, logo: LOGO, selectionStore: createSelectionStore(), spinnerStore: createSpinnerStore(), completionStore: createCompletionStore(), overlayStore: createOverlayStore(), input: '', cursor: 0, scrollTop: 0, flatLines }),
+    React.createElement(App, { messages, status: STATUS, logo: LOGO, selectionStore: createSelectionStore(), spinnerStore: createSpinnerStore(), completionStore: createCompletionStore(), overlayStore: createOverlayStore(), layout: EMPTY_LAYOUT, scrollTop: 0, flatLines }),
   );
 }
 
@@ -96,7 +98,7 @@ describe('App 顶层布局（flexbox footer 紧贴 + LOGO 固定区）', () => {
   it('StatusBar 进度条随 contextPct 变化', () => {
     const status50: StatusBarData = { ...STATUS, contextPct: 0.5 };
     const { lastFrame } = render(
-      React.createElement(App, { messages: [], status: status50, logo: LOGO, selectionStore: createSelectionStore(), spinnerStore: createSpinnerStore(), completionStore: createCompletionStore(), overlayStore: createOverlayStore(), input: '', cursor: 0, scrollTop: 0, flatLines: [] }),
+      React.createElement(App, { messages: [], status: status50, logo: LOGO, selectionStore: createSelectionStore(), spinnerStore: createSpinnerStore(), completionStore: createCompletionStore(), overlayStore: createOverlayStore(), layout: EMPTY_LAYOUT, scrollTop: 0, flatLines: [] }),
     );
     const frame = stripAnsi(lastFrame() ?? '');
     // 50% → round(0.5*10)=5 满（进度条无括号，见 StatusBar 多色高亮）

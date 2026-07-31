@@ -398,8 +398,6 @@ export function ConnectedApp({
         spinnerStore={spinnerStore}
         completionStore={completionStore}
         overlayStore={overlayStore}
-        input={inputText}
-        cursor={cursor}
         rows={rows}
         cols={cols}
         scrollTop={effectiveScrollTop}

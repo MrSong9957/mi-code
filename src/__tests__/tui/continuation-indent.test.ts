@@ -23,6 +23,11 @@ import type { FlatLine } from '../../tui/selection/flatten-messages.js';
 const PROMPT = '❯ ';
 const CONTINUATION_INDENT = '  ';
 
+// 构造 App props（含 layout，Step 11 起 App 必传 layout，不再接收 input/cursor）。
+function appProps(input: string, cursor: number, cols = 80) {
+  return { layout: computeInputViewportLayout(input, cursor, cols, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH) };
+}
+
 describe('续行缩进渲染回归', () => {
   describe('alt-screen 路径(Footer.tsx via App)', () => {
     const STATUS: StatusBarData = { model: 't', mode: 'auto', dir: '/t', branch: 'main', contextPct: 0 };
@@ -39,8 +44,7 @@ describe('续行缩进渲染回归', () => {
           spinnerStore: createSpinnerStore(),
           completionStore: createCompletionStore(),
           overlayStore: createOverlayStore(),
-          input: 'first\nsecond\nthird',
-          cursor: 17,
+          ...appProps('first\nsecond\nthird', 17),
           scrollTop: 0,
           flatLines: FLAT,
           cols: 80,
@@ -63,8 +67,7 @@ describe('续行缩进渲染回归', () => {
           spinnerStore: createSpinnerStore(),
           completionStore: createCompletionStore(),
           overlayStore: createOverlayStore(),
-          input: 'single',
-          cursor: 6,
+          ...appProps('single', 6),
           scrollTop: 0,
           flatLines: FLAT,
           cols: 80,
@@ -95,7 +98,7 @@ describe('续行缩进渲染回归', () => {
           spinnerStore: createSpinnerStore(),
           completionStore: createCompletionStore(),
           overlayStore: createOverlayStore(),
-          input, cursor,
+          ...appProps(input, cursor),
           scrollTop: 0,
           flatLines: FLAT,
           cols: 80, rows: 24,
@@ -164,7 +167,6 @@ describe('续行缩进渲染回归', () => {
         spinnerStore: createSpinnerStore(),
         completionStore: createCompletionStore(),
         overlayStore: createOverlayStore(),
-        input: 'single', cursor: 6,
         layout,
         scrollTop: 0,
         flatLines: [],

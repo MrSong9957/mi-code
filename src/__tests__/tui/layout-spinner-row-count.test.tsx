@@ -7,6 +7,7 @@ import { createCompletionStore } from '../../tui/state/completion-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import { createSelectionStore } from '../../tui/state/selection-store.js';
 import { createSpinnerStore } from '../../tui/state/spinner-store.js';
+import { computeInputViewportLayout, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH } from '../../tui/state/input-viewport.js';
 
 describe('spinner layout reservation', () => {
   it('uses SpinnerView.rowCount to reserve every auxiliary row before the input', () => {
@@ -27,8 +28,7 @@ describe('spinner layout reservation', () => {
         spinnerStore={spinnerStore}
         completionStore={createCompletionStore()}
         overlayStore={createOverlayStore()}
-        input=""
-        cursor={0}
+        layout={computeInputViewportLayout('', 0, 80, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH)}
         scrollTop={0}
         flatLines={[]}
       />,

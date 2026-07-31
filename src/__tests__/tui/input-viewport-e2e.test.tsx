@@ -22,7 +22,7 @@ import { createSelectionStore } from '../../tui/state/selection-store.js';
 import { createSpinnerStore } from '../../tui/state/spinner-store.js';
 import { createCompletionStore } from '../../tui/state/completion-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
-import { MAX_VISIBLE_INPUT_LINES } from '../../tui/state/input-viewport.js';
+import { MAX_VISIBLE_INPUT_LINES, computeInputViewportLayout, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH } from '../../tui/state/input-viewport.js';
 import { cursorScreenPos } from '../../tui/state/cursor-position.js';
 import { computeInputViewport } from '../../tui/state/input-viewport.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../../tui/types.js';
@@ -48,6 +48,7 @@ function renderApp(input: string, cursor: number, rows = 24, flatLines: FlatLine
   const spinnerStore = createSpinnerStore();
   const completionStore = createCompletionStore();
   const overlayStore = createOverlayStore();
+  const layout = computeInputViewportLayout(input, cursor, 80, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH);
   return render(
     React.createElement(App, {
       messages: EMPTY_MESSAGES,
@@ -57,8 +58,7 @@ function renderApp(input: string, cursor: number, rows = 24, flatLines: FlatLine
       spinnerStore,
       completionStore,
       overlayStore,
-      input,
-      cursor,
+      layout,
       scrollTop: 0,
       flatLines,
       cols: 80,
