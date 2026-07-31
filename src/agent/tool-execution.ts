@@ -198,6 +198,50 @@ function readUpdatedInput(
   return value.updatedInput;
 }
 
+function classifyExecutorError(
+  error: unknown,
+): ToolExecutionFailureDetail | undefined {
+  if (error instanceof ToolOperationalError) {
+    return {
+      kind: 'operational_error',
+      stage: 'execution',
+      message: error.message,
+      code: error.code,
+    };
+  }
+  if (
+    error instanceof Error
+    && 'code' in error
+    && typeof (error as NodeJS.ErrnoException).code === 'string'
+  ) {
+    return {
+      kind: 'operational_error',
+      stage: 'execution',
+      message: error.message,
+      code: (error as NodeJS.ErrnoException).code,
+    };
+  }
+  if (error instanceof Error && error.name === 'AbortError') {
+    return {
+      kind: 'cancelled',
+      stage: 'execution',
+      message: error.message,
+    };
+  }
+  if (error instanceof Error && error.name === 'TimeoutError') {
+    return {
+      kind: 'timeout',
+      stage: 'execution',
+      message: error.message,
+    };
+  }
+  return undefined;
+}
+
+type ExecutorOutcome =
+  | { kind: 'returned'; output: string }
+  | { kind: 'threw'; error: unknown };
+
 export async function executeToolCall(
   registry: ToolRegistry,
   call: ToolUseBlock,
@@ -287,13 +331,22 @@ export async function executeToolCall(
   );
   const gated = await runtime.runtimeGate.execute(
     decision,
-    async () => registered.executor(executorInput, {
-      ...context,
-      toolUseId: call.id,
-    }),
+    async (): Promise<ExecutorOutcome> => {
+      try {
+        return {
+          kind: 'returned',
+          output: await registered.executor(executorInput, {
+            ...context,
+            toolUseId: call.id,
+          }),
+        };
+      } catch (error) {
+        return { kind: 'threw', error };
+      }
+    },
   );
 
-  if (typeof gated !== 'string') {
+  if (gated.kind === 'denied') {
     return {
       status: 'failure',
       toolUseId: call.id,
@@ -311,6 +364,21 @@ export async function executeToolCall(
     };
   }
 
+  if (gated.kind === 'threw') {
+    const failure = classifyExecutorError(gated.error);
+    if (!failure) throw gated.error;
+    return {
+      status: 'failure',
+      toolUseId: call.id,
+      toolName: call.name,
+      inputUsed,
+      durationMs: performance.now() - startedAt,
+      stageHits: hits,
+      output: `Error executing tool "${call.name}": ${failure.message}`,
+      failure,
+    };
+  }
+
   return {
     status: 'success',
     toolUseId: call.id,
@@ -318,6 +386,6 @@ export async function executeToolCall(
     inputUsed,
     durationMs: performance.now() - startedAt,
     stageHits: hits,
-    output: gated,
+    output: gated.output,
   };
 }

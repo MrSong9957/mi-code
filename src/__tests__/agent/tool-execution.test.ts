@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   executeToolCall,
   PreCallbackInputViolation,
+  ToolOperationalError,
   type ToolExecutionCallbacks,
   type ToolPreExecuteResult,
 } from '../../agent/tool-execution.js';
@@ -451,5 +452,94 @@ describe('executeToolCall pre-execution input identity', () => {
       text: 'final',
       nested: { value: 'snapshot' },
     });
+  });
+});
+
+describe('executeToolCall executor error classification', () => {
+  async function executeThrowing(error: unknown) {
+    const registry = register(echoDefinition, async () => {
+      throw error;
+    });
+    return executeToolCall(
+      registry,
+      call('echo', { text: 'hello' }),
+      createToolExecutionRuntime(),
+    );
+  }
+
+  it('converts ToolOperationalError to operational_error', async () => {
+    const result = await executeThrowing(
+      new ToolOperationalError('service unavailable', 'SERVICE_DOWN'),
+    );
+
+    expect(result).toMatchObject({
+      status: 'failure',
+      failure: {
+        kind: 'operational_error',
+        stage: 'execution',
+        message: 'service unavailable',
+        code: 'SERVICE_DOWN',
+      },
+    });
+  });
+
+  it('accepts any string-valued errno code as operational', async () => {
+    const error = Object.assign(new Error('environment failed'), {
+      code: 'EUNLISTED_TEST_CODE',
+    });
+
+    const result = await executeThrowing(error);
+
+    expect(result).toMatchObject({
+      status: 'failure',
+      failure: {
+        kind: 'operational_error',
+        code: 'EUNLISTED_TEST_CODE',
+      },
+    });
+  });
+
+  it('converts AbortError to cancelled', async () => {
+    const error = new Error('cancelled');
+    error.name = 'AbortError';
+
+    const result = await executeThrowing(error);
+
+    expect(result).toMatchObject({
+      status: 'failure',
+      failure: { kind: 'cancelled', stage: 'execution' },
+    });
+  });
+
+  it('converts TimeoutError to timeout', async () => {
+    const error = new Error('deadline exceeded');
+    error.name = 'TimeoutError';
+
+    const result = await executeThrowing(error);
+
+    expect(result).toMatchObject({
+      status: 'failure',
+      failure: { kind: 'timeout', stage: 'execution' },
+    });
+  });
+
+  it('bubbles TypeError by identity', async () => {
+    const error = new TypeError('programmer bug');
+    await expect(executeThrowing(error)).rejects.toBe(error);
+  });
+
+  it('bubbles an unmarked Error by identity', async () => {
+    const error = new Error('unclassified');
+    await expect(executeThrowing(error)).rejects.toBe(error);
+  });
+
+  it('bubbles a non-Error thrown value unchanged', async () => {
+    const thrown = { reason: 'not-an-error' };
+    await expect(executeThrowing(thrown)).rejects.toBe(thrown);
+  });
+
+  it('does not classify errors from timeout-like message text', async () => {
+    const error = new Error('request timeout after 30 seconds');
+    await expect(executeThrowing(error)).rejects.toBe(error);
   });
 });
