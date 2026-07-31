@@ -29,7 +29,8 @@ import { classifyClick, type ClickState } from './selection/click-detector.js';
 import { buildRowTextMap, type RowTextMap } from './selection/row-text-map.js';
 import { getSelectedText } from './selection/get-selected-text.js';
 import { flattenMessages } from './selection/flatten-messages.js';
-import { MAX_VISIBLE_INPUT_LINES } from './state/input-viewport.js';
+import { computeInputViewportLayout, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH } from './state/input-viewport.js';
+import { computeEffectiveScrollTop } from './state/effective-scroll.js';
 import type { MessagesStore } from './state/messages-store.js';
 import type { InputStore } from './state/input-store.js';
 import type { StatusStore } from './state/status-store.js';
@@ -158,13 +159,16 @@ export function ConnectedApp({
   const flatLineCount = flatLines.length;
 
   // Footer 行数 + 可见区（按行算）
-  // 输入框视口固定为 MAX_VISIBLE_INPUT_LINES 行，不再随输入行数增长——历史区大小稳定。
-  const inputViewportExtraLines = MAX_VISIBLE_INPUT_LINES - 1;
+  // 物理行模型：layout 单一计算（footerRows/visibleRows/历史区 共用），透传给 App。
+  // 输入区动态 1–5 行：visibleRowCount 随物理行数变化，历史区相应伸缩（≤4 行）。
+  const layout = computeInputViewportLayout(inputText, cursor, cols, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH);
+  const inputViewportExtraLines = layout.visibleRowCount - 1;
   const suggestionRows = completionVisible ? Math.min(completionCandidates.length, 8) : 0;
   const footerRows = FOOTER_BASE_ROWS + spinnerRowCount + suggestionRows + inputViewportExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
   const maxScroll = Math.max(0, flatLineCount - visibleRows);
-  const effectiveScrollTop = scrolledAway ? scrollTop : maxScroll;
+  // scroll 钳位：scrolledAway 时 clampScrollTop 防越界（修旧 L167 漏钳位缺陷）。
+  const effectiveScrollTop = computeEffectiveScrollTop(scrolledAway, scrollTop, maxScroll);
   const scrollboxRenderedRows = Math.min(flatLineCount, visibleRows);
   const inputRowY = scrollboxRenderedRows + LOGO_ROWS + spinnerRowCount + suggestionRows + 1;
 
@@ -400,6 +404,7 @@ export function ConnectedApp({
         cols={cols}
         scrollTop={effectiveScrollTop}
         flatLines={flatLines}
+        layout={layout}
       />
     </DropdownProvider>
   );
