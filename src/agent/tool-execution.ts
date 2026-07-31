@@ -172,6 +172,32 @@ function stageHits(): ToolExecutionStageHits {
   };
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  return prototype === Object.prototype || prototype === null;
+}
+
+function readUpdatedInput(
+  value: void | ToolPreExecuteResult,
+): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainRecord(value)) {
+    throw new Error('onPreExecute returned an invalid result');
+  }
+  const keys = Object.keys(value);
+  if (keys.some((key) => key !== 'updatedInput')) {
+    throw new Error('onPreExecute returned an invalid result');
+  }
+  if (!Object.hasOwn(value, 'updatedInput')) return undefined;
+  if (!isPlainRecord(value.updatedInput)) {
+    throw new Error('onPreExecute returned an invalid result');
+  }
+  return value.updatedInput;
+}
+
 export async function executeToolCall(
   registry: ToolRegistry,
   call: ToolUseBlock,
@@ -179,6 +205,7 @@ export async function executeToolCall(
   context: Omit<ToolExecutionContext, 'toolUseId'> = {},
 ): Promise<ToolExecutionResult> {
   const startedAt = performance.now();
+  const hits = stageHits();
   const originalInput = structuredClone(call.input);
   const registered = registry.get(call.name);
   if (!registered) {
@@ -189,7 +216,7 @@ export async function executeToolCall(
       toolName: call.name,
       inputUsed: freezeSnapshot(originalInput),
       durationMs: performance.now() - startedAt,
-      stageHits: stageHits(),
+      stageHits: hits,
       output: `Error: ${message}`,
       failure: {
         kind: 'unknown_tool',
@@ -210,7 +237,7 @@ export async function executeToolCall(
       toolName: call.name,
       inputUsed: freezeSnapshot(originalInput),
       durationMs: performance.now() - startedAt,
-      stageHits: stageHits(),
+      stageHits: hits,
       output: `Error: Invalid input for "${call.name}": ${validation.message}`,
       failure: {
         kind: 'invalid_input',
@@ -220,15 +247,37 @@ export async function executeToolCall(
     };
   }
 
-  const finalInput = structuredClone(originalInput);
-  const inputUsed = freezeSnapshot(structuredClone(finalInput));
+  let finalInput = structuredClone(originalInput);
+  if (runtime.callbacks?.onPreExecute) {
+    hits.preExecute = true;
+    const preResult = await runtime.callbacks.onPreExecute({
+      toolUseId: call.id,
+      toolName: call.name,
+      input: freezeSnapshot(structuredClone(originalInput)),
+    });
+    const updatedInput = readUpdatedInput(preResult);
+    if (updatedInput !== undefined) {
+      const replacement = structuredClone(updatedInput);
+      const replacementValidation = validateToolInput(
+        replacement,
+        registered.definition.parameters,
+      );
+      if (!replacementValidation.valid) {
+        throw new PreCallbackInputViolation(replacementValidation.message);
+      }
+      finalInput = replacement;
+    }
+  }
+
+  const executorInput = structuredClone(finalInput);
+  const inputUsed = freezeSnapshot(structuredClone(executorInput));
   const actionSnapshotId = `snap:${createHash('sha256')
-    .update(JSON.stringify({ name: call.name, input: finalInput }))
+    .update(JSON.stringify({ name: call.name, input: executorInput }))
     .digest('hex')
     .slice(0, 16)}`;
   const decision = runtime.permissionChecker.checkDecision(
     call.name,
-    finalInput,
+    executorInput,
     {
       decision_id: `exec:${call.id}`,
       action_snapshot_id: actionSnapshotId,
@@ -238,7 +287,7 @@ export async function executeToolCall(
   );
   const gated = await runtime.runtimeGate.execute(
     decision,
-    async () => registered.executor(finalInput, {
+    async () => registered.executor(executorInput, {
       ...context,
       toolUseId: call.id,
     }),
@@ -251,7 +300,7 @@ export async function executeToolCall(
       toolName: call.name,
       inputUsed,
       durationMs: performance.now() - startedAt,
-      stageHits: stageHits(),
+      stageHits: hits,
       output: gated.human_reason,
       failure: {
         kind: 'permission_denied',
@@ -268,7 +317,7 @@ export async function executeToolCall(
     toolName: call.name,
     inputUsed,
     durationMs: performance.now() - startedAt,
-    stageHits: stageHits(),
+    stageHits: hits,
     output: gated,
   };
 }

@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { executeToolCall } from '../../agent/tool-execution.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  executeToolCall,
+  PreCallbackInputViolation,
+  type ToolExecutionCallbacks,
+  type ToolPreExecuteResult,
+} from '../../agent/tool-execution.js';
 import { ToolRegistry } from '../../agent/tool-registry.js';
 import type {
   ToolDefinition,
@@ -23,6 +28,22 @@ function register(
   registry.register(definition, executor);
   return registry;
 }
+
+const echoDefinition: ToolDefinition = {
+  name: 'echo',
+  description: 'echo',
+  parameters: {
+    type: 'object',
+    properties: {
+      text: { type: 'string' },
+      nested: {
+        type: 'object',
+        properties: { value: { type: 'string' } },
+      },
+    },
+    required: ['text'],
+  },
+};
 
 describe('ToolRegistry.get', () => {
   it('returns the complete registered tool without replacing its executor', () => {
@@ -279,5 +300,156 @@ describe('executeToolCall lookup, validation, and success', () => {
     expect(result.inputUsed).toEqual({ nested: { value: 'before' } });
     expect(Object.isFrozen(result.inputUsed)).toBe(true);
     expect(Object.isFrozen(result.inputUsed.nested)).toBe(true);
+  });
+});
+
+describe('executeToolCall pre-execution input identity', () => {
+  it('executes a complete replacement input and authorizes the same values', async () => {
+    let executorInput: Record<string, unknown> | undefined;
+    const registry = register(echoDefinition, async (input) => {
+      executorInput = structuredClone(input);
+      return `echo: ${input.text}`;
+    });
+    const runtime = createToolExecutionRuntime({
+      callbacks: {
+        onPreExecute: () => ({
+          updatedInput: { text: 'replacement', nested: { value: 'final' } },
+        }),
+      },
+    });
+    const decisionSpy = vi.spyOn(
+      runtime.permissionChecker,
+      'checkDecision',
+    );
+
+    const result = await executeToolCall(
+      registry,
+      call('echo', { text: 'original' }),
+      runtime,
+    );
+
+    const finalInput = {
+      text: 'replacement',
+      nested: { value: 'final' },
+    };
+    expect(decisionSpy).toHaveBeenCalledWith(
+      'echo',
+      finalInput,
+      expect.anything(),
+    );
+    expect(executorInput).toEqual(finalInput);
+    expect(result).toMatchObject({
+      status: 'success',
+      output: 'echo: replacement',
+      inputUsed: finalInput,
+      stageHits: { preExecute: true },
+    });
+  });
+
+  it('passes Pre an immutable snapshot and ignores in-place mutation attempts', async () => {
+    let preInputWasFrozen = false;
+    const registry = register(
+      echoDefinition,
+      async (input) => `echo: ${input.text}`,
+    );
+    const runtime = createToolExecutionRuntime({
+      callbacks: {
+        onPreExecute: (context) => {
+          preInputWasFrozen = Object.isFrozen(context.input)
+            && Object.isFrozen(context.input.nested);
+          expect(Reflect.set(context.input, 'text', 'mutated')).toBe(false);
+        },
+      },
+    });
+
+    const result = await executeToolCall(
+      registry,
+      call('echo', { text: 'original', nested: { value: 'stable' } }),
+      runtime,
+    );
+
+    expect(preInputWasFrozen).toBe(true);
+    expect(result).toMatchObject({
+      status: 'success',
+      output: 'echo: original',
+      inputUsed: { text: 'original', nested: { value: 'stable' } },
+    });
+  });
+
+  it('treats updatedInput as a replacement rather than a patch', async () => {
+    const registry = register(echoDefinition);
+    const runtime = createToolExecutionRuntime({
+      callbacks: {
+        onPreExecute: () => ({ updatedInput: { nested: { value: 'only' } } }),
+      },
+    });
+
+    await expect(executeToolCall(
+      registry,
+      call('echo', { text: 'original' }),
+      runtime,
+    )).rejects.toBeInstanceOf(PreCallbackInputViolation);
+  });
+
+  it.each([
+    null,
+    [],
+    { unexpected: true },
+    { updatedInput: [] },
+  ])('rejects an invalid Pre result shape: %j', async (invalidResult) => {
+    const onPreExecute = (() => invalidResult) as unknown as NonNullable<
+      ToolExecutionCallbacks['onPreExecute']
+    >;
+    const registry = register(echoDefinition);
+
+    await expect(executeToolCall(
+      registry,
+      call('echo', { text: 'original' }),
+      createToolExecutionRuntime({ callbacks: { onPreExecute } }),
+    )).rejects.toThrow('onPreExecute returned an invalid result');
+  });
+
+  it('does not call Pre when original input is invalid', async () => {
+    const onPreExecute = vi.fn<
+      NonNullable<ToolExecutionCallbacks['onPreExecute']>
+    >((): ToolPreExecuteResult => ({ updatedInput: { text: 'fixed' } }));
+
+    const result = await executeToolCall(
+      register(echoDefinition),
+      call('echo', {}),
+      createToolExecutionRuntime({ callbacks: { onPreExecute } }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'failure',
+      failure: { kind: 'invalid_input' },
+    });
+    expect(onPreExecute).not.toHaveBeenCalled();
+  });
+
+  it('keeps inputUsed stable when the executor mutates its input', async () => {
+    const registry = register(echoDefinition, async (input) => {
+      input.text = 'mutated-by-executor';
+      const nested = input.nested as Record<string, unknown>;
+      nested.value = 'mutated-by-executor';
+      return 'done';
+    });
+
+    const result = await executeToolCall(
+      registry,
+      call('echo', { text: 'original' }),
+      createToolExecutionRuntime({
+        callbacks: {
+          onPreExecute: () => ({
+            updatedInput: { text: 'final', nested: { value: 'snapshot' } },
+          }),
+        },
+      }),
+    );
+
+    expect(result.inputUsed).toEqual({
+      text: 'final',
+      nested: { value: 'snapshot' },
+    });
   });
 });
