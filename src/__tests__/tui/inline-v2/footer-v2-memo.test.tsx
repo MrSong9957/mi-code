@@ -16,6 +16,7 @@ import { FooterV2 } from '../../../tui/inline-v2/FooterV2.js';
 import { createCompletionStore } from '../../../tui/state/completion-store.js';
 import { createSelectionStore } from '../../../tui/state/selection-store.js';
 import { createSpinnerStore } from '../../../tui/state/spinner-store.js';
+import { computeInputViewportLayout, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH } from '../../../tui/state/input-viewport.js';
 import type { StatusBarData } from '../../../tui/types.js';
 import type { FooterV2Props } from '../../../tui/inline-v2/FooterV2.js';
 
@@ -27,18 +28,20 @@ const STATUS: StatusBarData = {
   contextPct: 0,
 };
 
+// 构造 layout helper(FooterV2 必传 layout,不再接收 input/cursor/viewportTop)。
+const layoutOf = (input: string, cursor: number, cols = 80) =>
+  computeInputViewportLayout(input, cursor, cols, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH);
+
 describe('<FooterV2>', () => {
   it('渲染 border + 输入 + statusbar', () => {
     const completionStore = createCompletionStore();
     const selectionStore = createSelectionStore();
     const { lastFrame } = render(
       <FooterV2
-        input="hello"
-        cursor={5}
         status={STATUS}
         cols={80}
         inputRowY={10}
-        viewportTop={0}
+        layout={layoutOf('hello', 5)}
         completionStore={completionStore}
         selectionStore={selectionStore}
       />,
@@ -58,12 +61,10 @@ describe('<FooterV2>', () => {
     const selectionStore = createSelectionStore();
     const { lastFrame } = render(
       <FooterV2
-        input="first\nsecond"
-        cursor={11}
         status={STATUS}
         cols={80}
         inputRowY={10}
-        viewportTop={0}
+        layout={layoutOf('first\nsecond', 11)}
         completionStore={completionStore}
         selectionStore={selectionStore}
       />,
@@ -82,12 +83,10 @@ describe('<FooterV2>', () => {
     const selectionStore = createSelectionStore();
     const { lastFrame } = render(
       <FooterV2
-        input="/"
-        cursor={1}
         status={STATUS}
         cols={80}
         inputRowY={10}
-        viewportTop={0}
+        layout={layoutOf('/', 1)}
         completionStore={completionStore}
         selectionStore={selectionStore}
       />,
@@ -127,12 +126,10 @@ describe('<FooterV2> memo 隔离', () => {
     });
 
     const baseProps: FooterV2Props = {
-      input: '',
-      cursor: 0,
       status: STATUS,
       cols: 80,
       inputRowY: 10,
-      viewportTop: 0,
+      layout: layoutOf('', 0),
       completionStore,
       selectionStore,
     };
@@ -164,12 +161,10 @@ describe('<FooterV2> AAA\\n888 多行表征', () => {
     const selectionStore = createSelectionStore();
     const { lastFrame } = render(
       <FooterV2
-        input={"AAA\n888"}
-        cursor={7}
         status={STATUS}
         cols={80}
         inputRowY={10}
-        viewportTop={0}
+        layout={layoutOf("AAA\n888", 7)}
         completionStore={completionStore}
         selectionStore={selectionStore}
       />,
@@ -189,12 +184,10 @@ describe('<FooterV2> AAA\\n888 多行表征', () => {
     const selectionStore = createSelectionStore();
     const { lastFrame } = render(
       <FooterV2
-        input={"AAA\n888"}
-        cursor={7}
         status={STATUS}
         cols={80}
         inputRowY={10}
-        viewportTop={0}
+        layout={layoutOf("AAA\n888", 7)}
         completionStore={completionStore}
         selectionStore={selectionStore}
       />,
