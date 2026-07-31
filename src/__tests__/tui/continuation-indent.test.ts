@@ -15,6 +15,7 @@ import { createSpinnerStore } from '../../tui/state/spinner-store.js';
 import { createCompletionStore } from '../../tui/state/completion-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import { App } from '../../tui/App.js';
+import { cursorScreenPos } from '../../tui/state/cursor-position.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../../tui/types.js';
 import type { FlatLine } from '../../tui/selection/flatten-messages.js';
 
@@ -73,6 +74,73 @@ describe('续行缩进渲染回归', () => {
       expect(frame).toContain(`${PROMPT}single`);
       // 下边框存在(─────),且在 prompt 行之后若干行(补空行撑高)
       expect(frame).toMatch(/─{20,}/);
+    });
+  });
+
+  // 表征测试:用 AAA\n888 精确锁定多行渲染的真实状态(分行/行号/光标/边框)。
+  // 目的:区分"分行错误" vs "高度策略问题" vs "光标落边框"。
+  // 先不假设"必须动态增高",只锁定真实渲染结果。
+  describe('AAA\\n888 多行表征(alt-screen)', () => {
+    const STATUS: StatusBarData = { model: 't', mode: 'auto', dir: '/t', branch: 'main', contextPct: 0 };
+    const LOGO: LogoData = { version: '1', dir: '/t' };
+    const EMPTY: TuiMessage[] = [];
+    const FLAT: FlatLine[] = [];
+
+    function renderApp(input: string, cursor: number) {
+      return render(
+        React.createElement(App, {
+          messages: EMPTY, status: STATUS, logo: LOGO,
+          selectionStore: createSelectionStore(),
+          spinnerStore: createSpinnerStore(),
+          completionStore: createCompletionStore(),
+          overlayStore: createOverlayStore(),
+          input, cursor,
+          scrollTop: 0,
+          flatLines: FLAT,
+          cols: 80, rows: 24,
+        }),
+      );
+    }
+
+    it('AAA 与 888 落在不同物理行(\\n 未被渲染为空格或同行)', () => {
+      expect.hasAssertions();
+      const { lastFrame } = renderApp('AAA\n888', 7);
+      const frame = lastFrame() ?? '';
+      const lines = frame.split('\n');
+      // 找到含 AAA 的行号 和 含 888 的行号
+      const aaaIdx = lines.findIndex(l => l.includes('AAA'));
+      const idx888 = lines.findIndex(l => l.includes('888'));
+      expect(aaaIdx).toBeGreaterThanOrEqual(0);
+      expect(idx888).toBeGreaterThanOrEqual(0);
+      // 核心断言:两者必须在不同行(分行正确),不允许只用 contains 判断
+      expect(idx888).toBeGreaterThan(aaaIdx);
+    });
+
+    it('光标位于 888 所在行(第二行内容区,非边框)', () => {
+      expect.hasAssertions();
+      // cursor=7 指向 "AAA\n888" 末尾(888 之后),应在第二行(y=1)
+      // 通过 cursorScreenPos 验证逻辑层光标位置
+      const pos = cursorScreenPos('AAA\n888', 7, PROMPT);
+      expect(pos.y).toBe(1); // 第二行(0-based)
+    });
+
+    it('AAA 与 888 都落在上下边框之间的输入区(不在边框行)', () => {
+      expect.hasAssertions();
+      const { lastFrame } = renderApp('AAA\n888', 7);
+      const frame = lastFrame() ?? '';
+      const lines = frame.split('\n');
+      const borderRegex = /─{20,}/;
+      const upperBorderIdx = lines.findIndex(l => borderRegex.test(l));
+      const lowerBorderIdx = lines.findIndex((l, i) => i > upperBorderIdx && borderRegex.test(l));
+      expect(upperBorderIdx).toBeGreaterThanOrEqual(0);
+      expect(lowerBorderIdx).toBeGreaterThan(upperBorderIdx);
+      const aaaIdx = lines.findIndex(l => l.includes('AAA'));
+      const idx888 = lines.findIndex(l => l.includes('888'));
+      // 两行内容都必须严格落在上下边框之间(输入区内),不落在边框行
+      expect(aaaIdx).toBeGreaterThan(upperBorderIdx);
+      expect(aaaIdx).toBeLessThan(lowerBorderIdx);
+      expect(idx888).toBeGreaterThan(upperBorderIdx);
+      expect(idx888).toBeLessThan(lowerBorderIdx);
     });
   });
 

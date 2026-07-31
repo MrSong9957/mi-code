@@ -76,8 +76,12 @@ describe('App 顶层布局（flexbox footer 紧贴 + LOGO 固定区）', () => {
     const inputIdx = lines.findIndex(l => l.includes('❯'));
     expect(inputIdx, '应有 ❯ 输入行').toBeGreaterThan(-1);
     expect(lines[inputIdx - 1], '上边框').toContain('─');
-    expect(lines[inputIdx + 1], '下边框').toContain('─');
-    expect(lines[inputIdx + 2], '状态栏').toContain('build');
+    // 输入区为 MAX_VISIBLE_INPUT_LINES 行(不足补空行撑高),下边框在输入区之后,
+    // 不再紧邻输入行。用 findIndex 从 inputIdx 之后定位,保留"结构存在且顺序正确"契约。
+    const lowerBorderIdx = lines.findIndex((l, i) => i > inputIdx && l.includes('─'));
+    expect(lowerBorderIdx, '下边框(输入区之后)').toBeGreaterThan(inputIdx);
+    const statusBarIdx = lines.findIndex((l, i) => i > lowerBorderIdx && l.includes('build'));
+    expect(statusBarIdx, '状态栏(下边框之后)').toBeGreaterThan(lowerBorderIdx);
   });
 
   it('StatusBar 格式：mode | model | dir | branch | [进度条] pct%', () => {

@@ -70,7 +70,7 @@ export function Footer({ input, cursor, status, cols, inputRowY, viewportTop, sp
         selectionStore={selectionStore}
         baseProps={{ color: 'gray' }}
       />
-      <Box {...{ internal_cursorTarget: true } as Record<string, unknown>}>
+      <Box flexDirection="column" {...{ internal_cursorTarget: true } as Record<string, unknown>}>
         {visibleInputLines.map((line, i) => {
           // 首行 prompt 仅在视口顶=0（真首行）时显示；滚动后窗口首行用缩进对齐 prompt 宽度。
           const absLine = viewportTop + i;
