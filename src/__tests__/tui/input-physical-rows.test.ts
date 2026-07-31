@@ -159,3 +159,31 @@ describe('computeInputViewportLayout cursor 定位 (Step 6)', () => {
     expect(l.cursorVisibleCol).toBe(PROMPT_WIDTH + 4);
   });
 });
+
+// Step 6b:全局 offset + 最终 cursor 位置集成覆盖(不改 wrapping 生产代码)。
+// 性质:集成覆盖。dropped-space map 在 Step 3 首次实现(wrapped span),全局转换在 Step 4,
+// cursor 定位在 Step 6。Step 3+4+6 正确后预期直接 GREEN。若失败回到对应步骤修,本步不改 wrapping。
+describe('computeInputViewportLayout 全局 offset + cursor 集成覆盖 (Step 6b)', () => {
+  it('全局 offset:aa   bb 行0 cursorColMap 被丢弃空格(全局 offset 2,3,4)→ 列 2', () => {
+    const l = L('aa   bb', 0, 8);
+    const aaRow = l.visibleRows.find(r => r.text === 'aa')!;
+    expect(aaRow.cursorColMap[2]).toBe(2);
+    expect(aaRow.cursorColMap[3]).toBe(2);
+    expect(aaRow.cursorColMap[4]).toBe(2);
+  });
+  it('全局 offset:下一行 bb 行 cursorColMap {5:0,6:1,7:2}', () => {
+    const l = L('aa   bb', 0, 8);
+    const bbRow = l.visibleRows.find(r => r.text === 'bb')!;
+    expect(bbRow.cursorColMap).toMatchObject({ 5: 0, 6: 1, 7: 2 });
+  });
+  it('cursor 在被丢弃空格之间(cursor=2,3,4):cursorVisibleRow=0,Col=PROMPT_WIDTH+2', () => {
+    expect(L('aa   bb', 2, 8).cursorVisibleCol).toBe(PROMPT_WIDTH + 2);
+    expect(L('aa   bb', 3, 8).cursorVisibleCol).toBe(PROMPT_WIDTH + 2);
+    expect(L('aa   bb', 4, 8).cursorVisibleCol).toBe(PROMPT_WIDTH + 2);
+  });
+  it('cursor 在下一单词行首(cursor=5):cursorVisibleRow=1,Col=CONTINUATION_INDENT_WIDTH+0', () => {
+    const l = L('aa   bb', 5, 8);
+    expect(l.cursorVisibleRow).toBe(1);
+    expect(l.cursorVisibleCol).toBe(CONTINUATION_INDENT_WIDTH + 0);
+  });
+});
