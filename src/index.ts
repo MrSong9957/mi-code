@@ -197,30 +197,13 @@ const subagentClientProvider = (modelChoice?: 'small' | 'inherit') => {
   const model = modelChoice === 'inherit' ? currentModel() : currentSmallModel();
   return createStreamClient(provider, apiKey ?? '', model, baseUrl);
 };
-const taskTool = createTaskTool(childToolRegistry, worktreeManager, subagentClientProvider);
-toolRegistry.register(taskTool.definition, taskTool.executor);
-const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, {
-  clientProvider: subagentClientProvider,
-  permissionChecker,
-});
-toolRegistry.register(spawnSoTool.definition, spawnSoTool.executor);
 // spawn_agent：派角色化子代理（explore/plan/general）
-// 透传 permissionChecker：让子代理也受 plan 模式约束（读 allow / 写 deny）
 // 透传技能目录：让子代理 system prompt 含技能发现信息（对齐 CC skill discovery）
 function truncateSkillsDescription(desc: string, maxLines = 20): string {
   const lines = desc.split('\n');
   if (lines.length <= maxLines) return desc;
   return lines.slice(0, maxLines).join('\n') + `\n... and ${lines.length - maxLines} more skills`;
 }
-const spawnAgentTool = createSpawnAgentTool(
-  childToolRegistry,
-  subagentClientProvider,
-  permissionChecker,
-  runSubagent,
-  truncateSkillsDescription(skillRegistry.describeAvailable()),
-  () => lastSystemPrompt,  // getParentSystemPrompt
-);
-toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 const loadSkillTool = createLoadSkillTool(skillRegistry);
 toolRegistry.register(loadSkillTool.definition, loadSkillTool.executor);
 const sendMessageTool = createSendMessageTool(teammateManager);
@@ -408,6 +391,29 @@ const runtimeGate = new RuntimeSecurityGate({
   pendingStore: makePendingStore(() => sessionId),
   channel: getDecisionChannel(),
 });
+const executionRuntime = { permissionChecker, runtimeGate };
+
+const taskTool = createTaskTool(
+  childToolRegistry,
+  executionRuntime,
+  worktreeManager,
+  subagentClientProvider,
+);
+toolRegistry.register(taskTool.definition, taskTool.executor);
+const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, {
+  clientProvider: subagentClientProvider,
+  executionRuntime,
+});
+toolRegistry.register(spawnSoTool.definition, spawnSoTool.executor);
+const spawnAgentTool = createSpawnAgentTool(
+  childToolRegistry,
+  subagentClientProvider,
+  executionRuntime,
+  runSubagent,
+  truncateSkillsDescription(skillRegistry.describeAvailable()),
+  () => lastSystemPrompt,
+);
+toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 
 /**
  * PlanStore：plan 文件落盘（plan 模式产出物的档案柜）。
@@ -828,11 +834,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     // budget 软限制退出。需要时可通过 StreamingQueryOptions.maxTurns 显式注入安全网。
     for await (const msg of streamingQuery(streamClient, toolRegistry, userMessageForAgent ?? userInput, {
       systemPrompt, tools, signal: ac.signal,
-      eventBus, compactClient, permissionChecker,
-      // Wave B Task 13 (M-066): 接入 RuntimeSecurityGate。
-      // ask 在 approved_once 到位前会真正阻塞(经 askManager UI 问卷),
-      // 无 channel 时 fail closed(no_channel),绝不降级为 allow。
-      runtimeGate,
+      eventBus, compactClient, executionRuntime,
       initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
       onMessages: (finalMessages) => {
         const newMsgs = finalMessages.slice(persistedCount);

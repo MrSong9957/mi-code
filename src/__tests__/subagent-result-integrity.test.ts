@@ -100,6 +100,7 @@ describe('subagent result integrity', () => {
       role: 'explore',
       client,
       maxSteps: 5,
+      executionRuntime: createToolExecutionRuntime(),
     });
 
     expect(result.status).toBe('unverified');
@@ -119,6 +120,7 @@ describe('subagent result integrity', () => {
       role: 'explore',
       client,
       maxSteps: 5,
+      executionRuntime: createToolExecutionRuntime(),
     });
 
     expect(result.status).toBe('completed');
@@ -133,6 +135,7 @@ describe('subagent result integrity', () => {
     ]]);
     const result = await runSubagent('inspect tests', makeReadRegistry(), {
       role: 'explore', client, maxSteps: 1,
+      executionRuntime: createToolExecutionRuntime(),
     });
 
     expect(result.status).toBe('incomplete');
@@ -158,6 +161,7 @@ describe('subagent result integrity', () => {
       role: 'explore',
       client,
       maxSteps: 2,
+      executionRuntime: createToolExecutionRuntime(),
     });
 
     expect(result.status).toBe('incomplete');
@@ -188,6 +192,7 @@ describe('subagent result integrity', () => {
       role: 'explore',
       client,
       maxSteps: 3,
+      executionRuntime: createToolExecutionRuntime(),
     });
 
     expect(result.status).toBe('incomplete');
@@ -257,6 +262,7 @@ describe('subagent final summary turn (AUTO-0025 Task 4)', () => {
     ]);
     const result = await runSubagent('list skills', makeReadRegistry(), {
       role: 'explore', client, maxSteps: 2,
+      executionRuntime: createToolExecutionRuntime(),
     });
 
     // 第 1 轮:工具列表含 read_file
@@ -278,6 +284,7 @@ describe('subagent final summary turn (AUTO-0025 Task 4)', () => {
     ]);
     const result = await runSubagent('list skills', makeReadRegistry(), {
       role: 'explore', client, maxSteps: 2,
+      executionRuntime: createToolExecutionRuntime(),
     });
 
     expect(result.status).toBe('incomplete');
@@ -330,6 +337,7 @@ describe('subagent hidden child progress (AUTO-0025-stable Task 3)', () => {
 
     const result = await runSubagent('inspect 3 files', makeReadRegistry(), {
       role: 'explore', client, maxSteps: 4,
+      executionRuntime: createToolExecutionRuntime(),
     });
 
     // evidence 仍正确计数内部工具活动(3 个成功的 read_file)

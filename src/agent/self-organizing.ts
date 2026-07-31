@@ -17,8 +17,7 @@ export interface SelfOrganizingOptions {
   model?: string;
   /** 流式 LLM 客户端（多 provider 支持）。传入时走 streamingQuery。 */
   client?: StreamingLLMClient;
-  /** 权限检查器（透传给 streamingQuery） */
-  permissionChecker?: import('../permission/checker.js').PermissionChecker;
+  executionRuntime: import('./tool-execution.js').ToolExecutionRuntime;
   idleTimeout?: number;   // 空闲超时（毫秒），默认 60000
   pollInterval?: number;  // 轮询间隔（毫秒），默认 5000
   maxWorkTurns?: number;  // 单次工作阶段最大轮数，默认 50
@@ -45,7 +44,7 @@ export async function runSelfOrganizingSubagent(
   tools: ToolRegistry,
   todoManager: TodoManager,
   inboxManager: InboxManager,
-  options: SelfOrganizingOptions = {},
+  options: SelfOrganizingOptions,
 ): Promise<string> {
   const idleTimeout = options.idleTimeout ?? DEFAULT_IDLE_TIMEOUT;
   const pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL;
@@ -162,7 +161,9 @@ async function runSelfOrganizingWithClient(
     tools: Array.from(toolSubset.values()).map(t => t.definition),
     signal: controller.signal,
     maxTurns,
-    permissionChecker: options.permissionChecker,
+    // Intentional behavior change: child `ask` decisions use the main
+    // RuntimeSecurityGate and wait for explicit approval.
+    executionRuntime: options.executionRuntime,
     model: options.model,
   })) {
     if (message !== null && typeof message === 'object' && 'type' in message && message.type === 'assistant') {

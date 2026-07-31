@@ -24,8 +24,6 @@ import { StreamEventBus } from './stream-event-bus.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolDefinitionSnapshot } from './tools/descriptor-snapshot.js';
 import type { RequestToolViewSnapshot } from './tools/overlay.js';
-import type { PermissionChecker } from '../permission/checker.js';
-import type { RuntimeSecurityGate } from '../permission/runtime-gate.js';
 import {
   executeToolCall,
   type ToolExecutionResult,
@@ -175,15 +173,6 @@ export interface StreamingQueryOptions {
    * 用于会话持久化（落盘到 JSONL）。
    */
   onMessages?: (messages: Message[]) => void;
-  /**
-   * Task 7 迁移期兼容字段，仅保留声明供子调用方分步迁移，不再读取。
-   * 只传此字段仍会触发缺少 executionRuntime 的不变量错误；Task 8 删除。
-   */
-  permissionChecker?: PermissionChecker;
-  /**
-   * Task 7 迁移期兼容字段；与 permissionChecker 一样不再读取，Task 8 删除。
-   */
-  runtimeGate?: RuntimeSecurityGate;
   /** 工具执行所需的统一权限、Gate 与回调运行时。 */
   executionRuntime?: ToolExecutionRuntime;
   /**

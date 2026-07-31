@@ -8,6 +8,7 @@ import { createSpawnSelfOrganizingTool } from '../agent/tools/spawn-self-organiz
 import { ToolRegistry } from '../agent/tool-registry.js';
 import { TodoManager } from '../agent/todo.js';
 import { InboxManager } from '../agent/inbox.js';
+import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
 
 describe('createSpawnSelfOrganizingTool', () => {
   function makeDeps() {
@@ -22,6 +23,7 @@ describe('createSpawnSelfOrganizingTool', () => {
     const { childTools, todoManager, inboxManager } = makeDeps();
     const { definition } = createSpawnSelfOrganizingTool(
       childTools, todoManager, inboxManager,
+      { executionRuntime: createToolExecutionRuntime() },
     );
 
     expect(definition.name).toBe('spawn_self_organizing');
@@ -34,7 +36,9 @@ describe('createSpawnSelfOrganizingTool', () => {
     const { childTools, todoManager, inboxManager } = makeDeps();
     const runFn = vi.fn().mockResolvedValue('done');
     const { executor } = createSpawnSelfOrganizingTool(
-      childTools, todoManager, inboxManager, { model: 'small-model', runFn },
+      childTools, todoManager, inboxManager, {
+        model: 'small-model', runFn, executionRuntime: createToolExecutionRuntime(),
+      },
     );
 
     const start = Date.now();
@@ -71,7 +75,9 @@ describe('createSpawnSelfOrganizingTool', () => {
 
     const runFn = vi.fn().mockRejectedValue(new Error('LLM down'));
     const { executor } = createSpawnSelfOrganizingTool(
-      childTools, todoManager, inboxManager, { runFn },
+      childTools, todoManager, inboxManager, {
+        runFn, executionRuntime: createToolExecutionRuntime(),
+      },
     );
 
     await executor({

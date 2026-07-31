@@ -13,6 +13,7 @@ import { createTaskTool } from '../agent/tools/task-tool.js';
 import { createDefaultRegistry } from '../agent/tool-registry.js';
 import { TodoManager } from '../agent/todo.js';
 import { TaskBoard } from '../task-board/task-board.js';
+import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
 
 function makeTmpGitRepo(): string {
   const dir = join(tmpdir(), `wt-integ-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -120,7 +121,7 @@ describe('task 工具的 worktree 隔离', () => {
   it('指定不存在的 worktree 返回错误', async () => {
     const todoManager = new TodoManager();
     const childRegistry = createDefaultRegistry(todoManager);
-    const taskTool = createTaskTool(childRegistry, manager);
+    const taskTool = createTaskTool(childRegistry, createToolExecutionRuntime(), manager);
 
     const result = await taskTool.executor({ prompt: 'do something', worktree: 'ghost-wt' });
     expect(result).toContain('Error');
@@ -141,7 +142,7 @@ describe('task 工具的 worktree 隔离', () => {
   it('未配置 worktreeManager 时 task 工具退化为普通子代理', async () => {
     const todoManager = new TodoManager();
     const childRegistry = createDefaultRegistry(todoManager);
-    const taskTool = createTaskTool(childRegistry); // 无 worktreeManager
+    const taskTool = createTaskTool(childRegistry, createToolExecutionRuntime()); // 无 worktreeManager
 
     // 仅验证不因 worktree 参数报错（实际 LLM 调用会因无 API key 失败，这里只测参数校验逻辑）
     // 不传 worktree 时正常构造

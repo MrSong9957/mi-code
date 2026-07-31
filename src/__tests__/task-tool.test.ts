@@ -11,6 +11,9 @@ import {
 import type { ToolRegistry } from '../agent/tool-registry.js';
 import type { SubagentOptions, SubagentResult } from '../agent/subagent.js';
 import type { StreamingLLMClient } from '../agent/types.js';
+import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
+
+const executionRuntime = createToolExecutionRuntime();
 
 /** 假的 ToolRegistry（task 工具不需要真实工具，只测派发参数） */
 function fakeRegistry(): ToolRegistry {
@@ -46,7 +49,7 @@ function makeClientProvider(captured: { modelChoice?: string }): {
 describe('createTaskTool clientProvider 接线', () => {
   it('未传 clientProvider 时不向 runSubagent 传 client（保持回退行为）', async () => {
     const captured: { options?: SubagentOptions } = {};
-    const tool = createTaskTool(fakeRegistry(), undefined, undefined, makeSpy(captured));
+    const tool = createTaskTool(fakeRegistry(), executionRuntime, undefined, undefined, makeSpy(captured));
 
     await tool.executor({ prompt: 'do something' });
 
@@ -60,6 +63,7 @@ describe('createTaskTool clientProvider 接线', () => {
     const { client, provider } = makeClientProvider(providerCapture);
     const tool = createTaskTool(
       fakeRegistry(),
+      executionRuntime,
       undefined,
       provider,
       makeSpy(captured),
@@ -78,6 +82,7 @@ describe('createTaskTool clientProvider 接线', () => {
     const { client, provider } = makeClientProvider(providerCapture);
     const tool = createTaskTool(
       fakeRegistry(),
+      executionRuntime,
       undefined,
       provider,
       makeSpy(captured),

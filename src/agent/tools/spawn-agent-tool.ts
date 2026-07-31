@@ -22,7 +22,7 @@ import type {
   SubagentExecutionResult,
 } from '../subagent.js';
 import { ROLE_REGISTRY, type Role, type SubagentModel } from '../roles.js';
-import type { PermissionChecker } from '../../permission/checker.js';
+import type { ToolExecutionRuntime } from '../tool-execution.js';
 import type { DelegationGateDecision } from '../../permission/delegation.js';
 
 /** 子代理执行器类型（用于依赖注入，便于测试） */
@@ -109,9 +109,8 @@ export function createSpawnAgentTool(
    * 传入时子代理走 streamingQuery（多 provider，支持 OpenAI/MiMo 等）。
    * 不传则回退 runWithVercelAI（仅 Anthropic，测试/向后兼容用）。
    */
-  clientProvider?: SubagentClientProvider,
-  /** 透传给子代理，让子代理工具调用也受 PermissionChecker 约束 */
-  permissionChecker?: PermissionChecker,
+  clientProvider: SubagentClientProvider | undefined,
+  executionRuntime: ToolExecutionRuntime,
   /** 依赖注入：测试时传 mock，生产路径走真实 runSubagent */
   runSubagentFn: SubagentRunner = runSubagent,
   /** 可用技能描述（注入子代理 system prompt，让子代理发现/调用技能） */
@@ -226,7 +225,7 @@ export function createSpawnAgentTool(
         if (useCompletionContract && runSubagentContractedFn) {
           const result = await runSubagentContractedFn(prompt, childTools, {
             client: clientProvider ? clientProvider('inherit') : undefined,
-            permissionChecker,
+            executionRuntime,
             maxSteps: 50,
             skillsDescription,
             forkMode: true,
@@ -237,7 +236,7 @@ export function createSpawnAgentTool(
         // fork 模式：继承主 agent system prompt，不走角色白名单
         const result = await runSubagentFn(prompt, childTools, {
           client: clientProvider ? clientProvider('inherit') : undefined,
-          permissionChecker,
+          executionRuntime,
           maxSteps: 50,  // fork 用于长任务
           skillsDescription,
           forkMode: true,
@@ -259,7 +258,7 @@ export function createSpawnAgentTool(
         const result = await runSubagentContractedFn(prompt, childTools, {
           role: role as Role,
           client: clientProvider ? clientProvider(modelChoice) : undefined,
-          permissionChecker,
+          executionRuntime,
           maxSteps,
           skillsDescription,
         });
@@ -269,7 +268,7 @@ export function createSpawnAgentTool(
       const result = await runSubagentFn(prompt, childTools, {
         role: role as Role,
         client: clientProvider ? clientProvider(modelChoice) : undefined,
-        permissionChecker,
+        executionRuntime,
         maxSteps,
         skillsDescription,
       });
