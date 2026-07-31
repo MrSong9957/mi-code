@@ -22,6 +22,7 @@ import type {
   StreamOptions,
   ContentBlock,
 } from '../agent/types.js';
+import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
 
 type ScriptBlock = ContentBlock | { type: 'thinking'; thinking: string };
 
@@ -104,6 +105,7 @@ describe('streamingQuery idle 跳出（Bug 2）', () => {
       systemPrompt: 'sys',
       tools: registry.getDefinitions(),
       signal: ac.signal,
+      executionRuntime: createToolExecutionRuntime(),
       maxTurns: 5,
       enableStreamingExecution: false, // 走串行路径，覆盖传统分支
     }));
@@ -134,6 +136,7 @@ describe('streamingQuery idle 跳出（Bug 2）', () => {
       systemPrompt: 'sys',
       tools: registry.getDefinitions(),
       signal: ac.signal,
+      executionRuntime: createToolExecutionRuntime(),
       maxTurns: 5,
       enableStreamingExecution: true,
       eventBus,

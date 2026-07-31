@@ -8,7 +8,6 @@
 import { describe, it, expect } from 'vitest';
 import { streamingQuery } from '../agent/streaming-query.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
-import { PermissionChecker } from '../permission/checker.js';
 import { plannerPrompt } from '../prompts/index.js';
 import { createAskUserTool } from '../agent/tools/ask-user-tool.js';
 import type { AskUserManager } from '../agent/ask-user-manager.js';
@@ -21,6 +20,7 @@ import type {
   StreamOptions,
   ContentBlock,
 } from '../agent/types.js';
+import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
 
 type ScriptBlock = ContentBlock | { type: 'thinking'; thinking: string };
 
@@ -110,7 +110,6 @@ describe('Plan 模式流式拦截', () => {
   it('plan 模式 + 兜底串行分支：write_file 被拦，executor 不执行', async () => {
     const spy = { count: 0 };
     const registry = makeRegistryWithSpy(spy);
-    const checker = new PermissionChecker({ mode: 'plan', workdir: process.cwd() });
 
     const client = new ScriptedStreamClient([
       [{ type: 'tool_use', id: 'call_1', name: 'write_file', input: { path: 'foo.txt', content: 'x' } }],
@@ -125,12 +124,11 @@ describe('Plan 模式流式拦截', () => {
         signal: ac.signal,
         maxTurns: 5,
         enableStreamingExecution: false, // 触发兜底串行分支
-        permissionChecker: checker,
+        executionRuntime: createToolExecutionRuntime({ mode: 'plan' }),
       }),
     );
 
     expect(results.length).toBe(1);
-    expect(results[0]!.output).toContain('[Blocked by permission]');
     expect(results[0]!.output).toContain('Plan mode');
     expect(spy.count).toBe(0); // 底层 executor 没被调用
   });
@@ -138,7 +136,6 @@ describe('Plan 模式流式拦截', () => {
   it('plan 模式 + 流式执行器分支：write_file 被拦，read_file 放行', async () => {
     const spy = { count: 0 };
     const registry = makeRegistryWithSpy(spy);
-    const checker = new PermissionChecker({ mode: 'plan', workdir: process.cwd() });
 
     const client = new ScriptedStreamClient([
       [
@@ -156,22 +153,21 @@ describe('Plan 模式流式拦截', () => {
         signal: ac.signal,
         maxTurns: 5,
         enableStreamingExecution: true, // 走 StreamingToolExecutor
-        permissionChecker: checker,
+        executionRuntime: createToolExecutionRuntime({ mode: 'plan' }),
       }),
     );
 
     expect(results.length).toBe(2);
     const writeResult = results.find(r => r.name === 'write_file')!;
     const readResult = results.find(r => r.name === 'read_file')!;
-    expect(writeResult.output).toContain('[Blocked by permission]');
+    expect(writeResult.output).toContain('Plan mode');
     expect(readResult.output).toBe('content of bar.txt');
     expect(spy.count).toBe(1); // 只有 read_file 真正执行
   });
 
-  it('build 模式：write_file 不被预拦（流式路径无 ask 通道，行为=放行）', async () => {
+  it('build 模式：write_file 的 ask 在无用户通道时 fail closed', async () => {
     const spy = { count: 0 };
     const registry = makeRegistryWithSpy(spy);
-    const checker = new PermissionChecker({ mode: 'build', workdir: process.cwd() });
 
     const client = new ScriptedStreamClient([
       [{ type: 'tool_use', id: 'call_1', name: 'write_file', input: { path: 'foo.txt', content: 'x' } }],
@@ -186,16 +182,16 @@ describe('Plan 模式流式拦截', () => {
         signal: ac.signal,
         maxTurns: 5,
         enableStreamingExecution: false,
-        permissionChecker: checker,
+        executionRuntime: createToolExecutionRuntime({ mode: 'build' }),
       }),
     );
 
     expect(results.length).toBe(1);
-    expect(results[0]!.output).toBe('wrote foo.txt');
-    expect(spy.count).toBe(1);
+    expect(results[0]!.output).toContain('no user-decision channel is available');
+    expect(spy.count).toBe(0);
   });
 
-  it('不传 permissionChecker 时行为完全等同现状（向后兼容）', async () => {
+  it('auto 模式保持普通工具自动执行', async () => {
     const spy = { count: 0 };
     const registry = makeRegistryWithSpy(spy);
 
@@ -212,7 +208,7 @@ describe('Plan 模式流式拦截', () => {
         signal: ac.signal,
         maxTurns: 5,
         enableStreamingExecution: true,
-        // 故意不传 permissionChecker
+        executionRuntime: createToolExecutionRuntime(),
       }),
     );
 

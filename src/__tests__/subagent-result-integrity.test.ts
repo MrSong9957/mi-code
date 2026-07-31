@@ -18,6 +18,7 @@ import type {
   StreamOptions,
   ContentBlock,
 } from '../agent/types.js';
+import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
 
 // ════════════════════════════════════════════════════════════════════
 // ScriptedStreamClient：按剧本执行的 fake LLM 客户端
@@ -298,6 +299,7 @@ describe('subagent final summary turn (AUTO-0025 Task 4)', () => {
     // 直接调 streamingQuery,不传 reserveFinalTextTurn
     for await (const _ of streamingQuery(client, registry, 'do thing', {
       systemPrompt: 'sys', tools: registry.getDefinitions(), signal: ac.signal,
+      executionRuntime: createToolExecutionRuntime(),
       maxTurns: 2, enableStreamingExecution: false,
     })) {
       void _;

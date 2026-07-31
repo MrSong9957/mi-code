@@ -16,6 +16,7 @@ import type {
   StreamOptions,
   ContentBlock,
 } from '../agent/types.js';
+import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
 
 /**
  * 录制式流式 fake client。
@@ -136,6 +137,7 @@ describe('streamingQuery L4 压缩接入', () => {
       systemPrompt: 'sys',
       tools: registry.getDefinitions(),
       signal: ac.signal,
+      executionRuntime: createToolExecutionRuntime(),
       maxTurns: 5,
       enableStreamingExecution: false, // 走串行执行路径，更可控
       compactClient,
@@ -158,6 +160,7 @@ describe('streamingQuery L4 压缩接入', () => {
       systemPrompt: 'sys',
       tools: registry.getDefinitions(),
       signal: ac.signal,
+      executionRuntime: createToolExecutionRuntime(),
       maxTurns: 5,
       enableStreamingExecution: false,
     }));
@@ -195,6 +198,7 @@ describe('thinking 块事件序列（Thought for Ns 时序前提）', () => {
       systemPrompt: 'sys',
       tools: registry.getDefinitions(),
       signal: ac.signal,
+      executionRuntime: createToolExecutionRuntime(),
       maxTurns: 3,
       enableStreamingExecution: false,
     })) as Array<{ type: string; index?: number; blockType?: string }>;
@@ -372,6 +376,7 @@ describe('AUTO-0030:end_turn 时 onMessages 应含 assistant 消息', () => {
       systemPrompt: 'sys',
       tools: registry.getDefinitions(),
       signal: ac.signal,
+      executionRuntime: createToolExecutionRuntime(),
       maxTurns: 5,
       enableStreamingExecution: false,
       onMessages: (msgs) => { capturedMessages = msgs; },
