@@ -35,6 +35,7 @@
 
 ### 1.1 RED: specify full Registry lookup
 
+- [ ] Before changing production code, run `git rev-parse HEAD` and retain that hash as the pre-implementation baseline for Task 10's clean-worktree comparison.
 - [ ] Add a test proving `get()` returns the exact registered definition and executor reference:
 
 ```ts
@@ -76,6 +77,8 @@ get(name: string): RegisteredTool | undefined {
 - [ ] Run the focused test and confirm it passes.
 
 ### 1.3 Add the agreed contract surface
+
+This subsection is deliberate type infrastructure, not a behavioral TDD step. Task 1's RED/GREEN claim applies only to `ToolRegistry.get()`. The contract declarations compile-check the approved shape; their runtime behavior starts receiving RED tests in Tasks 2-5. Do not add an empty `executeToolCall()` implementation merely to make this subsection appear test-driven.
 
 - [ ] Add `signal?: AbortSignal` to `ToolExecutionContext` in `src/agent/types.ts`; retain `sanitizedExecutionPlan`.
 - [ ] In `src/agent/tool-execution.ts`, define and export:
@@ -284,6 +287,12 @@ function validateToolInput(
 
 ### 2.4 GREEN: implement lookup and success boundary
 
+- [ ] Import the Node hash primitive with the ESM-safe built-in specifier:
+
+```ts
+import { createHash } from 'node:crypto';
+```
+
 - [ ] At entry, record `performance.now()` and `structuredClone(call.input)`.
 - [ ] Resolve through `registry.get(call.name)`.
 - [ ] On lookup/validation failure, construct the structured failure with a deep-frozen snapshot.
@@ -362,7 +371,22 @@ git commit -m "feat: validate and authorize unified tool calls"
   - a replacement missing a required field throws `PreCallbackInputViolation`;
   - original invalid input still returns normal `invalid_input` and never calls Pre.
 
-- [ ] Add a spying `PermissionChecker` subclass or method spy around `checkDecision()` to capture the authorized input without mocking `RuntimeSecurityGate`.
+- [ ] Spy only on the real checker method's second argument; do not create a subclass:
+
+```ts
+const decisionSpy = vi.spyOn(
+  runtime.permissionChecker,
+  'checkDecision',
+);
+
+expect(decisionSpy).toHaveBeenCalledWith(
+  'echo',
+  finalInput,
+  expect.anything(),
+);
+```
+
+This captures the authorized input while the test still exercises the real `PermissionChecker` and `RuntimeSecurityGate`.
 - [ ] Run the focused test and verify the new cases fail.
 
 ### 3.2 GREEN: insert Pre into the decision chain
@@ -515,7 +539,35 @@ Do not add a catch around Pre merely to observe stage hits; the absence of a res
   - the thrown value is safely serialized into exported `postExecuteError`;
   - callback time is excluded from `durationMs`.
 
-Use a deferred promise or fake timers so the callback takes measurable time without relying on a flaky wall-clock threshold.
+- [ ] Use a manually controlled deferred promise, not fake timers:
+
+```ts
+let releasePost!: () => void;
+const postBlocked = new Promise<void>((resolve) => {
+  releasePost = resolve;
+});
+let markPostEntered!: () => void;
+const postEntered = new Promise<void>((resolve) => {
+  markPostEntered = resolve;
+});
+
+const execution = executeToolCall(registry, call, {
+  ...runtime,
+  callbacks: {
+    onPostExecute: async () => {
+      markPostEntered();
+      await postBlocked;
+    },
+  },
+});
+
+await postEntered;
+expect(executor).toHaveBeenCalledOnce();
+releasePost();
+const result = await execution;
+```
+
+Before starting execution, use `vi.spyOn(performance, 'now')` with two deterministic return values for entry and result determination, then assert `result.durationMs` equals that interval and restore the spy. The deferred callback proves the result waits for Post, while its release timing cannot inflate `durationMs`. Do not use `vi.useFakeTimers()` and do not add a production clock abstraction.
 
 ### 5.3 RED: Failure notification cannot erase failure
 
@@ -720,7 +772,7 @@ executionRuntime?: ToolExecutionRuntime;
   - the complete result for yielded `executionResult`;
   - the existing ask-user `structuredOutcome` lookup unchanged.
 
-- [ ] Stop reading the old `permissionChecker`/`runtimeGate` option fields. Keep their declarations temporarily so current child call sites remain type-correct during this commit; Task 8 removes them after every production caller passes `executionRuntime`.
+- [ ] Stop reading the old `permissionChecker`/`runtimeGate` option fields, but keep both optional declarations in `StreamingQueryOptions` through this commit. A caller that supplies only those legacy fields must still hit the missing-`executionRuntime` invariant; Task 8 removes the declarations after every child caller is migrated.
 
 ### 7.3 Migrate focused test call sites
 
@@ -728,7 +780,7 @@ executionRuntime?: ToolExecutionRuntime;
 - [ ] Leave no-tool tests unchanged to exercise the allowed omission.
 - [ ] Do not retain a compatibility fallback that synthesizes auto permission.
 
-### 7.4 Verify the checkpoint, but do not commit yet
+### 7.4 Verify and commit P5 separately
 
 - [ ] Run:
 
@@ -738,8 +790,16 @@ npx vitest run src/__tests__ --testNamePattern="streamingQuery"
 npx tsc --noEmit
 ```
 
-- [ ] Keep the Task 7 changes uncommitted until Task 8 migrates every child caller. Committing here would leave checker-only child calls unable to satisfy the new runtime invariant.
-- [ ] Inspect `git diff -- src/__tests__` and keep unrelated pre-existing test changes out of the later combined commit.
+- [ ] Inspect `git diff -- src/__tests__` and keep unrelated pre-existing test changes out of this commit.
+- [ ] Commit Task 7 while the two legacy option declarations still exist:
+
+```bash
+git add src/agent/streaming-query.ts
+git add src/__tests__/idle-break.test.ts src/__tests__/plan-mode-streaming.test.ts src/__tests__/streaming-query-structured-outcome.test.ts src/__tests__/streaming-query.test.ts src/__tests__/subagent-result-integrity.test.ts
+git add src/__tests__/agent/bounded-memory-request.test.ts src/__tests__/agent/no-tool-contract-streaming.test.ts src/__tests__/agent/reconstruction-streaming.test.ts src/__tests__/agent/request-tool-view-integration.test.ts src/__tests__/agent/tool-transcript-checkpoints.test.ts
+git add src/__tests__/regression/streaming-permission-passthrough.test.ts
+git commit -m "refactor: unify serial tool execution"
+```
 
 ---
 
@@ -766,6 +826,7 @@ npx tsc --noEmit
 
 ### 8.1 RED: adapters propagate runtime by identity
 
+- [ ] First keep a regression assertion that constructing a tool-exposing query with only the retained legacy checker/gate fields rejects with the missing-runtime invariant. This assertion is expected to pass because Task 7 established that behavior; it is not the Task 8 RED.
 - [ ] Replace the old checker-gap assertions and failing documentation test with tests that capture runner options.
 - [ ] For `spawn_agent`, `task`, and `spawn_self_organizing`, assert:
 
@@ -773,6 +834,7 @@ npx tsc --noEmit
 expect(capturedOptions.executionRuntime).toBe(runtime);
 ```
 
+- [ ] Run these new adapter-identity assertions before changing the factories. Expected: FAIL because captured child options do not yet contain `executionRuntime`. This is Task 8's RED evidence.
 - [ ] Add a child `ask` integration test using a deferred `UserDecisionChannel`:
 
   - start the child tool call;
@@ -837,14 +899,12 @@ npx tsc --noEmit
 ```
 
 - [ ] Before staging, inspect `git diff -- src/__tests__` and exclude unrelated pre-existing test changes.
-- [ ] Commit the completed P2-P5 migration together:
+- [ ] Commit only the P2-P4 runtime propagation and removal of the two transitional option declarations:
 
 ```bash
 git add src/agent/streaming-query.ts src/agent/subagent.ts src/agent/self-organizing.ts src/agent/tools/spawn-agent-tool.ts src/agent/tools/task-tool.ts src/agent/tools/spawn-self-organizing-tool.ts src/index.ts
-git add src/__tests__/idle-break.test.ts src/__tests__/plan-mode-streaming.test.ts src/__tests__/streaming-query-structured-outcome.test.ts src/__tests__/streaming-query.test.ts src/__tests__/subagent-result-integrity.test.ts
-git add src/__tests__/agent/bounded-memory-request.test.ts src/__tests__/agent/no-tool-contract-streaming.test.ts src/__tests__/agent/reconstruction-streaming.test.ts src/__tests__/agent/request-tool-view-integration.test.ts src/__tests__/agent/tool-transcript-checkpoints.test.ts
-git add src/__tests__/regression/streaming-permission-passthrough.test.ts src/__tests__/regression/subagent-permission-passthrough.test.ts src/__tests__/role-agents.test.ts src/__tests__/task-tool.test.ts src/__tests__/spawn-self-organizing-tool.test.ts src/__tests__/worktree-integration.test.ts
-git commit -m "refactor: unify main and child tool execution"
+git add src/__tests__/subagent-result-integrity.test.ts src/__tests__/regression/subagent-permission-passthrough.test.ts src/__tests__/role-agents.test.ts src/__tests__/task-tool.test.ts src/__tests__/spawn-self-organizing-tool.test.ts src/__tests__/worktree-integration.test.ts
+git commit -m "refactor: share execution runtime with child agents"
 ```
 
 ---
@@ -868,10 +928,45 @@ git commit -m "refactor: unify main and child tool execution"
   - `src/index.ts`.
 
 - [ ] Assert none contains a direct `registry.execute(` or `this.registry.execute(` call.
-- [ ] Temporarily demonstrate the test’s sensitivity by matching the current pre-migration call before Task 6/7, or if executing sequentially after migration, insert and immediately revert a one-line fixture mutation in the test’s in-memory string. Do not modify production source solely to make RED.
-- [ ] Run the test and preserve the observed intentional failure in the task log.
+- [ ] Add a separate detector-sensitivity case using an inline fixture:
 
-### 9.2 GREEN: configure ESLint’s primary guard
+```ts
+it('detects direct registry execution in source text', () => {
+  const forbidden =
+    /\b(?:this\.)?registry\.execute\s*\(/;
+
+  expect(forbidden.test(
+    'await registry.execute(name, input);',
+  )).toBe(true);
+});
+```
+
+- [ ] The source-boundary assertion is expected to be GREEN after Tasks 6-8. The Task 9 RED comes from the ESLint enforcement test in Step 9.2, not from mutating production source or manufacturing a temporary file change.
+
+### 9.2 RED: require ESLint enforcement
+
+- [ ] Before editing `eslint.config.js`, add a programmatic ESLint test that lints an inline production-path source containing `registry.execute()` and expects the configured restriction message.
+
+```ts
+const eslint = new ESLint({ cwd: process.cwd() });
+const [result] = await eslint.lintText(
+  'await registry.execute(name, input);',
+  { filePath: 'src/agent/direct-execution-fixture.ts' },
+);
+
+expect(result.messages).toEqual(
+  expect.arrayContaining([
+    expect.objectContaining({
+      message:
+        'Use executeToolCall() instead of ToolRegistry.execute() in production paths.',
+    }),
+  ]),
+);
+```
+
+- [ ] Run the focused test. Expected: FAIL because `no-restricted-syntax` is not configured yet.
+
+### 9.3 GREEN: configure ESLint’s primary guard
 
 - [ ] Add `no-restricted-syntax` for `src/**/*.ts` with selectors for:
 
@@ -893,7 +988,7 @@ Use executeToolCall() instead of ToolRegistry.execute() in production paths.
 
 Do not allowlist `src/agent/llm-vercel.ts`; it has a different direct-executor pattern and remains a separately documented E4 item.
 
-### 9.3 Verify guard behavior
+### 9.4 Verify guard behavior
 
 - [ ] Run:
 
@@ -902,7 +997,7 @@ npx vitest run src/__tests__/regression/unified-tool-execution-paths.test.ts
 npx eslint src/agent/streaming-executor.ts src/agent/streaming-query.ts src/agent/subagent.ts src/agent/self-organizing.ts src/agent/tools/spawn-agent-tool.ts src/agent/tools/task-tool.ts src/agent/tools/spawn-self-organizing-tool.ts src/index.ts
 ```
 
-- [ ] Run a temporary copied fixture through ESLint or use ESLint’s programmatic API in the regression test to confirm `registry.execute()` produces the configured error message. The fixture must live under a temporary directory and must be removed by the test.
+- [ ] Confirm the programmatic inline-fixture test reports the exact configured error message; no filesystem fixture is needed.
 - [ ] Commit:
 
 ```bash
@@ -965,7 +1060,15 @@ npm run build
 ```
 
 - [ ] If a command fails, record the exact failure and use `superpowers:systematic-debugging` before changing code.
-- [ ] Do not fix unrelated pre-existing failures; prove they are unrelated and record them.
+- [ ] Do not fix unrelated pre-existing failures. To prove one is pre-existing:
+
+  1. record the pre-implementation baseline commit hash;
+  2. create a clean temporary worktree at that exact commit;
+  3. run the same failing command there;
+  4. record the baseline hash and matching failure output in the verification log;
+  5. remove the temporary worktree through the normal Git worktree cleanup flow.
+
+If the failure does not reproduce at the baseline commit, treat it as introduced by this implementation and debug it before completion.
 
 ### 10.3 Manual source audit
 
