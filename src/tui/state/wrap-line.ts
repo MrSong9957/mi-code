@@ -188,17 +188,26 @@ function wrapCore(line: string, firstWidthRaw: number, contWidthRaw: number): Wr
         colMap[ci] = runningCol;
         flushSpan(ci, spans.length === 0 ? 'none' : 'soft', currentLine);
 
-        // 完整重置：currentLine/colMap/runningCol 都基于 currentChar 重建
-        const charWidth = stringWidth(char.ch.value);
+        // 完整重置：currentLine/colMap/runningCol 都基于 currentChar 重建。
+        // 若 currentChar 是空格，丢弃它（避免下一行前导空格，对齐旧 wrapLine L98-100 行为）。
         lineStart = char.srcOffset;
-        currentLine = [char];
-        currentWidth = w;
+        if (char.ch.value === ' ') {
+          // 空格丢弃：下一行从空，width/col/colMap 归零
+          currentLine = [];
+          currentWidth = 0;
+          colMap = { [lineStart]: 0 };
+          runningCol = 0;
+        } else {
+          const charWidth = stringWidth(char.ch.value);
+          currentLine = [char];
+          currentWidth = w;
+          colMap = {
+            [lineStart]: 0,
+            [lineStart + 1]: charWidth,
+          };
+          runningCol = charWidth;
+        }
         lineWidth = contWidth;
-        colMap = {
-          [lineStart]: 0,
-          [lineStart + 1]: charWidth,
-        };
-        runningCol = charWidth;
         lastSpaceIdx = -1;
       }
     } else {
