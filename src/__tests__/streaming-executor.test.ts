@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { StreamingToolExecutor, isConcurrencySafe } from '../agent/streaming-executor.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
 import type { ToolDefinition, ToolExecutor, ToolUseBlock } from '../agent/types.js';
+import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
 
 function createTestRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
@@ -33,7 +34,11 @@ describe('StreamingToolExecutor v2', () => {
   let executor: StreamingToolExecutor;
 
   beforeEach(() => {
-    executor = new StreamingToolExecutor(createTestRegistry());
+    executor = new StreamingToolExecutor(
+      createTestRegistry(),
+      createToolExecutionRuntime(),
+      new AbortController().signal,
+    );
   });
 
   it('should initialize with empty state', () => {
@@ -53,6 +58,10 @@ describe('StreamingToolExecutor v2', () => {
 
     expect(results.length).toBe(1);
     expect((results[0] as any).results[0].text).toBe('echo: hello');
+    expect((results[0] as any).executionResult).toMatchObject({
+      status: 'success',
+      output: 'echo: hello',
+    });
   });
 
   it('should execute multiple tools in order', async () => {
@@ -117,12 +126,16 @@ describe('StreamingToolExecutor v2', () => {
       active -= 1;
       return call;
     });
-    const serialExecutor = new StreamingToolExecutor(registry);
+    const serialExecutor = new StreamingToolExecutor(
+      registry,
+      createToolExecutionRuntime(),
+      new AbortController().signal,
+    );
 
     serialExecutor.addTool(createToolUseBlock('call-1', 'ask_user_question', { call: 'call-1' }));
     serialExecutor.addTool(createToolUseBlock('call-2', 'ask_user_question', { call: 'call-2' }));
 
-    expect(active).toBe(1);
+    await vi.waitFor(() => expect(active).toBe(1));
     expect(releases.has('call-2')).toBe(false);
     releases.get('call-1')!();
     await vi.waitFor(() => expect(releases.has('call-2')).toBe(true));
@@ -132,5 +145,85 @@ describe('StreamingToolExecutor v2', () => {
     for await (const batch of serialExecutor.getRemainingResults()) results.push(...batch);
     expect(maxActive).toBe(1);
     expect(results.map((tool) => tool.id)).toEqual(['call-1', 'call-2']);
+  });
+
+  it('stores a structured permission failure and keeps string output', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'write_file',
+      description: 'write',
+      parameters: { type: 'object' },
+    }, async () => 'should not run');
+    const deniedExecutor = new StreamingToolExecutor(
+      registry,
+      createToolExecutionRuntime({ mode: 'build' }),
+      new AbortController().signal,
+    );
+
+    deniedExecutor.addTool(createToolUseBlock(
+      'call-denied',
+      'write_file',
+      { path: 'inside.txt' },
+    ));
+    const results = [];
+    for await (const batch of deniedExecutor.getRemainingResults()) {
+      results.push(...batch);
+    }
+
+    expect(results[0]?.executionResult).toMatchObject({
+      status: 'failure',
+      failure: { kind: 'permission_denied', stage: 'permission' },
+    });
+    expect(results[0]?.results?.[0]).toEqual({
+      type: 'text',
+      text: results[0]?.executionResult?.output,
+    });
+  });
+
+  it('passes the configured signal into ToolExecutionContext', async () => {
+    const registry = new ToolRegistry();
+    const controller = new AbortController();
+    let observedSignal: AbortSignal | undefined;
+    registry.register({
+      name: 'echo',
+      description: 'echo',
+      parameters: { type: 'object' },
+    }, async (_input, context) => {
+      observedSignal = context?.signal;
+      return 'ok';
+    });
+    const signalExecutor = new StreamingToolExecutor(
+      registry,
+      createToolExecutionRuntime(),
+      controller.signal,
+    );
+
+    signalExecutor.addTool(createToolUseBlock('call-signal', 'echo', {}));
+    for await (const _ of signalExecutor.getRemainingResults()) void _;
+
+    expect(observedSignal).toBe(controller.signal);
+  });
+
+  it('bubbles an unclassified executor error through result consumption', async () => {
+    const error = new TypeError('executor bug');
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'echo',
+      description: 'echo',
+      parameters: { type: 'object' },
+    }, async () => {
+      throw error;
+    });
+    const failingExecutor = new StreamingToolExecutor(
+      registry,
+      createToolExecutionRuntime(),
+      new AbortController().signal,
+    );
+    failingExecutor.addTool(createToolUseBlock('call-error', 'echo', {}));
+
+    const consume = async () => {
+      for await (const _ of failingExecutor.getRemainingResults()) void _;
+    };
+    await expect(consume()).rejects.toBe(error);
   });
 });

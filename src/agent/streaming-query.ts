@@ -527,8 +527,12 @@ export async function* streamingQuery(
     let needsFollowUp = false;
 
     // 创建流式工具执行器
-    const streamingExecutor = enableStreamingExecution
-      ? new StreamingToolExecutor(registry, permissionChecker, runtimeGate)
+    const streamingExecutor = enableStreamingExecution && permissionChecker && runtimeGate
+      ? new StreamingToolExecutor(
+          registry,
+          { permissionChecker, runtimeGate },
+          signal,
+        )
       : null;
 
     // AUTO-0025 Task 4:判断本轮是否是"无工具的最终总结轮"。
