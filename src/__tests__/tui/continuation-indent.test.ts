@@ -16,6 +16,7 @@ import { createCompletionStore } from '../../tui/state/completion-store.js';
 import { createOverlayStore } from '../../tui/state/overlay-store.js';
 import { App } from '../../tui/App.js';
 import { cursorScreenPos } from '../../tui/state/cursor-position.js';
+import { computeInputViewportLayout, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH } from '../../tui/state/input-viewport.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../../tui/types.js';
 import type { FlatLine } from '../../tui/selection/flatten-messages.js';
 
@@ -148,5 +149,35 @@ describe('续行缩进渲染回归', () => {
     expect.hasAssertions();
     // 两者显示宽度必须相等(都是 2 列),否则续行与首行输入起点错位。
     expect(CONTINUATION_INDENT.length).toBe(PROMPT.length);
+  });
+
+  // Step 9:传入 layout 时走物理行渲染,单行输入不补空行(实际行数=1)。
+  it('layout 路径:单行输入渲染实际行数(不补空行撑高)', () => {
+    expect.hasAssertions();
+    const STATUS9: StatusBarData = { model: 't', mode: 'auto', dir: '/t', branch: 'main', contextPct: 0 };
+    const LOGO9: LogoData = { version: '1', dir: '/t' };
+    const layout = computeInputViewportLayout('single', 6, 80, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH);
+    const { lastFrame } = render(
+      React.createElement(App, {
+        messages: [], status: STATUS9, logo: LOGO9,
+        selectionStore: createSelectionStore(),
+        spinnerStore: createSpinnerStore(),
+        completionStore: createCompletionStore(),
+        overlayStore: createOverlayStore(),
+        input: 'single', cursor: 6,
+        layout,
+        scrollTop: 0,
+        flatLines: [],
+        cols: 80, rows: 24,
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain(`${PROMPT}single`);
+    // layout.visibleRowCount=1 → 输入区只 1 行,下边框紧邻输入行(不像旧路径补 4 空行)
+    const lines = frame.split('\n');
+    const inputIdx = lines.findIndex(l => l.includes(`${PROMPT}single`));
+    const lowerBorderIdx = lines.findIndex((l, i) => i > inputIdx && /─{20,}/.test(l));
+    // 下边框应紧邻输入行(inputIdx+1),而非隔 4 行(旧补空行路径)
+    expect(lowerBorderIdx).toBe(inputIdx + 1);
   });
 });

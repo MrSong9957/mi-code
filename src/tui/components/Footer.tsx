@@ -14,7 +14,7 @@ import { SelectionText } from './SelectionText.js';
 import { SpinnerWithVerb } from './Spinner.js';
 import { SuggestionBar } from './SuggestionBar.js';
 import { cursorScreenPos } from '../state/cursor-position.js';
-import { MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
+import { MAX_VISIBLE_INPUT_LINES, type InputViewportLayout } from '../state/input-viewport.js';
 import type { StatusBarData } from '../types.js';
 import type { SpinnerView } from '../state/spinner-view.js';
 import type { CompletionStore } from '../state/completion-store.js';
@@ -33,19 +33,68 @@ export interface FooterProps {
   inputRowY: number;
   /** 输入框视口顶部行号（0-based）。光标/行渲染都相对此偏移。默认 0=无滚动。 */
   viewportTop: number;
+  /**
+   * 物理行布局（可选，Step 9 兼容态）。传入时走物理行渲染路径；不传走旧 split/slice/补空行路径。
+   * Step 11 起必传。
+   */
+  layout?: InputViewportLayout;
   spinnerView: SpinnerView;
   completionStore: CompletionStore;
   /** 选区 store（由 App 注入；SelectionText 自订阅） */
   selectionStore?: SelectionStore;
 }
 
-export function Footer({ input, cursor, status, cols, inputRowY, viewportTop, spinnerView, completionStore, selectionStore }: FooterProps): React.ReactElement {
+export function Footer({ input, cursor, status, cols, inputRowY, viewportTop, layout, spinnerView, completionStore, selectionStore }: FooterProps): React.ReactElement {
   const { setCursorPosition } = useCursor();
+  const border = '─'.repeat(Math.max(0, cols));
+
+  // === layout 分支（Step 9 兼容态）：传入走物理行渲染；不传走旧逻辑行视口 ===
+  if (layout) {
+    // 光标定位：直接查 layout.cursorVisibleRow/Col（物理行模型，不调 cursorScreenPos）。
+    setCursorPosition({ x: layout.cursorVisibleCol, y: inputRowY + layout.cursorVisibleRow });
+    const lowerBorderRow = inputRowY + layout.visibleRowCount;
+    const statusBarRow = lowerBorderRow + 1;
+    return (
+      <Box flexShrink={0} flexDirection="column">
+        <SpinnerWithVerb view={spinnerView} />
+        <SuggestionBar store={completionStore} />
+        <SelectionText
+          content={border}
+          globalRow={inputRowY - 1}
+          selectionStore={selectionStore}
+          baseProps={{ color: 'gray' }}
+        />
+        <Box flexDirection="column" {...{ internal_cursorTarget: true } as Record<string, unknown>}>
+          {layout.visibleRows.map((row, i) => {
+            const prefix = row.prefixKind === 'prompt' ? PROMPT : CONTINUATION_INDENT;
+            const isFirstLogical = row.breakKind === 'none';
+            return (
+              <SelectionText
+                key={i}
+                content={`${prefix}${row.text}`}
+                globalRow={inputRowY + i}
+                selectionStore={selectionStore}
+                baseProps={isFirstLogical ? { color: 'green', bold: true } : {}}
+              />
+            );
+          })}
+        </Box>
+        <SelectionText
+          content={border}
+          globalRow={lowerBorderRow}
+          selectionStore={selectionStore}
+          baseProps={{ color: 'gray' }}
+        />
+        <StatusBar status={status} selectionStore={selectionStore} globalRow={statusBarRow} />
+      </Box>
+    );
+  }
+
+  // === 旧路径（layout 缺省时）：split/slice/补空行 ===
   const pos = cursorScreenPos(input, cursor, PROMPT);
   // 视口化：光标 y 减去 viewportTop 得到视口内行号，保证光标落在可见区。
   setCursorPosition({ x: pos.x, y: inputRowY + (pos.y - viewportTop) });
 
-  const border = '─'.repeat(Math.max(0, cols));
   const allInputLines = input.split('\n');
   // 视口切片：只渲染 [viewportTop, viewportTop + MAX_VISIBLE_INPUT_LINES) 区间。
   const visibleInputLines = allInputLines.slice(
