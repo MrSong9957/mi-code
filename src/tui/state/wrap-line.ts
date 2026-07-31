@@ -186,19 +186,22 @@ function wrapCore(line: string, firstWidthRaw: number, contWidthRaw: number): Wr
         // 无空格（CJK/超长 token）或空格太靠前：直接在当前字符前断行（字符级）
         // 折行点 cursor（归下一行，Step 6 契约）：在前一行 colMap 记当前 runningCol
         colMap[ci] = runningCol;
-        flushSpan(ci, spans.length === 0 ? 'none' : 'soft', currentLine);
 
-        // 完整重置：currentLine/colMap/runningCol 都基于 currentChar 重建。
         // 若 currentChar 是空格，丢弃它（避免下一行前导空格，对齐旧 wrapLine L98-100 行为）。
-        lineStart = char.srcOffset;
+        // 空格归前一行区间（charEnd = ci+1 含空格），下一行从空格后一位（ci+1）起。
         if (char.ch.value === ' ') {
-          // 空格丢弃：下一行从空，width/col/colMap 归零
+          // 行末边界(ci+1=下一行起点)归前一行可见末列(runningCol),与空格分支 nextLineStart 一致
+          colMap[ci + 1] = runningCol;
+          flushSpan(ci + 1, spans.length === 0 ? 'none' : 'soft', currentLine);
+          lineStart = ci + 1;
           currentLine = [];
           currentWidth = 0;
           colMap = { [lineStart]: 0 };
           runningCol = 0;
         } else {
+          flushSpan(ci, spans.length === 0 ? 'none' : 'soft', currentLine);
           const charWidth = stringWidth(char.ch.value);
+          lineStart = char.srcOffset;
           currentLine = [char];
           currentWidth = w;
           colMap = {

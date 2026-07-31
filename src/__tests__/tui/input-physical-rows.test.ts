@@ -186,6 +186,21 @@ describe('computeInputViewportLayout 全局 offset + cursor 集成覆盖 (Step 6
     expect(l.cursorVisibleRow).toBe(1);
     expect(l.cursorVisibleCol).toBe(CONTINUATION_INDENT_WIDTH + 0);
   });
+  it('hello world(cols=8):全局 cursorColMap 行0 空格(5)→列5,行末(6)→列5;行1 起点正确', () => {
+    // cols=8 → usableWidth=7, 首行 budget=7-PROMPT_WIDTH(2)=5。
+    // 'hello world' w=5,5 → ['hello','world'](空格在字符级分支丢弃,行0 [0,6) 含空格,行1 [6,11))
+    const l = L('hello world', 0, 8);
+    const helloRow = l.visibleRows.find(r => r.text === 'hello')!;
+    expect(helloRow.cursorColMap[5]).toBe(5);  // 空格 offset 5 → 列 5('o' 后)
+    expect(helloRow.cursorColMap[6]).toBe(5);  // 行末边界(offset 6,下一行起点)→ 前行可见末列 5
+    const worldRow = l.visibleRows.find(r => r.text === 'world')!;
+    expect(worldRow.sourceStart).toBe(6);      // 行1 从 'w'(offset 6)起,空格已归前行区间
+  });
+  it('hello world(cursor=6 下一单词行首):cursorVisibleRow=1,Col=CONTINUATION_INDENT_WIDTH+0', () => {
+    const l = L('hello world', 6, 8);
+    expect(l.cursorVisibleRow).toBe(1);
+    expect(l.cursorVisibleCol).toBe(CONTINUATION_INDENT_WIDTH + 0);
+  });
 });
 
 // Step 7:viewport 滚动 + >5 物理行。
