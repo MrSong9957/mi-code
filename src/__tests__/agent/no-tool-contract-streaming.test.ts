@@ -22,6 +22,7 @@ import type {
   StreamOptions,
   ContentBlock,
 } from '../../agent/types.js';
+import { createToolExecutionRuntime } from '../helpers/tool-execution-runtime.js';
 
 /**
  * 间谍式 client: 记录每次 stream 调用时传入的 tools 数组, 并按脚本返回内容。
@@ -112,6 +113,7 @@ describe('No-Tool Contract streamingQuery integration', () => {
         },
       ],
       signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime(),
       noToolContract: contract,
     })) {
       // drain
@@ -155,6 +157,7 @@ describe('No-Tool Contract streamingQuery integration', () => {
         },
       ],
       signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime(),
       noToolContract: contract,
     })) {
       // StreamMessage union 里 tool_result 类型有 output 字段
@@ -196,6 +199,7 @@ describe('No-Tool Contract streamingQuery integration', () => {
         },
       ],
       signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime(),
       // 不传 noToolContract → LEGACY 行为
     })) {
       // drain

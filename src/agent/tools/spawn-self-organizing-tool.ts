@@ -33,17 +33,15 @@ export interface SpawnSelfOrganizingToolOptions extends SelfOrganizingOptions {
   runFn?: SelfOrganizingRunner;
   /** 创建子代理 LLM client 的工厂（多 provider 支持） */
   clientProvider?: SubagentClientProvider;
-  /** 权限检查器（透传给子代理） */
-  permissionChecker?: import('../../permission/checker.js').PermissionChecker;
 }
 
 export function createSpawnSelfOrganizingTool(
   childTools: ToolRegistry,
   todoManager: TodoManager,
   inboxManager: InboxManager,
-  options: SpawnSelfOrganizingToolOptions = {},
+  options: SpawnSelfOrganizingToolOptions,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
-  const { runFn = runSelfOrganizingSubagent, clientProvider, permissionChecker, ...selfOrgOptions } = options;
+  const { runFn = runSelfOrganizingSubagent, clientProvider, ...selfOrgOptions } = options;
 
   return {
     definition: {
@@ -91,7 +89,6 @@ export function createSpawnSelfOrganizingTool(
       runFn(name, role, identityWithTask, childTools, todoManager, inboxManager, {
         ...selfOrgOptions,
         client: clientProvider ? clientProvider('inherit') : undefined,
-        permissionChecker,
       }).catch((err: unknown) => {
         // 后台子代理失败不影响主循环，仅记录到 stderr
         const msg = err instanceof Error ? err.message : String(err);

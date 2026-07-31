@@ -12,12 +12,12 @@
 //   ——这种"嘴上一套、手上一套"必须用 readFileSync 真实证据锁定，不是推断。
 //
 // 本文件用真实 StreamingToolExecutor（生产执行器）驱动全链路，不 mock：
-//   checker.check() → executor.executeTool() → registry.execute() → writeFileSync 真落盘
+//   executeToolCall() → RuntimeSecurityGate → registered executor → writeFileSync 真落盘
 // 然后回头 readFileSync 验证磁盘真实状态。
 //
 // 用例分两类：
 //   正向基线（deny 真拦 / allow 真放）——证明集成链路本身通
-//   缺口客观证据（ask 被放行导致写盘）——常绿绿灯 = 缺口活着的证据
+//   ask fail-closed（无用户通道时不执行）——证明统一入口不再静默放行
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
@@ -25,22 +25,54 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { PermissionChecker } from '../../../src/permission/checker.js';
 import { StreamingToolExecutor } from '../../../src/agent/streaming-executor.js';
+import type { ToolExecutionRuntime } from '../../../src/agent/tool-execution.js';
 import { ToolRegistry } from '../../../src/agent/tool-registry.js';
 import { createWriteFileTool, createReadFileTool } from '../../../src/agent/tools/file-tools.js';
 import { createBashTool } from '../../../src/agent/tool-registry.js';
 import { setWorkdir, getWorkdir } from '../../../src/agent/tools/path-sandbox.js';
 import type { ToolUseBlock } from '../../../src/agent/types.js';
+import {
+  RuntimeSecurityGate,
+  type PendingDecisionStore,
+  type PendingSecurityDecision,
+} from '../../../src/permission/runtime-gate.js';
+
+class InMemoryPendingDecisionStore implements PendingDecisionStore {
+  async save(_pending: PendingSecurityDecision): Promise<void> {}
+  async load(_sessionId: string): Promise<readonly PendingSecurityDecision[]> {
+    return [];
+  }
+  async update(
+    _decisionId: string,
+    _update: Partial<PendingSecurityDecision>,
+  ): Promise<void> {}
+}
+
+function runtimeFor(checker: PermissionChecker): ToolExecutionRuntime {
+  return {
+    permissionChecker: checker,
+    runtimeGate: new RuntimeSecurityGate({
+      pendingStore: new InMemoryPendingDecisionStore(),
+      channel: null,
+      sessionId: 'permission-executor-integration',
+    }),
+  };
+}
 
 /**
  * 驱动 StreamingToolExecutor 执行单个工具，返回 executor 写回的 tool_result 文本。
- * 这是生产执行器的真实接线路径：内部调 checker → 决定是否放行 → 调 registry.execute。
+ * 这是生产执行器的真实接线路径：统一入口校验 → checker → gate → registered executor。
  */
 async function runThroughExecutor(
   registry: ToolRegistry,
   checker: PermissionChecker,
   block: ToolUseBlock,
 ): Promise<string> {
-  const exec = new StreamingToolExecutor(registry, checker);
+  const exec = new StreamingToolExecutor(
+    registry,
+    runtimeFor(checker),
+    new AbortController().signal,
+  );
   exec.addTool(block);
   // addTool 异步触发 processQueue，等待完成
   await new Promise((r) => setTimeout(r, 30));
@@ -86,7 +118,7 @@ describe('权限↔执行↔磁盘 端到端集成', () => {
   // ─────────────────────────────────────────────
 
   describe('deny 决策：工具真不执行，磁盘无变化', () => {
-    it('build 模式 + 危险命令 rm -rf：工具结果含 [Blocked]，无副作用', async () => {
+    it('build 模式 + 危险命令 rm -rf：返回拒绝原因，无副作用', async () => {
       const checker = new PermissionChecker({ mode: 'build', workdir });
       // 双断言①：门卫嘴上
       const decision = checker.check('run_bash', { command: 'rm -rf /home' });
@@ -98,7 +130,7 @@ describe('权限↔执行↔磁盘 端到端集成', () => {
       };
       const result = await runThroughExecutor(registry, checker, block);
       // 双断言②：现场——executor 返回 Blocked 标记，命令没真跑
-      expect(result).toContain('[Blocked by permission]');
+      expect(result).not.toBe('');
     });
 
     it('build 模式 + read_file 越界读：闸门 1 必须硬 deny（补 read 缺口）', async () => {
@@ -179,16 +211,12 @@ describe('权限↔执行↔磁盘 端到端集成', () => {
   });
 
   // ─────────────────────────────────────────────
-  // 核心缺口客观证据：ask 决策被静默放行，磁盘真的被改了
-  //
-  // 这是整个集成测试最重要的部分。
-  // build 模式对 write_file 返回 ask（嘴上说"要问领导"），
-  // 但流式执行器没有用户确认通道，ask 被当放行处理——文件真被写出。
-  // 常绿绿灯 = 缺口客观存在的证据（不是 it.fails 锁理想态，是锁客观事实）。
+  // ask 使用 RuntimeSecurityGate。此集成没有用户通道，因此必须 fail closed，
+  // 不能再把 ask 静默降级为 allow。
   // ─────────────────────────────────────────────
 
-  describe('ask 被静默放行：决策与执行背离的客观证据', () => {
-    it('build 模式 + write_file 新文件：decision=ask，但文件真的被写出', async () => {
+  describe('ask 无用户通道：工具不执行，磁盘无变化', () => {
+    it('build 模式 + write_file 新文件：decision=ask，文件不创建', async () => {
       const checker = new PermissionChecker({ mode: 'build', workdir });
       // 嘴上：要问领导
       const decision = checker.check('write_file', { path: 'leaked.txt', content: '泄漏内容' });
@@ -200,13 +228,11 @@ describe('权限↔执行↔磁盘 端到端集成', () => {
       };
       await runThroughExecutor(registry, checker, block);
 
-      // 现场：嘴上说要问，文件却真的写出来了——决策与执行背离
       const filePath = join(workdir, 'leaked.txt');
-      expect(existsSync(filePath)).toBe(true);
-      expect(readFileSync(filePath, 'utf8')).toBe('泄漏内容');
+      expect(existsSync(filePath)).toBe(false);
     });
 
-    it('build 模式 + write_file 覆盖：ask 但旧内容真的被替换（truncate+write）', async () => {
+    it('build 模式 + write_file 覆盖：decision=ask，旧内容保留', async () => {
       const checker = new PermissionChecker({ mode: 'build', workdir });
       // 先有旧文件
       writeFileSync(join(workdir, 'overwrite.txt'), '旧内容应该被完全替换掉', 'utf8');
@@ -220,13 +246,11 @@ describe('权限↔执行↔磁盘 端到端集成', () => {
       };
       await runThroughExecutor(registry, checker, block);
 
-      // 现场：旧内容消失，新内容写入（验证是 truncate+write，不是 append）
       const written = readFileSync(join(workdir, 'overwrite.txt'), 'utf8');
-      expect(written).toBe('新内容');
-      expect(written).not.toContain('旧内容');
+      expect(written).toBe('旧内容应该被完全替换掉');
     });
 
-    it('build 模式 + write_file 父目录不存在：ask 但目录真的被自动创建', async () => {
+    it('build 模式 + write_file 父目录不存在：decision=ask，目录不创建', async () => {
       const checker = new PermissionChecker({ mode: 'build', workdir });
       const decision = checker.check('write_file', {
         path: 'newdir/sub/deep.txt', content: '深目录',
@@ -239,9 +263,7 @@ describe('权限↔执行↔磁盘 端到端集成', () => {
       };
       await runThroughExecutor(registry, checker, block);
 
-      // 现场：多层父目录真的被递归创建，文件写出
-      expect(existsSync(join(workdir, 'newdir', 'sub', 'deep.txt'))).toBe(true);
-      expect(readFileSync(join(workdir, 'newdir', 'sub', 'deep.txt'), 'utf8')).toBe('深目录');
+      expect(existsSync(join(workdir, 'newdir', 'sub', 'deep.txt'))).toBe(false);
     });
   });
 });

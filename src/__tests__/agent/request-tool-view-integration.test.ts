@@ -34,6 +34,7 @@ import type {
   StreamOptions,
   ContentBlock,
 } from '../../agent/types.js';
+import { createToolExecutionRuntime } from '../helpers/tool-execution-runtime.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test fixtures
@@ -460,6 +461,7 @@ describe('streamingQuery — toolView + baseToolSnapshot wiring', () => {
       systemPrompt: 'system',
       tools: [def('legacy_only')],
       signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime(),
     })) {
       // drain
     }

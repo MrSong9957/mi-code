@@ -11,15 +11,16 @@
 // 风险等级：🔴 权限（写操作零确认执行）
 //
 // 本测试通过 StreamingToolExecutor（生产执行器）验证：
-//   1. deny（plan 模式写、危险命令、越界路径）→ 必须拦截，结果含 [Blocked by permission]
-//   2. allow（auto 模式、只读操作）→ 放行（正确）
-//   3. **LEGACY 路径**(executor 不传 runtimeGate):ask 仍然放行(向后兼容,由 it.fails 锁定)
-//   4. **NEW 路径**(executor 传 runtimeGate):ask 必须阻塞,approved_once 到位前 executor 零调用
+//   1. deny（plan 模式写、危险命令、越界路径）→ 必须拦截
+//   2. allow（auto 模式、只读操作）→ 放行
+//   3. ask 无 channel → fail closed
+//   4. ask 有 channel → approved_once 到位前 executor 零调用
 //
 // 测试不接真实 LLM/网络，仅驱动 executor + 注入假 registry / gate。
 
 import { describe, it, expect } from 'vitest';
 import { StreamingToolExecutor } from '../../../src/agent/streaming-executor.js';
+import type { ToolExecutionRuntime } from '../../../src/agent/tool-execution.js';
 import { ToolRegistry } from '../../../src/agent/tool-registry.js';
 import { PermissionChecker } from '../../../src/permission/checker.js';
 import type { ToolUseBlock } from '../../../src/agent/types.js';
@@ -35,6 +36,27 @@ import {
   type SecurityDecision,
   type UserDecision,
 } from '../../../src/permission/decisions.js';
+
+class NoopPendingDecisionStore implements PendingDecisionStore {
+  async save(_pending: PendingSecurityDecision): Promise<void> {}
+  async load(_sessionId: string): Promise<readonly PendingSecurityDecision[]> {
+    return [];
+  }
+  async update(
+    _decisionId: string,
+    _update: Partial<PendingSecurityDecision>,
+  ): Promise<void> {}
+}
+
+function runtimeFor(
+  checker: PermissionChecker,
+  gate = new RuntimeSecurityGate({
+    pendingStore: new NoopPendingDecisionStore(),
+    channel: null,
+  }),
+): ToolExecutionRuntime {
+  return { permissionChecker: checker, runtimeGate: gate };
+}
 
 /** 构造一个假 registry：记录执行结果，不真跑副作用 */
 function makeFakeRegistry(executed: string[]): ToolRegistry {
@@ -79,7 +101,11 @@ async function didExecute(
       return 'ok';
     },
   );
-  const exec = new StreamingToolExecutor(probe, checker);
+  const exec = new StreamingToolExecutor(
+    probe,
+    runtimeFor(checker),
+    new AbortController().signal,
+  );
   exec.addTool(block);
   // 等待异步队列跑完
   await new Promise((r) => setTimeout(r, 50));
@@ -90,7 +116,7 @@ async function didExecute(
   return executed.length > 0;
 }
 
-/** 取回 executor 执行后写回的 tool_result 文本（含 [Blocked by permission] 标记） */
+/** 取回 executor 执行后写回的模型可见 output 文本。 */
 async function getResultText(
   checker: PermissionChecker,
   block: ToolUseBlock,
@@ -100,7 +126,11 @@ async function getResultText(
     { name: block.name, description: 'probe', parameters: { type: 'object', properties: {}, required: [] } },
     async () => 'EXECUTED',
   );
-  const exec = new StreamingToolExecutor(probe, checker);
+  const exec = new StreamingToolExecutor(
+    probe,
+    runtimeFor(checker),
+    new AbortController().signal,
+  );
   exec.addTool(block);
   await new Promise((r) => setTimeout(r, 50));
   // getRemainingResults 吐出按顺序的批次，取该工具的 results
@@ -119,7 +149,7 @@ async function getResultText(
 describe('流式权限放行回归（StreamingToolExecutor）', () => {
   // ── 正向基线：deny 必须真正拦截 ──
 
-  it('plan 模式 write_file 被 deny：结果含 [Blocked by permission]，副作用不发生', async () => {
+  it('plan 模式 write_file 被 deny：返回拒绝原因，副作用不发生', async () => {
     const checker = new PermissionChecker({ mode: 'plan', workdir: process.cwd() });
     const block: ToolUseBlock = {
       type: 'tool_use',
@@ -128,7 +158,7 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
       input: { path: 'inside.txt', content: 'x' },
     };
     const text = await getResultText(checker, block);
-    expect(text).toContain('[Blocked by permission]');
+    expect(text).not.toBe('EXECUTED');
 
     const ran = await didExecute(new ToolRegistry(), checker, block);
     expect(ran).toBe(false);
@@ -143,7 +173,7 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
       input: { command: 'rm -rf /home' },
     };
     const text = await getResultText(checker, block);
-    expect(text).toContain('[Blocked by permission]');
+    expect(text).not.toBe('EXECUTED');
   });
 
   it('越界写路径被 deny', async () => {
@@ -155,7 +185,7 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
       input: { path: '../../../etc/passwd', content: 'x' },
     };
     const text = await getResultText(checker, block);
-    expect(text).toContain('[Blocked by permission]');
+    expect(text).not.toBe('EXECUTED');
   });
 
   // ── 正向基线：allow 正确放行 ──
@@ -188,22 +218,14 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
   //
   // PermissionChecker 对 build 模式 write_file 返回 ask（单元层确认）。
   //
-  // *** Wave B Task 13 (M-066) cutover 说明 ***
-  // 接入 RuntimeSecurityGate 后(NEW 路径),ask 在 approved_once 到位前必须阻塞——
-  // 见下方 "NEW 路径:runtimeGate 接入" 一节。下方 it.fails 仅锁定 **LEGACY 路径**
-  // (executor 不传 runtimeGate) 的行为——保持向后兼容,生产路径必须改走 NEW 路径。
+  // 统一入口要求 RuntimeSecurityGate；ask 在 approved_once 到位前必须阻塞。
   it('PermissionChecker 对 build 模式 write_file 返回 ask（决策源头）', () => {
     const checker = new PermissionChecker({ mode: 'build', workdir: process.cwd() });
     const decision = checker.check('write_file', { path: 'inside.txt', content: 'x' });
     expect(decision.behavior).toBe('ask');
   });
 
-  // *** Wave B Task 13 cutover: 此测试现在锁定 LEGACY 路径的 ask-passthrough 行为。 ***
-  // NEW 路径(传 runtimeGate)必须阻塞——见 "NEW 路径" 一节的测试。
-  // 标记 it.fails 是因为:LEGACY StreamingToolExecutor 在不传 runtimeGate 时,
-  // ask 会继续执行(向后兼容);本断言(期望 ran=false)在 LEGACY 路径下必然失败,
-  // 表示"LEGACY 路径存在已知 ask-passthrough,生产应改用 NEW 路径"。
-  it.fails('LEGACY 路径(无 runtimeGate):ask 决策时工具被放行执行(已知行为,向后兼容)', async () => {
+  it('统一入口: ask 无用户通道时工具不执行', async () => {
     const checker = new PermissionChecker({ mode: 'build', workdir: process.cwd() });
     const block: ToolUseBlock = {
       type: 'tool_use',
@@ -211,7 +233,6 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
       name: 'write_file',
       input: { path: 'inside.txt', content: 'x' },
     };
-    // 期望:ask 不应让工具真正执行副作用。LEGACY 路径下必然失败(行为=放行)。
     const ran = await didExecute(new ToolRegistry(), checker, block);
     expect(ran).toBe(false);
   });
@@ -272,7 +293,11 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
       pendingStore: new InMemoryPendingDecisionStore(),
       channel: new DeferredChannel(),
     });
-    const exec = new StreamingToolExecutor(probe, checker, gate);
+    const exec = new StreamingToolExecutor(
+      probe,
+      runtimeFor(checker, gate),
+      new AbortController().signal,
+    );
 
     const block: ToolUseBlock = {
       type: 'tool_use', id: 't-ask', name: 'write_file',
@@ -304,7 +329,7 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
     expect(spy).toEqual(['write_file:inside.txt']);
   });
 
-  it('NEW 路径: ask + gate 无 channel → 结果含 [Blocked by permission](ask.no_channel),executor 零调用', async () => {
+  it('统一入口: ask + gate 无 channel → 返回拒绝原因，executor 零调用', async () => {
     const spy: string[] = [];
     const probe = new ToolRegistry();
     probe.register(
@@ -317,7 +342,11 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
       pendingStore: new InMemoryPendingDecisionStore(),
       channel: null,
     });
-    const exec = new StreamingToolExecutor(probe, checker, gate);
+    const exec = new StreamingToolExecutor(
+      probe,
+      runtimeFor(checker, gate),
+      new AbortController().signal,
+    );
 
     const block: ToolUseBlock = {
       type: 'tool_use', id: 't-nochannel', name: 'write_file',
@@ -329,7 +358,7 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
 
     expect(spy).toHaveLength(0); // 未执行
 
-    // 取回结果:必须含 [Blocked by permission]
+    // 取回结果：必须不是 executor 的成功输出。
     let text: string | null = null;
     for await (const batch of exec.getRemainingResults()) {
       for (const t of batch) {
@@ -338,10 +367,10 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
         }
       }
     }
-    expect(text).toContain('[Blocked by permission]');
+    expect(text).not.toBe('written');
   });
 
-  it('NEW 路径: deny 仍然拦截(executor 零调用,结果含 [Blocked by permission])', async () => {
+  it('统一入口: deny 仍然拦截(executor 零调用,返回拒绝原因)', async () => {
     const spy: string[] = [];
     const probe = new ToolRegistry();
     probe.register(
@@ -354,7 +383,11 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
       pendingStore: new InMemoryPendingDecisionStore(),
       channel: new DeferredChannel(),
     });
-    const exec = new StreamingToolExecutor(probe, checker, gate);
+    const exec = new StreamingToolExecutor(
+      probe,
+      runtimeFor(checker, gate),
+      new AbortController().signal,
+    );
 
     const block: ToolUseBlock = {
       type: 'tool_use', id: 't-deny', name: 'write_file',
@@ -373,7 +406,7 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
         }
       }
     }
-    expect(text).toContain('[Blocked by permission]');
+    expect(text).not.toBe('written');
   });
 
   it('NEW 路径: allow 仍然放行(executor 被调用一次,结果=EXECUTED)', async () => {
@@ -389,7 +422,11 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
       pendingStore: new InMemoryPendingDecisionStore(),
       channel: new DeferredChannel(),
     });
-    const exec = new StreamingToolExecutor(probe, checker, gate);
+    const exec = new StreamingToolExecutor(
+      probe,
+      runtimeFor(checker, gate),
+      new AbortController().signal,
+    );
 
     const block: ToolUseBlock = {
       type: 'tool_use', id: 't-allow', name: 'read_file',

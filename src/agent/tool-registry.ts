@@ -47,6 +47,11 @@ export class ToolRegistry {
     this._tools.set(definition.name, { definition, executor });
   }
 
+  /** 获取完整的已注册工具，供统一执行边界使用。 */
+  get(name: string): RegisteredTool | undefined {
+    return this._tools.get(name);
+  }
+
   /** 获取工具定义列表（传给 LLM） */
   getDefinitions(): ToolDefinition[] {
     return Array.from(this._tools.values()).map(t => t.definition);

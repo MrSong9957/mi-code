@@ -18,7 +18,7 @@ import { ToolRegistry } from './tool-registry.js';
 import { formatUnknownError } from '../utils/error-message.js';
 import type { RegisteredTool, StreamingLLMClient } from './types.js';
 import { ROLE_REGISTRY, filterToolsByRole, type Role } from './roles.js';
-import type { PermissionChecker } from '../permission/checker.js';
+import type { ToolExecutionRuntime } from './tool-execution.js';
 import type { NormalizedEnvironmentSnapshot } from './context/intake/environment.js';
 import {
   normalizeEnvironmentSnapshot,
@@ -88,11 +88,7 @@ export interface SubagentOptions {
    * 未设置或传 system 字段时，行为与原版一致（全量工具 + 默认 prompt）。
    */
   role?: Role;
-  /**
-   * 权限检查器：透传给 runWithVercelAI，让子代理也受 PermissionChecker 约束。
-   * 不传则子代理工具调用裸跑（向后兼容，但不推荐生产用）。
-   */
-  permissionChecker?: PermissionChecker;
+  executionRuntime: ToolExecutionRuntime;
   /**
    * 流式 LLM 客户端（多 provider 支持）。
    *
@@ -413,7 +409,9 @@ async function runSubagentWithClient(
     tools: Array.from(toolSubset.values()).map(t => t.definition),
     signal: controller.signal,
     maxTurns,
-    permissionChecker: options.permissionChecker,
+    // Intentional behavior change: child `ask` decisions use the main
+    // RuntimeSecurityGate and wait for explicit approval.
+    executionRuntime: options.executionRuntime,
     model: options.model,
     eventBus,
     reserveFinalTextTurn,
@@ -550,7 +548,7 @@ function finalizeSubagentExecution(
 export async function runSubagent(
   prompt: string,
   tools: ToolRegistry,
-  options: SubagentOptions = {},
+  options: SubagentOptions,
 ): Promise<SubagentResult> {
   // system 选择优先级：显式 system > 角色预设 > 默认
   const system = options.system
@@ -642,7 +640,8 @@ export async function runSubagent(
         model: options.model,
         maxSteps: options.maxSteps || 10,
         system: effectiveSystem,
-        permissionChecker: options.permissionChecker,
+        // E4 deferred: the Vercel fallback still consumes only the checker.
+        permissionChecker: options.executionRuntime.permissionChecker,
       });
       text = result.text || '(no summary)';
     }
@@ -706,7 +705,8 @@ async function runSubagentBackground(
         model: options.model,
         maxSteps: options.maxSteps || 10,
         system,
-        permissionChecker: options.permissionChecker,
+        // E4 deferred: the Vercel fallback still consumes only the checker.
+        permissionChecker: options.executionRuntime.permissionChecker,
       });
       text = result.text || '(no summary)';
     }
@@ -791,7 +791,7 @@ let subagentContractCounter = 0;
 export async function runSubagentContracted(
   prompt: string,
   tools: ToolRegistry,
-  options: SubagentOptions = {},
+  options: SubagentOptions,
 ): Promise<SubagentExecutionResult> {
   const result = await runSubagent(prompt, tools, options);
 

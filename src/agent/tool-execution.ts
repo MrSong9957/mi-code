@@ -1,0 +1,450 @@
+import { createHash } from 'node:crypto';
+import type { PermissionChecker } from '../permission/checker.js';
+import type { RuntimeSecurityGate } from '../permission/runtime-gate.js';
+import { freezeSnapshot } from './contracts/identities.js';
+import type { ToolRegistry } from './tool-registry.js';
+import type {
+  ToolExecutionContext,
+  ToolParameter,
+  ToolUseBlock,
+} from './types.js';
+
+export interface CallbackError {
+  name: string;
+  message: string;
+  code?: string;
+}
+
+export interface ToolExecutionStageHits {
+  preExecute: boolean;
+  postExecute: boolean;
+  failure: boolean;
+}
+
+export interface ToolExecutionBase {
+  toolUseId: string;
+  toolName: string;
+  inputUsed: Readonly<Record<string, unknown>>;
+  durationMs: number;
+  stageHits: ToolExecutionStageHits;
+}
+
+export interface ToolExecutionSuccess extends ToolExecutionBase {
+  status: 'success';
+  output: string;
+  postExecuteError?: CallbackError;
+}
+
+type ToolExecutionFailureDetail =
+  | { kind: 'unknown_tool'; stage: 'lookup'; message: string }
+  | { kind: 'invalid_input'; stage: 'validation'; message: string }
+  | { kind: 'permission_denied'; stage: 'permission'; message: string; code?: string }
+  | { kind: 'cancelled'; stage: 'execution'; message: string; code?: string }
+  | { kind: 'timeout'; stage: 'execution'; message: string; code?: string }
+  | { kind: 'operational_error'; stage: 'execution'; message: string; code?: string };
+
+export interface ToolExecutionFailure extends ToolExecutionBase {
+  status: 'failure';
+  output: string;
+  failure: ToolExecutionFailureDetail;
+  failureCallbackError?: CallbackError;
+}
+
+export type ToolExecutionResult =
+  | ToolExecutionSuccess
+  | ToolExecutionFailure;
+
+export interface ToolPreExecuteContext {
+  toolUseId: string;
+  toolName: string;
+  input: Readonly<Record<string, unknown>>;
+}
+
+export interface ToolPreExecuteResult {
+  updatedInput?: Record<string, unknown>;
+}
+
+export interface ToolExecutionCallbacks {
+  onPreExecute?: (
+    context: ToolPreExecuteContext,
+  ) =>
+    | void
+    | ToolPreExecuteResult
+    | Promise<void | ToolPreExecuteResult>;
+  onPostExecute?: (
+    result: ToolExecutionSuccess,
+  ) => void | Promise<void>;
+  onFailure?: (
+    result: ToolExecutionFailure,
+  ) => void | Promise<void>;
+}
+
+export interface ToolExecutionRuntime {
+  permissionChecker: PermissionChecker;
+  runtimeGate: RuntimeSecurityGate;
+  callbacks?: ToolExecutionCallbacks;
+}
+
+export class ToolOperationalError extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+    this.name = 'ToolOperationalError';
+  }
+}
+
+export class PreCallbackInputViolation extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PreCallbackInputViolation';
+  }
+}
+
+type ValidationResult =
+  | { valid: true }
+  | { valid: false; message: string };
+
+function invalid(path: string, message: string): ValidationResult {
+  return { valid: false, message: `${path}: ${message}` };
+}
+
+function validateToolInput(
+  value: unknown,
+  schema: ToolParameter,
+  path = '$',
+): ValidationResult {
+  switch (schema.type) {
+    case 'null':
+      return value === null ? { valid: true } : invalid(path, 'expected null');
+    case 'string':
+      return typeof value === 'string'
+        ? { valid: true }
+        : invalid(path, 'expected string');
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value)
+        ? { valid: true }
+        : invalid(path, 'expected number');
+    case 'boolean':
+      return typeof value === 'boolean'
+        ? { valid: true }
+        : invalid(path, 'expected boolean');
+    case 'array': {
+      if (!Array.isArray(value)) return invalid(path, 'expected array');
+      if (!schema.items) return { valid: true };
+      for (let index = 0; index < value.length; index += 1) {
+        const result = validateToolInput(
+          value[index],
+          schema.items,
+          `${path}[${index}]`,
+        );
+        if (!result.valid) return result;
+      }
+      return { valid: true };
+    }
+    case 'object': {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        return invalid(path, 'expected object');
+      }
+      const record = value as Record<string, unknown>;
+      for (const key of schema.required ?? []) {
+        if (!Object.hasOwn(record, key)) {
+          return invalid(`${path}.${key}`, 'required property missing');
+        }
+      }
+      for (const [key, propertySchema] of Object.entries(schema.properties ?? {})) {
+        if (!Object.hasOwn(record, key)) continue;
+        const result = validateToolInput(
+          record[key],
+          propertySchema,
+          `${path}.${key}`,
+        );
+        if (!result.valid) return result;
+      }
+      return { valid: true };
+    }
+  }
+}
+
+function stageHits(): ToolExecutionStageHits {
+  return {
+    preExecute: false,
+    postExecute: false,
+    failure: false,
+  };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  return prototype === Object.prototype || prototype === null;
+}
+
+function readUpdatedInput(
+  value: void | ToolPreExecuteResult,
+): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainRecord(value)) {
+    throw new Error('onPreExecute returned an invalid result');
+  }
+  const keys = Object.keys(value);
+  if (keys.some((key) => key !== 'updatedInput')) {
+    throw new Error('onPreExecute returned an invalid result');
+  }
+  if (!Object.hasOwn(value, 'updatedInput')) return undefined;
+  if (!isPlainRecord(value.updatedInput)) {
+    throw new Error('onPreExecute returned an invalid result');
+  }
+  return value.updatedInput;
+}
+
+function classifyExecutorError(
+  error: unknown,
+): ToolExecutionFailureDetail | undefined {
+  if (error instanceof ToolOperationalError) {
+    return {
+      kind: 'operational_error',
+      stage: 'execution',
+      message: error.message,
+      code: error.code,
+    };
+  }
+  if (
+    error instanceof Error
+    && 'code' in error
+    && typeof (error as NodeJS.ErrnoException).code === 'string'
+  ) {
+    return {
+      kind: 'operational_error',
+      stage: 'execution',
+      message: error.message,
+      code: (error as NodeJS.ErrnoException).code,
+    };
+  }
+  if (error instanceof Error && error.name === 'AbortError') {
+    return {
+      kind: 'cancelled',
+      stage: 'execution',
+      message: error.message,
+    };
+  }
+  if (error instanceof Error && error.name === 'TimeoutError') {
+    return {
+      kind: 'timeout',
+      stage: 'execution',
+      message: error.message,
+    };
+  }
+  return undefined;
+}
+
+type ExecutorOutcome =
+  | { kind: 'returned'; output: string }
+  | { kind: 'threw'; error: unknown };
+
+function safeString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized !== undefined) return serialized;
+    return String(value);
+  } catch {
+    return '[unserializable thrown value]';
+  }
+}
+
+function toCallbackError(value: unknown): CallbackError {
+  if (value instanceof Error) {
+    const result: CallbackError = {
+      name: value.name || 'Error',
+      message: value.message,
+    };
+    if (
+      'code' in value
+      && typeof (value as NodeJS.ErrnoException).code === 'string'
+    ) {
+      result.code = (value as NodeJS.ErrnoException).code;
+    }
+    return result;
+  }
+  return {
+    name: 'NonErrorThrown',
+    message: safeString(value),
+  };
+}
+
+async function finalizeSuccess(
+  result: ToolExecutionSuccess,
+  callback?: ToolExecutionCallbacks['onPostExecute'],
+): Promise<ToolExecutionSuccess> {
+  if (!callback) return result;
+  result.stageHits.postExecute = true;
+  try {
+    await callback(result);
+  } catch (error) {
+    result.postExecuteError = toCallbackError(error);
+  }
+  return result;
+}
+
+async function finalizeFailure(
+  result: ToolExecutionFailure,
+  callback?: ToolExecutionCallbacks['onFailure'],
+): Promise<ToolExecutionFailure> {
+  if (!callback) return result;
+  result.stageHits.failure = true;
+  try {
+    await callback(result);
+  } catch (error) {
+    result.failureCallbackError = toCallbackError(error);
+  }
+  return result;
+}
+
+export async function executeToolCall(
+  registry: ToolRegistry,
+  call: ToolUseBlock,
+  runtime: ToolExecutionRuntime,
+  context: Omit<ToolExecutionContext, 'toolUseId'> = {},
+): Promise<ToolExecutionResult> {
+  const startedAt = performance.now();
+  const hits = stageHits();
+  const originalInput = structuredClone(call.input);
+  const registered = registry.get(call.name);
+  if (!registered) {
+    const message = `Unknown tool "${call.name}"`;
+    return finalizeFailure({
+      status: 'failure',
+      toolUseId: call.id,
+      toolName: call.name,
+      inputUsed: freezeSnapshot(originalInput),
+      durationMs: performance.now() - startedAt,
+      stageHits: hits,
+      output: `Error: ${message}`,
+      failure: {
+        kind: 'unknown_tool',
+        stage: 'lookup',
+        message,
+      },
+    }, runtime.callbacks?.onFailure);
+  }
+
+  const validation = validateToolInput(
+    originalInput,
+    registered.definition.parameters,
+  );
+  if (!validation.valid) {
+    return finalizeFailure({
+      status: 'failure',
+      toolUseId: call.id,
+      toolName: call.name,
+      inputUsed: freezeSnapshot(originalInput),
+      durationMs: performance.now() - startedAt,
+      stageHits: hits,
+      output: `Error: Invalid input for "${call.name}": ${validation.message}`,
+      failure: {
+        kind: 'invalid_input',
+        stage: 'validation',
+        message: validation.message,
+      },
+    }, runtime.callbacks?.onFailure);
+  }
+
+  let finalInput = structuredClone(originalInput);
+  if (runtime.callbacks?.onPreExecute) {
+    hits.preExecute = true;
+    const preResult = await runtime.callbacks.onPreExecute({
+      toolUseId: call.id,
+      toolName: call.name,
+      input: freezeSnapshot(structuredClone(originalInput)),
+    });
+    const updatedInput = readUpdatedInput(preResult);
+    if (updatedInput !== undefined) {
+      const replacement = structuredClone(updatedInput);
+      const replacementValidation = validateToolInput(
+        replacement,
+        registered.definition.parameters,
+      );
+      if (!replacementValidation.valid) {
+        throw new PreCallbackInputViolation(replacementValidation.message);
+      }
+      finalInput = replacement;
+    }
+  }
+
+  const executorInput = structuredClone(finalInput);
+  const inputUsed = freezeSnapshot(structuredClone(executorInput));
+  const actionSnapshotId = `snap:${createHash('sha256')
+    .update(JSON.stringify({ name: call.name, input: executorInput }))
+    .digest('hex')
+    .slice(0, 16)}`;
+  const decision = runtime.permissionChecker.checkDecision(
+    call.name,
+    executorInput,
+    {
+      decision_id: `exec:${call.id}`,
+      action_snapshot_id: actionSnapshotId,
+      policy_id: 'permission-default',
+      policy_version: '1',
+    },
+  );
+  const gated = await runtime.runtimeGate.execute(
+    decision,
+    async (): Promise<ExecutorOutcome> => {
+      try {
+        return {
+          kind: 'returned',
+          output: await registered.executor(executorInput, {
+            ...context,
+            toolUseId: call.id,
+          }),
+        };
+      } catch (error) {
+        return { kind: 'threw', error };
+      }
+    },
+  );
+
+  if (gated.kind === 'denied') {
+    return finalizeFailure({
+      status: 'failure',
+      toolUseId: call.id,
+      toolName: call.name,
+      inputUsed,
+      durationMs: performance.now() - startedAt,
+      stageHits: hits,
+      output: gated.human_reason,
+      failure: {
+        kind: 'permission_denied',
+        stage: 'permission',
+        message: gated.human_reason,
+        code: gated.reason_code,
+      },
+    }, runtime.callbacks?.onFailure);
+  }
+
+  if (gated.kind === 'threw') {
+    const failure = classifyExecutorError(gated.error);
+    if (!failure) throw gated.error;
+    return finalizeFailure({
+      status: 'failure',
+      toolUseId: call.id,
+      toolName: call.name,
+      inputUsed,
+      durationMs: performance.now() - startedAt,
+      stageHits: hits,
+      output: `Error executing tool "${call.name}": ${failure.message}`,
+      failure,
+    }, runtime.callbacks?.onFailure);
+  }
+
+  return finalizeSuccess({
+    status: 'success',
+    toolUseId: call.id,
+    toolName: call.name,
+    inputUsed,
+    durationMs: performance.now() - startedAt,
+    stageHits: hits,
+    output: gated.output,
+  }, runtime.callbacks?.onPostExecute);
+}

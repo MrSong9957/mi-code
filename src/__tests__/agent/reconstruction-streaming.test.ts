@@ -34,6 +34,7 @@ import type {
   StreamOptions,
   ContentBlock,
 } from '../../agent/types.js';
+import { createToolExecutionRuntime } from '../helpers/tool-execution-runtime.js';
 
 // ---------------------------------------------------------------------------
 // Fake client(与 streaming-query.test.ts 同款,保持一致)
@@ -131,6 +132,7 @@ describe('Wave G Task 10 — streamingQuery postCompactReconstruction hook', () 
         systemPrompt: 'sys',
         tools: registry.getDefinitions(),
         signal: ac.signal,
+        executionRuntime: createToolExecutionRuntime(),
         maxTurns: 2,
         enableStreamingExecution: false,
         onMessages: (m) => {
@@ -165,6 +167,7 @@ describe('Wave G Task 10 — streamingQuery postCompactReconstruction hook', () 
         systemPrompt: 'sys',
         tools: registry.getDefinitions(),
         signal: ac.signal,
+        executionRuntime: createToolExecutionRuntime(),
         maxTurns: 5,
         enableStreamingExecution: false,
         postCompactReconstruction: async ({ messages, sessionId, turnId }) => {
@@ -214,6 +217,7 @@ describe('Wave G Task 10 — streamingQuery postCompactReconstruction hook', () 
         systemPrompt: 'sys',
         tools: registry.getDefinitions(),
         signal: ac.signal,
+        executionRuntime: createToolExecutionRuntime(),
         maxTurns: 5,
         enableStreamingExecution: false,
         onMessages: (m) => {
@@ -262,6 +266,7 @@ describe('Wave G Task 10 — streamingQuery postCompactReconstruction hook', () 
           systemPrompt: 'sys',
           tools: registry.getDefinitions(),
           signal: ac.signal,
+          executionRuntime: createToolExecutionRuntime(),
           maxTurns: 5,
           enableStreamingExecution: false,
           onMessages: (m) => {
@@ -298,6 +303,7 @@ describe('Wave G Task 10 — streamingQuery postCompactReconstruction hook', () 
         systemPrompt: 'sys',
         tools: registry.getDefinitions(),
         signal: ac.signal,
+        executionRuntime: createToolExecutionRuntime(),
         maxTurns: 5,
         enableStreamingExecution: false,
         onMessages: (m) => {
@@ -342,6 +348,7 @@ describe('Wave G Task 10 — streamingQuery postCompactReconstruction hook', () 
         systemPrompt: 'sys',
         tools: registry.getDefinitions(),
         signal: ac.signal,
+        executionRuntime: createToolExecutionRuntime(),
         maxTurns: 5,
         enableStreamingExecution: false,
         postCompactReconstruction: async () => ({
@@ -395,6 +402,7 @@ describe('Wave G Task 10 — streamingQuery postCompactReconstruction hook', () 
         systemPrompt: 'sys',
         tools: registry.getDefinitions(),
         signal: ac.signal,
+        executionRuntime: createToolExecutionRuntime(),
         maxTurns: 5,
         enableStreamingExecution: false,
         postCompactReconstruction: async ({ messages }) => {

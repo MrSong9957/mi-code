@@ -39,6 +39,7 @@ import type {
   AssistantMessage,
   StreamOptions,
 } from '../../agent/types.js';
+import { createToolExecutionRuntime } from '../helpers/tool-execution-runtime.js';
 
 // ---------- helpers ----------
 
@@ -391,6 +392,7 @@ describe('streamingQuery before_provider_send integration', () => {
       systemPrompt: 'sys',
       tools: registry.getDefinitions(),
       signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime(),
       maxTurns: 6,
       enableStreamingExecution: false,
     }));

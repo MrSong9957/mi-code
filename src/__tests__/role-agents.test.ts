@@ -9,7 +9,9 @@ import type { ToolDefinition, ToolExecutor, RegisteredTool } from '../agent/type
 import type { SubagentOptions, SubagentResult } from '../agent/subagent.js';
 import { runSubagent, enhanceSubagentSystemPrompt } from '../agent/subagent.js';
 import type { StreamingLLMClient } from '../agent/types.js';
-import { PermissionChecker } from '../permission/checker.js';
+import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
+
+const executionRuntime = createToolExecutionRuntime();
 
 describe('ROLE_REGISTRY 角色注册表', () => {
   it('三个角色都有 systemPrompt 与 tools', () => {
@@ -154,14 +156,14 @@ describe('createSpawnAgentTool', () => {
 
   it('definition 字段正确', () => {
     const registry = makeRegistry();
-    const { definition } = createSpawnAgentTool(registry);
+    const { definition } = createSpawnAgentTool(registry, undefined, executionRuntime);
     expect(definition.name).toBe('spawn_agent');
     expect(definition.parameters.required).toEqual(['role', 'prompt']);
   });
 
   it('schema 含可选 description 字段(AUTO-0025-transient Task 3)', () => {
     const registry = makeRegistry();
-    const { definition } = createSpawnAgentTool(registry);
+    const { definition } = createSpawnAgentTool(registry, undefined, executionRuntime);
     expect(definition.parameters.properties).toHaveProperty('description');
     // description 不在 required(向后兼容)
     expect(definition.parameters.required).not.toContain('description');
@@ -173,7 +175,7 @@ describe('createSpawnAgentTool', () => {
       text: 'ok', isBackground: false, status: 'completed',
       terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 },
     }));
-    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+    const { executor } = createSpawnAgentTool(registry, undefined, executionRuntime, mockRunner);
     const result = await executor({ role: 'explore', prompt: 'task' });
     expect(result).toContain('[Subagent status=completed]');
   });
@@ -185,7 +187,7 @@ describe('createSpawnAgentTool', () => {
       calls.push({ prompt, role: opts.role });
       return { text: 'subagent summary', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     });
-    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+    const { executor } = createSpawnAgentTool(registry, undefined, executionRuntime, mockRunner);
 
     const result = await executor({ role: 'explore', prompt: 'find auth code' });
     // AUTO-0025 Task 5:输出携带结构化 status 前缀,让主 agent 能区分成功/失败
@@ -209,7 +211,7 @@ describe('createSpawnAgentTool', () => {
       text: 'found 3 skills', isBackground: false, status: 'completed',
       terminationReason: 'end_turn', evidence: { toolCallCount: 2, successfulToolResultCount: 2 },
     }));
-    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+    const { executor } = createSpawnAgentTool(registry, undefined, executionRuntime, mockRunner);
 
     const result = await executor({ role: 'explore', prompt: 'list skills' });
     expect(result).toContain('[Subagent status=completed]');
@@ -223,7 +225,7 @@ describe('createSpawnAgentTool', () => {
       isBackground: false, status: 'incomplete',
       terminationReason: 'max_turns', evidence: { toolCallCount: 3, successfulToolResultCount: 1 },
     }));
-    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+    const { executor } = createSpawnAgentTool(registry, undefined, executionRuntime, mockRunner);
 
     const result = await executor({ role: 'explore', prompt: 'deep search' });
     expect(result).toContain('[Subagent status=incomplete');
@@ -238,7 +240,7 @@ describe('createSpawnAgentTool', () => {
       isBackground: false, status: 'unverified',
       terminationReason: 'end_turn', evidence: { toolCallCount: 0, successfulToolResultCount: 0 },
     }));
-    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+    const { executor } = createSpawnAgentTool(registry, undefined, executionRuntime, mockRunner);
 
     const result = await executor({ role: 'explore', prompt: 'check' });
     expect(result).toContain('[Subagent status=unverified]');
@@ -251,14 +253,14 @@ describe('createSpawnAgentTool', () => {
       calls.push({ role: opts.role });
       return { text: 'plan summary', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     });
-    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+    const { executor } = createSpawnAgentTool(registry, undefined, executionRuntime, mockRunner);
     await executor({ role: 'plan', prompt: 'design api' });
     expect(calls[0]?.role).toBe('plan');
   });
 
   it('非法 role → 返回 Error', async () => {
     const registry = makeRegistry();
-    const { executor } = createSpawnAgentTool(registry);
+    const { executor } = createSpawnAgentTool(registry, undefined, executionRuntime);
     const result = await executor({ role: 'admin', prompt: 'x' });
     expect(result).toMatch(/Error/i);
     expect(result).toMatch(/explore.*plan.*general/);
@@ -266,7 +268,7 @@ describe('createSpawnAgentTool', () => {
 
   it('空 prompt → 返回 Error', async () => {
     const registry = makeRegistry();
-    const { executor } = createSpawnAgentTool(registry);
+    const { executor } = createSpawnAgentTool(registry, undefined, executionRuntime);
     const result = await executor({ role: 'explore', prompt: '' });
     expect(result).toMatch(/Error/i);
   });
@@ -279,7 +281,7 @@ describe('createSpawnAgentTool', () => {
       capturedClient = opts.client;
       return { text: 'ok', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     });
-    const { executor } = createSpawnAgentTool(registry, () => fakeClient, undefined, mockRunner);
+    const { executor } = createSpawnAgentTool(registry, () => fakeClient, executionRuntime, mockRunner);
     await executor({ role: 'general', prompt: 'x' });
     // clientProvider 被调用，产物作为 opts.client 传入 runner
     expect(capturedClient).toBe(fakeClient);
@@ -292,22 +294,22 @@ describe('createSpawnAgentTool', () => {
       capturedClient = opts.client;
       return { text: 'ok', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     });
-    const { executor } = createSpawnAgentTool(registry, undefined, undefined, mockRunner);
+    const { executor } = createSpawnAgentTool(registry, undefined, executionRuntime, mockRunner);
     await executor({ role: 'general', prompt: 'x' });
     expect(capturedClient).toBeUndefined();
   });
 
-  it('透传 permissionChecker 给 runner', async () => {
+  it('透传同一个 executionRuntime 给 runner', async () => {
     const registry = makeRegistry();
-    const checker = new PermissionChecker({ mode: 'plan' });
-    let capturedChecker: PermissionChecker | undefined;
+    const runtime = createToolExecutionRuntime({ mode: 'plan' });
+    let capturedRuntime: SubagentOptions['executionRuntime'] | undefined;
     const mockRunner = vi.fn(async (_p: string, _t: ToolRegistry, opts: SubagentOptions): Promise<SubagentResult> => {
-      capturedChecker = opts.permissionChecker;
+      capturedRuntime = opts.executionRuntime;
       return { text: 'ok', isBackground: false, status: 'completed' as const, terminationReason: 'end_turn', evidence: { toolCallCount: 1, successfulToolResultCount: 1 } };
     });
-    const { executor } = createSpawnAgentTool(registry, undefined, checker, mockRunner);
+    const { executor } = createSpawnAgentTool(registry, undefined, runtime, mockRunner);
     await executor({ role: 'explore', prompt: 'x' });
-    expect(capturedChecker).toBe(checker);
+    expect(capturedRuntime).toBe(runtime);
   });
 
   /** 构造捕获 runner：把每次调用的 options 存入 captured.options */
@@ -324,7 +326,7 @@ describe('createSpawnAgentTool', () => {
     const tool = createSpawnAgentTool(
       fakeRegistry,
       undefined,          // clientProvider
-      undefined,          // permissionChecker
+      executionRuntime,
       makeFakeRunner(captured),
       undefined,          // skillsDescription
       () => 'parent system prompt',  // getParentSystemPrompt
@@ -343,7 +345,7 @@ describe('createSpawnAgentTool', () => {
     const tool = createSpawnAgentTool(
       fakeRegistry,
       undefined,
-      undefined,
+      executionRuntime,
       makeFakeRunner(captured),
       undefined,
       () => 'parent system prompt',
@@ -355,7 +357,7 @@ describe('createSpawnAgentTool', () => {
 
   it('fork=true 但无 getParentSystemPrompt 时返回 Error', async () => {
     const fakeRegistry = makeRegistry();
-    const tool = createSpawnAgentTool(fakeRegistry);
+    const tool = createSpawnAgentTool(fakeRegistry, undefined, executionRuntime);
     const result = await tool.executor({ role: 'general', prompt: 'do something', fork: true });
     expect(result).toContain('Error');
   });
@@ -375,7 +377,7 @@ describe('createSpawnAgentTool', () => {
     const { executor } = createSpawnAgentTool(
       registry,
       () => failingClient,
-      undefined,
+      executionRuntime,
       runSubagent,
     );
 

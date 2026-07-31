@@ -24,8 +24,11 @@ import { StreamEventBus } from './stream-event-bus.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolDefinitionSnapshot } from './tools/descriptor-snapshot.js';
 import type { RequestToolViewSnapshot } from './tools/overlay.js';
-import type { PermissionChecker } from '../permission/checker.js';
-import type { RuntimeSecurityGate, DeniedAction } from '../permission/runtime-gate.js';
+import {
+  executeToolCall,
+  type ToolExecutionResult,
+  type ToolExecutionRuntime,
+} from './tool-execution.js';
 import { runCompaction, compactHistoryWithLLM } from './compression.js';
 import {
   createRecoveryState,
@@ -130,67 +133,19 @@ function enforceCheckpoint(
   return validation;
 }
 
-/**
- * 流式路径下的权限预检(串行兜底分支用):返回是否被拦截及回写给模型的输出文本。
- *
- * *** Wave B Task 13 (M-066) cutover ***
- * 选 Option A: 把本函数改成 async,让 ask 真正阻塞(await gate)。
- *
- * 行为:
- *   - 无 checker(LEGACY)→ 不拦截。
- *   - checker + 无 runtimeGate(LEGACY)→ 仅 deny 拦截,ask 放行(向后兼容)。
- *   - checker + runtimeGate(NEW,生产路径)→ 用 checker.checkDecision 构造 SecurityDecision,
- *     交给 gate.execute 处理:allow 放行;deny 拦截;ask **阻塞** await channel.request
- *     (approved_once 到位前不执行 executor);channel=null → denied(no_channel)。
- *
- * 返回 { blocked, output }:blocked=true 时 output 是回写给模型的文本(含 [Blocked by permission])。
- * blocked=false 时,调用方继续往下执行 registry.execute。
- */
-async function checkPermissionOrBlock(
-  name: string,
-  input: Record<string, unknown>,
-  checker: PermissionChecker | undefined,
-  gate: RuntimeSecurityGate | undefined,
-): Promise<{ blocked: boolean; output: string | null }> {
-  if (!checker) return { blocked: false, output: null };
-
-  // NEW 路径(传 gate):走结构化 SecurityDecision + 真正阻塞 ask
-  if (gate) {
-    const decisionId = `serial:${name}:${createHash('sha256').update(JSON.stringify({ name, input })).digest('hex').slice(0, 8)}`;
-    const actionSnapshotId = `snap:${createHash('sha256').update(JSON.stringify({ name, input })).digest('hex').slice(0, 16)}`;
-    const decision = checker.checkDecision(name, input, {
-      decision_id: decisionId,
-      action_snapshot_id: actionSnapshotId,
-      policy_id: 'permission-default',
-      policy_version: '1',
-    });
-
-    // execute 风格:把"调用方继续执行"包装成 executor,让 gate 在 authorized 时返回 true,
-    // 在 denied 时返回 DeniedAction。调用方根据返回值决定是否再走一次 registry.execute
-    // (这里只用 authorize 分支,executor 由调用方在 blocked=false 时自行调用——
-    //  这样串行分支的结构与原代码最对齐)。
-    const outcome = await gate.authorize(decision);
-    if (outcome.kind === 'authorized') {
-      return { blocked: false, output: null };
-    }
-    const denied = outcome as DeniedAction;
-    return { blocked: true, output: `[Blocked by permission] ${denied.human_reason}` };
-  }
-
-  // LEGACY 路径(无 gate):仅 deny 拦截,ask 放行(向后兼容)
-  const decision = checker.check(name, input);
-  if (decision.behavior === 'deny') {
-    return { blocked: true, output: `[Blocked by permission] ${decision.reason}` };
-  }
-  return { blocked: false, output: null };
-}
-
 /** 流式查询消息（所有可能的输出类型） */
 export type StreamMessage =
   | NormalizedMessage
   | StreamEvent
   // AUTO-0025 Phase B (Task 10):structuredOutcome 走 UI 通道(仅 ask_user_question 有)。
-  | { type: 'tool_result'; toolUseId: string; name: string; output: string; structuredOutcome?: StructuredAskResult };
+  | {
+      type: 'tool_result';
+      toolUseId: string;
+      name: string;
+      output: string;
+      structuredOutcome?: StructuredAskResult;
+      executionResult?: ToolExecutionResult;
+    };
 
 /** 流式查询选项 */
 export interface StreamingQueryOptions {
@@ -218,24 +173,8 @@ export interface StreamingQueryOptions {
    * 用于会话持久化（落盘到 JSONL）。
    */
   onMessages?: (messages: Message[]) => void;
-  /**
-   * 权限检查器（传入后启用工具执行前的权限拦截）。
-   * 流式路径无用户确认通道，仅 deny 决策真正拦截；ask 保持旧行为（放行）。
-   * 与 checkPermissionOrBlock 的实现一致，与 streaming-executor.ts 的 deny 拦截一致。
-   */
-  permissionChecker?: PermissionChecker;
-  /**
-   * Wave B Task 13 (M-066): 运行时安全闸门。
-   *
-   * 与 `permissionChecker` 同时传入时启用 NEW 路径:
-   *   - allow / deny: 自动出闸。
-   *   - ask: **真正阻塞** await 用户决策(approved_once 到位前不执行 executor);
-   *          无 channel 时直接 deny(no_channel),绝不降级为 allow。
-   *
-   * 不传时 LEGACY 路径生效(仅 deny 拦截、ask 放行,向后兼容)。
-   * 生产主路径(index.ts)必须传入 runtimeGate。
-   */
-  runtimeGate?: RuntimeSecurityGate;
+  /** 工具执行所需的统一权限、Gate 与回调运行时。 */
+  executionRuntime?: ToolExecutionRuntime;
   /**
    * AUTO-0025 Task 4:保留一个"无工具的最终总结轮"。
    *
@@ -418,14 +357,17 @@ export async function* streamingQuery(
     compactClient,
     initialMessages,
     onMessages,
-    permissionChecker,
-    runtimeGate,
+    executionRuntime,
     reserveFinalTextTurn = false,
     noToolContract,
     referenceValidationHook,
     boundedMemoryIntegration,
     postCompactReconstruction,
   } = options;
+
+  if (tools.length > 0 && !executionRuntime) {
+    throw new Error('streamingQuery invariant violation: executionRuntime is required when tools are exposed');
+  }
 
   // Wave C Task 9 (M-031): No-Tool Contract 启用时, 本次 query 整体禁用工具。
   //
@@ -523,12 +465,11 @@ export async function* streamingQuery(
     // Wave C Task 9: toolResults 提前声明为 per-turn 累积器, 让 no-tool runtime gate
     // 能在阶段 1 收到 tool_use 时立即 push protocol rejection (不依赖阶段 3 才存在)。
     const toolResults: ToolResultBlock[] = [];
-    const toolStartTimes = new Map<string, number>();
     let needsFollowUp = false;
 
     // 创建流式工具执行器
-    const streamingExecutor = enableStreamingExecution
-      ? new StreamingToolExecutor(registry, permissionChecker, runtimeGate)
+    const streamingExecutor = enableStreamingExecution && executionRuntime
+      ? new StreamingToolExecutor(registry, executionRuntime, signal)
       : null;
 
     // AUTO-0025 Task 4:判断本轮是否是"无工具的最终总结轮"。
@@ -673,7 +614,6 @@ export async function* streamingQuery(
               if (streamingExecutor) {
                 streamingExecutor.addTool(block as ToolUseBlock);
                 const startTime = Date.now();
-                toolStartTimes.set(block.id, startTime);
                 eventBus?.emitToolCall({
                   toolUseId: (block as ToolUseBlock).id,
                   name: (block as ToolUseBlock).name,
@@ -783,7 +723,7 @@ export async function* streamingQuery(
             toolUseId: tool.id,
             name: tool.block.name,
             output,
-            duration: Date.now() - (toolStartTimes.get(tool.id) ?? Date.now()),
+            duration: tool.executionResult?.durationMs ?? 0,
             structuredOutcome,
           });
 
@@ -793,85 +733,54 @@ export async function* streamingQuery(
             name: tool.block.name,
             output,
             structuredOutcome,
+            executionResult: tool.executionResult,
           };
         }
       }
     } else {
       // 传统方式：串行执行所有工具
       for (const block of toolUseBlocks) {
-        // 权限预检:
-        //   - 传 runtimeGate(NEW 路径):ask 真正阻塞(await channel.request)。
-        //   - 不传(LEGACY 路径):仅 deny 拦截、ask 放行(向后兼容)。
-        const guard = await checkPermissionOrBlock(block.name, block.input, permissionChecker, runtimeGate);
-        if (guard.blocked && guard.output) {
-          const output = guard.output;
-          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: output });
-          eventBus?.emitToolResult({
-            toolUseId: block.id,
-            name: block.name,
-            output,
-            duration: Date.now() - (toolStartTimes.get(block.id) ?? Date.now()),
-          });
-          yield { type: 'tool_result', toolUseId: block.id, name: block.name, output };
-          continue;
+        if (!executionRuntime) {
+          throw new Error('streamingQuery invariant violation: tool call received without executionRuntime');
         }
-        try {
-          const output = await registry.execute(block.name, block.input, { toolUseId: block.id });
-          const result: ToolResultBlock = {
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: output,
-          };
-          toolResults.push(result);
+        const executionResult = await executeToolCall(
+          registry,
+          block,
+          executionRuntime,
+          { signal },
+        );
+        const output = executionResult.output;
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: block.id,
+          content: output,
+        });
 
-          // idle 工具被调用 → 标记跳出
-          if (block.name === 'idle') {
-            idleRequested = true;
-          }
-
-          // AUTO-0025 Phase B (Task 11):meta 旁路消费端(传统分支,与流式分支对齐)。
-          const structuredOutcome = askOutcomeStore.take(block.id);
-          if (!structuredOutcome && block.name === 'ask_user_question' && process.env.DEBUG) {
-            console.error('[streaming-query] ask_user_question outcome missing in store', { toolUseId: block.id });
-          }
-
-          eventBus?.emitToolResult({
-            toolUseId: block.id,
-            name: block.name,
-            output,
-            duration: Date.now() - (toolStartTimes.get(block.id) ?? Date.now()),
-            structuredOutcome,
-          });
-
-          yield {
-            type: 'tool_result',
-            toolUseId: block.id,
-            name: block.name,
-            output,
-            structuredOutcome,
-          };
-        } catch (error) {
-          const output = `[Tool Error] ${formatUnknownError(error)}`;
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: output,
-          });
-
-          eventBus?.emitToolResult({
-            toolUseId: block.id,
-            name: block.name,
-            output,
-            duration: Date.now() - (toolStartTimes.get(block.id) ?? Date.now()),
-          });
-
-          yield {
-            type: 'tool_result',
-            toolUseId: block.id,
-            name: block.name,
-            output,
-          };
+        if (block.name === 'idle') {
+          idleRequested = true;
         }
+
+        const structuredOutcome = askOutcomeStore.take(block.id);
+        if (!structuredOutcome && block.name === 'ask_user_question' && process.env.DEBUG) {
+          console.error('[streaming-query] ask_user_question outcome missing in store', { toolUseId: block.id });
+        }
+
+        eventBus?.emitToolResult({
+          toolUseId: block.id,
+          name: block.name,
+          output,
+          duration: executionResult.durationMs,
+          structuredOutcome,
+        });
+
+        yield {
+          type: 'tool_result',
+          toolUseId: block.id,
+          name: block.name,
+          output,
+          structuredOutcome,
+          executionResult,
+        };
       }
     }
 

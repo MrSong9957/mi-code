@@ -7,7 +7,7 @@
 //          而 ToolResultBlock.content 仍是 serialize 字符串(API 通道不变)。
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { streamingQuery } from '../agent/streaming-query.js';
+import { streamingQuery, type StreamMessage } from '../agent/streaming-query.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
 import { askOutcomeStore } from '../agent/ask-outcome-store.js';
 import { createAskUserTool } from '../agent/tools/ask-user-tool.js';
@@ -23,6 +23,7 @@ import type {
   ContentBlock,
 } from '../agent/types.js';
 import type { AskUserManager } from '../agent/ask-user-manager.js';
+import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
 
 // 录制式 fake client:按剧本念台词(同 streaming-query.test.ts 的 ScriptedStreamClient)
 type ScriptBlock = ContentBlock;
@@ -104,6 +105,7 @@ describe('streamingQuery structuredOutcome 透传', () => {
       systemPrompt: 'sys',
       tools: [askTool.definition],
       signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime(),
       eventBus,
       onMessages: m => { messages.push(...m); },
     });
@@ -133,6 +135,57 @@ describe('streamingQuery structuredOutcome 透传', () => {
     expect(askOutcomeStore.size()).toBe(0);
   });
 
+  it('流式路径 emitToolResult 的 duration 与 executionResult.durationMs 同源(纯执行耗时,不含排队等待)', async () => {
+    // 契约:duration 字段供 UI 展示"工具执行耗时"(subagent-presentation.ts:69 注释明确),
+    // 应取 executeToolCall 内部用 performance.now() 测的 executionResult.durationMs,
+    // 而非从 addTool 派发时刻起算的 Date.now() 壁钟差(后者含并发排队等待时间)。
+    // 本测试用一个可观测执行耗时的工具,断言两者数值一致(同源),而非断言时间范围(避免 flaky)。
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'dur-1', name: 'slow_echo', input: { text: 'x' } }],
+      [{ type: 'text', text: 'done' }],
+    ]);
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'slow_echo',
+      description: 'echo with observable duration',
+      parameters: { type: 'object', properties: { text: { type: 'string' } } },
+    }, async (input) => {
+      // 真实执行耗时:约 30ms,足以与排队/壁钟误差区分
+      await new Promise(r => setTimeout(r, 30));
+      return `echo: ${(input as { text: string }).text}`;
+    });
+
+    const eventBus = new StreamEventBus();
+    let capturedDuration: number | undefined;
+    let capturedExecDuration: number | undefined;
+    eventBus.onToolResult(d => {
+      capturedDuration = d.duration;
+    });
+
+    const gen = streamingQuery(client, registry, 'hi', {
+      systemPrompt: 'sys',
+      tools: [{
+        name: 'slow_echo',
+        description: 'echo with observable duration',
+        parameters: { type: 'object', properties: { text: { type: 'string' } } },
+      }],
+      signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime(),
+      eventBus,
+    });
+
+    for await (const msg of gen) {
+      if (msg.type === 'tool_result' && msg.executionResult) {
+        capturedExecDuration = msg.executionResult.durationMs;
+      }
+    }
+
+    expect(capturedDuration).toBeDefined();
+    expect(capturedExecDuration).toBeDefined();
+    // 核心断言:两条路径的 duration 必须同源(严格相等),而非各自独立计时
+    expect(capturedDuration).toBe(capturedExecDuration);
+  });
+
   it('普通工具的 tool_result 不携带 structuredOutcome(undefined)', async () => {
     const client = new ScriptedStreamClient([
       [{ type: 'tool_use', id: 'tuu-2', name: 'plain_tool', input: {} }],
@@ -152,6 +205,7 @@ describe('streamingQuery structuredOutcome 透传', () => {
       systemPrompt: 'sys',
       tools: [{ name: 'plain_tool', description: 'p', parameters: { type: 'object', properties: {} } }],
       signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime(),
       eventBus,
     });
     for await (const _ of gen) { void _; }
@@ -190,5 +244,176 @@ describe('streamingQuery turn 结束生命周期契约', () => {
     // 若未来设计变化需要在 finally 同时调 clear+sweep,请先评估 orphan 清理是否仍确定,
     // 再更新此断言。勿直接删除此断言(会失去对 sweep 误用的回归保护)。
     expect(sweepSpy).not.toHaveBeenCalled();
+  });
+});
+
+async function collectMessages(
+  generator: AsyncGenerator<StreamMessage>,
+): Promise<StreamMessage[]> {
+  const messages: StreamMessage[] = [];
+  for await (const message of generator) messages.push(message);
+  return messages;
+}
+
+function toolScript(name: string, input: Record<string, unknown> = {}): ScriptBlock[][] {
+  return [
+    [{ type: 'tool_use', id: 'tool-1', name, input }],
+    [{ type: 'text', text: 'done' }],
+  ];
+}
+
+describe('streamingQuery unified tool execution', () => {
+  it('rejects a tool-exposing query without executionRuntime before execution', async () => {
+    const registry = new ToolRegistry();
+    const executor = vi.fn(async () => 'should not run');
+    const definition = {
+      name: 'plain_tool',
+      description: 'plain',
+      parameters: { type: 'object' as const, properties: {} },
+    };
+    registry.register(definition, executor);
+
+    await expect(collectMessages(streamingQuery(
+      new ScriptedStreamClient(toolScript('plain_tool')),
+      registry,
+      'hi',
+      {
+        systemPrompt: 'sys',
+        tools: [definition],
+        signal: new AbortController().signal,
+      },
+    ))).rejects.toThrow(/executionRuntime/);
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('allows a true no-tool query to omit executionRuntime', async () => {
+    const messages = await collectMessages(streamingQuery(
+      new ScriptedStreamClient([[{ type: 'text', text: 'done' }]]),
+      new ToolRegistry(),
+      'hi',
+      {
+        systemPrompt: 'sys',
+        tools: [],
+        signal: new AbortController().signal,
+      },
+    ));
+
+    expect(messages.some(message => message.type === 'assistant')).toBe(true);
+  });
+
+  it('returns the same structured permission failure in streaming and serial modes', async () => {
+    const definition = {
+      name: 'write_file',
+      description: 'write',
+      parameters: {
+        type: 'object' as const,
+        properties: {
+          path: { type: 'string' as const },
+          content: { type: 'string' as const },
+        },
+        required: ['path', 'content'],
+      },
+    };
+
+    const run = async (enableStreamingExecution: boolean) => {
+      const registry = new ToolRegistry();
+      registry.register(definition, vi.fn(async () => 'written'));
+      const messages = await collectMessages(streamingQuery(
+        new ScriptedStreamClient(toolScript('write_file', { path: 'inside.txt', content: 'x' })),
+        registry,
+        'hi',
+        {
+          systemPrompt: 'sys',
+          tools: [definition],
+          signal: new AbortController().signal,
+          enableStreamingExecution,
+          executionRuntime: createToolExecutionRuntime({ mode: 'plan' }),
+        },
+      ));
+      return messages.find(message => message.type === 'tool_result');
+    };
+
+    const streaming = await run(true);
+    const serial = await run(false);
+    expect(streaming).toMatchObject({
+      type: 'tool_result',
+      executionResult: {
+        status: 'failure',
+        failure: {
+          kind: 'permission_denied',
+          stage: 'permission',
+        },
+      },
+    });
+    expect(serial).toMatchObject({
+      type: 'tool_result',
+      output: streaming?.type === 'tool_result' ? streaming.output : undefined,
+      executionResult: {
+        status: 'failure',
+        failure: {
+          kind: 'permission_denied',
+          stage: 'permission',
+        },
+      },
+    });
+  });
+
+  it('emits the complete structured result and model-facing output in serial mode', async () => {
+    const registry = new ToolRegistry();
+    const definition = {
+      name: 'plain_tool',
+      description: 'plain',
+      parameters: { type: 'object' as const, properties: {} },
+    };
+    registry.register(definition, async () => 'plain output');
+
+    const messages = await collectMessages(streamingQuery(
+      new ScriptedStreamClient(toolScript('plain_tool')),
+      registry,
+      'hi',
+      {
+        systemPrompt: 'sys',
+        tools: [definition],
+        signal: new AbortController().signal,
+        enableStreamingExecution: false,
+        executionRuntime: createToolExecutionRuntime(),
+      },
+    ));
+    const result = messages.find(message => message.type === 'tool_result');
+
+    expect(result).toMatchObject({
+      type: 'tool_result',
+      output: 'plain output',
+      executionResult: {
+        status: 'success',
+        toolUseId: 'tool-1',
+        toolName: 'plain_tool',
+        output: 'plain output',
+      },
+    });
+  });
+
+  it('bubbles unclassified executor errors in serial mode', async () => {
+    const registry = new ToolRegistry();
+    const definition = {
+      name: 'buggy_tool',
+      description: 'buggy',
+      parameters: { type: 'object' as const, properties: {} },
+    };
+    const bug = new TypeError('executor invariant failed');
+    registry.register(definition, async () => { throw bug; });
+
+    await expect(collectMessages(streamingQuery(
+      new ScriptedStreamClient(toolScript('buggy_tool')),
+      registry,
+      'hi',
+      {
+        systemPrompt: 'sys',
+        tools: [definition],
+        signal: new AbortController().signal,
+        enableStreamingExecution: false,
+        executionRuntime: createToolExecutionRuntime(),
+      },
+    ))).rejects.toBe(bug);
   });
 });
