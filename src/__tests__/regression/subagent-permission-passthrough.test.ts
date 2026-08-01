@@ -172,11 +172,13 @@ describe('child execution runtime propagation', () => {
     expect(captured[0]?.executionRuntime).toBe(runtime);
   });
 
-  it('keeps a child ask blocked until the shared gate approves once', async () => {
+  it('silently allows a child build_write ask without hitting the shared channel', async () => {
+    // Task 5: 子代理路径下 build_write_confirmation ask 经 applySubagentSilentPolicy
+    // 静默改写为 allow,不再经共享 channel 阻塞用户。channel 永不被请求。
     const channel = new DeferredDecisionChannel();
     let calls = 0;
     const runtime = createToolExecutionRuntime({ mode: 'build', channel });
-    const running = runSubagent('write a file', childRegistry(async () => {
+    await runSubagent('write a file', childRegistry(async () => {
       calls++;
       return 'written';
     }), {
@@ -186,14 +188,13 @@ describe('child execution runtime propagation', () => {
       executionRuntime: runtime,
     });
 
-    await channel.requested;
-    expect(calls).toBe(0);
-    channel.resolve('approved_once');
-    await running;
+    // ★ 静默放行:执行了,channel 未被请求。
     expect(calls).toBe(1);
+    expect(channel['decision']).toBeUndefined();
   });
 
-  it('reports permission_denied to the child when the shared gate rejects', async () => {
+  it('silently allows a child build_write ask even if the shared channel would reject', async () => {
+    // Task 5: 子代理静默路径不读 channel,即使 channel 一律 reject,child write 仍静默放行。
     const failures: string[] = [];
     const channel: UserDecisionChannel = {
       request: async (decision) => ({
@@ -222,7 +223,8 @@ describe('child execution runtime propagation', () => {
       executionRuntime: runtime,
     });
 
-    expect(calls).toBe(0);
-    expect(failures).toContain('permission_denied');
+    // ★ 子代理静默放行:执行了,无 permission_denied。
+    expect(calls).toBe(1);
+    expect(failures).not.toContain('permission_denied');
   });
 });

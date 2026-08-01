@@ -421,6 +421,8 @@ async function runSubagentWithClient(
     // Intentional behavior change: child `ask` decisions use the main
     // RuntimeSecurityGate and wait for explicit approval.
     executionRuntime: options.executionRuntime,
+    // 子代理路径:ask 静默分流(不弹 channel),deny/allow 透传。
+    origin: 'subagent',
     model: options.model,
     eventBus,
     reserveFinalTextTurn,

@@ -193,6 +193,13 @@ export interface StreamingQueryOptions {
   /** 工具执行所需的统一权限、Gate 与回调运行时。 */
   executionRuntime?: ToolExecutionRuntime;
   /**
+   * 工具调用的发起来源(透传给 StreamingToolExecutor → executeToolCall)。
+   * - 'main'(默认):主 Agent,ask 询问用户,allowlist exact-match 命中改写为 allow。
+   * - 'subagent':子代理,ask 静默分流,不弹 channel。
+   * 未传时默认 'main',保持旧调用零改动兼容。
+   */
+  origin?: 'main' | 'subagent';
+  /**
    * AUTO-0025 Task 4:保留一个"无工具的最终总结轮"。
    *
    * 物理本质:maxTurns 边界前,最后一轮强制不暴露工具,让模型只能用已有工具结果
@@ -376,6 +383,7 @@ export async function* streamingQuery(
     onMessages,
     onMessageCheckpoint,
     executionRuntime,
+    origin,
     reserveFinalTextTurn = false,
     noToolContract,
     referenceValidationHook,
@@ -487,7 +495,7 @@ export async function* streamingQuery(
 
     // 创建流式工具执行器
     const streamingExecutor = enableStreamingExecution && executionRuntime
-      ? new StreamingToolExecutor(registry, executionRuntime, signal)
+      ? new StreamingToolExecutor(registry, executionRuntime, signal, origin)
       : null;
 
     // AUTO-0025 Task 4:判断本轮是否是"无工具的最终总结轮"。

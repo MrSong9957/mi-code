@@ -85,6 +85,13 @@ export interface ToolExecutionContext {
    * 生产路径在 ERC-4 Activation Gate 通过后由调用方注入。
    */
   sanitizedExecutionPlan?: unknown;  // SanitizedExecutionPlan 类型(避免 types.ts 反向依赖 permission/)
+  /**
+   * 工具调用的发起来源。
+   * - 'main'(默认):主 Agent 路径,ask 走 channel 询问用户;allowlist exact-match 命中时改写为 allow。
+   * - 'subagent':子代理路径,ask 经 applySubagentSilentPolicy 静默分流(不弹 channel)。
+   * 未传时默认 'main',保持旧调用零改动兼容。
+   */
+  origin?: 'main' | 'subagent';
 }
 
 /** 工具执行函数。ctx 可选,旧 executor 零改动。返回类型固定 Promise<string>。 */
