@@ -336,6 +336,48 @@ describe('compactHistoryWithLLM', () => {
 
     expect(result[0]!.content).toContain('compacted for continuity');
   });
+
+  // ★ 阻断 A 防御:compactHistoryWithLLM 自身必须保证 uiOnly block 不进 compact model。
+  // 不依赖调用方提前 sanitize(防御性纵深)。
+  it('含 uiOnly 状态块的 messages → compact client 收到的输入不含状态块文本/metadata', async () => {
+    // 捕获型 client:记录 stream() 收到的 messages,返回最小摘要
+    const captured: Message[] = [];
+    const capturingClient: StreamingLLMClient = {
+      async *stream(messages: Message[]) {
+        captured.push(...JSON.parse(JSON.stringify(messages)));
+        yield { type: 'message_start', messageId: 'm1', model: 'small', inputTokens: 1 };
+        yield { type: 'content_block_start', index: 0, blockType: 'text' };
+        yield { type: 'content_block_delta', index: 0, deltaType: 'text', content: '摘要' };
+        yield { type: 'content_block_stop', index: 0 };
+        yield { type: 'message_delta', stopReason: 'end_turn', outputTokens: 1 };
+        yield { type: 'message_stop' };
+      },
+    };
+
+    // 构造含 uiOnly 状态块的 messages(模拟落盘的 sessionMessages)
+    const messages: Message[] = [
+      { role: 'user', content: 'do task' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '正常回复正文' },
+          { type: 'text', text: '当前状态：部分完成\n失败或受阻位置：The user rejected this action.', uiOnly: true },
+        ],
+      },
+    ];
+
+    await compactHistoryWithLLM(messages, capturingClient);
+
+    // compact client 收到的输入(经 serializeMessagesForSummary 序列化成字符串)
+    const capturedJson = JSON.stringify(captured);
+    // ★ 状态块文本不可见
+    expect(capturedJson).not.toContain('当前状态');
+    expect(capturedJson).not.toContain('The user rejected');
+    // ★ uiOnly metadata 不可见
+    expect(capturedJson).not.toContain('uiOnly');
+    // ★ 正常正文保留
+    expect(capturedJson).toContain('正常回复正文');
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════

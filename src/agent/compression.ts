@@ -9,6 +9,7 @@
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Message, ContentBlock, StreamingLLMClient, StreamEvent, AssistantMessage } from './types.js';
+import { sanitizeMessagesForModel } from './model-message-sanitizer.js';
 import type { ToolTranscriptValidation } from './tools/transcript-validator.js';
 
 /** 大结果阈值：超过此长度写磁盘 */
@@ -257,10 +258,15 @@ export async function compactHistoryWithLLM(
 ): Promise<Message[]> {
   saveTranscript(messages);
 
+  // ★ model-context 防御:无论调用方是否已 sanitize,compact model 边界自身保证
+  // uiOnly block(如 final-feedback 状态块)不进摘要模型 context(阻断 A 防御纵深)。
+  // saveTranscript 用原始 messages(审计完整);此处仅净化喂模型的副本。
+  const modelMessages = sanitizeMessagesForModel(messages);
+
   let summary: string;
   try {
     const stream = client.stream(
-      [{ role: 'user', content: serializeMessagesForSummary(messages) }],
+      [{ role: 'user', content: serializeMessagesForSummary(modelMessages) }],
       [], // 摘要任务不需要工具
       {
         systemPrompt: SUMMARIZE_SYSTEM_PROMPT,
