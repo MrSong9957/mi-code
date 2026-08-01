@@ -30,6 +30,10 @@ class ScriptedStreamClient implements StreamingLLMClient {
   private callCount = 0;
   constructor(private scripts: ScriptBlock[][]) {}
 
+  get calls(): number {
+    return this.callCount;
+  }
+
   async *stream(
     _messages: Message[],
     _tools: ToolDefinition[],
@@ -392,5 +396,86 @@ describe('AUTO-0030:end_turn 时 onMessages 应含 assistant 消息', () => {
     const lastAsst = capturedMessages![3];
     const textBlock = (lastAsst.content as ContentBlock[]).find(b => b.type === 'text') as { text: string } | undefined;
     expect(textBlock?.text).toBe('完成。');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// 子代理工作日志 checkpoint seam:awaited onMessageCheckpoint
+//
+// 物理本质:子代理需要一个"每完成一条消息边界就落盘"的钩子,这样即使 provider
+// 在下一轮崩溃,已完成的工作也能从 JSONL 日志恢复。这个钩子必须 awaited ——
+// 落盘返回前不能启动下一轮 provider 调用(否则崩溃会抹掉未落盘的工作)。
+// ════════════════════════════════════════════════════════════════════
+describe('streamingQuery 子代理 checkpoint seam', () => {
+  it('awaits a checkpoint after the completed tool round and final assistant', async () => {
+    const registry = new ToolRegistry();
+    registry.register(
+      {
+        name: 'echo',
+        description: 'echo',
+        parameters: { type: 'object', properties: { value: { type: 'string' } } },
+      },
+      async input => String(input.value),
+    );
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'tool-1', name: 'echo', input: { value: 'saved' } }],
+      [{ type: 'text', text: 'final summary' }],
+    ]);
+    const snapshots: Message[][] = [];
+    let releaseFirst!: () => void;
+    const firstWrite = new Promise<void>(resolve => { releaseFirst = resolve; });
+
+    const consume = (async () => {
+      for await (const _ of streamingQuery(client, registry, 'work', {
+        systemPrompt: 'test',
+        tools: registry.getDefinitions(),
+        signal: new AbortController().signal,
+        executionRuntime: createToolExecutionRuntime(),
+        onMessageCheckpoint: async messages => {
+          snapshots.push(structuredClone(messages) as Message[]);
+          if (snapshots.length === 1) await firstWrite;
+        },
+      })) { /* consume */ }
+    })();
+
+    await vi.waitFor(() => expect(snapshots).toHaveLength(1));
+    expect(snapshots[0]?.at(-1)?.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'tool-1', content: 'saved' },
+    ]);
+    expect(client.calls).toBe(1);
+
+    releaseFirst();
+    await consume;
+
+    expect(snapshots.at(-1)?.at(-1)?.role).toBe('assistant');
+    expect(snapshots.at(-1)?.at(-1)?.content).toEqual([
+      { type: 'text', text: 'final summary' },
+    ]);
+  });
+
+  it('does not start another provider turn when checkpoint persistence fails', async () => {
+    const registry = new ToolRegistry();
+    registry.register(
+      { name: 'echo', description: 'echo', parameters: { type: 'object' } },
+      async () => 'saved',
+    );
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'tool-1', name: 'echo', input: {} }],
+      [{ type: 'text', text: 'must not run' }],
+    ]);
+
+    const consume = async () => {
+      for await (const _ of streamingQuery(client, registry, 'work', {
+        systemPrompt: 'test',
+        tools: registry.getDefinitions(),
+        signal: new AbortController().signal,
+        executionRuntime: createToolExecutionRuntime(),
+        onMessageCheckpoint: async () => {
+          throw new Error('journal disk unavailable');
+        },
+      })) { /* consume */ }
+    };
+    await expect(consume()).rejects.toThrow('journal disk unavailable');
+    expect(client.calls).toBe(1);
   });
 });

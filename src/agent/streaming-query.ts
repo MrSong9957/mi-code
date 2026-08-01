@@ -173,6 +173,23 @@ export interface StreamingQueryOptions {
    * 用于会话持久化（落盘到 JSONL）。
    */
   onMessages?: (messages: Message[]) => void;
+  /**
+   * 子代理工作日志 checkpoint:每完成一条消息边界(awaited)落盘一次。
+   *
+   * 物理本质:子代理每打完一回合("工具调用 + 工具结果配对完成"或"无工具的最终
+   * assistant"),把当前完整的 messages 快照交给调用方持久化。awaited 语义保证
+   * 落盘返回前不会启动下一轮 provider 调用 —— 这样即使后续 provider/通信失败,
+   * 已完成的工作也能从 checkpoint 恢复(fail-fast:checkpoint 写失败 → 直接抛错
+   * 终止子代理执行,绝不"知错继续")。
+   *
+   * 调用时机(仅在"已完成的消息边界",不在 partial delta):
+   *   - 阶段 4:assistant(tool_use) + user(tool_result) 合并进 messages 之后
+   *   - end_turn:无工具的最终 assistant 合并进 messages 之后、return 之前
+   *
+   * I/O 数量受"完成的轮数"约束(不是流式 token):N 个工具轮 + 1 个最终 assistant
+   * 产生至多 N+1 次 awaited checkpoint 追加。不传时(LEGACY)无任何行为变化。
+   */
+  onMessageCheckpoint?: (messages: readonly Message[]) => Promise<void>;
   /** 工具执行所需的统一权限、Gate 与回调运行时。 */
   executionRuntime?: ToolExecutionRuntime;
   /**
@@ -357,6 +374,7 @@ export async function* streamingQuery(
     compactClient,
     initialMessages,
     onMessages,
+    onMessageCheckpoint,
     executionRuntime,
     reserveFinalTextTurn = false,
     noToolContract,
@@ -677,6 +695,10 @@ export async function* streamingQuery(
         ];
       }
       eventBus?.emitLoopEnd({ reason: 'end_turn' });
+      // 子代理工作日志:end_turn 退出前 awaited checkpoint 一次。
+      // 此时本轮无工具的最终 assistant 已合并进 messages,是一个"已完成的消息边界"。
+      // fail-fast:checkpoint 写失败 → 直接抛错,不调用 finalization、不 return。
+      if (onMessageCheckpoint) await onMessageCheckpoint(messages);
       // Wave B Task 11: end_turn 是 LLM 自主收尾,最干净的成功路径。跑 finalization 体检。
       runFinalizationCheckpoint();
       return;
@@ -805,6 +827,12 @@ export async function* streamingQuery(
       // tool_result 消息
       { role: 'user', content: toolResults },
     ];
+
+    // 子代理工作日志:工具轮配对完成后 awaited checkpoint 一次。
+    // 此时本轮 assistant(tool_use) + user(tool_result) 已合并进 messages,
+    // 是一个"已完成的消息边界"(可安全恢复的最小单元)。fail-fast:写失败 → 抛错。
+    // 注意:放在 compaction 之前 —— 恢复的是"真实发生过的工作",而非 compact 后的摘要。
+    if (onMessageCheckpoint) await onMessageCheckpoint(messages);
 
     // 上下文压缩：防止消息历史无限增长
     //
