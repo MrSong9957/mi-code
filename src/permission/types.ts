@@ -38,6 +38,12 @@ export interface PermissionRule {
 export interface PermissionDecision {
   behavior: PermissionBehavior;
   reason: string;
+  /**
+   * 稳定机器码(与 reason 同源产出,不参与人类阅读)。
+   * 值与 mapLegacyReason 产出的 reason_code 完全一致(见对照表)。
+   * 下游路由(subagent 静默策略 / session allowlist)据此判断,绝不反推 reason 文本。
+   */
+  reason_code: string;
 }
 
 /**
