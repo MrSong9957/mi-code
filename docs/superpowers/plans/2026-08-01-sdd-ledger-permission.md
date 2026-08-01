@@ -87,9 +87,14 @@
 ## 后续独立阻断(真实 TTY 验收发现,待单独处理)
 
 ### 阻断 A — 场景 7:成功 turn 错误携带上一轮 "The user rejected this action."
-- 状态:已登记,未处理
-- 现象:某个成功完成的 turn 的输出里残留了上一轮被 reject 的 "The user rejected this action." 文本
-- 待查:turn-final-feedback 分类逻辑 / 上下文残留 / tool_result 串话
+- 状态:✅ 已修复(commits 9bcf2c0/d14ab79/7acaf30)
+- 根因:final-feedback 状态块落盘进 sessionMessages → 下 turn initialMessages 喂模型 → LLM 从历史模仿状态块(含 rejected 文本)
+- 修复:TextBlock.uiOnly 标记 + sanitizeMessagesForModel 在 streamingQuery model-context 边界剔除
+  - appendFeedback 状态块始终独立 block 且 uiOnly=true(string content 规范化为两 block)
+  - sanitizer 删 uiOnly block、空 message 删除、不 mutation、输出无 uiOnly 字段
+  - 唯一过滤边界:streamingQuery L444(provider 收 sanitizer 后标准消息)
+  - 落盘保留:sessionMessages/jsonl/UI 含 uiOnly 块(完整 transcript);仅 model context 剔除
+- 测试:sanitizer 8 + appendFeedback uiOnly 3 + 集成边界 3 = 14 新用例;既有全 GREEN
 
 ### 阻断 B — 场景 9:session 切换后 exact write_file 未重新询问
 - 状态:✅ 已处理(无生产改动,补回归测试)
