@@ -4,7 +4,7 @@ import {
   commitFinalizedTurn,
   type TurnToolFact,
 } from '../agent/turn-final-feedback.js';
-import type { Message } from '../agent/types.js';
+import type { Message, ContentBlock } from '../agent/types.js';
 
 function assistant(text: string): Message {
   return { role: 'assistant', content: [{ type: 'text', text }] };
@@ -140,6 +140,81 @@ it('appends one terminal status block to the last assistant message (需要反�
 
   expect(second.messages).toEqual(first.messages);
   expect(countStatusBlocks(second.messages)).toBe(1);
+});
+
+// ★ uiOnly 标记:final-feedback 状态块必须独立 text block 且 uiOnly=true
+describe('appendFeedback 状态块 uiOnly 标记', () => {
+  // helper:构造一个"需要 feedback"的场景(tool-only assistant + completed subagent result)
+  function needFeedbackMessages(): Message[] {
+    return [
+      { role: 'user', content: 'start' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'task', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '[Subagent status=completed]\ncompleted work' }] },
+    ];
+  }
+  const tf = [tool('task', '[Subagent status=completed]\ncompleted work', 'success')];
+
+  it('array content → feedback block 为独立 text block 且 uiOnly=true', () => {
+    const result = finalizeTurnForUser({
+      messages: needFeedbackMessages(),
+      turnStartIndex: 1,
+      toolFacts: tf,
+      aborted: false,
+    });
+    // finalized 后应有新 assistant message(终端无 assistant text → push 新 message)
+    const last = result.messages.at(-1)!;
+    expect(last.role).toBe('assistant');
+    const blocks = last.content as ContentBlock[];
+    // 状态块是独立 block,uiOnly=true
+    const feedbackBlock = blocks.find(b => b.type === 'text' && (b as { uiOnly?: boolean }).uiOnly === true);
+    expect(feedbackBlock).toBeDefined();
+    expect(feedbackBlock!.type).toBe('text');
+  });
+
+  it('string content assistant → 规范化为两 block(原正文 + uiOnly feedback),不拼接', () => {
+    // 构造:string content assistant 在 tool_result 之后
+    const messages: Message[] = [
+      { role: 'user', content: 'start' },
+      { role: 'assistant', content: '正文回复' }, // string content,turnStartIndex=1
+    ];
+    // 用失败场景强制 feedback(error)
+    const result = finalizeTurnForUser({
+      messages,
+      turnStartIndex: 1,
+      toolFacts: [],
+      error: 'something failed',
+      aborted: false,
+    });
+    const last = result.messages.at(-1)!;
+    expect(last.role).toBe('assistant');
+    expect(Array.isArray(last.content)).toBe(true); // string 已规范化为 array
+    const blocks = last.content as ContentBlock[];
+    // 第一个 block 是原正文(无 uiOnly)
+    expect(blocks[0]).toEqual({ type: 'text', text: '正文回复' });
+    // 最后一个 block 是 feedback(uiOnly=true)
+    const fb = blocks.at(-1)!;
+    expect(fb.type).toBe('text');
+    expect((fb as { uiOnly?: boolean }).uiOnly).toBe(true);
+  });
+
+  it('正常正文 text block 不被标记 uiOnly', () => {
+    const messages: Message[] = [
+      { role: 'user', content: 'start' },
+      { role: 'assistant', content: [{ type: 'text', text: '正常正文' }] },
+    ];
+    const result = finalizeTurnForUser({
+      messages,
+      turnStartIndex: 1,
+      toolFacts: [],
+      error: 'fail',
+      aborted: false,
+    });
+    const last = result.messages.at(-1)!;
+    const blocks = last.content as ContentBlock[];
+    const normalBlocks = blocks.filter(b => b.type === 'text' && (b as { uiOnly?: boolean }).uiOnly !== true);
+    expect(normalBlocks.length).toBeGreaterThanOrEqual(1); // 原正文保留,未标记
+    expect(normalBlocks.some(b => (b as { text: string }).text === '正常正文')).toBe(true);
+  });
 });
 
 it('does not count assistant prose before the last tool result as a terminal reply', () => {

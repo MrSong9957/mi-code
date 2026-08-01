@@ -282,17 +282,23 @@ function appendFeedback(
   if (terminalSliceIdx >= 0) {
     const fullIdx = turnStartIndex + terminalSliceIdx;
     const original = result[fullIdx];
-    let newContent: string | Message['content'];
+    let newContent: Message['content'];
     if (typeof original.content === 'string') {
-      newContent = `${original.content}\n\n${feedbackText}`;
+      // string content 规范化为两 block:原正文(纯净)+ feedback(uiOnly)
+      // 禁止拼接 `${original}\n\n${feedback}`(会让 uiOnly 语义失效 + 正文混入状态块)
+      newContent = [
+        { type: 'text', text: original.content },
+        { type: 'text', text: feedbackText, uiOnly: true },
+      ];
     } else {
-      newContent = [...original.content, { type: 'text', text: feedbackText }];
+      // array content:追加独立 feedback block,标记 uiOnly
+      newContent = [...original.content, { type: 'text', text: feedbackText, uiOnly: true }];
     }
     result[fullIdx] = { ...original, content: newContent };
   } else {
     result.push({
       role: 'assistant',
-      content: [{ type: 'text', text: feedbackText }],
+      content: [{ type: 'text', text: feedbackText, uiOnly: true }],
     });
   }
   return result;
