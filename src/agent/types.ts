@@ -10,6 +10,12 @@ export type ContentBlockType = 'text' | 'tool_use' | 'tool_result' | 'image';
 export interface TextBlock {
   type: 'text';
   text: string;
+  /**
+   * UI-only 标记:此 block 仅用于用户可见历史/UI,绝不应进入模型 context。
+   * final-feedback 状态块标 true。sanitizer 在喂模型前剔除。
+   * 只在真正 UI-only 的 block 上设 true,不写 false。
+   */
+  uiOnly?: true;
 }
 
 /** 工具调用块（模型输出） */
