@@ -38,6 +38,11 @@ import { createTaskTool } from './agent/tools/task-tool.js';
 import { createSpawnAgentTool } from './agent/tools/spawn-agent-tool.js';
 import { createSpawnSelfOrganizingTool } from './agent/tools/spawn-self-organizing-tool.js';
 import { runSubagent } from './agent/subagent.js';
+import {
+  finalizeTurnForUser,
+  commitFinalizedTurn,
+  type TurnToolFact,
+} from './agent/turn-final-feedback.js';
 import { plannerPrompt, systemPrompt as systemPromptTemplate } from './prompts/index.js';
 import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
@@ -830,7 +835,18 @@ async function handleUserSubmit(rawText: string): Promise<void> {
 
   // agent 循环（与旧实现 verbatim，仅 layout.* → tuiHandle.statusStore）
   let assistantText = '';
-  let persistedCount = sessionMessages.length;
+  // turnStartIndex / persistedMessageCount 同值起步但语义不同:
+  //   - turnStartIndex:不可变,限定分类器只看本回合新增消息(slice 边界)
+  //   - persistedMessageCount:可变,记录父会话已落盘的消息数(commit 增量游标)
+  // revised onMessages 只捕获查询结束时的完整快照,不在流式过程中追加;
+  // commitFinalizedTurn 在 finally 里一次性 awaited 落盘新增消息 + emit 状态块。
+  const turnStartIndex = sessionMessages.length;
+  const persistedMessageCount = turnStartIndex;
+  // 收集本回合的 turn facts 供 finalizer 分类(工具名/输出/执行状态)。
+  const toolFacts: TurnToolFact[] = [];
+  let finalMessages: Message[] | null = null;
+  let terminalError: string | undefined;
+  let aborted = false;
   const blockTypes = new Map<number, string>();
   // Spinner 立即启动(label="Connecting..."),收到第一个 event 后切到正常 verb。
   // 兼顾"用户有即时反馈"和"状态准确"。
@@ -847,14 +863,11 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       systemPrompt, tools, signal: ac.signal,
       eventBus, compactClient, executionRuntime,
       initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
-      onMessages: (finalMessages) => {
-        const newMsgs = finalMessages.slice(persistedCount);
-        sessionMessages = finalMessages;
-        persistedCount = finalMessages.length;
-        for (const m of newMsgs) {
-          // 持久化前 strip image base64(只存 cachePath),避免 JSONL 膨胀
-          void sessionStore.append(sessionId, stripImagesForPersistence(m));
-        }
+      // revised:只捕获查询结束时的完整快照,持久化交给 commitFinalizedTurn 统一 awaited。
+      // 原 onMessages 用 void sessionStore.append(非 awaited)启动追加,若进程在追加完成前
+      // 退出会丢失本回合;这里改为查询结束后一次性有序 awaited commit。
+      onMessages: messages => {
+        finalMessages = messages;
       },
     })) {
       // 第一个 event 到达 → 清除 "Connecting" label,恢复到 spinner 默认 verb
@@ -910,7 +923,13 @@ async function handleUserSubmit(rawText: string): Promise<void> {
           assistantText = '';
         }
       } else if ('type' in msg && msg.type === 'tool_result') {
-        const tr = msg as { type: 'tool_result'; name: string; output: string };
+        const tr = msg as { type: 'tool_result'; name: string; output: string; executionResult?: { status?: string } };
+        // 收集结构化 tool fact(在 Hook 之前):供 finalizer 分类本回合是否成功/部分完成。
+        toolFacts.push({
+          name: tr.name,
+          output: tr.output,
+          executionStatus: tr.executionResult?.status as TurnToolFact['executionStatus'],
+        });
         const hookResult = await hookRunner.run({
           name: 'PostToolUse',
           payload: { tool_name: tr.name, output: tr.output },
@@ -939,13 +958,50 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     // 实测：ac.abort('user-cancel') 抛出的 err 是字符串(不是 Error)，err.name 是 undefined。
     // 只有 ac.signal.aborted 在三种 abort 形态下都为 true。
     if (ac.signal.aborted) {
-      // 用户主动中断：静默退出，不打印 [Error]
+      aborted = true;
     } else {
+      terminalError = formatErrorForDisplay(err);
       // formatErrorForDisplay 只取 message（不含堆栈），超长截断——
       // 避免把整个 Error.stack 刷屏到终端（之前的 [system] [Error] Error [ERR_UNHANDLED_ERROR]... 问题）
-      tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
+      tuiHandle?.printStyled(`[Error] ${terminalError}`, 'error');
     }
   } finally {
+    // 统一收尾口:把本回合 finalized 后的消息 awaited 落盘 + emit 四字段状态块。
+    // 无论正常结束/错误/中断都走这一步,保证每个非后台用户回合都有恰好一个
+    // 用户可见的最终 assistant 状态块(当前状态/已获得结果/失败或受阻位置/下一步)。
+    const baseMessages = finalMessages ?? sessionMessages;
+    const finalized = finalizeTurnForUser({
+      messages: baseMessages,
+      turnStartIndex,
+      toolFacts,
+      error: terminalError,
+      aborted,
+    });
+
+    // 持久化失败用窄错误边界兜住:落盘本身失败时,用未 finalized 的 baseMessages
+    // 重新构造一个"失败"块 emit 给用户(绝不假装成功)。此异常路径无法承诺落盘
+    // (因为存储层已失败),但仍保证用户能看到明确的失败文本。
+    try {
+      await commitFinalizedTurn(
+        finalized,
+        persistedMessageCount,
+        message => sessionStore.append(sessionId, stripImagesForPersistence(message)),
+        text => pipeline.emit({ kind: 'assistant_text', text, isFinal: true }),
+      );
+      // 落盘成功后同步模块级会话状态(供下一回合 / resume 使用)。
+      sessionMessages = finalized.messages;
+    } catch (persistError) {
+      const persistenceFailure = finalizeTurnForUser({
+        messages: baseMessages,
+        turnStartIndex,
+        toolFacts,
+        error: `最终回复落盘失败：${formatErrorForDisplay(persistError)}`,
+        aborted,
+      });
+      sessionMessages = persistenceFailure.messages;
+      pipeline.emit({ kind: 'assistant_text', text: persistenceFailure.feedbackText, isFinal: true });
+    }
+
     // AUTO-0025-transient:统一退出路径——finalizeTurnLifecycle 幂等结束 thinking + stop spinner。
     thinking = finalizeTurnLifecycle(turnLifecycle, thinking);
     isProcessing = false;

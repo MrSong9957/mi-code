@@ -302,3 +302,35 @@ export function finalizeTurnForUser(
   const messages = appendFeedback(input.messages, input.turnStartIndex, feedbackText);
   return { status, feedbackText, messages };
 }
+
+/**
+ * 把 finalized 快照中新增的消息按顺序持久化,然后 emit 最终四字段状态块。
+ *
+ * 物理本质:turn 结束前的"统一交班口"。streamingQuery 产出的最终 messages 快照
+ * 经 finalizeTurnForUser 加上状态块后,这里负责:
+ *   1. 把 `result.messages.slice(persistedMessageCount)` 的新消息逐条 awaited 落盘
+ *   2. 持久化全部成功后才 emit feedbackText(绝不先报成功再落盘)
+ *   3. 返回新的持久化计数(供调用方更新游标)
+ *
+ * 持久化失败由调用方处理(视为失败回合)—— 本函数让 append 抛错向上传播,
+ * 不会假装成功。这与"先持久化再 emit"的顺序共同保证:用户看到的状态块一定已落盘
+ * (除非落盘本身失败,那是更窄的边界,由调用方的 catch 单独 emit 失败块)。
+ *
+ * @param result finalizeTurnForUser 的输出
+ * @param persistedMessageCount 已落盘的父会话消息数(只追加这之后的增量)
+ * @param append 单条消息持久化回调(sessionStore.append)
+ * @param emit 最终文本发射回调(pipeline.emit assistant_text isFinal)
+ * @returns 新的持久化计数
+ */
+export async function commitFinalizedTurn(
+  result: TurnFinalizationResult,
+  persistedMessageCount: number,
+  append: (message: Message) => Promise<void>,
+  emit: (text: string) => void,
+): Promise<number> {
+  for (const message of result.messages.slice(persistedMessageCount)) {
+    await append(message);
+  }
+  emit(result.feedbackText);
+  return result.messages.length;
+}
