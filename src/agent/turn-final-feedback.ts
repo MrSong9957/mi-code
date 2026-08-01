@@ -27,8 +27,20 @@ export interface TurnFinalizationInput {
 /** finalizeTurnForUser 的输出 */
 export interface TurnFinalizationResult {
   status: UserTurnStatus;
+  /**
+   * 四字段状态块文本。当 requiresFeedback=false 时为空字符串(正常成功路径
+   * 模型已给出终端 assistant 回复,无需画蛇添足追加兜底块)。
+   */
   feedbackText: string;
   messages: Message[];
+  /**
+   * 是否需要向用户展示状态块。
+   * - false:正常成功路径(成功 + 已有终端 assistant 文本),不追加 messages、
+   *   feedbackText 为空、commitFinalizedTurn 跳过 emit。
+   * - true:异常兜底(部分完成/失败/成功但无终端 assistant 文本),追加状态块到
+   *   messages 并 emit feedbackText。
+   */
+  requiresFeedback: boolean;
 }
 
 /** 子代理 envelope 解析（仅解析锚定格式，不解析任意自然语言） */
@@ -297,10 +309,25 @@ export function finalizeTurnForUser(
 ): TurnFinalizationResult {
   const status = classifyTurn(input);
   const slice = input.messages.slice(input.turnStartIndex);
+
+  // 正常成功路径(模型已给出终端 assistant 文本回复):不追加状态块、不 emit。
+  // 状态块只用于异常兜底 —— 当工具/子代理已执行但模型没有正常 final 回复,
+  // 或回合并未成功(部分完成/失败)时,才需要四字段块帮用户理解结局。
+  // 这避免在模型已经清晰总结的正常成功路径上画蛇添足地追加重复的状态块。
+  const terminalText = getTerminalAssistantText(slice);
+  if (status === '成功' && terminalText.trim().length > 0) {
+    return {
+      status,
+      feedbackText: '',
+      messages: [...input.messages],
+      requiresFeedback: false,
+    };
+  }
+
   const fields = buildFeedbackFields(status, input, slice);
   const feedbackText = buildFeedbackText(status, fields);
   const messages = appendFeedback(input.messages, input.turnStartIndex, feedbackText);
-  return { status, feedbackText, messages };
+  return { status, feedbackText, messages, requiresFeedback: true };
 }
 
 /**
@@ -331,6 +358,10 @@ export async function commitFinalizedTurn(
   for (const message of result.messages.slice(persistedMessageCount)) {
     await append(message);
   }
-  emit(result.feedbackText);
+  // 正常成功路径(requiresFeedback=false)跳过 emit —— 用户不应看到四字段状态块,
+  // 模型自己的终端回复就是最终输出。异常兜底路径才 emit 状态块。
+  if (result.requiresFeedback) {
+    emit(result.feedbackText);
+  }
   return result.messages.length;
 }

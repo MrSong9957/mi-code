@@ -86,24 +86,55 @@ describe('finalizeTurnForUser 分类', () => {
       aborted: false,
     });
     expect(result.status).toBe(expected);
-    expect(result.feedbackText).toContain(`当前状态：${expected}`);
-    expect(result.feedbackText).toContain('已获得结果：');
-    expect(result.feedbackText).toContain('失败或受阻位置：');
-    expect(result.feedbackText).toContain('下一步：');
+    // 正常成功路径(模型已给出终端 assistant 文本)不追加状态块:
+    // feedbackText 为空、messages 不变、requiresFeedback=false。
+    // 只有异常兜底(部分完成/失败/无终端文本的成功)才生成状态块。
+    if (result.requiresFeedback) {
+      expect(result.feedbackText).toContain(`当前状态：${expected}`);
+      expect(result.feedbackText).toContain('已获得结果：');
+      expect(result.feedbackText).toContain('失败或受阻位置：');
+      expect(result.feedbackText).toContain('下一步：');
+    }
+  });
+
+  it('正常成功路径(有终端 assistant 文本)不追加状态块也不生成 feedbackText', () => {
+    const result = finalizeTurnForUser({
+      messages: [assistant('这是明确的总结回复')],
+      turnStartIndex: 0,
+      toolFacts: [],
+      aborted: false,
+    });
+    expect(result.status).toBe('成功');
+    expect(result.requiresFeedback).toBe(false);
+    expect(result.feedbackText).toBe('');
+    // messages 不变(未追加状态块)
+    expect(result.messages).toEqual([assistant('这是明确的总结回复')]);
   });
 });
 
-it('appends one terminal status block to the last assistant message', () => {
+it('appends one terminal status block to the last assistant message (需要反馈场景幂等)', () => {
+  // 用"需要反馈"的场景(子代理完成但模型无 final 回复)验证幂等:
+  // 重复 finalize 仍只追加一个状态块。
+  const baseMessages: Message[] = [
+    { role: 'user', content: 'start' },
+    {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', id: 't1', name: 'task', input: {} },
+      ],
+    },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '[Subagent status=completed]\ncompleted work' }] },
+  ];
   const first = finalizeTurnForUser({
-    messages: [assistant('answer')],
-    turnStartIndex: 0,
-    toolFacts: [],
+    messages: baseMessages,
+    turnStartIndex: 1,
+    toolFacts: [tool('task', '[Subagent status=completed]\ncompleted work', 'success')],
     aborted: false,
   });
   const second = finalizeTurnForUser({
     messages: first.messages,
-    turnStartIndex: 0,
-    toolFacts: [],
+    turnStartIndex: 1,
+    toolFacts: [tool('task', '[Subagent status=completed]\ncompleted work', 'success')],
     aborted: false,
   });
 
@@ -194,5 +225,31 @@ describe('commitFinalizedTurn', () => {
     // 持久化(append:assistant)先于 emit(emit:状态)
     expect(order[0]).toBe('append:assistant');
     expect(order.at(-1)).toMatch(/^emit/);
+  });
+
+  it('正常成功路径(requiresFeedback=false)持久化但不 emit 状态块', async () => {
+    const appended: Message[] = [];
+    const emitted: string[] = [];
+    const result = finalizeTurnForUser({
+      messages: [assistant('明确的正常回复')],
+      turnStartIndex: 0,
+      toolFacts: [],
+      aborted: false,
+    });
+    expect(result.requiresFeedback).toBe(false);
+
+    const count = await commitFinalizedTurn(
+      result,
+      0,
+      async message => { appended.push(message); },
+      text => { emitted.push(text); },
+    );
+
+    expect(count).toBe(result.messages.length);
+    // 仍持久化正常回复(不因跳过反馈而丢消息)
+    expect(appended).toHaveLength(1);
+    expect(appended[0].role).toBe('assistant');
+    // 关键:不 emit 任何状态块(用户不会看到四字段块)
+    expect(emitted).toEqual([]);
   });
 });
