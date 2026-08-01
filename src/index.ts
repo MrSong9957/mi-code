@@ -393,11 +393,18 @@ const runtimeGate = new RuntimeSecurityGate({
 });
 const executionRuntime = { permissionChecker, runtimeGate };
 
+// 子代理工作日志工厂:用动态 sessionId 闭包,确保 resume/session 轮换后仍绑定当前会话。
+// 每次前台子代理执行调用一次,创建一个绑定到新 executionId 的独立 journal。
+const createSubagentJournal = () =>
+  sessionStore.createSubagentJournal(sessionId, randomUUID());
+
 const taskTool = createTaskTool(
   childToolRegistry,
   executionRuntime,
   worktreeManager,
   subagentClientProvider,
+  runSubagent,
+  createSubagentJournal,
 );
 toolRegistry.register(taskTool.definition, taskTool.executor);
 const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, {
@@ -412,6 +419,10 @@ const spawnAgentTool = createSpawnAgentTool(
   runSubagent,
   truncateSkillsDescription(skillRegistry.describeAvailable()),
   () => lastSystemPrompt,
+  false,      // 保持当前 legacy completion-contract 路径
+  undefined,  // 无 contracted runner 迁移
+  undefined,  // 保持当前 delegation-gate 参数
+  createSubagentJournal,
 );
 toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 
