@@ -84,6 +84,39 @@
 
 无 BLOCKED。一处偏离:Task 5 更新了 subagent-permission-passthrough.test.ts 的 2 个测试(旧行为"子代理 ask 阻塞"→ 新行为"子代理 build_write 静默放行"),这是本计划要废除的语义,主代理 review 确认合理。
 
+## 后续独立阻断(真实 TTY 验收发现,待单独处理)
+
+### 阻断 A — 场景 7:成功 turn 错误携带上一轮 "The user rejected this action."
+- 状态:已登记,未处理
+- 现象:某个成功完成的 turn 的输出里残留了上一轮被 reject 的 "The user rejected this action." 文本
+- 待查:turn-final-feedback 分类逻辑 / 上下文残留 / tool_result 串话
+
+### 阻断 B — 场景 9:session 切换后 exact write_file 未重新询问
+- 状态:已登记,未处理
+- 现象:session 切换后,之前记住的 exact write_file 似乎没重新询问(allowlist 可能未随 session 切换清空)
+- 待查:三处 sessionAllowlist.clear()(L455 rotateSessionId / L619 rewind / L1049 resume)是否实际执行;sessionId 与 allowlist 生命周期绑定是否正确
+
+---
+
+## 追加修复:spawn_agent/task build 模式静默 allow
+
+### 背景
+真实 TTY 验收发现:子代理内部工具已静默,但主 Agent 调 spawn_agent/task 时仍弹 Permission(因两者在 build 模式落闸门4 默认 ask)。用户验收标准是整个子代理 workflow 后台静默,派代理这一步也必须静默。
+
+### 根因
+- 'task' 在 WRITE_TOOLS(types.ts:79)→ plan 模式 deny,build 模式落闸门4 ask
+- 'spawn_agent' 不在 WRITE_TOOLS 也不在 READ_ONLY_TOOLS(types.ts:64 注释)→ build 模式落闸门4 默认 ask
+- checker.ts L219-224:READ_ONLY_TOOLS 检查后直接 ask,无 delegation 白名单
+
+### 修复 (commit a4a77e9) ✅
+- types.ts: 新增 DELEGATION_TOOLS = [spawn_agent, task]
+- checker.ts: 闸门4 在 READ_ONLY_TOOLS 前检查 DELEGATION_TOOLS → build 模式 allow
+- plan 模式仍按 WRITE_TOOLS 拦截 task(闸门3 先于闸门4)
+- TDD: RED(spawn_agent/task 得 ask)→ GREEN(allow);plan task 仍 deny;write_file 仍 ask
+- 端到端: main+spawn_agent channel 0 次;main+write_file 仍 ask
+- 回归: 497 passed(权限层 + 子代理 + 执行链路);typecheck exit 0
+- build-mode-permission.test.ts: spawn_agent 从 writeSamples 移除(语义变更,非妥协)
+
 ## BLOCKED / 偏离
 
 (出现时记录)
