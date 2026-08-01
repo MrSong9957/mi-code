@@ -11,7 +11,7 @@
 // 按业务规则分流（mode）→ VIP 快速通道（allow）→ 其余走人工（ask）。
 
 import type { PermissionMode, PermissionRule, PermissionDecision } from './types.js';
-import { WRITE_TOOLS, READ_ONLY_TOOLS } from './types.js';
+import { WRITE_TOOLS, READ_ONLY_TOOLS, DELEGATION_TOOLS } from './types.js';
 import { isDangerousBash, isWriteBash, isPathOutsideWorkspace, matchesRule } from './patterns.js';
 import { extractBashPaths } from './bash-paths.js';
 import {
@@ -214,6 +214,12 @@ export class PermissionChecker {
       if (rule.behavior === 'ask' && matchesRule(rule, toolName, input)) {
         return { behavior: 'ask', reason: `Matched ask rule (tool=${rule.tool})`, reason_code: 'permission.default' };
       }
+    }
+
+    // 委派工具(派子代理):build 模式静默 allow。
+    // 派代理本身不直接改文件系统;子代理内部工具仍由 PermissionChecker + origin silent policy 约束。
+    if (DELEGATION_TOOLS.includes(toolName)) {
+      return { behavior: 'allow', reason: 'Delegation tools are allowed by default in build mode', reason_code: 'permission.default' };
     }
 
     if (READ_ONLY_TOOLS.includes(toolName)) {

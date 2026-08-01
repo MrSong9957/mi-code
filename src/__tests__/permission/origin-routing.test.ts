@@ -39,6 +39,10 @@ function makeRegistry(): { registry: ToolRegistry; calls: string[] } {
     { name: 'run_bash', description: 'p', parameters: { type: 'object', properties: {}, required: [] } },
     async (i) => { calls.push(`bash:${i.command}`); return 'done'; },
   );
+  registry.register(
+    { name: 'spawn_agent', description: 'p', parameters: { type: 'object', properties: {}, required: [] } },
+    async () => { calls.push('spawn_agent'); return 'spawned'; },
+  );
   return { registry, calls };
 }
 
@@ -151,5 +155,32 @@ describe('executeToolCall origin 路由(端到端)', () => {
     await p;
     // ★ allowlist 现在记住此 action
     expect(al.has('write_file', input)).toBe(true);
+  });
+
+  // ★ delegation 工具:build 模式下主 Agent 派子代理不打扰用户
+  it('主 Agent spawn_agent → allow,不弹 channel(静默派子代理)', async () => {
+    const { registry, calls } = makeRegistry();
+    const ch = new ControllableChannel();
+    const rt = makeRuntime('build', ch);
+    const r = await executeToolCall(
+      registry,
+      { type: 'tool_use', id: 't9', name: 'spawn_agent', input: { description: 'x', prompt: 'y' } } as ToolUseBlock,
+      rt,
+      { origin: 'main' },
+    );
+    expect(r.status).toBe('success');
+    expect(ch.requests).toHaveLength(0); // ★ build 模式不弹 UI
+    expect(calls).toEqual(['spawn_agent']); // ★ 执行了
+  });
+
+  it('主 Agent write_file 仍 ask(delegation 放行不影响普通写确认)', async () => {
+    const { registry } = makeRegistry();
+    const ch = new ControllableChannel();
+    const rt = makeRuntime('build', ch);
+    const p = executeToolCall(registry, wf('t10', { path: 'd.txt', content: 'z' }), rt, { origin: 'main' });
+    await new Promise(r => setTimeout(r, 30));
+    expect(ch.requests).toHaveLength(1); // ★ write_file 仍询问
+    ch.resolveApproved('exec:t10');
+    await p;
   });
 });

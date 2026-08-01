@@ -92,4 +92,27 @@ describe('PermissionChecker reason_code 产出', () => {
     expect(d.behavior).toBe('ask');
     expect(d.reason_code).toBe('permission.user_confirmation_required');
   });
+
+  // ★ delegation 工具(build 模式静默 allow — 子代理 workflow 不打扰用户)
+  // 派子代理本身不是危险操作;子代理内部工具仍由 origin silent policy 约束。
+  it('build spawn_agent → allow(静默派子代理)', () => {
+    const c = new PermissionChecker({ mode: 'build', workdir: process.cwd() });
+    const d = c.check('spawn_agent', { description: 'x', prompt: 'y' });
+    expect(d.behavior).toBe('allow');
+    expect(d.reason_code).toBe('permission.default');
+  });
+
+  it('build task → allow(静默派子代理)', () => {
+    const c = new PermissionChecker({ mode: 'build', workdir: process.cwd() });
+    const d = c.check('task', { description: 'x', prompt: 'y' });
+    expect(d.behavior).toBe('allow');
+    expect(d.reason_code).toBe('permission.default');
+  });
+
+  // plan 模式下 delegation 仍受限:task 在 WRITE_TOOLS → plan 模式 deny(保持)
+  it('plan task → deny(WRITE_TOOLS 在 plan 模式保持拦截)', () => {
+    const c = new PermissionChecker({ mode: 'plan', workdir: process.cwd() });
+    const d = c.check('task', { description: 'x', prompt: 'y' });
+    expect(d.behavior).toBe('deny');
+  });
 });

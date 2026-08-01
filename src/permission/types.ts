@@ -106,3 +106,19 @@ export const READ_ONLY_TOOLS = [
   'todo_write',
   'schedule_list',
 ];
+
+/**
+ * 委派工具列表(派生子代理,build 模式下静默 allow)
+ *
+ * 物理本质:派子代理本身不直接改变文件系统状态——它只是启动一个后台 worker。
+ * 子代理内部工具调用仍由 PermissionChecker + origin silent policy 完整约束
+ * (危险命令 deny / safety_uncertain 静默 deny / build_write 静默 allow)。
+ * 因此 build 模式下"派代理"这一步不应打扰用户;plan 模式仍按 WRITE_TOOLS 拦截。
+ *
+ * 注意:task 同时在 WRITE_TOOLS(plan 模式 deny 用)和本列表(build 模式 allow 用),
+ * 两者不冲突——WRITE_TOOLS 只在 plan 闸门3 读取,本列表只在 build 闸门4 读取。
+ */
+export const DELEGATION_TOOLS = [
+  'spawn_agent',
+  'task',
+];
