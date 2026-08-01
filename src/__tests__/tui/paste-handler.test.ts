@@ -247,3 +247,85 @@ describe('短文本直显阈值（单行且 ≤80 字符不折叠）', () => {
     expect(p2).toBe('[Pasted text #1 +2 lines]');
   });
 });
+
+// ── 换行符归一化(修复真实终端 bracketed paste 的 \r / \r\n 问题)──
+//
+// 物理本质:真实终端(Windows Terminal 等)粘贴多行内容时,bracketed paste 把
+// 换行编码成 \r(0x0D)而非 \n(0x0A)。若 paste 入口不归一化,下游所有环节
+// (占位符行数统计、输入框渲染、历史渲染、落盘)都拿到 \r,而渲染层对纯 \r
+// 的处理不当,造成"只显示部分内容且顺序异常"的视觉假象。
+//
+// 归一化边界:storePastedContent —— paste 内容进入系统的唯一入口。在这里归一化,
+// 短文本直显分支和长文本 Map 分支都拿到 \n。
+describe('换行符归一化(CR/CRLF → LF)', () => {
+  beforeEach(() => {
+    resetPasteState();
+  });
+
+  it('CR-only 换行归一化为 LF(真实终端 paste 的典型场景)', () => {
+    expect.hasAssertions();
+    // 真实终端 paste:换行是 \r(0x0D),不是 \n
+    const crContent = '第一段\r第二段\r第三段';
+    const placeholder = storePastedContent(crContent);
+    expect(placeholder).toBe('[Pasted text #1 +3 lines]');
+    // 展开后换行必须是 \n,不能残留 \r
+    const expanded = expandPastedTextRefs(placeholder);
+    expect(expanded).toBe('第一段\n第二段\n第三段');
+    expect(expanded).not.toContain('\r');
+  });
+
+  it('CRLF 归一化为单个 LF(不能变成两个换行)', () => {
+    expect.hasAssertions();
+    const crlfContent = 'line1\r\nline2\r\nline3';
+    const placeholder = storePastedContent(crlfContent);
+    // 应是 3 行,不是 5 行(\r\n 不能拆成两个换行)
+    expect(placeholder).toBe('[Pasted text #1 +3 lines]');
+    const expanded = expandPastedTextRefs(placeholder);
+    expect(expanded).toBe('line1\nline2\nline3');
+    expect(expanded).not.toContain('\r');
+  });
+
+  it('普通 LF 保持不变(不误伤已是 \\n 的内容)', () => {
+    expect.hasAssertions();
+    const lfContent = 'line1\nline2';
+    const placeholder = storePastedContent(lfContent);
+    expect(placeholder).toBe('[Pasted text #1 +2 lines]');
+    expect(expandPastedTextRefs(placeholder)).toBe('line1\nline2');
+  });
+
+  it('多行 paste 内容和顺序保持完整(CR-only,模拟真实复现案例)', () => {
+    expect.hasAssertions();
+    // 模拟真实终端粘贴的多行编号文本(换行全是 \r)
+    const realWorldPaste = '请派 explore 子代理查日志系统：\r1. 找出日志库\r2. 找出初始化入口\r3. 找出日志级别配置\r4. 返回路径和结论\r不要修改代码。';
+    const placeholder = storePastedContent(realWorldPaste);
+    const expanded = expandPastedTextRefs(placeholder);
+    // 顺序完整:每段都按原顺序保留
+    expect(expanded.indexOf('请派')).toBeLessThan(expanded.indexOf('1. 找出日志库'));
+    expect(expanded.indexOf('1. 找出日志库')).toBeLessThan(expanded.indexOf('2. 找出'));
+    expect(expanded.indexOf('4. 返回')).toBeLessThan(expanded.indexOf('不要修改代码'));
+    // 全部换行归一化为 \n,无 \r 残留
+    expect(expanded).not.toContain('\r');
+    expect(expanded.split('\n')).toHaveLength(6);
+  });
+
+  it('CR-only 短文本(原会被误判单行直显)现在正确识别为多行', () => {
+    expect.hasAssertions();
+    // 含 \r 的多行短文本:归一化后应识别为多行,折叠为占位符
+    // (而非因不含 \n 被误判单行走直显分支,导致 \r 泄漏到渲染)
+    const shortMultilineCR = 'a\rb\rc';
+    const placeholder = storePastedContent(shortMultilineCR);
+    expect(placeholder).toBe('[Pasted text #1 +3 lines]');
+    expect(expandPastedTextRefs(placeholder)).toBe('a\nb\nc');
+  });
+
+  it('混合换行(CR + CRLF + LF)全部归一化为 LF', () => {
+    expect.hasAssertions();
+    const mixed = 'a\nb\r\nc\rd';
+    const placeholder = storePastedContent(mixed);
+    const expanded = expandPastedTextRefs(placeholder);
+    expect(expanded).toBe('a\nb\nc\nd');
+    expect(expanded).not.toContain('\r');
+    // 4 行
+    expect(expanded.split('\n')).toHaveLength(4);
+  });
+});

@@ -17,8 +17,28 @@ const DIRECT_DISPLAY_THRESHOLD = 80;
 let nextPasteId = 1;
 const pastedContents = new Map<number, string>();
 
+/**
+ * 把换行符归一化为 LF(0x0A)。
+ *
+ * 真实终端(Windows Terminal 等)粘贴多行内容时,bracketed paste 把换行编码成
+ * \r(0x0D)而非 \n(0x0A)。若不归一化,下游渲染层对纯 \r 处理不当,造成
+ * "只显示部分内容且顺序异常"的视觉假象。
+ *
+ * 规则:
+ *   - \r\n → \n(CRLF,先处理,避免 \r 单独再被转一次变成两个换行)
+ *   - \r → \n(剩余的 CR-only)
+ *   - \n 保持不变
+ */
+function normalizeNewlines(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
 /** 存储粘贴内容，返回占位符（短文本直接原样返回，不折叠） */
 export function storePastedContent(content: string): string {
+  // 在 paste 入口归一化换行:CR/CRLF → LF。
+  // 必须在短文本直显判断之前 —— 否则 CR-only 的多行文本因不含 \n 会误判为单行,
+  // 走直显分支泄漏 \r 到渲染层。
+  content = normalizeNewlines(content);
   // 短文本直显：单行且 ≤80 字符不折叠，原样返回，不进 Map、不消耗 ID
   if (!content.includes('\n') && content.length <= DIRECT_DISPLAY_THRESHOLD) {
     return content;
