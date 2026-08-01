@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { runSubagent } from '../agent/subagent.js';
+import { recoverSubagentWork, type SubagentJournal } from '../agent/subagent-journal.js';
 import { streamingQuery } from '../agent/streaming-query.js';
 import { ToolRegistry } from '../agent/tool-registry.js';
 import type {
@@ -188,19 +189,118 @@ describe('subagent result integrity', () => {
       },
     };
 
+    // 内存 journal:checkpoint 时克隆快照,load 时回放。
+    // 用于验证 provider 失败后 runSubagent 能从 journal 恢复已完成的工作。
+    let snapshot: Message[] = [];
+    const journal: SubagentJournal = {
+      executionId: 'child-provider-failure',
+      reference: 'memory://child-provider-failure',
+      checkpoint: async messages => { snapshot = structuredClone(messages) as Message[]; },
+      load: async () => snapshot,
+    };
+
     const result = await runSubagent('inspect files', makeReadRegistry(), {
       role: 'explore',
       client,
       maxSteps: 3,
       executionRuntime: createToolExecutionRuntime(),
+      journal,
     });
 
     expect(result.status).toBe('incomplete');
     expect(result.terminationReason).toBe('error');
-    expect(result.evidence).toEqual({
-      toolCallCount: 1,
-      successfulToolResultCount: 1,
+    expect(result.text).toContain('agent, tui, ui');
+    expect(result.text).toContain('memory://child-provider-failure');
+    expect(result.text).toContain('provider failed on second turn');
+    expect(result.evidence.successfulToolResultCount).toBe(1);
+  });
+
+  it('final turn 未产出总结时,从 journal 恢复已完成的工作', async () => {
+    // 工具成功 + 最终总结轮返回空内容 → journal 里有工具结果,但 finalTurnSynthesized=false
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } }],
+      // 第 2 轮(=maxSteps=2 的 final turn)返回空内容
+      [],
+    ]);
+    let snapshot: Message[] = [];
+    const journal: SubagentJournal = {
+      executionId: 'child-empty-summary',
+      reference: 'memory://child-empty-summary',
+      checkpoint: async messages => { snapshot = structuredClone(messages) as Message[]; },
+      load: async () => snapshot,
+    };
+
+    const result = await runSubagent('list skills', makeReadRegistry(), {
+      role: 'explore',
+      client,
+      maxSteps: 2,
+      executionRuntime: createToolExecutionRuntime(),
+      journal,
     });
+
+    expect(result.status).toBe('incomplete');
+    expect(result.text).toContain('[Subagent incomplete: no final summary]');
+    expect(result.text).toContain('agent, tui, ui');
+    expect(result.text).toContain('memory://child-empty-summary');
+    expect(result.text).not.toContain('(no final text)');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// recoverSubagentWork:从结构化 child messages 确定式恢复已完成工作
+//
+// 物理本质:provider 崩溃后,从 journal 的 Message[] 里提取"真实发生过的工作":
+// 配对的 tool_use→tool_result + assistant 分析文本,按 transcript 顺序拼接,
+// 直到 12000 字符内联上限。journal 本身是无损源,内联只是给父代理看一个有界视图。
+// ════════════════════════════════════════════════════════════════════
+describe('recoverSubagentWork 确定式恢复', () => {
+  it('按时间顺序保留所有 assistant 文本与成功的配对工具结果', () => {
+    const recovered = recoverSubagentWork(
+      [
+        { role: 'assistant', content: [{ type: 'text', text: 'text A: inspect structure' }, { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/index.ts' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r1', content: 'file contents' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'text B: analyze TODOs' }, { type: 'tool_use', id: 'g1', name: 'run_bash', input: { command: 'grep TODO' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'g1', content: 'three TODOs' }] },
+      ],
+      'memory://chronological',
+    );
+
+    expect(recovered.successfulToolResults).toBe(2);
+    expect(recovered.text.indexOf('text A')).toBeLessThan(recovered.text.indexOf('file contents'));
+    expect(recovered.text.indexOf('file contents')).toBeLessThan(recovered.text.indexOf('text B'));
+    expect(recovered.text.indexOf('text B')).toBeLessThan(recovered.text.indexOf('three TODOs'));
+  });
+
+  it('同一 assistant 消息内 tool_use 后的 text 块仍按消息顺序先于该 tool_result', () => {
+    const mixed = recoverSubagentWork(
+      [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'text A: preparing' },
+            { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/index.ts' } },
+            { type: 'text', text: 'text B: request prepared' },
+          ],
+        },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r1', content: 'file contents' }] },
+      ],
+      'memory://mixed-blocks',
+    );
+
+    expect(mixed.successfulToolResults).toBe(1);
+    expect(mixed.text.indexOf('text A')).toBeLessThan(mixed.text.indexOf('text B'));
+    expect(mixed.text.indexOf('text B')).toBeLessThan(mixed.text.indexOf('file contents'));
+  });
+
+  it('没有任何成功的配对工具结果时返回空恢复', () => {
+    const recovered = recoverSubagentWork(
+      [
+        { role: 'assistant', content: [{ type: 'text', text: 'just thinking, no tools' }] }],
+      'memory://empty',
+    );
+
+    expect(recovered.successfulToolResults).toBe(0);
+    expect(recovered.text).toBe('');
   });
 });
 
