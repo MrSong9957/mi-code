@@ -18,6 +18,7 @@ import type {
   AssistantMessage,
 } from './types.js';
 import { isStreamEvent } from './types.js';
+import { sanitizeMessagesForModel } from './model-message-sanitizer.js';
 import { QueryEngine, type NormalizedMessage, type QueryEngineOptions } from './query-engine.js';
 import { StreamingToolExecutor } from './streaming-executor.js';
 import { StreamEventBus } from './stream-event-bus.js';
@@ -440,9 +441,15 @@ export async function* streamingQuery(
     : systemPromptWithMemory;
 
   const engine = new QueryEngine(client);
-  // 初始历史：resume 时传入之前的会话 + 本次 user 消息；否则从单条 user 消息开始
-  let messages: Message[] = initialMessages && initialMessages.length > 0
-    ? [...initialMessages, { role: 'user' as const, content: userMessage }]
+  // 初始历史：resume 时传入之前的会话 + 本次 user 消息；否则从单条 user 消息开始。
+  // ★ model-context 边界:initialMessages 可能含 uiOnly final-feedback 状态块(落盘保留),
+  //   喂模型前必须用 sanitizer 剔除,否则 LLM 会从历史模仿状态块(阻断 A)。
+  //   sessionMessages/jsonl/UI 保持原数据;仅 model context 过滤。
+  const sanitizedInitial = initialMessages && initialMessages.length > 0
+    ? sanitizeMessagesForModel(initialMessages)
+    : undefined;
+  let messages: Message[] = sanitizedInitial && sanitizedInitial.length > 0
+    ? [...sanitizedInitial, { role: 'user' as const, content: userMessage }]
     : [{ role: 'user' as const, content: userMessage }];
   let turnCount = 0;
 
