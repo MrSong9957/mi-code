@@ -164,8 +164,9 @@ import type {
   UserDecisionChannel,
 } from './permission/runtime-gate.js';
 import type { SecurityDecision, UserDecision } from './permission/decisions.js';
-import { SECURITY_PROTOCOL_VERSION } from './permission/decisions.js';
 import type { AskQuestionRequest, AskQuestionOutcome } from './agent/ask-user-types.js';
+import { SessionAllowlist } from './permission/session-allowlist.js';
+import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
 const cliOpts = parseCliArgs();
@@ -324,8 +325,11 @@ toolRegistry.register(askTool.definition, askTool.executor);
 // 然后组装一个 RuntimeSecurityGate,接入 streamingQuery 的 ask 阻塞路径。
 //
 // 关键:permission ask 用与 ask_user_question tool **不同的 schema**(BRC-6 要求不能伪装成
-// tool result)。这里把 SecurityDecision 转成一个简短的二选一问卷(Allow once / Reject),
-// outcome=submitted → approved_once;outcome=cancelled/chat → rejected。
+// tool result)。这里把 SecurityDecision 转成一个三选一问卷
+// (Allow once / Allow this exact action for this session / Reject),
+// answer → UserDecision 经纯函数 mapPermissionAnswerToUserDecision 精确映射:
+// 仅两个放行选项 → approved_once(remember 分别 false/true);Reject/unknown/empty/非submitted → rejected。
+// options 的 label 直接复用 ALLOW_ONCE_LABEL / ALLOW_EXACT_LABEL 常量,与映射同源。
 //
 // adapterSessionIdReader:延迟读取当前 sessionId(因为 sessionId 是 mutable let,
 // gate 构造时还不知道 resume 后的值)。
@@ -333,8 +337,8 @@ toolRegistry.register(askTool.definition, askTool.executor);
 function getDecisionChannel(): UserDecisionChannel {
   return {
     async request(decision: SecurityDecision): Promise<UserDecision> {
-      // 把 SecurityDecision 转成问卷(Allow once / Reject)。这是**独立的 permission ask
-      // schema**,不伪装成 tool result。
+      // 把 SecurityDecision 转成问卷。这是**独立的 permission ask
+      // schema**,不伪装成 tool result。label 复用常量,保证 UI 显示与 answer 映射同源。
       const request: AskQuestionRequest = {
         questions: [{
           question:
@@ -343,7 +347,8 @@ function getDecisionChannel(): UserDecisionChannel {
             `Reason: ${decision.human_reason}`,
           header: 'Permission',
           options: [
-            { label: 'Allow once', description: 'Run this action exactly once. It will not be remembered.' },
+            { label: ALLOW_ONCE_LABEL, description: 'Run this action exactly once. It will not be remembered.' },
+            { label: ALLOW_EXACT_LABEL, description: 'Run now and remember this exact command for the rest of this session.' },
             { label: 'Reject', description: 'Do not run this action.' },
           ],
           multiSelect: false,
@@ -351,14 +356,8 @@ function getDecisionChannel(): UserDecisionChannel {
       };
       // UI 抛错 → 视为通道故障(由 gate 转成 denied,绝不放行)
       const outcome: AskQuestionOutcome = await askManager.ask(request);
-      const response: UserDecision['response'] =
-        outcome.kind === 'submitted' ? 'approved_once' : 'rejected';
-      return {
-        protocol_version: SECURITY_PROTOCOL_VERSION,
-        decision_id: decision.decision_id,
-        response,
-        decided_at: new Date().toISOString(),
-      };
+      // answer → UserDecision 经纯函数精确映射:Reject/unknown/empty/非submitted 绝不放行。
+      return mapPermissionAnswerToUserDecision(decision.decision_id, outcome);
     },
   };
 }
@@ -396,7 +395,11 @@ const runtimeGate = new RuntimeSecurityGate({
   pendingStore: makePendingStore(() => sessionId),
   channel: getDecisionChannel(),
 });
-const executionRuntime = { permissionChecker, runtimeGate };
+// SessionAllowlist:主 agent session 级 exact-match 缓存。装配到 executionRuntime,
+// 供 Task 5 的 ToolExecutionRuntime 在 allowlist 命中后绕过 build_write_confirmation ask。
+// 生命周期由三处 session 切换点(rotateSessionId / handleRewindLastTurn / --resume)调 clear()。
+const sessionAllowlist = new SessionAllowlist();
+const executionRuntime = { permissionChecker, runtimeGate, sessionAllowlist };
 
 // 子代理工作日志工厂:用动态 sessionId 闭包,确保 resume/session 轮换后仍绑定当前会话。
 // 每次前台子代理执行调用一次,创建一个绑定到新 executionId 的独立 journal。
@@ -449,7 +452,7 @@ const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
     clearPipeline: () => pipeline.clear(),
     triggerClearScreen: () => tuiHandle?.clearScreenStore.getState().triggerClearScreen(),
     clearSessionMessages: () => { sessionMessages = []; },
-    rotateSessionId: () => { sessionId = randomUUID(); },
+    rotateSessionId: () => { sessionId = randomUUID(); sessionAllowlist.clear(); },
     resetContextUsage: () => tuiHandle?.statusStore.getState().setContextPct(0),
     setPermissionMode: (next) => permissionChecker.setMode(next),
     setConfigMode: (next) => configStore.setPermissionMode(next),
@@ -613,6 +616,7 @@ async function handleRewindLastTurn(): Promise<void> {
 
   // 5. 换 sessionId(旧 jsonl 保留,resume 时新会话不带撤回的消息)
   sessionId = randomUUID();
+  sessionAllowlist.clear();
 
   // 6. 回填输入框(用户实际发送的 agentText 展开版)
   if (lastSubmittedAgentText !== null) {
@@ -1042,6 +1046,7 @@ if (cliOpts.list) {
   if (resumeId) {
     sessionMessages = sessionStore.loadSync(resumeId);
     sessionId = resumeId;
+    sessionAllowlist.clear();
     // Wave B Task 13 (M-066): 加载该会话遗留的 pending decisions。
     //
     // *** Wave B 最简正确行为 ***:status === 'awaiting_user' 的单据在 resume 时
