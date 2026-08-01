@@ -13,15 +13,11 @@ import { StatusBar } from './StatusBar.js';
 import { SelectionText } from './SelectionText.js';
 import { SpinnerWithVerb } from './Spinner.js';
 import { SuggestionBar } from './SuggestionBar.js';
-import { type InputViewportLayout } from '../state/input-viewport.js';
+import { PROMPT, CONTINUATION_INDENT, type InputViewportLayout } from '../state/input-viewport.js';
 import type { StatusBarData } from '../types.js';
 import type { SpinnerView } from '../state/spinner-view.js';
 import type { CompletionStore } from '../state/completion-store.js';
 import type { SelectionStore } from '../state/selection-store.js';
-
-const PROMPT = '❯ ';
-/** 续行缩进：与 PROMPT 宽度对齐（❯ 占 1 列 + 空格 1 列 = 2 列）。 */
-const CONTINUATION_INDENT = '  ';
 
 export interface FooterProps {
   status: StatusBarData;

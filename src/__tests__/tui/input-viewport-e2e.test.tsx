@@ -34,15 +34,6 @@ const LOGO: LogoData = { version: '1.0', dir: '/tmp' };
 const EMPTY_FLAT_LINES: FlatLine[] = [];
 const EMPTY_MESSAGES: TuiMessage[] = [];
 
-/** 构造一条文本 FlatLine（用于契约 3 的历史区填充） */
-function makeTextFlatLine(text: string, idx: number): FlatLine {
-  return {
-    messageUuid: `msg-${idx}`,
-    lineIndex: 0,
-    line: { content: text, style: {}, indent: 0 },
-  };
-}
-
 function renderApp(input: string, cursor: number, rows = 24, flatLines: FlatLine[] = EMPTY_FLAT_LINES): { lastFrame: () => string | undefined } {
   const selectionStore = createSelectionStore();
   const spinnerStore = createSpinnerStore();
@@ -103,28 +94,18 @@ describe('多行输入 + 视口窗口 E2E', () => {
     expect(frame).toContain('l2');
   });
 
-  it('契约 3：footer 高度固定——1 行输入 vs 8 行输入，历史区行数相同', () => {
+  it('契约 3：动态 footer——8 行输入比 1 行输入的 layout.visibleRowCount 大(物理行模型)', () => {
     expect.hasAssertions();
-    // 用足够多的消息行，让历史区可见行数对 footer 高度敏感
-    const flatLines: FlatLine[] = [];
-    for (let i = 0; i < 30; i++) flatLines.push(makeTextFlatLine(`msg${i}`, i));
-
-    // 场景 A：1 行输入
-    const r1 = renderApp('single', 6, 24, flatLines);
-    // 场景 B：8 行输入
+    // 旧"footer 高度固定"契约已被动态物理行模型取代(输入区 1-5 行,历史区相应伸缩)。
+    // ink-testing-library 帧固定 rows 行,无法从帧行数判断 footer 高度;
+    // 改为直接断言 layout.visibleRowCount 反映真实动态行为。
+    const layout1 = computeInputViewportLayout('single', 6, 80, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH);
     const eightLines = ['l0', 'l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7'].join('\n');
-    const r8 = renderApp(eightLines, 18, 24, flatLines);
-    const frame1 = r1.lastFrame() ?? '';
-    const frame8 = r8.lastFrame() ?? '';
-    // footer 高度固定 → 两种场景下历史区可见消息数相同（msg29 都应出现或都不出现）
-    const hasLastMsg1 = frame1.includes('msg29');
-    const hasLastMsg8 = frame8.includes('msg29');
-    expect(hasLastMsg1).toBe(hasLastMsg8);
-    // 8 行输入的 footer 不应该比 1 行的更高（视口固定）
-    const frame1Lines = frame1.split('\n').length;
-    const frame8Lines = frame8.split('\n').length;
-    // footer 行数相同（允许 logo/msg 差异，但总行数差应为 0，因为 footer 固定）
-    expect(Math.abs(frame1Lines - frame8Lines)).toBeLessThanOrEqual(1);
+    const layout8 = computeInputViewportLayout(eightLines, 18, 80, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH);
+    // 8 行输入:visibleRowCount 锁 5(超 MAX_VISIBLE_INPUT_LINES);1 行输入:visibleRowCount=1
+    expect(layout1.visibleRowCount).toBe(1);
+    expect(layout8.visibleRowCount).toBe(5);
+    expect(layout8.physicalRowCount).toBeGreaterThan(layout1.physicalRowCount);
   });
 
   it('契约 4：cursorScreenPos 与 computeInputViewport 协同——光标恒在视口内', () => {
