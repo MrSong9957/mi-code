@@ -92,9 +92,10 @@
 - 待查:turn-final-feedback 分类逻辑 / 上下文残留 / tool_result 串话
 
 ### 阻断 B — 场景 9:session 切换后 exact write_file 未重新询问
-- 状态:已登记,未处理
-- 现象:session 切换后,之前记住的 exact write_file 似乎没重新询问(allowlist 可能未随 session 切换清空)
-- 待查:三处 sessionAllowlist.clear()(L455 rotateSessionId / L619 rewind / L1049 resume)是否实际执行;sessionId 与 allowlist 生命周期绑定是否正确
+- 状态:✅ 已处理(无生产改动,补回归测试)
+- 调查结论:原场景 9 没有实际发生 session 切换(证据:c626788a 内 write_file #3-#7 全在同 sessionId 内,#4/#7 与 #3 完全相同命中 allowlist 是预期行为)。当前无证据证明存在 bug。session remember 语义保持(同 sessionId 跨 turn 有效)。
+- 处理:补生命周期契约测试(session-allowlist-lifecycle.test.ts,6 用例,commit e298f09),全 GREEN 确认实现正确
+- 覆盖:rotateSessionId(clearContext=true)→ clear;clearContext=false → 保留;clear 后重新 ask(hard rewind/resume 契约);soft interrupt 不 clear;同 session 跨 turn 记住;clear 清空所有 entry
 
 ---
 
