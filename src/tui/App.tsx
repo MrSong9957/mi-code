@@ -25,8 +25,7 @@ import { LogoBox } from './components/LogoBox.js';
 import { Footer } from './components/Footer.js';
 import { Overlay } from './components/Overlay.js';
 import { DropdownOverlay } from './components/DropdownOverlay.js';
-import { cursorScreenPos } from './state/cursor-position.js';
-import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from './state/input-viewport.js';
+import { type InputViewportLayout } from './state/input-viewport.js';
 import { useStore } from 'zustand/react';
 import type { TuiMessage, StatusBarData, LogoData } from './types.js';
 import type { FlatLine } from './selection/flatten-messages.js';
@@ -49,8 +48,6 @@ export interface AppProps {
   spinnerStore: SpinnerStore;
   completionStore: CompletionStore;
   overlayStore: OverlayStore;
-  input: string;
-  cursor: number;
   /** 终端列数（边框宽度用）；默认 80（ink-testing-library 默认） */
   cols?: number;
   /** 终端行数（算 ScrollBox visibleRows 用）；默认 24 */
@@ -59,9 +56,11 @@ export interface AppProps {
   scrollTop: number;
   /** 已固化消息展开后的行列表（按行坐标，由 ConnectedApp 持有） */
   flatLines: FlatLine[];
+  /** 输入框视口布局（物理行模型，必传 Step 11 起）。footerRows/历史区/Footer 渲染共用。 */
+  layout: InputViewportLayout;
 }
 
-export function App({ messages, status, logo, selectionStore, input, cursor, spinnerStore, completionStore, overlayStore, scrollTop, flatLines, cols = 80, rows = 24 }: AppProps): React.ReactElement {
+export function App({ messages, status, logo, selectionStore, spinnerStore, completionStore, overlayStore, scrollTop, flatLines, layout, cols = 80, rows = 24 }: AppProps): React.ReactElement {
   const overlayVisible = useStore(overlayStore, (s) => s.visible);
   // 订阅 spinner 是否激活——影响 Footer 占用行数
   const spinnerState = useStore(spinnerStore);
@@ -72,25 +71,19 @@ export function App({ messages, status, logo, selectionStore, input, cursor, spi
     return <Overlay store={overlayStore} cols={cols} />;
   }
 
-  // Footer 实际占用行数：基础 4（border×2 + 1 输入 + status）+ spinner? + 视口固定高度-1
-  // 输入框视口固定为 MAX_VISIBLE_INPUT_LINES 行，不再随输入行数增长——历史区大小稳定。
-  // 注意：下拉菜单已分离到 DropdownOverlay，不再占用 footer 行数
-  const inputViewportExtraLines = MAX_VISIBLE_INPUT_LINES - 1;
+  // layout 必传（Step 11 起）：footerRows/visibleRows/历史区 共用 layout.visibleRowCount。
+  const inputViewportExtraLines = layout.visibleRowCount - 1;
   const footerRows = FOOTER_ROWS + spinnerView.rowCount + inputViewportExtraLines;
   const visibleRows = Math.max(0, rows - footerRows - LOGO_ROWS);
   // inputRowY 按行算（flatLines.length 是行数，修根因 2b）
   const scrollboxRenderedRows = Math.min(flatLines.length, visibleRows);
   const inputRowY = scrollboxRenderedRows + LOGO_ROWS + spinnerView.rowCount + 1;
-  // 输入框视口：光标居中滚动，超 MAX_VISIBLE_INPUT_LINES 时 viewportTop 跟随光标。
-  const totalInputLines = input.split('\n').length;
-  const cursorLine = cursorScreenPos(input, cursor, '❯ ').y;
-  const vp = computeInputViewport(totalInputLines, cursorLine, MAX_VISIBLE_INPUT_LINES);
   return (
     <Box flexDirection="column">
       <LogoBox logo={logo} selectionStore={selectionStore} />
       <ScrollBox messages={messages} flatLines={flatLines} visibleRows={visibleRows} scrollTop={scrollTop} selectionStore={selectionStore} />
       <DropdownOverlay />
-      <Footer input={input} cursor={cursor} status={status} cols={cols} inputRowY={inputRowY} viewportTop={vp.viewportTop} spinnerView={spinnerView} completionStore={completionStore} selectionStore={selectionStore} />
+      <Footer status={status} cols={cols} inputRowY={inputRowY} layout={layout} spinnerView={spinnerView} completionStore={completionStore} selectionStore={selectionStore} />
     </Box>
   );
 }

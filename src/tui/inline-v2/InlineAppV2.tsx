@@ -19,7 +19,7 @@
 // 这样 logo 不会被 spinner tick 反复重画(避免 logo 重复出现),且 resize 时通过
 // 父组件 ConnectedApp 重挂载本组件(key={resizeKey})让 <Static> 重写 logo + 所有消息。
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box, Static, Text } from 'ink';
 import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
@@ -34,8 +34,7 @@ import { AskQuestionOverlayV2 } from './AskQuestionOverlayV2.js';
 import { ExitPlanModeOverlayV2 } from './ExitPlanModeOverlayV2.js';
 import { OverlayHost } from './OverlayHost.js';
 import { selectSpinnerView } from '../state/spinner-view.js';
-import { computeInputViewport, MAX_VISIBLE_INPUT_LINES } from '../state/input-viewport.js';
-import { cursorScreenPos } from '../state/cursor-position.js';
+import { computeInputViewportLayout, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH } from '../state/input-viewport.js';
 import type { TuiMessage, StatusBarData, LogoData } from '../types.js';
 import type { MessagesStore } from '../state/messages-store.js';
 import type { TranscriptBlock, ActivityItem } from '../transcript-types.js';
@@ -181,10 +180,11 @@ export function InlineAppV2({ logo, stores, cols }: InlineAppV2Props): React.Rea
   // 但订阅确保 overlay 状态变化时活动区也重渲染)。值本身不直接消费。
   void useStore(stores.overlayStore, (s) => s.visible);
 
-  // 输入框视口:光标居中滚动,超出 MAX_VISIBLE_INPUT_LINES 时 viewportTop 跟随。
-  const totalInputLines = inputText.split('\n').length;
-  const cursorLine = cursorScreenPos(inputText, cursor, '❯ ').y;
-  const vp = computeInputViewport(totalInputLines, cursorLine, MAX_VISIBLE_INPUT_LINES);
+  // 物理行模型 layout(useMemo 缓存引用——spinner tick 不触发 FooterV2 重渲染,memo 隔离)。
+  const layout = useMemo(
+    () => computeInputViewportLayout(inputText, cursor, cols, PROMPT_WIDTH, CONTINUATION_INDENT_WIDTH),
+    [inputText, cursor, cols],
+  );
 
   // 流式文本占的行数(用于计算 spinner/footer 的 y 偏移)。
   // 物理行数近似:每行按 cols 折算,首行扣除 ● 前缀。粗估即可(精确行数由 Ink yoga 算)。
@@ -296,12 +296,10 @@ export function InlineAppV2({ logo, stores, cols }: InlineAppV2Props): React.Rea
           <>
             <SpinnerMemo store={stores.spinnerStore} />
             <FooterV2
-              input={inputText}
-              cursor={cursor}
               status={statusData}
               cols={cols}
               inputRowY={inputRowY}
-              viewportTop={vp.viewportTop}
+              layout={layout}
               completionStore={stores.completionStore}
               selectionStore={stores.selectionStore}
             />
