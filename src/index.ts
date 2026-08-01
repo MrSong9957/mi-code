@@ -166,14 +166,17 @@ import type {
 import type { SecurityDecision, UserDecision } from './permission/decisions.js';
 import type { AskQuestionRequest, AskQuestionOutcome } from './agent/ask-user-types.js';
 import { SessionAllowlist } from './permission/session-allowlist.js';
-import { transitionSessionId } from './permission/session-lifecycle.js';
+import { SessionState } from './permission/session-state.js';
 import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
 const cliOpts = parseCliArgs();
 const sessionStore = new SessionStore();
-// 会话 ID：resume 时用恢复的 id，否则新建
-let sessionId: string = randomUUID();
+// Session 级状态:sessionAllowlist + sessionState(唯一 session mutation boundary)。
+// sessionState 封装 sessionId:外部只读 currentId,切换只经 transitionTo(内部 clear allowlist)。
+// 结构上消除"调用方直接赋值 sessionId 而忘记 clear"的双写风险。
+const sessionAllowlist = new SessionAllowlist();
+const sessionState = new SessionState(sessionAllowlist, randomUUID());
 let currentPlanContext: PlanContext | null = null;
 // 当前会话累积消息（resume 时预载，streamingQuery onMessages 时更新）
 let sessionMessages: Message[] = [];
@@ -332,8 +335,8 @@ toolRegistry.register(askTool.definition, askTool.executor);
 // 仅两个放行选项 → approved_once(remember 分别 false/true);Reject/unknown/empty/非submitted → rejected。
 // options 的 label 直接复用 ALLOW_ONCE_LABEL / ALLOW_EXACT_LABEL 常量,与映射同源。
 //
-// adapterSessionIdReader:延迟读取当前 sessionId(因为 sessionId 是 mutable let,
-// gate 构造时还不知道 resume 后的值)。
+// adapterSessionIdReader:延迟读取当前 sessionId(因为 sessionState.currentId 会随
+// rotate/rewind/resume 变化,gate 构造时还不知道 resume 后的值)。
 
 function getDecisionChannel(): UserDecisionChannel {
   return {
@@ -393,19 +396,16 @@ function makePendingStore(sessionIdReader: () => string): PendingDecisionStore {
 }
 
 const runtimeGate = new RuntimeSecurityGate({
-  pendingStore: makePendingStore(() => sessionId),
+  pendingStore: makePendingStore(() => sessionState.currentId),
   channel: getDecisionChannel(),
 });
-// SessionAllowlist:主 agent session 级 exact-match 缓存。装配到 executionRuntime,
-// 供 Task 5 的 ToolExecutionRuntime 在 allowlist 命中后绕过 build_write_confirmation ask。
-// 生命周期由三处 session 切换点(rotateSessionId / handleRewindLastTurn / --resume)调 clear()。
-const sessionAllowlist = new SessionAllowlist();
+// executionRuntime 装配:复用前面构造的 sessionAllowlist(绑定到 sessionState)。
 const executionRuntime = { permissionChecker, runtimeGate, sessionAllowlist };
 
 // 子代理工作日志工厂:用动态 sessionId 闭包,确保 resume/session 轮换后仍绑定当前会话。
 // 每次前台子代理执行调用一次,创建一个绑定到新 executionId 的独立 journal。
 const createSubagentJournal = () =>
-  sessionStore.createSubagentJournal(sessionId, randomUUID());
+  sessionStore.createSubagentJournal(sessionState.currentId, randomUUID());
 
 const taskTool = createTaskTool(
   childToolRegistry,
@@ -453,7 +453,7 @@ const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
     clearPipeline: () => pipeline.clear(),
     triggerClearScreen: () => tuiHandle?.clearScreenStore.getState().triggerClearScreen(),
     clearSessionMessages: () => { sessionMessages = []; },
-    rotateSessionId: () => { sessionId = transitionSessionId(sessionId, randomUUID(), sessionAllowlist); },
+    rotateSessionId: () => { sessionState.transitionTo(randomUUID()); },
     resetContextUsage: () => tuiHandle?.statusStore.getState().setContextPct(0),
     setPermissionMode: (next) => permissionChecker.setMode(next),
     setConfigMode: (next) => configStore.setPermissionMode(next),
@@ -616,7 +616,7 @@ async function handleRewindLastTurn(): Promise<void> {
   }
 
   // 5. 换 sessionId(旧 jsonl 保留,resume 时新会话不带撤回的消息)
-  sessionId = transitionSessionId(sessionId, randomUUID(), sessionAllowlist);
+  sessionState.transitionTo(randomUUID());
 
   // 6. 回填输入框(用户实际发送的 agentText 展开版)
   if (lastSubmittedAgentText !== null) {
@@ -661,7 +661,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     { historyText: trimmedRaw, agentText: userInput, project: currentProject, isProcessing }
   );
   if (!committed) return;
-  currentPlanContext = { sessionId, turnId: randomUUID() };
+  currentPlanContext = { sessionId: sessionState.currentId, turnId: randomUUID() };
   planStore.beginTurn(currentPlanContext);
 
   // 检查 ! 前缀拦截
@@ -677,7 +677,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   // 其他斜杠命令短路 return,不进 agent loop。
   let userMessageForAgent: string | ContentBlock[] | null = null;
   if (cmd && cmd.name === 'image') {
-    const imgResult = await processImageCommand(cmd.args, sessionId);
+    const imgResult = await processImageCommand(cmd.args, sessionState.currentId);
     if ('error' in imgResult) {
       printLine(`✗ ${imgResult.error}`);
       return;
@@ -989,7 +989,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       await commitFinalizedTurn(
         finalized,
         persistedMessageCount,
-        message => sessionStore.append(sessionId, stripImagesForPersistence(message)),
+        message => sessionStore.append(sessionState.currentId, stripImagesForPersistence(message)),
         text => pipeline.emit({ kind: 'assistant_text', text, isFinal: true }),
       );
       // 落盘成功后同步模块级会话状态(供下一回合 / resume 使用)。
@@ -1045,7 +1045,7 @@ if (cliOpts.list) {
   const resumeId = cliOpts.resume ?? (cliOpts.continueLatest ? sessionStore.getLastSessionIdSync() : null);
   if (resumeId) {
     sessionMessages = sessionStore.loadSync(resumeId);
-    sessionId = transitionSessionId(sessionId, resumeId, sessionAllowlist);
+    sessionState.transitionTo(resumeId);
     // Wave B Task 13 (M-066): 加载该会话遗留的 pending decisions。
     //
     // *** Wave B 最简正确行为 ***:status === 'awaiting_user' 的单据在 resume 时
@@ -1123,7 +1123,7 @@ if (cliOpts.list) {
     backgroundManager.killAll();
     tuiHandle?.stopSpinner();
     tuiHandle?.cleanup();
-    writeResumeHint(process.stdout, sessionId);
+    writeResumeHint(process.stdout, sessionState.currentId);
   }
   process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });
   process.on('SIGTERM', () => { cleanupOnExit(); process.exit(0); });
