@@ -74,6 +74,8 @@ export interface UserDecision {
   decision_id: string;
   response: 'approved_once' | 'rejected';
   decided_at: string;
+  /** 用户请求记住此 action(session 级)。由 gate 透传到 AuthorizedAction。 */
+  remember?: boolean;
 }
 
 /**

@@ -47,6 +47,8 @@ export type AuthorizedAction = {
   kind: 'authorized';
   decision_id: string;
   action_snapshot_id: string;
+  /** 透传自 UserDecision.remember。调用方据此写 session allowlist。 */
+  remember?: boolean;
 };
 
 export type DeniedAction = {
@@ -211,6 +213,7 @@ export class RuntimeSecurityGate {
         kind: 'authorized',
         decision_id: decision.decision_id,
         action_snapshot_id: decision.action.snapshot_id,
+        remember: userDecision.remember,
       };
     }
 
@@ -234,14 +237,29 @@ export class RuntimeSecurityGate {
    * Authorize + 在 authorized 时执行 executor。
    *
    * 不变量:denied 时 **绝不** 调用 executor;authorized 时调用 executor 一次并返回其结果。
+   *
+   * 可选 options.onAuthorized 是 non-interfering observer:仅在 authorized 路径
+   * (authorize 已返回 authorized)、executor 之前触发一次。其异常被 try/catch 吞掉,
+   * 不阻止 executor、不改变 authorized(即不会把 authorized 变成 denied)。
    */
   async execute<T>(
     decision: SecurityDecision,
     executor: () => Promise<T>,
+    options?: { onAuthorized?: (action: AuthorizedAction) => void },
   ): Promise<T | DeniedAction> {
     const outcome = await this.authorize(decision);
     if (outcome.kind === 'denied') {
-      return outcome;
+      return outcome; // 不变:denied 绝不调 executor,也不触发 onAuthorized
+    }
+    // authorized:通知观察者(携带 remember 元数据)。observer 是 non-interfering:
+    // 其异常不得阻止 executor、不得改变 authorized→denied。吞掉异常保证 executor 仍执行一次。
+    if (options?.onAuthorized) {
+      try {
+        options.onAuthorized(outcome);
+      } catch {
+        // observer 故障不影响执行语义:executor 仍恰好执行一次,返回其结果。
+        // 不记录、不重抛——observer 是纯观察点,无权影响授权/执行流。
+      }
     }
     return await executor();
   }
