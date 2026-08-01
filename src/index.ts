@@ -166,6 +166,7 @@ import type {
 import type { SecurityDecision, UserDecision } from './permission/decisions.js';
 import type { AskQuestionRequest, AskQuestionOutcome } from './agent/ask-user-types.js';
 import { SessionAllowlist } from './permission/session-allowlist.js';
+import { transitionSessionId } from './permission/session-lifecycle.js';
 import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
@@ -452,7 +453,7 @@ const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
     clearPipeline: () => pipeline.clear(),
     triggerClearScreen: () => tuiHandle?.clearScreenStore.getState().triggerClearScreen(),
     clearSessionMessages: () => { sessionMessages = []; },
-    rotateSessionId: () => { sessionId = randomUUID(); sessionAllowlist.clear(); },
+    rotateSessionId: () => { sessionId = transitionSessionId(sessionId, randomUUID(), sessionAllowlist); },
     resetContextUsage: () => tuiHandle?.statusStore.getState().setContextPct(0),
     setPermissionMode: (next) => permissionChecker.setMode(next),
     setConfigMode: (next) => configStore.setPermissionMode(next),
@@ -615,8 +616,7 @@ async function handleRewindLastTurn(): Promise<void> {
   }
 
   // 5. 换 sessionId(旧 jsonl 保留,resume 时新会话不带撤回的消息)
-  sessionId = randomUUID();
-  sessionAllowlist.clear();
+  sessionId = transitionSessionId(sessionId, randomUUID(), sessionAllowlist);
 
   // 6. 回填输入框(用户实际发送的 agentText 展开版)
   if (lastSubmittedAgentText !== null) {
@@ -1045,8 +1045,7 @@ if (cliOpts.list) {
   const resumeId = cliOpts.resume ?? (cliOpts.continueLatest ? sessionStore.getLastSessionIdSync() : null);
   if (resumeId) {
     sessionMessages = sessionStore.loadSync(resumeId);
-    sessionId = resumeId;
-    sessionAllowlist.clear();
+    sessionId = transitionSessionId(sessionId, resumeId, sessionAllowlist);
     // Wave B Task 13 (M-066): 加载该会话遗留的 pending decisions。
     //
     // *** Wave B 最简正确行为 ***:status === 'awaiting_user' 的单据在 resume 时
