@@ -293,9 +293,16 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
         required: ['command'],
       },
     },
-    executor: async (input) => {
+    executor: async (input, ctx) => {
       const command = input.command as string;
       const timeoutMs = (input.timeout_ms as number | undefined) ?? 30_000;
+
+      // 已经中止的信号:在 spawn 前直接拒绝,避免起无谓的子进程。
+      if (ctx?.signal?.aborted) {
+        const error = new Error('Command aborted');
+        error.name = 'AbortError';
+        throw error;
+      }
 
       // BRC-6 / M-063：子进程环境清洗。
       // 父进程 process.env 在此 ONCE 读取（sanctioned read point），交给
@@ -376,11 +383,15 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
         // timeout/Abort 立即 reject 对应分类错误；close 正常 resolve；error 仍 resolve 字符串(Task 4 改)。
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
+        let abortHandler: (() => void) | undefined;
 
         const cleanup = (): void => {
           if (timer !== undefined) {
             clearTimeout(timer);
             timer = undefined;
+          }
+          if (abortHandler) {
+            ctx?.signal?.removeEventListener('abort', abortHandler);
           }
         };
 
@@ -428,6 +439,17 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
           cleanup();
           resolve(`Command failed: ${err.message}`);
         });
+
+        // in-flight Abort:挂载 listener + 注册后再查一次,关闭 pre-spawn 检查与
+        // listener attach 之间的竞态。settled 守卫保证两次调用无副作用。
+        abortHandler = (): void => {
+          const error = new Error('Command aborted');
+          error.name = 'AbortError';
+          settleFailure(error, true);
+        };
+
+        ctx?.signal?.addEventListener('abort', abortHandler, { once: true });
+        if (ctx?.signal?.aborted) abortHandler();
       });
     },
   };

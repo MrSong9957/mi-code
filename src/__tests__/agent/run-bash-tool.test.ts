@@ -165,4 +165,61 @@ describe('run_bash timeout contract', () => {
       output: 'command failed',
     });
   });
+
+  it('kills the process tree and returns failure(cancelled) on Abort', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const controller = new AbortController();
+    const removeListenerSpy = vi.spyOn(
+      controller.signal,
+      'removeEventListener',
+    );
+    const settled = vi.fn();
+
+    const execution = executeBash(
+      { command: 'echo waiting', timeout_ms: 600_000 },
+      controller.signal,
+    );
+    void execution.then(settled);
+    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    expect(settled).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failure',
+      failure: expect.objectContaining({
+        kind: 'cancelled',
+        stage: 'execution',
+      }),
+    }));
+    expect(removeListenerSpy).toHaveBeenCalledWith(
+      'abort',
+      expect.any(Function),
+    );
+    expect(mocks.killProcessTree).toHaveBeenCalledWith(4_242);
+    expect(removeListenerSpy.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.killProcessTree.mock.invocationCallOrder[0]);
+    expect(mocks.killProcessTree.mock.invocationCallOrder[0])
+      .toBeLessThan(settled.mock.invocationCallOrder[0]);
+
+    child.emit('close', 0);
+    child.emit('error', new Error('late child error'));
+    await Promise.resolve();
+    expect(settled).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns cancelled before spawn for an already-aborted signal', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(executeBash(
+      { command: 'echo never-started', timeout_ms: 600_000 },
+      controller.signal,
+    )).resolves.toMatchObject({
+      status: 'failure',
+      failure: { kind: 'cancelled', stage: 'execution' },
+    });
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+  });
 });
