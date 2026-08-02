@@ -19,9 +19,16 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { TranscriptBlock } from '../transcript-types.js';
+import { getUsableWidth } from '../state/wrap-line.js';
+import { useTheme } from '../state/theme-context.js';
 import { ToolBlockLine } from './ToolBlockLine.js';
 import { AskBlockLine } from './AskBlockLine.js';
 import { AssistantBlockLine } from './AssistantBlockLine.js';
+import {
+  layoutUserBlockRows,
+  shouldShowUserPrompt,
+  USER_PROMPT,
+} from './user-block-layout.js';
 import { formatSpinnerDuration } from '../state/spinner-store.js';
 
 export interface TranscriptBlockLineProps {
@@ -34,17 +41,45 @@ function assertNever(value: never): never {
   throw new Error(`Unexpected transcript block: ${JSON.stringify(value)}`);
 }
 
+/**
+ * UserBlock 渲染叶子：纯布局函数产出未填充的可见文本行，整行背景由
+ * Ink Box width + backgroundColor 承载（不向文本追加视觉填充空格）。
+ * 首物理行按需前缀绿色粗体 '❯'，正文前景色保持现状。
+ */
+function UserBlockLine({ text, width }: { text: string; width: number }): React.ReactElement {
+  const theme = useTheme();
+  const rows = layoutUserBlockRows(text, width);
+  const showPrompt = shouldShowUserPrompt(text, width);
+
+  return (
+    <Box width={width} flexDirection="column">
+      {rows.map((row, index) => {
+        const isPromptRow = index === 0 && showPrompt;
+        const body = isPromptRow ? row.slice(USER_PROMPT.length) : row;
+        return (
+          <Box
+            key={`user-row-${index}`}
+            width={width}
+            height={1}
+            backgroundColor={theme.bgMuted}
+          >
+            <Text>
+              {isPromptRow && <Text color="green" bold>❯</Text>}
+              {isPromptRow ? ` ${body}` : body}
+            </Text>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
 export function TranscriptBlockLine({ block, cols }: TranscriptBlockLineProps): React.ReactElement {
   switch (block.kind) {
-    case 'user':
-      return (
-        <Box width={cols}>
-          <Text>
-            <Text color="green" bold>❯</Text>
-            {' ' + block.text}
-          </Text>
-        </Box>
-      );
+    case 'user': {
+      const width = getUsableWidth(cols);
+      return <UserBlockLine text={block.text} width={width} />;
+    }
 
     case 'assistant':
       return <AssistantBlockLine block={block} cols={cols} />;

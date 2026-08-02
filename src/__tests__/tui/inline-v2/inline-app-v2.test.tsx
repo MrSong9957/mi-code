@@ -200,8 +200,18 @@ describe('<InlineAppV2>', () => {
 
     const { lastFrame } = render(<InlineAppV2 {...makeProps(stores)} />);
     const frame = stripAnsi(lastFrame() ?? '');
+    const lines = frame.split('\n').map((line) => line.trimEnd());
 
-    expect(frame).toContain('❯ question\n\n● answer');
+    // UserBlock 现在使用整宽 bgMuted 背景(规格 §6.3),Box width 会向行尾写入
+    // 背景填充空格,故不能用 toContain('❯ question\n\n● answer') 那种子串断言
+    // (填充空格会插在 '❯ question' 与 '\n' 之间)。本测试守护的真正不变量是
+    // 「相邻已固化消息块之间恰好一个空行」:user 行之后 1 个空行,再接 assistant 行。
+    const userIndex = lines.findIndex((line) => line.startsWith('❯ question'));
+    const assistantIndex = lines.findIndex((line) => line.startsWith('● answer'));
+
+    expect(userIndex).toBeGreaterThanOrEqual(0);
+    expect(assistantIndex).toBe(userIndex + 2);
+    expect(lines[userIndex + 1]).toBe('');
   });
 
   it('spinner active 时渲染 spinner 文本', () => {
