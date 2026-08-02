@@ -4,7 +4,7 @@
 
 **Goal:** Add bounded `timeout_ms` control to `run_bash` and make timeout, Abort, and spawn failures enter the existing structured execution-failure contract while preserving non-zero exit codes as success.
 
-**Architecture:** Extend the existing `ToolParameter` numeric schema with inclusive `minimum`/`maximum` keywords and enforce them inside `validateToolInput`, so invalid timeout values fail before permission or execution. Keep `ToolExecutor` as `Promise<string>` and make `createBashTool` communicate expected execution failures by rejecting with the error shapes that `executeToolCall` already classifies. Use deterministic mocked-child tests for timer and event races, while retaining the existing real `killProcessTree` regression tests unchanged.
+**Architecture:** Extend the existing `ToolParameter` numeric schema with inclusive `minimum`/`maximum` keywords and enforce them inside `validateToolInput`, so invalid timeout values fail before permission or execution. Keep `ToolExecutor` as `Promise<string>` and make `createBashTool` settle timeout/Abort immediately through the error shapes that `executeToolCall` already classifies; wrap every child `error` in the existing `ToolOperationalError`. Use deterministic mocked-child tests and fake timers for lifecycle races, while retaining the existing real `killProcessTree` regression tests unchanged.
 
 **Tech Stack:** TypeScript ES2022/NodeNext, Node.js `child_process`, `AbortSignal`, Vitest 3, existing `ToolRegistry`, existing `executeToolCall`, existing `PermissionChecker`/`RuntimeSecurityGate` test runtime.
 
@@ -15,9 +15,9 @@
 - `timeout_ms?: number`; omission uses `30_000` milliseconds.
 - The inclusive valid range is `1` through `600_000` milliseconds. Values below or above it return `invalid_input` before the executor runs.
 - Keep the schema type as `number`; do not add an unapproved integer-only constraint.
-- Timeout returns `failure(timeout)` through the existing `TimeoutError` classification.
-- Abort terminates the process tree and returns `failure(cancelled)` through the existing `AbortError` classification.
-- Spawn errors return `failure(operational_error)` by preserving the emitted Node error and its string `code`.
+- Timeout immediately settles as `failure(timeout)`: guard duplicate settlement, clean up timer/listener state, terminate the process tree, then reject an error named `TimeoutError`. Later child events are ignored.
+- An already-aborted signal returns `failure(cancelled)` before `spawn`. In-flight Abort immediately guards, cleans up, terminates the process tree, and rejects an error named `AbortError`; later child events are ignored.
+- Every child `error`, with or without a string `code`, returns `failure(operational_error)` by wrapping it in the existing `ToolOperationalError` without changing `executeToolCall`.
 - A command that starts and exits non-zero remains `success` with the existing stderr/stdout/fallback output selection.
 - Do not change `ToolExecutor`, `ToolExecutionResult`, `classifyExecutorError`, or any other `executeToolCall` error semantics.
 - Do not modify `dispatch-map.ts`, background execution, `BackgroundManager`, Git Bash documentation, or unrelated code.
@@ -215,7 +215,7 @@ git commit -m "feat: validate numeric tool parameter bounds"
 **Interfaces:**
 
 - Consumes: Task 1’s `ToolParameter.minimum`/`maximum`, existing `createBashTool()`, `ToolRegistry.register(...)`, `executeToolCall(...)`, `createToolExecutionRuntime()`, and existing `killProcessTree(pid)`.
-- Produces: optional `run_bash.timeout_ms` schema field; executor-local `timeoutMs: number`; a rejected error named `TimeoutError`; unchanged resolved strings for non-zero exit codes.
+- Produces: optional `run_bash.timeout_ms` schema field; executor-local `timeoutMs: number`; an immediate single-settlement helper ordered as guard → cleanup → optional tree kill → reject; unchanged resolved strings for non-zero exit codes.
 
 - [ ] **Step 1: Create the deterministic child-process test harness**
 
@@ -291,6 +291,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -341,20 +342,37 @@ describe('run_bash timeout contract', () => {
     await expect(resultPromise).resolves.toBe('ok');
   });
 
-  it('returns failure(timeout) when timeout_ms expires', async () => {
+  it('immediately returns failure(timeout) without a child close/error event', async () => {
+    vi.useFakeTimers();
     const child = makeChild();
     mocks.spawn.mockReturnValue(child);
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const settled = vi.fn();
 
-    const execution = executeBash({ command: 'echo waiting', timeout_ms: 1 });
-    await vi.waitFor(() => {
-      expect(mocks.killProcessTree).toHaveBeenCalledWith(4_242);
-    });
-    child.emit('close', null);
+    const execution = executeBash({ command: 'echo waiting', timeout_ms: 1_234 });
+    void execution.then(settled);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.spawn).toHaveBeenCalledOnce();
 
-    await expect(execution).resolves.toMatchObject({
+    await vi.advanceTimersByTimeAsync(1_234);
+    expect(settled).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failure',
-      failure: { kind: 'timeout', stage: 'execution' },
-    });
+      failure: expect.objectContaining({
+        kind: 'timeout',
+        stage: 'execution',
+      }),
+    }));
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    expect(mocks.killProcessTree).toHaveBeenCalledWith(4_242);
+    expect(clearTimeoutSpy.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.killProcessTree.mock.invocationCallOrder[0]);
+    expect(mocks.killProcessTree.mock.invocationCallOrder[0])
+      .toBeLessThan(settled.mock.invocationCallOrder[0]);
+
+    child.emit('close', 0);
+    child.emit('error', new Error('late child error'));
+    await Promise.resolve();
+    expect(settled).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a non-zero exit code as success with stderr output', async () => {
@@ -389,7 +407,7 @@ Expected failures:
 - `timeout_ms` is absent from the schema.
 - out-of-range `run_bash` input reaches success because the schema does not yet declare bounds.
 - the explicit timer still uses `30_000`.
-- the 1 ms execution does not reach the mocked tree kill within the test wait window.
+- advancing the controlled timer does not settle the execution until the missing immediate-settlement behavior is implemented.
 - the non-zero regression may already pass and must remain green throughout later tasks.
 
 - [ ] **Step 3: Add the bounded optional schema property**
@@ -407,7 +425,7 @@ timeout_ms: {
 
 Keep `required: ['command']`; do not add `timeout_ms` to it.
 
-- [ ] **Step 4: Select the default or explicit timeout once**
+- [ ] **Step 4: Select timeout and define immediate single settlement**
 
 At the start of the executor, immediately after reading `command`, add:
 
@@ -415,35 +433,76 @@ At the start of the executor, immediately after reading `command`, add:
 const timeoutMs = (input.timeout_ms as number | undefined) ?? 30_000;
 ```
 
-Change `new Promise<string>((resolve) => {` to accept `reject`, and replace the hard-coded timer delay with `timeoutMs`:
+Change `new Promise<string>((resolve) => {` to accept `reject`:
 
 ```ts
 return new Promise<string>((resolve, reject) => {
 ```
 
-```ts
-const timer = setTimeout(() => {
-  timedOut = true;
-  if (child.pid) killProcessTree(child.pid);
-}, timeoutMs);
-```
-
 Do not revalidate the range inside the executor; Task 1’s schema validation is the single input gate on production `executeToolCall` paths.
 
-- [ ] **Step 5: Reject timeout with the existing classifier shape**
+- [ ] **Step 5: Settle timeout immediately and guard late child events**
 
-Replace only the `timedOut` branch inside `child.on('close')`:
+Replace `let timedOut = false`, the hard-coded timer, and the current close/error handlers with this lifecycle state. Keep the existing stdout/stderr collection code before it:
 
 ```ts
-if (timedOut) {
+let settled = false;
+let timer: ReturnType<typeof setTimeout> | undefined;
+
+const cleanup = (): void => {
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    timer = undefined;
+  }
+};
+
+const settleFailure = (error: Error, terminateTree: boolean): void => {
+  if (settled) return;
+  settled = true;
+  cleanup();
+  if (terminateTree && child.pid) killProcessTree(child.pid);
+  reject(error);
+};
+
+timer = setTimeout(() => {
   const error = new Error(`Command timed out after ${timeoutMs} ms`);
   error.name = 'TimeoutError';
-  reject(error);
-  return;
-}
+  settleFailure(error, true);
+}, timeoutMs);
+
+child.on('close', (code) => {
+  if (settled) return;
+  settled = true;
+  cleanup();
+
+  const stdout = stdoutChunks.length > 0
+    ? Encoder.decodeBuffer(Buffer.concat(stdoutChunks))
+    : '';
+  const stderr = stderrChunks.length > 0
+    ? Encoder.decodeBuffer(Buffer.concat(stderrChunks))
+    : '';
+
+  if (code !== 0) {
+    resolve(stderr || stdout || `Command exited with code ${code}`);
+    return;
+  }
+
+  if (stderr) {
+    resolve(stdout ? `${stdout}\n${stderr}` : stderr);
+    return;
+  }
+  resolve(stdout);
+});
+
+child.on('error', (err) => {
+  if (settled) return;
+  settled = true;
+  cleanup();
+  resolve(`Command failed: ${err.message}`);
+});
 ```
 
-Leave the existing `code !== 0` block resolving `stderr || stdout || "Command exited with code ..."`. Do not throw or reject non-zero exits.
+`settleFailure` deliberately performs guard → cleanup → optional process-tree termination → reject in that order. It does not wait for `close` or `error`; those later events observe `settled` and return. Task 4 replaces only the still-existing spawn-error string resolution.
 
 - [ ] **Step 6: Run GREEN verification**
 
@@ -455,7 +514,7 @@ npx vitest run src/__tests__/agent/tool-execution.test.ts src/__tests__/agent/ru
 npm run typecheck
 ```
 
-Expected: all commands exit `0`; default and explicit delay tests pass, timeout is a structured failure, and non-zero remains structured success.
+Expected: all commands exit `0`; the fake-timer test observes timeout settlement without emitting a child terminal event, verifies cleanup-before-kill-before-result ordering, and confirms late child events cannot settle twice. Default/explicit delay and non-zero success remain green.
 
 - [ ] **Step 7: Review and commit Task 2**
 
@@ -477,8 +536,8 @@ git commit -m "feat: add configurable run_bash timeout"
 
 **Interfaces:**
 
-- Consumes: existing optional `ToolExecutionContext.signal`, Task 2’s `timeoutMs`, current `killProcessTree(pid)`, and existing `AbortError` classification in `executeToolCall`.
-- Produces: `createBashTool().executor(input, ctx)` observes both already-aborted and in-flight signals; the first timeout/Abort terminal cause wins; Abort calls `killProcessTree` and rejects an error named `AbortError`.
+- Consumes: existing optional `ToolExecutionContext.signal`, Task 2’s `settled`/`cleanup`/`settleFailure(error, terminateTree)` lifecycle, current `killProcessTree(pid)`, and existing `AbortError` classification in `executeToolCall`.
+- Produces: already-aborted signals throw `AbortError` before `spawn`; in-flight Abort reuses immediate settlement in strict guard → cleanup → tree kill → reject order; later `close`/`error` events return at the settled guard.
 
 - [ ] **Step 1: Add failing in-flight and already-aborted tests**
 
@@ -489,41 +548,57 @@ it('kills the process tree and returns failure(cancelled) on Abort', async () =>
   const child = makeChild();
   mocks.spawn.mockReturnValue(child);
   const controller = new AbortController();
+  const removeListenerSpy = vi.spyOn(
+    controller.signal,
+    'removeEventListener',
+  );
+  const settled = vi.fn();
 
   const execution = executeBash(
     { command: 'echo waiting', timeout_ms: 600_000 },
     controller.signal,
   );
+  void execution.then(settled);
   await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledOnce());
   controller.abort();
 
-  expect(mocks.killProcessTree).toHaveBeenCalledWith(4_242);
-  child.emit('close', null);
-  await expect(execution).resolves.toMatchObject({
+  await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+  expect(settled).toHaveBeenCalledWith(expect.objectContaining({
     status: 'failure',
-    failure: { kind: 'cancelled', stage: 'execution' },
-  });
+    failure: expect.objectContaining({
+      kind: 'cancelled',
+      stage: 'execution',
+    }),
+  }));
+  expect(removeListenerSpy).toHaveBeenCalledWith(
+    'abort',
+    expect.any(Function),
+  );
+  expect(mocks.killProcessTree).toHaveBeenCalledWith(4_242);
+  expect(removeListenerSpy.mock.invocationCallOrder[0])
+    .toBeLessThan(mocks.killProcessTree.mock.invocationCallOrder[0]);
+  expect(mocks.killProcessTree.mock.invocationCallOrder[0])
+    .toBeLessThan(settled.mock.invocationCallOrder[0]);
+
+  child.emit('close', 0);
+  child.emit('error', new Error('late child error'));
+  await Promise.resolve();
+  expect(settled).toHaveBeenCalledTimes(1);
 });
 
-it('kills the process tree for an already-aborted signal', async () => {
-  const child = makeChild();
-  mocks.spawn.mockReturnValue(child);
+it('returns cancelled before spawn for an already-aborted signal', async () => {
   const controller = new AbortController();
   controller.abort();
 
-  const execution = executeBash(
-    { command: 'echo waiting', timeout_ms: 600_000 },
+  await expect(executeBash(
+    { command: 'echo never-started', timeout_ms: 600_000 },
     controller.signal,
-  );
-  await vi.waitFor(() => {
-    expect(mocks.killProcessTree).toHaveBeenCalledWith(4_242);
-  });
-  child.emit('close', null);
-
-  await expect(execution).resolves.toMatchObject({
+  )).resolves.toMatchObject({
     status: 'failure',
     failure: { kind: 'cancelled', stage: 'execution' },
   });
+  expect(mocks.spawn).not.toHaveBeenCalled();
+  expect(mocks.killProcessTree).not.toHaveBeenCalled();
 });
 ```
 
@@ -535,9 +610,9 @@ Run:
 npx vitest run src/__tests__/agent/run-bash-tool.test.ts -t "Abort|aborted signal"
 ```
 
-Expected: FAIL because the current executor ignores its optional context and `killProcessTree` is not called.
+Expected: FAIL because the current executor ignores its optional context: in-flight Abort does not settle, and an already-aborted signal still reaches `spawn`.
 
-- [ ] **Step 3: Consume `ctx.signal` and preserve first terminal cause**
+- [ ] **Step 3: Reject an already-aborted signal before spawn**
 
 Change the executor signature to:
 
@@ -545,101 +620,54 @@ Change the executor signature to:
 executor: async (input, ctx) => {
 ```
 
-Replace `let timedOut = false` with:
+Immediately after reading `command` and `timeoutMs`, before environment-policy work and before `new Promise` calls `spawn`, add:
 
 ```ts
-let terminationError: Error | undefined;
-let settled = false;
-```
-
-After stdout/stderr listener setup, define a single termination request path:
-
-```ts
-const requestTermination = (error: Error): void => {
-  if (terminationError || settled) return;
-  terminationError = error;
-  if (child.pid) killProcessTree(child.pid);
-};
-
-const timer = setTimeout(() => {
-  const error = new Error(`Command timed out after ${timeoutMs} ms`);
-  error.name = 'TimeoutError';
-  requestTermination(error);
-}, timeoutMs);
-
-const abortHandler = (): void => {
+if (ctx?.signal?.aborted) {
   const error = new Error('Command aborted');
   error.name = 'AbortError';
-  requestTermination(error);
-};
-
-const cleanup = (): void => {
-  clearTimeout(timer);
-  ctx?.signal?.removeEventListener('abort', abortHandler);
-};
-
-if (ctx?.signal?.aborted) {
-  abortHandler();
-} else {
-  ctx?.signal?.addEventListener('abort', abortHandler, { once: true });
+  throw error;
 }
 ```
 
-This replaces Task 2’s `timedOut` flag and timer block; do not keep both mechanisms.
+- [ ] **Step 4: Extend Task 2 cleanup for in-flight Abort**
 
-- [ ] **Step 4: Settle close/error events once and prioritize termination**
-
-At the start of the `close` handler, add the settled guard and cleanup, then reject the recorded terminal cause before decoding output:
+Inside the Promise, add an optional handler variable beside Task 2’s `timer` declaration:
 
 ```ts
-child.on('close', (code) => {
-  if (settled) return;
-  settled = true;
-  cleanup();
-
-  if (terminationError) {
-    reject(terminationError);
-    return;
-  }
-
-  const stdout = stdoutChunks.length > 0
-    ? Encoder.decodeBuffer(Buffer.concat(stdoutChunks))
-    : '';
-  const stderr = stderrChunks.length > 0
-    ? Encoder.decodeBuffer(Buffer.concat(stderrChunks))
-    : '';
-
-  if (code !== 0) {
-    resolve(stderr || stdout || `Command exited with code ${code}`);
-    return;
-  }
-
-  if (stderr) {
-    resolve(stdout ? `${stdout}\n${stderr}` : stderr);
-    return;
-  }
-  resolve(stdout);
-});
+let abortHandler: (() => void) | undefined;
 ```
 
-For this task, keep the existing spawn-error-as-string behavior when there is no terminal cause, but make an Abort-triggered child error preserve cancellation:
+Extend Task 2’s `cleanup` function without changing its timer cleanup:
 
 ```ts
-child.on('error', (err) => {
-  if (settled) return;
-  settled = true;
-  cleanup();
-  if (terminationError) {
-    reject(terminationError);
-    return;
+const cleanup = (): void => {
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    timer = undefined;
   }
-  resolve(`Command failed: ${err.message}`);
-});
+  if (abortHandler) {
+    ctx?.signal?.removeEventListener('abort', abortHandler);
+  }
+};
 ```
 
-Task 4 replaces only the final `resolve` in this handler.
+After assigning the timeout timer and after child `close`/`error` listeners are registered, attach the Abort handler through Task 2’s immediate settlement function:
 
-- [ ] **Step 5: Run GREEN and race-regression verification**
+```ts
+abortHandler = (): void => {
+  const error = new Error('Command aborted');
+  error.name = 'AbortError';
+  settleFailure(error, true);
+};
+
+ctx?.signal?.addEventListener('abort', abortHandler, { once: true });
+if (ctx?.signal?.aborted) abortHandler();
+```
+
+The post-registration `aborted` check closes the race between the pre-spawn check and listener attachment. If Abort fires during that interval, either the listener or this check invokes `abortHandler`; Task 2’s settled guard makes duplicate invocation harmless. No child event participates in producing the cancellation result.
+
+- [ ] **Step 5: Run GREEN and immediate-settlement verification**
 
 Run:
 
@@ -649,7 +677,7 @@ npx vitest run src/__tests__/agent/run-bash-tool.test.ts
 npm run typecheck
 ```
 
-Expected: all commands exit `0`; Abort is cancelled, timeout remains timeout, non-zero remains success, and each test settles exactly once.
+Expected: all commands exit `0`; already-aborted input never calls `spawn`, in-flight Abort settles without a child terminal event, cleanup happens before tree kill and result delivery, late child events are ignored, timeout remains immediate, and non-zero remains success.
 
 - [ ] **Step 6: Review and commit Task 3**
 
@@ -671,35 +699,46 @@ git commit -m "feat: cancel run_bash on abort"
 
 **Interfaces:**
 
-- Consumes: Task 3’s settled/cleanup/termination ordering and existing `executeToolCall` rule that an `Error` with a string `code` becomes `operational_error`.
-- Produces: unmodified code-bearing errors emitted by the spawned child reject the executor and become `failure(operational_error)`; no new error class or classifier branch.
+- Consumes: Task 3’s settled/cleanup ordering and existing exported `ToolOperationalError`, which `executeToolCall` already maps to `operational_error` with an optional code.
+- Produces: every child `error` is wrapped in `ToolOperationalError`, preserving a string code when present; plain errors are also guaranteed to become `failure(operational_error)` without a classifier change.
 
 - [ ] **Step 1: Add the failing spawn-error classification test**
 
 Append inside the focused test block:
 
 ```ts
-it('returns failure(operational_error) for a spawn error', async () => {
-  const child = makeChild();
-  mocks.spawn.mockReturnValue(child);
-  const spawnError = Object.assign(new Error('spawn failed'), {
-    code: 'ENOENT',
-  });
+it.each([
+  {
+    label: 'without code',
+    error: new Error('plain spawn failure'),
+    expectedCode: undefined,
+  },
+  {
+    label: 'with string code',
+    error: Object.assign(new Error('coded spawn failure'), { code: 'ENOENT' }),
+    expectedCode: 'ENOENT',
+  },
+])(
+  'returns failure(operational_error) for child error $label',
+  async ({ error, expectedCode }) => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
 
-  const execution = executeBash({ command: 'echo unavailable' });
-  await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledOnce());
-  child.emit('error', spawnError);
+    const execution = executeBash({ command: 'echo unavailable' });
+    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledOnce());
+    child.emit('error', error);
 
-  await expect(execution).resolves.toMatchObject({
-    status: 'failure',
-    failure: {
-      kind: 'operational_error',
-      stage: 'execution',
-      message: 'spawn failed',
-      code: 'ENOENT',
-    },
-  });
-});
+    await expect(execution).resolves.toMatchObject({
+      status: 'failure',
+      failure: {
+        kind: 'operational_error',
+        stage: 'execution',
+        message: error.message,
+        code: expectedCode,
+      },
+    });
+  },
+);
 ```
 
 - [ ] **Step 2: Run the spawn test and confirm RED**
@@ -710,23 +749,31 @@ Run:
 npx vitest run src/__tests__/agent/run-bash-tool.test.ts -t "spawn error"
 ```
 
-Expected: FAIL because Task 3 still resolves `"Command failed: spawn failed"`, so `executeToolCall` reports `status: 'success'`.
+Expected: both cases FAIL because Task 3 still resolves a `"Command failed: ..."` string, so `executeToolCall` reports `status: 'success'`. The plain-error case additionally proves that rejecting the original error would be insufficient because the existing classifier would rethrow it.
 
-- [ ] **Step 3: Reject the original emitted error**
+- [ ] **Step 3: Wrap every child error in `ToolOperationalError`**
 
-In the `child.on('error')` handler from Task 3, replace only:
-
-```ts
-resolve(`Command failed: ${err.message}`);
-```
-
-with:
+Add this value import in `src/agent/tool-registry.ts`:
 
 ```ts
-reject(err);
+import { ToolOperationalError } from './tool-execution.js';
 ```
 
-Keep the earlier `terminationError` branch, so a spawn/error event caused by killing an aborted or timed-out process cannot overwrite the first terminal cause. Do not import `ToolOperationalError`; the emitted Node error already carries the classifier’s required string `code`.
+`tool-execution.ts` imports `ToolRegistry` with `import type`, so this does not create a runtime module cycle.
+
+Replace Task 2’s complete child error handler with:
+
+```ts
+child.on('error', (err) => {
+  const code = 'code' in err
+    && typeof (err as NodeJS.ErrnoException).code === 'string'
+    ? (err as NodeJS.ErrnoException).code
+    : undefined;
+  settleFailure(new ToolOperationalError(err.message, code), false);
+});
+```
+
+Passing `false` prevents a spawn failure from attempting to kill a process tree. If timeout or Abort already settled, the shared guard returns before cleanup/reject, so a late child error cannot overwrite the earlier result.
 
 - [ ] **Step 4: Run GREEN and full focused verification**
 
@@ -739,11 +786,11 @@ npx vitest run src/__tests__/agent/tool-execution.test.ts src/__tests__/agent/ru
 npm run typecheck
 ```
 
-Expected: all commands exit `0`; spawn error is operational, while timeout, Abort, schema, default timeout, explicit timeout, and non-zero success tests remain green.
+Expected: all commands exit `0`; both plain and code-bearing child errors are operational, the optional string code is preserved, and timeout, Abort, schema, default timeout, explicit timeout, and non-zero success tests remain green.
 
 - [ ] **Step 5: Review and commit Task 4**
 
-Confirm the production diff is the one-line resolve-to-reject semantic change plus its focused test. Commit:
+Confirm the production diff contains only the `ToolOperationalError` import, the child error handler replacement, and its two focused cases. Commit:
 
 ```bash
 git add src/agent/tool-registry.ts src/__tests__/agent/run-bash-tool.test.ts
@@ -765,7 +812,16 @@ npm run typecheck
 npm test
 ```
 
-Expected: every command exits `0`. When `npm test` is launched through the newly updated `run_bash`, explicitly pass `timeout_ms: 600_000` to the tool call rather than changing the global default.
+The focused tests, targeted regressions, lint, and typecheck must exit `0`. Keep `npm test` as the real acceptance for the original command that exceeded 30 seconds. Launch it through the updated tool with this exact tool input rather than changing the default or invoking the command repeatedly:
+
+```json
+{
+  "command": "npm test",
+  "timeout_ms": 600000
+}
+```
+
+Expected: `npm test` completes within the explicit 10-minute tool budget and exits `0`. If its only failure is a confirmed, unrelated pre-existing/flaky test, record the command, elapsed time, failing test name, exact failure output, and why it is outside the five-file implementation diff. Do not fix unrelated code, weaken this feature’s focused gates, or rerun the full gate hoping for a different result. Report the full-suite acceptance as blocked by that recorded pre-existing failure while retaining the passing focused evidence.
 
 Do not run `npm run build` in this worktree: that script invokes `gen:prompts` and would touch the protected existing `src/prompts/planner.generated.ts` modification. `npm run typecheck` supplies the required TypeScript compilation check without generation.
 
