@@ -53,11 +53,29 @@
 **Interfaces:**
 - Consumes: `wrapLineWithSpans(line, firstLineWidth, continuationWidth)`、`stringWidth(text)`、`tokenize(text)` 与 `styledCharsFromTokens(tokens)`。
 - Produces: `USER_PROMPT: '❯ '`、`shouldShowUserPrompt(text: string, width: number): boolean`、`layoutUserBlockRows(text: string, width: number): string[]`。
-- Invariant: 返回数组至少一行；只有第 0 行可能包含合成的 `USER_PROMPT`；返回值不含为背景添加的尾随空格。
+- Invariant: 返回数组至少一行；只有第 0 行可能包含合成的 `USER_PROMPT`；返回值不含为背景添加的尾随空格，但允许返回完全来自原文缩进的空格行。
 
-- [ ] **Step 1: 写失败测试，锁定 Tab、空逻辑行和原文不变**
+- [ ] **Step 1: 探查共享折行器的前导空格行为**
 
-Create `src/__tests__/tui/inline-v2/user-block-layout.test.ts` with these first tests:
+Run this read-only probe before writing the UserBlock helper:
+
+```bash
+node --import tsx --input-type=module -e "import { wrapLineWithSpans } from './src/tui/state/wrap-line.ts'; const input='    sudo whoami'; for (const width of [4,8,11]) { const rows=wrapLineWithSpans(input,width,width).map((span)=>span.text); console.log(JSON.stringify({width,rows})); }"
+```
+
+Expected current output:
+
+```text
+{"width":4,"rows":["","sudo","whoa","mi"]}
+{"width":8,"rows":["","sudo who","ami"]}
+{"width":11,"rows":["    sudo","whoami"]}
+```
+
+This proves that the shared word-boundary policy drops the four leading spaces at widths 4 and 8. The fix must stay local to `user-block-layout.ts`; do not modify `src/tui/state/wrap-line.ts` or change its shared word-wrap policy.
+
+- [ ] **Step 2: 写一组完整失败测试，锁定 Tab、缩进、空行、prefix 与 Unicode**
+
+Create `src/__tests__/tui/inline-v2/user-block-layout.test.ts` with the complete Task 1 test set before writing production code:
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -92,10 +110,48 @@ describe('layoutUserBlockRows', () => {
     const input = 'a\n\t中🤖';
     expect(layoutUserBlockRows(input, 6)).toEqual(layoutUserBlockRows(input, 6));
   });
+
+  it.each<[number, string[]]>([
+    [4, ['❯ ', '    ', 'sudo', 'whoa', 'mi']],
+    [8, ['❯ ', '    sudo', 'whoami']],
+    [11, ['❯ ', '    sudo', 'whoami']],
+  ])('preserves four source-derived leading spaces at width %i', (width, expected) => {
+    expect(layoutUserBlockRows('\n\tsudo whoami', width)).toEqual(expected);
+  });
+
+  it('shows the prompt at width 3 for ASCII but omits it for CJK', () => {
+    expect(shouldShowUserPrompt('a', 3)).toBe(true);
+    expect(layoutUserBlockRows('a', 3)).toEqual(['❯ a']);
+
+    expect(shouldShowUserPrompt('中', 3)).toBe(false);
+    expect(layoutUserBlockRows('中', 3)).toEqual(['中']);
+  });
+
+  it('uses the full local width after the first physical row', () => {
+    expect(layoutUserBlockRows('abcd', 3)).toEqual(['❯ a', 'bcd']);
+  });
+
+  it('keeps CJK, emoji ZWJ sequences and combining graphemes intact', () => {
+    expect(layoutUserBlockRows('中文', 2)).toEqual(['中', '文']);
+    expect(layoutUserBlockRows('👨‍👩‍👧‍👦x', 1)).toEqual(['👨‍👩‍👧‍👦', 'x']);
+    expect(layoutUserBlockRows('e\u0301x', 1)).toEqual(['e\u0301', 'x']);
+  });
+
+  it('allows overflow only for one indivisible grapheme wider than width', () => {
+    const rows = layoutUserBlockRows('中a', 1);
+    expect(rows).toEqual(['中', 'a']);
+    expect(stringWidth(rows[0]!)).toBe(2);
+    expect(stringWidth(rows[1]!)).toBeLessThanOrEqual(1);
+  });
+
+  it('clamps non-finite and non-positive widths without dropping text', () => {
+    expect(layoutUserBlockRows('ab', 0).join('')).toBe('ab');
+    expect(layoutUserBlockRows('ab', Number.NaN).join('')).toBe('ab');
+  });
 });
 ```
 
-- [ ] **Step 2: 运行测试，确认 RED 原因正确**
+- [ ] **Step 3: 运行完整测试集，确认一次 RED**
 
 Run:
 
@@ -103,55 +159,9 @@ Run:
 npx vitest run src/__tests__/tui/inline-v2/user-block-layout.test.ts
 ```
 
-Expected: FAIL because `src/tui/inline-v2/user-block-layout.ts` does not exist. Do not create a test stub that returns constants.
+Expected: FAIL solely because `src/tui/inline-v2/user-block-layout.ts` does not exist, after Vitest successfully parses the complete file containing every Tab, leading-space, blank-line, prefix, grapheme and invalid-width case. Do not create a test stub that returns constants.
 
-- [ ] **Step 3: 扩展失败测试，锁定动态 prefix 与 grapheme 宽度**
-
-Add these tests to the same `describe` block before writing production code:
-
-```ts
-it('shows the prompt at width 3 for ASCII but omits it for CJK', () => {
-  expect(shouldShowUserPrompt('a', 3)).toBe(true);
-  expect(layoutUserBlockRows('a', 3)).toEqual(['❯ a']);
-
-  expect(shouldShowUserPrompt('中', 3)).toBe(false);
-  expect(layoutUserBlockRows('中', 3)).toEqual(['中']);
-});
-
-it('uses the full local width after the first physical row', () => {
-  expect(layoutUserBlockRows('abcd', 3)).toEqual(['❯ a', 'bcd']);
-});
-
-it('keeps CJK, emoji ZWJ sequences and combining graphemes intact', () => {
-  expect(layoutUserBlockRows('中文', 2)).toEqual(['中', '文']);
-  expect(layoutUserBlockRows('👨‍👩‍👧‍👦x', 1)).toEqual(['👨‍👩‍👧‍👦', 'x']);
-  expect(layoutUserBlockRows('e\u0301x', 1)).toEqual(['e\u0301', 'x']);
-});
-
-it('allows overflow only for one indivisible grapheme wider than width', () => {
-  const rows = layoutUserBlockRows('中a', 1);
-  expect(rows).toEqual(['中', 'a']);
-  expect(stringWidth(rows[0]!)).toBe(2);
-  expect(stringWidth(rows[1]!)).toBeLessThanOrEqual(1);
-});
-
-it('clamps non-finite and non-positive widths without dropping text', () => {
-  expect(layoutUserBlockRows('ab', 0).join('')).toBe('ab');
-  expect(layoutUserBlockRows('ab', Number.NaN).join('')).toBe('ab');
-});
-```
-
-- [ ] **Step 4: 再次运行测试，确认仍为 RED**
-
-Run:
-
-```bash
-npx vitest run src/__tests__/tui/inline-v2/user-block-layout.test.ts
-```
-
-Expected: FAIL for the same missing-module reason; the added assertions must be collected by Vitest and must not contain syntax errors.
-
-- [ ] **Step 5: 写最小生产实现**
+- [ ] **Step 4: 写最小生产实现**
 
 Create `src/tui/inline-v2/user-block-layout.ts` with this implementation shape:
 
@@ -183,6 +193,47 @@ function shouldShowPromptForFirstLine(firstLine: string, width: number): boolean
     : USER_PROMPT_WIDTH + stringWidth(grapheme) <= width;
 }
 
+function wrapUserLinePreservingLeadingSpaces(
+  line: string,
+  firstWidthRaw: number,
+  continuationWidthRaw: number,
+): string[] {
+  const firstWidth = Math.max(1, firstWidthRaw);
+  const continuationWidth = Math.max(1, continuationWidthRaw);
+  const leadingSpaces = line.match(/^ */u)?.[0] ?? '';
+  if (leadingSpaces === '') {
+    return wrapLineWithSpans(line, firstWidth, continuationWidth).map((span) => span.text);
+  }
+
+  const body = line.slice(leadingSpaces.length);
+  const rows: string[] = [];
+  let remainingSpaces = leadingSpaces;
+  let currentWidth = firstWidth;
+
+  while (
+    remainingSpaces.length >= currentWidth
+    && (remainingSpaces.length > currentWidth || body !== '')
+  ) {
+    rows.push(remainingSpaces.slice(0, currentWidth));
+    remainingSpaces = remainingSpaces.slice(currentWidth);
+    currentWidth = continuationWidth;
+  }
+
+  if (body === '') {
+    if (remainingSpaces !== '' || rows.length === 0) rows.push(remainingSpaces);
+    return rows;
+  }
+
+  const wrappedBody = wrapLineWithSpans(
+    body,
+    currentWidth - remainingSpaces.length,
+    continuationWidth,
+  ).map((span) => span.text);
+  rows.push(remainingSpaces + wrappedBody[0]!);
+  rows.push(...wrappedBody.slice(1));
+  return rows;
+}
+
 export function shouldShowUserPrompt(text: string, width: number): boolean {
   const normalized = renderCopy(text);
   const firstLine = normalized.split('\n', 1)[0] ?? '';
@@ -202,13 +253,13 @@ export function layoutUserBlockRows(text: string, width: number): string[] {
     const firstWidth = isFirstLogicalLine && showPrompt
       ? localWidth - USER_PROMPT_WIDTH
       : localWidth;
-    const spans = wrapLineWithSpans(line, firstWidth, localWidth);
+    const wrappedRows = wrapUserLinePreservingLeadingSpaces(line, firstWidth, localWidth);
 
-    spans.forEach((span, spanIndex) => {
-      const prefix = isFirstLogicalLine && spanIndex === 0 && showPrompt
+    wrappedRows.forEach((wrappedRow, rowIndex) => {
+      const prefix = isFirstLogicalLine && rowIndex === 0 && showPrompt
         ? USER_PROMPT
         : '';
-      rows.push(prefix + span.text);
+      rows.push(prefix + wrappedRow);
     });
   }
 
@@ -216,9 +267,9 @@ export function layoutUserBlockRows(text: string, width: number): string[] {
 }
 ```
 
-Do not modify `src/tui/state/wrap-line.ts`; its existing tokenizer already segments graphemes.
+`wrapUserLinePreservingLeadingSpaces` is intentionally private and UserBlock-specific. Rows containing only spaces represent source-derived indentation, not background padding. Do not modify `src/tui/state/wrap-line.ts`; its existing tokenizer still supplies grapheme-safe wrapping for the non-indent body.
 
-- [ ] **Step 6: 运行当前测试，确认 GREEN**
+- [ ] **Step 5: 运行当前测试，确认 GREEN**
 
 Run:
 
@@ -226,9 +277,9 @@ Run:
 npx vitest run src/__tests__/tui/inline-v2/user-block-layout.test.ts
 ```
 
-Expected: PASS with all UserBlock layout cases green. If the existing word-wrap policy changes an assertion, diagnose the returned physical rows; do not weaken the grapheme, prefix, Tab, or no-padding contracts.
+Expected: PASS with all UserBlock layout cases green. Widths 4, 8 and 11 must retain exactly four source-derived leading spaces even though the Step 1 shared-wrapper probe loses them at narrower widths. Do not weaken the grapheme, prefix, Tab, leading-space or no-background-padding contracts.
 
-- [ ] **Step 7: 提交 Task 1**
+- [ ] **Step 6: 提交 Task 1**
 
 ```bash
 git add src/tui/inline-v2/user-block-layout.ts src/__tests__/tui/inline-v2/user-block-layout.test.ts
@@ -255,6 +306,7 @@ Expected: one commit containing only the new pure layout module and its tests.
 Update imports in `src/__tests__/tui/inline-v2/transcript-block-line.test.tsx`:
 
 ```ts
+import { styledCharsFromTokens, tokenize } from '@alcalzone/ansi-tokenize';
 import stringWidth from 'string-width';
 import { ThemeProvider } from '../../../tui/state/theme-context.js';
 import { darkTheme, lightTheme, type Theme } from '../../../utils/theme.js';
@@ -271,39 +323,56 @@ function renderUser(text: string, cols: number, theme: Theme = darkTheme): strin
     </ThemeProvider>,
   ).lastFrame() ?? '';
 }
+
+const BG_MUTED_CASES: ReadonlyArray<readonly [string, Theme, string]> = [
+  ['dark-derived', { ...darkTheme, bgMuted: '#ff00ff' }, '\u001b[105m'],
+  ['light-derived', { ...lightTheme, bgMuted: '#00ffff' }, '\u001b[106m'],
+];
+
+function styleCodesForCharacter(raw: string, value: string): string[] {
+  const character = styledCharsFromTokens(tokenize(raw)).find((entry) => entry.value === value);
+  expect(character).toBeDefined();
+  return character!.styles.map((style) => style.code);
+}
 ```
 
 Add these tests inside the existing `describe('TranscriptBlockLine')`:
 
 ```tsx
-it('renders multiline user input as one continuous full-width background block', () => {
-  const raw = renderUser('请执行：\n\n\tsudo whoami', 12);
-  const visible = stripAnsi(raw).split('\n').map((line) => line.trimEnd());
-  const physicalLines = stripAnsi(raw).split('\n');
+it.each(BG_MUTED_CASES)(
+  'renders every physical row with the exact %s bgMuted sentinel',
+  (_name, theme, backgroundAnsi) => {
+    const raw = renderUser('请执行：\n\n\tsudo whoami', 12, theme);
+    const rawLines = raw.split('\n');
+    const visible = stripAnsi(raw).split('\n').map((line) => line.trimEnd());
+    const physicalLines = stripAnsi(raw).split('\n');
 
-  expect(visible).toEqual(['❯ 请执行：', '', '    sudo', 'whoami']);
-  expect(physicalLines).toHaveLength(4);
-  expect(physicalLines.every((line) => stringWidth(line) === 11)).toBe(true);
-  expect(raw).toMatch(/\u001b\[(?:4[0-7]|10[0-7]|48;(?:2;\d+;\d+;\d+|5;\d+))m/);
-});
+    expect(visible).toEqual(['❯ 请执行：', '', '    sudo', 'whoami']);
+    expect(physicalLines).toHaveLength(4);
+    expect(physicalLines.every((line) => stringWidth(line) === 11)).toBe(true);
+    expect(rawLines.every((line) => line.includes(backgroundAnsi))).toBe(true);
+  },
+);
 
-it('uses the active theme bgMuted value for the user block background', () => {
-  const dark = renderUser('x\n\ny', 10, darkTheme);
-  const light = renderUser('x\n\ny', 10, lightTheme);
+it('keeps green and bold styles on the marker but not the body regardless of ANSI order', () => {
+  const [, theme, backgroundAnsi] = BG_MUTED_CASES[0]!;
+  const raw = renderUser('plain question', 20, theme);
+  const markerCodes = styleCodesForCharacter(raw, '❯');
+  const bodyCodes = styleCodesForCharacter(raw, 'p');
 
-  expect(dark).not.toBe(light);
-  expect(stripAnsi(dark).split('\n')).toHaveLength(3);
-  expect(stripAnsi(light).split('\n')).toHaveLength(3);
-});
-
-it('keeps only the prompt marker green and bold', () => {
-  const raw = renderUser('plain question', 20);
-  expect(raw).not.toContain('\u001b[32m\u001b[1m❯ plain question');
+  expect(markerCodes).toEqual(expect.arrayContaining([
+    '\u001b[32m',
+    '\u001b[1m',
+    backgroundAnsi,
+  ]));
+  expect(bodyCodes).toContain(backgroundAnsi);
+  expect(bodyCodes).not.toContain('\u001b[32m');
+  expect(bodyCodes).not.toContain('\u001b[1m');
   expect(stripAnsi(raw).trimEnd()).toContain('❯ plain question');
 });
 ```
 
-The width assertion intentionally uses `cols - 1`, matching existing `getUsableWidth` terminal safety.
+The exact `105m` and `106m` sentinel assertions rely on the repository's `vitest.config.ts` setting `FORCE_COLOR='1'`. They prove that every normal, wrapped and blank physical row consumes the active `theme.bgMuted`, while the width assertion intentionally uses `cols - 1` to match existing `getUsableWidth` terminal safety. Do not replace them with a broad background-color regex or a `dark !== light` assertion.
 
 - [ ] **Step 2: 运行测试，确认 RED 原因正确**
 
@@ -380,7 +449,7 @@ Run:
 npx vitest run src/__tests__/tui/inline-v2/transcript-block-line.test.tsx src/__tests__/tui/inline-v2/user-block-layout.test.ts
 ```
 
-Expected: PASS. The frame must contain background ANSI, the stripped rows must keep the blank line and four-space indentation, and the existing marker-only color test must remain green.
+Expected: PASS. Every raw frame line must contain its exact `bgMuted` sentinel, the stripped rows must keep the blank line and four-space indentation, and parsed character styles must prove that only the marker receives green and bold.
 
 - [ ] **Step 5: 运行现有消息间距回归，确认没有把内部背景与外部 margin 混合**
 
@@ -414,7 +483,7 @@ Expected: one commit containing only UserBlock Ink wiring and frame tests.
 - Produces: Assistant-only `AssistantTokenRenderRow` union and `layoutCompletedAssistantTokens(tokens: Token[], availableWidth: number): AssistantTokenRenderRow[]`.
 - Isolation: This row union is not added to `src/tui/types.ts`, `src/tui/transcript-types.ts` or any shared model; only `AssistantBlockLine` and its direct tests may import it.
 
-- [ ] **Step 1: 写失败测试，锁定最终跨 token 边界**
+- [ ] **Step 1: 写一组完整失败测试，锁定跨 token 边界与真实 token 内部空行**
 
 Create `src/__tests__/tui/inline-v2/assistant-token-layout.test.ts`:
 
@@ -465,16 +534,54 @@ describe('layoutCompletedAssistantTokens', () => {
       .toEqual(['one', '', 'two']);
   });
 
-  it('preserves an internal blank row inside one non-space token', () => {
-    const tokens = [
-      { type: 'paragraph', raw: 'a\n\nb', text: 'a b', tokens: [] },
-    ] as unknown as Token[];
+  it.each<[string, string, string, string[]]>([
+    [
+      'fenced code',
+      'code',
+      'before\n\n~~~\nline one\n\nline three\n~~~\n\nafter',
+      ['before', '', '~~~', 'line one', '', 'line three', '~~~', '', 'after'],
+    ],
+    [
+      'loose list',
+      'list',
+      'before\n\n- one\n\n- two\n\nafter',
+      ['before', '', '- one', '', '- two', '', 'after'],
+    ],
+    [
+      'blockquote',
+      'blockquote',
+      'before\n\n> first\n>\n> third\n\nafter',
+      ['before', '', '> first', '>', '> third', '', 'after'],
+    ],
+  ])('preserves the real internal blank row of one %s token', (
+    _name,
+    structuralType,
+    markdown,
+    expected,
+  ) => {
+    const tokens = lexer(markdown);
+    expect(tokens.filter((token) => token.type !== 'space').map((token) => token.type))
+      .toEqual(['paragraph', structuralType, 'paragraph']);
+    expect(visible(layoutCompletedAssistantTokens(tokens, 40))).toEqual(expected);
+  });
 
-    expect(visible(layoutCompletedAssistantTokens(tokens, 40)))
-      .toEqual(['a', '', 'b']);
+  it('keeps table layout rows and one blank boundary on each side', () => {
+    const rows = layoutCompletedAssistantTokens(lexer(
+      'before\n\n| A |\n| --- |\n| x |\n\nafter',
+    ), 20);
+    const lines = visible(rows);
+    const top = lines.findIndex((line) => line.startsWith('┌'));
+    const bottom = lines.findIndex((line) => line.startsWith('└'));
+
+    expect(top).toBeGreaterThan(1);
+    expect(lines[top - 1]).toBe('');
+    expect(lines[bottom + 1]).toBe('');
+    expect(lines[bottom + 2]).toBe('after');
   });
 });
 ```
+
+The `lexer(markdown)` assertion is part of the contract: the fenced code, loose list and blockquote fixtures must each contain exactly one structural token between the outer paragraphs, so their middle blank row is genuinely token-internal rather than an inter-token `space` boundary.
 
 - [ ] **Step 2: 运行测试，确认 RED 原因正确**
 
@@ -484,48 +591,9 @@ Run:
 npx vitest run src/__tests__/tui/inline-v2/assistant-token-layout.test.ts
 ```
 
-Expected: FAIL because `assistant-token-layout.ts` does not exist.
+Expected: FAIL solely because `assistant-token-layout.ts` does not exist, after Vitest successfully parses the complete file containing the boundary, consecutive-space, renderer-edge, fenced-code, loose-list, blockquote and table cases.
 
-- [ ] **Step 3: 扩展失败测试，锁定 code/list/blockquote/table 内部结构**
-
-Add these tests to the same `describe` block:
-
-```ts
-it.each([
-  ['fenced code', 'before\n\n```\ncode\n```\n\nafter', ['before', '', '```', 'code', '```', '', 'after']],
-  ['list', 'before\n\n- one\n- two\n\nafter', ['before', '', '- one', '- two', '', 'after']],
-  ['blockquote', 'before\n\n> quote\n> next\n\nafter', ['before', '', '> quote', '> next', '', 'after']],
-])('preserves %s token-internal rows', (_name, markdown, expected) => {
-  expect(visible(layoutCompletedAssistantTokens(lexer(markdown), 40)))
-    .toEqual(expected);
-});
-
-it('keeps table layout rows and one blank boundary on each side', () => {
-  const rows = layoutCompletedAssistantTokens(lexer(
-    'before\n\n| A |\n| --- |\n| x |\n\nafter',
-  ), 20);
-  const lines = visible(rows);
-  const top = lines.findIndex((line) => line.startsWith('┌'));
-  const bottom = lines.findIndex((line) => line.startsWith('└'));
-
-  expect(top).toBeGreaterThan(1);
-  expect(lines[top - 1]).toBe('');
-  expect(lines[bottom + 1]).toBe('');
-  expect(lines[bottom + 2]).toBe('after');
-});
-```
-
-- [ ] **Step 4: 再次运行测试，确认仍为 RED**
-
-Run:
-
-```bash
-npx vitest run src/__tests__/tui/inline-v2/assistant-token-layout.test.ts
-```
-
-Expected: FAIL for the missing production module, with every test file parsing successfully.
-
-- [ ] **Step 5: 写 Assistant 专用局部行实现**
+- [ ] **Step 3: 写 Assistant 专用局部行实现**
 
 Create `src/tui/inline-v2/assistant-token-layout.ts`:
 
@@ -603,7 +671,7 @@ export function layoutCompletedAssistantTokens(
 
 This implementation treats only explicit empty raw rows as external boundary candidates. A table row with `spans.length === 0` remains `kind: 'table'`, preserving the existing key-value table record separator.
 
-- [ ] **Step 6: 运行 token 布局测试，确认 GREEN**
+- [ ] **Step 4: 运行 token 布局测试，确认 GREEN**
 
 Run:
 
@@ -611,9 +679,9 @@ Run:
 npx vitest run src/__tests__/tui/inline-v2/assistant-token-layout.test.ts
 ```
 
-Expected: PASS for paragraph, consecutive space, renderer-edge blank, internal blank, code, list, blockquote and table cases.
+Expected: PASS for paragraph, consecutive space, renderer-edge blank, fenced-code internal blank, loose-list internal blank, blockquote internal blank and table cases.
 
-- [ ] **Step 7: 提交 Task 3**
+- [ ] **Step 5: 提交 Task 3**
 
 ```bash
 git add src/tui/inline-v2/assistant-token-layout.ts src/__tests__/tui/inline-v2/assistant-token-layout.test.ts
@@ -808,10 +876,6 @@ Expected: one commit containing only completed Assistant component wiring and it
 Before reporting implementation complete, preserve the terminal results for:
 
 ```bash
-npx vitest run src/__tests__/tui/inline-v2/user-block-layout.test.ts
-npx vitest run src/__tests__/tui/inline-v2/transcript-block-line.test.tsx
-npx vitest run src/__tests__/tui/inline-v2/assistant-token-layout.test.ts
-npx vitest run src/__tests__/tui/inline-v2/assistant-block-line.test.tsx src/__tests__/tui/inline-v2/assistant-block-line-interrupted.test.tsx src/__tests__/tui/inline-v2/assistant-block-line-table-fallback.test.tsx
 npx vitest run src/__tests__/tui/inline-v2/
 npm run typecheck
 npm run lint
