@@ -50,7 +50,9 @@ describe('build 模式权限：单工具归类', () => {
 
   describe('黄册子（写操作）→ 嘴上 ask', () => {
     // 遍历黄册子成员抽样验证（全 20 个太多，抽关键几个）
-    const writeSamples = ['write_file', 'edit_file', 'worktree', 'memory_write', 'spawn_agent'];
+    // 注意:spawn_agent/task 已重新归类为 DELEGATION_TOOLS(build 模式 allow),
+    // 不再属于 build-ask 的写工具抽样。见 checker-reason-code.test.ts delegation 用例。
+    const writeSamples = ['write_file', 'edit_file', 'worktree', 'memory_write'];
     for (const tool of writeSamples) {
       it(`${tool} 应判 ask（注意：流式路径会静默放行，见 streaming-permission-passthrough）`, () => {
         const decision = checker.check(tool, { path: 'x.txt', content: 'x' });

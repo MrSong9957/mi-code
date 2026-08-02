@@ -175,6 +175,19 @@ describe('postToolLogger', () => {
       logSpy.mockRestore();
     }
   });
+
+  // Hook 是诊断输出,不能替代最终 assistant 回复。
+  // turn-final-feedback 的分类器从不把 [Hook] 文本当作终端 assistant 回复;
+  // 这里锁定 Hook message 的形态,确保它携带的是 [Hook] 标记而非 当前状态: 状态块。
+  it('Hook message 是 [Hook] 诊断输出,绝非终端状态块', () => {
+    const hook = postToolLogger({
+      name: 'PostToolUse',
+      payload: { tool_name: 'task', output: 'work' },
+    });
+    expect(hook.message).toBe('[Hook] task done');
+    // 关键不变量:Hook message 绝不包含最终状态块的标记
+    expect(hook.message).not.toContain('当前状态：');
+  });
 });
 
 describe('sessionStartLogger', () => {

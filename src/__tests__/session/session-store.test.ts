@@ -63,6 +63,30 @@ describe('SessionStore', () => {
       expect(loaded[0]!.role).toBe('assistant');
       expect(Array.isArray(loaded[0]!.content)).toBe(true);
     });
+
+    // ★ uiOnly 持久化契约:final-feedback 状态块(uiOnly block)落盘后必须完整保留。
+    // sanitizer 只在 model-context 边界剔除;sessionStore.append/load 原样往返。
+    it('uiOnly text block 经 append/load 往返后完整保留(正文+uiOnly+顺序)', async () => {
+      const sid = 'test-uionly-persist';
+      const msg: Message = {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '正常回复正文' },
+          { type: 'text', text: '当前状态：部分完成\n失败或受阻位置：示例', uiOnly: true },
+        ],
+      };
+      await store.append(sid, msg);
+      const loaded = await store.load(sid);
+      expect(loaded).toHaveLength(1);
+      const blocks = loaded[0]!.content as Array<{ type: string; text: string; uiOnly?: true }>;
+      // 顺序不变
+      expect(blocks).toHaveLength(2);
+      // 第一个:正常正文,无 uiOnly
+      expect(blocks[0]).toEqual({ type: 'text', text: '正常回复正文' });
+      expect(blocks[0]!.uiOnly).toBeUndefined();
+      // 第二个:uiOnly 状态块,uiOnly:true 完整保留
+      expect(blocks[1]).toEqual({ type: 'text', text: '当前状态：部分完成\n失败或受阻位置：示例', uiOnly: true });
+    });
   });
 
   describe('list', () => {

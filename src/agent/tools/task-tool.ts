@@ -9,6 +9,8 @@ import type { ToolDefinition, ToolExecutor, StreamingLLMClient } from '../types.
 import type { ToolRegistry } from '../tool-registry.js';
 import { runSubagent } from '../subagent.js';
 import type { SubagentOptions, SubagentResult } from '../subagent.js';
+import type { SubagentJournalFactory } from '../subagent-journal.js';
+import { formatSubagentResult } from '../subagent-result-format.js';
 import type { SubagentModel } from '../roles.js';
 import type { WorktreeManager } from '../../worktree/worktree-manager.js';
 import type { ToolExecutionRuntime } from '../tool-execution.js';
@@ -31,6 +33,14 @@ export function createTaskTool(
   clientProvider?: SubagentClientProvider,
   /** 依赖注入：测试时传入 mock，生产路径留空走真实 runSubagent */
   runSubagentFn: SubagentRunner = runSubagent,
+  /**
+   * 子代理工作日志工厂(可靠性路径)。
+   *
+   * 每次前台子代理执行调用一次,创建一个绑定到新 executionId 的独立 journal,
+   * 透传给 runSubagentFn。与 spawn_agent 走同一套可靠性路径。
+   * 不传时(LEGACY)行为不变。
+   */
+  journalFactory?: SubagentJournalFactory,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
   return {
     definition: {
@@ -70,13 +80,19 @@ export function createTaskTool(
         return `Error: worktree "${worktreeName}" requested but worktree support is not configured.`;
       }
 
+      // 子代理工作日志:在可选 worktree 解析后、调用 runner 前创建。
+      const journal = journalFactory?.();
+
       const result = await runSubagentFn(prompt, childTools, {
         cwd,
         executionRuntime,
         // task 用 general 角色（继承主模型），传 'inherit' 让 clientProvider 选主模型
         client: clientProvider ? clientProvider('inherit') : undefined,
+        journal,
       });
-      return result.text;
+      // 与 spawn_agent 共享同一个 status envelope(而非裸 result.text),
+      // 让主 agent 能区分完成/未完成/未验证。
+      return formatSubagentResult(result);
     },
   };
 }

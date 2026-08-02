@@ -11,7 +11,7 @@
 // 按业务规则分流（mode）→ VIP 快速通道（allow）→ 其余走人工（ask）。
 
 import type { PermissionMode, PermissionRule, PermissionDecision } from './types.js';
-import { WRITE_TOOLS, READ_ONLY_TOOLS } from './types.js';
+import { WRITE_TOOLS, READ_ONLY_TOOLS, DELEGATION_TOOLS } from './types.js';
 import { isDangerousBash, isWriteBash, isPathOutsideWorkspace, matchesRule } from './patterns.js';
 import { extractBashPaths } from './bash-paths.js';
 import {
@@ -125,10 +125,10 @@ export class PermissionChecker {
       const command = (input.command as string) || '';
       const astBehavior = this.commandPolicyHook(command, this.mode);
       if (astBehavior === 'deny') {
-        return { behavior: 'deny', reason: 'Command structural policy denied (AST gate)' };
+        return { behavior: 'deny', reason: 'Command structural policy denied (AST gate)', reason_code: 'permission.command_policy_denied' };
       }
       if (astBehavior === 'ask') {
-        return { behavior: 'ask', reason: 'Command structural policy requires review (AST gate)' };
+        return { behavior: 'ask', reason: 'Command structural policy requires review (AST gate)', reason_code: 'permission.command_policy_denied' };
       }
       // 'allow' 或 null: 继续走原管道(不放松硬门)
     }
@@ -138,21 +138,21 @@ export class PermissionChecker {
       const command = (input.command as string) || '';
       // 1a. 危险命令黑名单（sudo/rm-rf/$()/fork bomb...）
       if (isDangerousBash(command)) {
-        return { behavior: 'deny', reason: 'Dangerous command blocked by built-in policy' };
+        return { behavior: 'deny', reason: 'Dangerous command blocked by built-in policy', reason_code: 'permission.dangerous_command' };
       }
       // 1b. 路径围栏（Phase 1：解析 + 路径越界检测）
       // 解析命令里的路径参数，发现指向工作区外的 → deny；
       // 解析失败/变量未知 → ask（不自动放行，升级人审）。
       const { paths, parseFailed, unresolvableVars } = extractBashPaths(command);
       if (parseFailed) {
-        return { behavior: 'ask', reason: 'Bash command unparseable, needs review' };
+        return { behavior: 'ask', reason: 'Bash command unparseable, needs review', reason_code: 'permission.command_unparseable' };
       }
       if (unresolvableVars) {
-        return { behavior: 'ask', reason: 'Bash command has unresolvable variable, needs review' };
+        return { behavior: 'ask', reason: 'Bash command has unresolvable variable, needs review', reason_code: 'permission.command_unresolvable_var' };
       }
       for (const p of paths) {
         if (isPathOutsideWorkspace(p, this.workdir)) {
-          return { behavior: 'deny', reason: `Bash touches path outside workspace: ${p}` };
+          return { behavior: 'deny', reason: `Bash touches path outside workspace: ${p}`, reason_code: 'permission.path_outside_workspace' };
         }
       }
     }
@@ -160,14 +160,14 @@ export class PermissionChecker {
       const filePath = (input.path as string) || '';
       if (filePath && isPathOutsideWorkspace(filePath, this.workdir)) {
         const op = toolName === 'read_file' ? 'Reading' : 'Writing';
-        return { behavior: 'deny', reason: `${op} outside workspace is blocked by built-in policy` };
+        return { behavior: 'deny', reason: `${op} outside workspace is blocked by built-in policy`, reason_code: 'permission.path_outside_workspace' };
       }
     }
 
     // ── 闸门 2：用户 deny 规则 ──
     for (const rule of this.rules) {
       if (rule.behavior === 'deny' && matchesRule(rule, toolName, input)) {
-        return { behavior: 'deny', reason: `Matched deny rule (tool=${rule.tool})` };
+        return { behavior: 'deny', reason: `Matched deny rule (tool=${rule.tool})`, reason_code: 'permission.rule_deny' };
       }
     }
 
@@ -178,7 +178,7 @@ export class PermissionChecker {
       if (FILE_WRITE_TOOLS.has(toolName) && this.planDir) {
         const filePath = (input.path as string) || '';
         if (filePath && !isPathOutsideWorkspace(filePath, this.planDir)) {
-          return { behavior: 'allow', reason: 'Plan mode allows writing inside plan dir' };
+          return { behavior: 'allow', reason: 'Plan mode allows writing inside plan dir', reason_code: 'permission.default' };
         }
       }
       // run_bash 精细判定：写命令（mkdir/echo>/git commit/...）deny，只读命令（ls/cat/grep）allow
@@ -186,25 +186,25 @@ export class PermissionChecker {
       if (toolName === 'run_bash') {
         const command = (input.command as string) || '';
         if (isWriteBash(command)) {
-          return { behavior: 'deny', reason: 'Plan mode blocks write bash commands' };
+          return { behavior: 'deny', reason: 'Plan mode blocks write bash commands', reason_code: 'permission.plan_write_blocked' };
         }
-        return { behavior: 'allow', reason: 'Plan mode allows read-only bash commands' };
+        return { behavior: 'allow', reason: 'Plan mode allows read-only bash commands', reason_code: 'permission.default' };
       }
       if (WRITE_TOOLS.includes(toolName)) {
-        return { behavior: 'deny', reason: 'Plan mode blocks write operations' };
+        return { behavior: 'deny', reason: 'Plan mode blocks write operations', reason_code: 'permission.plan_write_blocked' };
       }
-      return { behavior: 'allow', reason: 'Plan mode allows read operations' };
+      return { behavior: 'allow', reason: 'Plan mode allows read operations', reason_code: 'permission.default' };
     }
 
     if (this.mode === 'auto') {
       // auto 模式：危险命令已在闸门1挡住，其余自动放行
-      return { behavior: 'allow', reason: 'Auto mode allows this operation' };
+      return { behavior: 'allow', reason: 'Auto mode allows this operation', reason_code: 'permission.default' };
     }
 
     // ── 闸门 4：用户 allow 规则 ──
     for (const rule of this.rules) {
       if (rule.behavior === 'allow' && matchesRule(rule, toolName, input)) {
-        return { behavior: 'allow', reason: `Matched allow rule (tool=${rule.tool})` };
+        return { behavior: 'allow', reason: `Matched allow rule (tool=${rule.tool})`, reason_code: 'permission.rule_allow' };
       }
     }
 
@@ -212,16 +212,22 @@ export class PermissionChecker {
     // 用户 ask 规则显式要求确认
     for (const rule of this.rules) {
       if (rule.behavior === 'ask' && matchesRule(rule, toolName, input)) {
-        return { behavior: 'ask', reason: `Matched ask rule (tool=${rule.tool})` };
+        return { behavior: 'ask', reason: `Matched ask rule (tool=${rule.tool})`, reason_code: 'permission.default' };
       }
     }
 
+    // 委派工具(派子代理):build 模式静默 allow。
+    // 派代理本身不直接改文件系统;子代理内部工具仍由 PermissionChecker + origin silent policy 约束。
+    if (DELEGATION_TOOLS.includes(toolName)) {
+      return { behavior: 'allow', reason: 'Delegation tools are allowed by default in build mode', reason_code: 'permission.default' };
+    }
+
     if (READ_ONLY_TOOLS.includes(toolName)) {
-      return { behavior: 'allow', reason: 'Read operations are safe by default' };
+      return { behavior: 'allow', reason: 'Read operations are safe by default', reason_code: 'permission.default' };
     }
 
     // 写操作需用户确认
-    return { behavior: 'ask', reason: 'Write operation needs user confirmation' };
+    return { behavior: 'ask', reason: 'Write operation needs user confirmation', reason_code: 'permission.user_confirmation_required' };
   }
 
   /**
@@ -255,9 +261,10 @@ export class PermissionChecker {
     // 1. 复用 legacy 四步管道——绝不重复实现规则评估
     const legacy = this.check(toolName, input);
 
-    // 2. 映射 legacy.reason → 稳定 (reason_code, risk_kind, deciding_layer)
-    //    用大小写不敏感的子串匹配；顺序敏感（先匹配更具体的危险类）。
-    const mapped = mapLegacyReason(legacy.reason);
+    // 2. 映射 legacy → 稳定 (reason_code, risk_kind, deciding_layer)
+    //    直读 legacy.reason_code(check() 每个 return 同源产出);risk_kind/deciding_layer
+    //    按对照表查 META。不再用子串匹配 reason 文本。
+    const mapped = mapLegacyReason(legacy);
 
     // 3. provenance：规则匹配的派生信息不易在 check() 外拿到（check() 只返回 reason），
     //    所以这里用稳定占位 'permission:rules'；非规则匹配的默认走 'permission:builtin''。
@@ -291,71 +298,30 @@ export class PermissionChecker {
 }
 
 /**
- * 把 legacy check() 的自由文本 reason 映射成稳定机器码（spec §11.7）。
+ * 直读 PermissionDecision.reason_code(由 check() 同源产出)。
  *
- * 注意：用大小写不敏感的子串匹配；顺序敏感——危险类必须先于通用类匹配。
- * human_reason 保留原文本，但不参与本函数的任何分支判断（这里只看 reason 字符串本身，
- * 不看 human_reason；分支依据是 reason_code 而非 reason 文本）。
+ * 不再用子串匹配 reason 文本——check() 现在每个 return 直接带 reason_code,
+ * 本函数只透传 + 按对照表补 risk_kind/deciding_layer。
+ * risk_kind/deciding_layer 保持现有审计语义(见对照表),禁止用 reason_code.split 重算。
  */
-function mapLegacyReason(reason: string): {
+function mapLegacyReason(legacy: PermissionDecision): {
   reasonCode: string;
   riskKind: string;
   decidingLayer: string;
 } {
-  const r = reason.toLowerCase();
-  // 顺序敏感：危险命令 → 路径 → 不可解析 → plan → deny 规则 → allow 规则 → user 确认 → 默认
-  if (r.includes('dangerous command')) {
-    return {
-      reasonCode: 'permission.dangerous_command',
-      riskKind: 'dangerous_command',
-      decidingLayer: 'command',
-    };
-  }
-  if (r.includes('outside')) {
-    return {
-      reasonCode: 'permission.path_outside_workspace',
-      riskKind: 'path_violation',
-      decidingLayer: 'path',
-    };
-  }
-  if (r.includes('unparseable') || r.includes('cannot parse')) {
-    return {
-      reasonCode: 'permission.command_unparseable',
-      riskKind: 'unparseable_command',
-      decidingLayer: 'command',
-    };
-  }
-  if (r.includes('plan mode')) {
-    return {
-      reasonCode: 'permission.plan_write_blocked',
-      riskKind: 'mode_violation',
-      decidingLayer: 'permission',
-    };
-  }
-  if (r.includes('deny rule')) {
-    return {
-      reasonCode: 'permission.rule_deny',
-      riskKind: 'rule_deny',
-      decidingLayer: 'permission',
-    };
-  }
-  if (r.includes('allow rule')) {
-    return {
-      reasonCode: 'permission.rule_allow',
-      riskKind: 'rule_allow',
-      decidingLayer: 'permission',
-    };
-  }
-  if (r.includes('user confirmation') || r.includes('write operation')) {
-    return {
-      reasonCode: 'permission.user_confirmation_required',
-      riskKind: 'workspace_mutation',
-      decidingLayer: 'permission',
-    };
-  }
-  return {
-    reasonCode: 'permission.default',
-    riskKind: 'default',
-    decidingLayer: 'permission',
+  const rc = legacy.reason_code;
+  // 仅给"有独立审计语义"的码补 risk_kind/deciding_layer;其余统一 default。
+  // 对照 security-decision-integration.test.ts 已锁定的值。
+  const META: Record<string, { riskKind: string; decidingLayer: string }> = {
+    'permission.dangerous_command': { riskKind: 'dangerous_command', decidingLayer: 'command' },
+    'permission.path_outside_workspace': { riskKind: 'path_violation', decidingLayer: 'path' },
+    'permission.command_unparseable': { riskKind: 'unparseable_command', decidingLayer: 'command' },
+    'permission.command_unresolvable_var': { riskKind: 'unresolvable_variable', decidingLayer: 'command' },
+    'permission.plan_write_blocked': { riskKind: 'mode_violation', decidingLayer: 'permission' },
+    'permission.rule_deny': { riskKind: 'rule_deny', decidingLayer: 'permission' },
+    'permission.rule_allow': { riskKind: 'rule_allow', decidingLayer: 'permission' },
+    'permission.user_confirmation_required': { riskKind: 'workspace_mutation', decidingLayer: 'permission' },
   };
+  const meta = META[rc] ?? { riskKind: 'default', decidingLayer: 'permission' };
+  return { reasonCode: rc, riskKind: meta.riskKind, decidingLayer: meta.decidingLayer };
 }

@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import type { PermissionChecker } from '../permission/checker.js';
 import type { RuntimeSecurityGate } from '../permission/runtime-gate.js';
+import type { SessionAllowlist } from '../permission/session-allowlist.js';
+import {
+  applySubagentSilentPolicy,
+  rewriteToAllow,
+} from '../permission/subagent-silent-policy.js';
 import { freezeSnapshot } from './contracts/identities.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type {
@@ -83,6 +88,12 @@ export interface ToolExecutionRuntime {
   permissionChecker: PermissionChecker;
   runtimeGate: RuntimeSecurityGate;
   callbacks?: ToolExecutionCallbacks;
+  /**
+   * 主 Agent session 级 exact-match 授权缓存。
+   * 仅 origin=main 路径消费:build_write_confirmation ask 命中时改写为 allow(经 rewriteToAllow),
+   * gate onAuthorized 回调在 remember=true 时写入。deny/safety_uncertain 永不读 allowlist。
+   */
+  sessionAllowlist?: SessionAllowlist;
 }
 
 export class ToolOperationalError extends Error {
@@ -388,8 +399,32 @@ export async function executeToolCall(
       policy_version: '1',
     },
   );
+
+  // ── origin 路由:在 checkDecision 后、gate.execute 前改写 effectiveDecision ──
+  // tool executor 永远只有 runtimeGate.execute 一个执行入口(不变量)。
+  // deny/safety_uncertain 已被 checkDecision 先行拦截,到达此处时:
+  //   - origin=subagent → applySubagentSilentPolicy 静默分流(ask→allow/deny),仍走 gate
+  //   - origin=main + allowlist exact-match 命中 → rewriteToAllow 把 ask 改写为 allow,仍走 gate
+  // 三层正交过滤保证 deny/safety_uncertain 到不了 rewriteToAllow(allowlist 不覆盖 deny)。
+  const origin = context.origin ?? 'main';
+  let effectiveDecision = decision;
+
+  if (origin === 'subagent') {
+    // 子代理:按 reason_code 静默分流(ask→allow/deny 改写),仍走 gate。
+    effectiveDecision = applySubagentSilentPolicy(decision);
+  } else if (
+    decision.behavior === 'ask' &&
+    decision.reason_code === 'permission.user_confirmation_required' &&
+    runtime.sessionAllowlist?.has(call.name, executorInput) === true
+  ) {
+    // 主 Agent allowlist exact-match 命中 → 把 ask 改写成 allow(不绕过 gate)。
+    effectiveDecision = rewriteToAllow(decision);
+  }
+
+  // ★ 唯一执行入口:所有路径(子代理静默 / allowlist 命中 / 正常 ask)统一经 gate.execute。
+  // onAuthorized 回调写 allowlist(仅 main + remember);observer 异常不影响执行(gate 保证)。
   const gated = await runtime.runtimeGate.execute(
-    decision,
+    effectiveDecision,
     async (): Promise<ExecutorOutcome> => {
       try {
         return {
@@ -403,6 +438,15 @@ export async function executeToolCall(
         return { kind: 'threw', error };
       }
     },
+    origin === 'main'
+      ? {
+          onAuthorized: (action) => {
+            if (action.remember) {
+              runtime.sessionAllowlist?.add(call.name, executorInput);
+            }
+          },
+        }
+      : undefined,
   );
 
   if (gated.kind === 'denied') {

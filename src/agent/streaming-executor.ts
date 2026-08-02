@@ -57,6 +57,7 @@ export class StreamingToolExecutor {
   private readonly registry: ToolRegistry;
   private readonly runtime: ToolExecutionRuntime;
   private readonly signal?: AbortSignal;
+  private readonly origin: 'main' | 'subagent';
   private tools: TrackedTool[] = [];
   private discarded = false;
   private progressResolve?: () => void;
@@ -65,10 +66,12 @@ export class StreamingToolExecutor {
     registry: ToolRegistry,
     runtime: ToolExecutionRuntime,
     signal?: AbortSignal,
+    origin?: 'main' | 'subagent',
   ) {
     this.registry = registry;
     this.runtime = runtime;
     this.signal = signal;
+    this.origin = origin ?? 'main';
   }
 
   /**
@@ -131,7 +134,7 @@ export class StreamingToolExecutor {
         this.registry,
         tool.block,
         this.runtime,
-        { signal: this.signal },
+        { signal: this.signal, origin: this.origin },
       );
       tool.executionResult = executionResult;
       tool.results = [{ type: 'text', text: executionResult.output }];

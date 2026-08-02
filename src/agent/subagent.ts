@@ -15,6 +15,7 @@ import { runWithVercelAI } from './llm-vercel.js';
 import { streamingQuery } from './streaming-query.js';
 import { StreamEventBus } from './stream-event-bus.js';
 import { ToolRegistry } from './tool-registry.js';
+import { recoverSubagentWork, type SubagentJournal } from './subagent-journal.js';
 import { formatUnknownError } from '../utils/error-message.js';
 import type { RegisteredTool, StreamingLLMClient } from './types.js';
 import { ROLE_REGISTRY, filterToolsByRole, type Role } from './roles.js';
@@ -119,6 +120,14 @@ export interface SubagentOptions {
    * 未传时为空数组（legacy SubagentResult 不携带 deliverables）。
    */
   deliverables?: DeliverableReport[];
+  /**
+   * 子代理工作日志:把每条已完成的消息边界 awaited 落盘。
+   *
+   * provider 崩溃 / final turn 交白卷时,runSubagent 从 journal.load() 恢复已完成
+   * 的工作(已配对的工具结果 + assistant 文本),用有界内联文本替换 `(no final text)`。
+   * 不传时(LEGACY,直接调用 runSubagent 的测试)行为不变。
+   */
+  journal?: SubagentJournal;
 }
 
 export type SubagentStatus = 'completed' | 'incomplete' | 'unverified' | 'background';
@@ -412,9 +421,16 @@ async function runSubagentWithClient(
     // Intentional behavior change: child `ask` decisions use the main
     // RuntimeSecurityGate and wait for explicit approval.
     executionRuntime: options.executionRuntime,
+    // 子代理路径:ask 静默分流(不弹 channel),deny/allow 透传。
+    origin: 'subagent',
     model: options.model,
     eventBus,
     reserveFinalTextTurn,
+    // 子代理工作日志:每完成一条消息边界 awaited 落盘。
+    // fail-fast:checkpoint 写失败会抛错,runSubagent 的 catch 块将其转为 incomplete/error。
+    onMessageCheckpoint: options.journal
+      ? messages => options.journal!.checkpoint(messages)
+      : undefined,
   })) {
     if (message !== null && typeof message === 'object' && 'type' in message) {
       if (message.type === 'assistant') {
@@ -653,6 +669,18 @@ export async function runSubagent(
       }
     }
 
+    // 子代理工作日志恢复:final turn 未合成总结时,从 journal 恢复已完成的工作,
+    // 用恢复文本替换 `(no final text)`。无 journal 或无恢复内容时保持原行为。
+    if (finalTurnSynthesized === false && options.journal) {
+      const recovered = recoverSubagentWork(
+        await options.journal.load(),
+        options.journal.reference,
+      );
+      if (recovered.text) {
+        text = recovered.text;
+      }
+    }
+
     return finalizeSubagentExecution(text, false, options.role, {
       toolCallCount: executionProgress.toolCallCount,
       successfulToolResultCount: executionProgress.successfulToolResultCount,
@@ -662,8 +690,22 @@ export async function runSubagent(
   } catch (error) {
     // 核心生命周期边界：provider/流式异常统一转换为 incomplete/error 回执，
     // 而非让 promise reject。runSubagent 的契约是"始终返回 SubagentResult"。
+    //
+    // 子代理工作日志恢复:provider 崩溃后,从 journal 加载已完成的工作,
+    // 用 `${errorText}\n${recovered.text}` 组合回执(恢复内容在前,错误信息在后)。
+    // 保留 terminationReason: 'error' —— 不因恢复到工具结果就假装任务完成。
+    const errorText = formatUnknownError(error);
+    const recovered = options.journal
+      ? recoverSubagentWork(
+          await options.journal.load(),
+          options.journal.reference,
+        )
+      : { text: '', successfulToolResults: 0 };
+    const text = recovered.text
+      ? `${errorText}\n${recovered.text}`
+      : errorText;
     return finalizeSubagentExecution(
-      formatUnknownError(error),
+      text,
       false,
       options.role,
       {

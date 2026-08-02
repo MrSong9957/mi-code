@@ -38,6 +38,11 @@ import { createTaskTool } from './agent/tools/task-tool.js';
 import { createSpawnAgentTool } from './agent/tools/spawn-agent-tool.js';
 import { createSpawnSelfOrganizingTool } from './agent/tools/spawn-self-organizing-tool.js';
 import { runSubagent } from './agent/subagent.js';
+import {
+  finalizeTurnForUser,
+  commitFinalizedTurn,
+  type TurnToolFact,
+} from './agent/turn-final-feedback.js';
 import { plannerPrompt, systemPrompt as systemPromptTemplate } from './prompts/index.js';
 import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
@@ -159,14 +164,19 @@ import type {
   UserDecisionChannel,
 } from './permission/runtime-gate.js';
 import type { SecurityDecision, UserDecision } from './permission/decisions.js';
-import { SECURITY_PROTOCOL_VERSION } from './permission/decisions.js';
 import type { AskQuestionRequest, AskQuestionOutcome } from './agent/ask-user-types.js';
+import { SessionAllowlist } from './permission/session-allowlist.js';
+import { SessionState } from './permission/session-state.js';
+import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
 const cliOpts = parseCliArgs();
 const sessionStore = new SessionStore();
-// 会话 ID：resume 时用恢复的 id，否则新建
-let sessionId: string = randomUUID();
+// Session 级状态:sessionAllowlist + sessionState(唯一 session mutation boundary)。
+// sessionState 封装 sessionId:外部只读 currentId,切换只经 transitionTo(内部 clear allowlist)。
+// 结构上消除"调用方直接赋值 sessionId 而忘记 clear"的双写风险。
+const sessionAllowlist = new SessionAllowlist();
+const sessionState = new SessionState(sessionAllowlist, randomUUID());
 let currentPlanContext: PlanContext | null = null;
 // 当前会话累积消息（resume 时预载，streamingQuery onMessages 时更新）
 let sessionMessages: Message[] = [];
@@ -319,17 +329,20 @@ toolRegistry.register(askTool.definition, askTool.executor);
 // 然后组装一个 RuntimeSecurityGate,接入 streamingQuery 的 ask 阻塞路径。
 //
 // 关键:permission ask 用与 ask_user_question tool **不同的 schema**(BRC-6 要求不能伪装成
-// tool result)。这里把 SecurityDecision 转成一个简短的二选一问卷(Allow once / Reject),
-// outcome=submitted → approved_once;outcome=cancelled/chat → rejected。
+// tool result)。这里把 SecurityDecision 转成一个三选一问卷
+// (Allow once / Allow this exact action for this session / Reject),
+// answer → UserDecision 经纯函数 mapPermissionAnswerToUserDecision 精确映射:
+// 仅两个放行选项 → approved_once(remember 分别 false/true);Reject/unknown/empty/非submitted → rejected。
+// options 的 label 直接复用 ALLOW_ONCE_LABEL / ALLOW_EXACT_LABEL 常量,与映射同源。
 //
-// adapterSessionIdReader:延迟读取当前 sessionId(因为 sessionId 是 mutable let,
-// gate 构造时还不知道 resume 后的值)。
+// adapterSessionIdReader:延迟读取当前 sessionId(因为 sessionState.currentId 会随
+// rotate/rewind/resume 变化,gate 构造时还不知道 resume 后的值)。
 
 function getDecisionChannel(): UserDecisionChannel {
   return {
     async request(decision: SecurityDecision): Promise<UserDecision> {
-      // 把 SecurityDecision 转成问卷(Allow once / Reject)。这是**独立的 permission ask
-      // schema**,不伪装成 tool result。
+      // 把 SecurityDecision 转成问卷。这是**独立的 permission ask
+      // schema**,不伪装成 tool result。label 复用常量,保证 UI 显示与 answer 映射同源。
       const request: AskQuestionRequest = {
         questions: [{
           question:
@@ -338,7 +351,8 @@ function getDecisionChannel(): UserDecisionChannel {
             `Reason: ${decision.human_reason}`,
           header: 'Permission',
           options: [
-            { label: 'Allow once', description: 'Run this action exactly once. It will not be remembered.' },
+            { label: ALLOW_ONCE_LABEL, description: 'Run this action exactly once. It will not be remembered.' },
+            { label: ALLOW_EXACT_LABEL, description: 'Run now and remember this exact command for the rest of this session.' },
             { label: 'Reject', description: 'Do not run this action.' },
           ],
           multiSelect: false,
@@ -346,14 +360,8 @@ function getDecisionChannel(): UserDecisionChannel {
       };
       // UI 抛错 → 视为通道故障(由 gate 转成 denied,绝不放行)
       const outcome: AskQuestionOutcome = await askManager.ask(request);
-      const response: UserDecision['response'] =
-        outcome.kind === 'submitted' ? 'approved_once' : 'rejected';
-      return {
-        protocol_version: SECURITY_PROTOCOL_VERSION,
-        decision_id: decision.decision_id,
-        response,
-        decided_at: new Date().toISOString(),
-      };
+      // answer → UserDecision 经纯函数精确映射:Reject/unknown/empty/非submitted 绝不放行。
+      return mapPermissionAnswerToUserDecision(decision.decision_id, outcome);
     },
   };
 }
@@ -388,16 +396,24 @@ function makePendingStore(sessionIdReader: () => string): PendingDecisionStore {
 }
 
 const runtimeGate = new RuntimeSecurityGate({
-  pendingStore: makePendingStore(() => sessionId),
+  pendingStore: makePendingStore(() => sessionState.currentId),
   channel: getDecisionChannel(),
 });
-const executionRuntime = { permissionChecker, runtimeGate };
+// executionRuntime 装配:复用前面构造的 sessionAllowlist(绑定到 sessionState)。
+const executionRuntime = { permissionChecker, runtimeGate, sessionAllowlist };
+
+// 子代理工作日志工厂:用动态 sessionId 闭包,确保 resume/session 轮换后仍绑定当前会话。
+// 每次前台子代理执行调用一次,创建一个绑定到新 executionId 的独立 journal。
+const createSubagentJournal = () =>
+  sessionStore.createSubagentJournal(sessionState.currentId, randomUUID());
 
 const taskTool = createTaskTool(
   childToolRegistry,
   executionRuntime,
   worktreeManager,
   subagentClientProvider,
+  runSubagent,
+  createSubagentJournal,
 );
 toolRegistry.register(taskTool.definition, taskTool.executor);
 const spawnSoTool = createSpawnSelfOrganizingTool(childToolRegistry, todoManager, inboxManager, {
@@ -412,6 +428,10 @@ const spawnAgentTool = createSpawnAgentTool(
   runSubagent,
   truncateSkillsDescription(skillRegistry.describeAvailable()),
   () => lastSystemPrompt,
+  false,      // 保持当前 legacy completion-contract 路径
+  undefined,  // 无 contracted runner 迁移
+  undefined,  // 保持当前 delegation-gate 参数
+  createSubagentJournal,
 );
 toolRegistry.register(spawnAgentTool.definition, spawnAgentTool.executor);
 
@@ -433,7 +453,7 @@ const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
     clearPipeline: () => pipeline.clear(),
     triggerClearScreen: () => tuiHandle?.clearScreenStore.getState().triggerClearScreen(),
     clearSessionMessages: () => { sessionMessages = []; },
-    rotateSessionId: () => { sessionId = randomUUID(); },
+    rotateSessionId: () => { sessionState.transitionTo(randomUUID()); },
     resetContextUsage: () => tuiHandle?.statusStore.getState().setContextPct(0),
     setPermissionMode: (next) => permissionChecker.setMode(next),
     setConfigMode: (next) => configStore.setPermissionMode(next),
@@ -596,7 +616,7 @@ async function handleRewindLastTurn(): Promise<void> {
   }
 
   // 5. 换 sessionId(旧 jsonl 保留,resume 时新会话不带撤回的消息)
-  sessionId = randomUUID();
+  sessionState.transitionTo(randomUUID());
 
   // 6. 回填输入框(用户实际发送的 agentText 展开版)
   if (lastSubmittedAgentText !== null) {
@@ -641,7 +661,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     { historyText: trimmedRaw, agentText: userInput, project: currentProject, isProcessing }
   );
   if (!committed) return;
-  currentPlanContext = { sessionId, turnId: randomUUID() };
+  currentPlanContext = { sessionId: sessionState.currentId, turnId: randomUUID() };
   planStore.beginTurn(currentPlanContext);
 
   // 检查 ! 前缀拦截
@@ -657,7 +677,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   // 其他斜杠命令短路 return,不进 agent loop。
   let userMessageForAgent: string | ContentBlock[] | null = null;
   if (cmd && cmd.name === 'image') {
-    const imgResult = await processImageCommand(cmd.args, sessionId);
+    const imgResult = await processImageCommand(cmd.args, sessionState.currentId);
     if ('error' in imgResult) {
       printLine(`✗ ${imgResult.error}`);
       return;
@@ -819,7 +839,18 @@ async function handleUserSubmit(rawText: string): Promise<void> {
 
   // agent 循环（与旧实现 verbatim，仅 layout.* → tuiHandle.statusStore）
   let assistantText = '';
-  let persistedCount = sessionMessages.length;
+  // turnStartIndex / persistedMessageCount 同值起步但语义不同:
+  //   - turnStartIndex:不可变,限定分类器只看本回合新增消息(slice 边界)
+  //   - persistedMessageCount:可变,记录父会话已落盘的消息数(commit 增量游标)
+  // revised onMessages 只捕获查询结束时的完整快照,不在流式过程中追加;
+  // commitFinalizedTurn 在 finally 里一次性 awaited 落盘新增消息 + emit 状态块。
+  const turnStartIndex = sessionMessages.length;
+  const persistedMessageCount = turnStartIndex;
+  // 收集本回合的 turn facts 供 finalizer 分类(工具名/输出/执行状态)。
+  const toolFacts: TurnToolFact[] = [];
+  let finalMessages: Message[] | null = null;
+  let terminalError: string | undefined;
+  let aborted = false;
   const blockTypes = new Map<number, string>();
   // Spinner 立即启动(label="Connecting..."),收到第一个 event 后切到正常 verb。
   // 兼顾"用户有即时反馈"和"状态准确"。
@@ -836,14 +867,11 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       systemPrompt, tools, signal: ac.signal,
       eventBus, compactClient, executionRuntime,
       initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
-      onMessages: (finalMessages) => {
-        const newMsgs = finalMessages.slice(persistedCount);
-        sessionMessages = finalMessages;
-        persistedCount = finalMessages.length;
-        for (const m of newMsgs) {
-          // 持久化前 strip image base64(只存 cachePath),避免 JSONL 膨胀
-          void sessionStore.append(sessionId, stripImagesForPersistence(m));
-        }
+      // revised:只捕获查询结束时的完整快照,持久化交给 commitFinalizedTurn 统一 awaited。
+      // 原 onMessages 用 void sessionStore.append(非 awaited)启动追加,若进程在追加完成前
+      // 退出会丢失本回合;这里改为查询结束后一次性有序 awaited commit。
+      onMessages: messages => {
+        finalMessages = messages;
       },
     })) {
       // 第一个 event 到达 → 清除 "Connecting" label,恢复到 spinner 默认 verb
@@ -899,7 +927,13 @@ async function handleUserSubmit(rawText: string): Promise<void> {
           assistantText = '';
         }
       } else if ('type' in msg && msg.type === 'tool_result') {
-        const tr = msg as { type: 'tool_result'; name: string; output: string };
+        const tr = msg as { type: 'tool_result'; name: string; output: string; executionResult?: { status?: string } };
+        // 收集结构化 tool fact(在 Hook 之前):供 finalizer 分类本回合是否成功/部分完成。
+        toolFacts.push({
+          name: tr.name,
+          output: tr.output,
+          executionStatus: tr.executionResult?.status as TurnToolFact['executionStatus'],
+        });
         const hookResult = await hookRunner.run({
           name: 'PostToolUse',
           payload: { tool_name: tr.name, output: tr.output },
@@ -928,13 +962,50 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     // 实测：ac.abort('user-cancel') 抛出的 err 是字符串(不是 Error)，err.name 是 undefined。
     // 只有 ac.signal.aborted 在三种 abort 形态下都为 true。
     if (ac.signal.aborted) {
-      // 用户主动中断：静默退出，不打印 [Error]
+      aborted = true;
     } else {
+      terminalError = formatErrorForDisplay(err);
       // formatErrorForDisplay 只取 message（不含堆栈），超长截断——
       // 避免把整个 Error.stack 刷屏到终端（之前的 [system] [Error] Error [ERR_UNHANDLED_ERROR]... 问题）
-      tuiHandle?.printStyled(`[Error] ${formatErrorForDisplay(err)}`, 'error');
+      tuiHandle?.printStyled(`[Error] ${terminalError}`, 'error');
     }
   } finally {
+    // 统一收尾口:把本回合 finalized 后的消息 awaited 落盘 + emit 四字段状态块。
+    // 无论正常结束/错误/中断都走这一步,保证每个非后台用户回合都有恰好一个
+    // 用户可见的最终 assistant 状态块(当前状态/已获得结果/失败或受阻位置/下一步)。
+    const baseMessages = finalMessages ?? sessionMessages;
+    const finalized = finalizeTurnForUser({
+      messages: baseMessages,
+      turnStartIndex,
+      toolFacts,
+      error: terminalError,
+      aborted,
+    });
+
+    // 持久化失败用窄错误边界兜住:落盘本身失败时,用未 finalized 的 baseMessages
+    // 重新构造一个"失败"块 emit 给用户(绝不假装成功)。此异常路径无法承诺落盘
+    // (因为存储层已失败),但仍保证用户能看到明确的失败文本。
+    try {
+      await commitFinalizedTurn(
+        finalized,
+        persistedMessageCount,
+        message => sessionStore.append(sessionState.currentId, stripImagesForPersistence(message)),
+        text => pipeline.emit({ kind: 'assistant_text', text, isFinal: true }),
+      );
+      // 落盘成功后同步模块级会话状态(供下一回合 / resume 使用)。
+      sessionMessages = finalized.messages;
+    } catch (persistError) {
+      const persistenceFailure = finalizeTurnForUser({
+        messages: baseMessages,
+        turnStartIndex,
+        toolFacts,
+        error: `最终回复落盘失败：${formatErrorForDisplay(persistError)}`,
+        aborted,
+      });
+      sessionMessages = persistenceFailure.messages;
+      pipeline.emit({ kind: 'assistant_text', text: persistenceFailure.feedbackText, isFinal: true });
+    }
+
     // AUTO-0025-transient:统一退出路径——finalizeTurnLifecycle 幂等结束 thinking + stop spinner。
     thinking = finalizeTurnLifecycle(turnLifecycle, thinking);
     isProcessing = false;
@@ -974,7 +1045,7 @@ if (cliOpts.list) {
   const resumeId = cliOpts.resume ?? (cliOpts.continueLatest ? sessionStore.getLastSessionIdSync() : null);
   if (resumeId) {
     sessionMessages = sessionStore.loadSync(resumeId);
-    sessionId = resumeId;
+    sessionState.transitionTo(resumeId);
     // Wave B Task 13 (M-066): 加载该会话遗留的 pending decisions。
     //
     // *** Wave B 最简正确行为 ***:status === 'awaiting_user' 的单据在 resume 时
@@ -1052,7 +1123,7 @@ if (cliOpts.list) {
     backgroundManager.killAll();
     tuiHandle?.stopSpinner();
     tuiHandle?.cleanup();
-    writeResumeHint(process.stdout, sessionId);
+    writeResumeHint(process.stdout, sessionState.currentId);
   }
   process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });
   process.on('SIGTERM', () => { cleanupOnExit(); process.exit(0); });

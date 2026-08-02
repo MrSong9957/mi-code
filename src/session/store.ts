@@ -8,11 +8,12 @@
 
 import { readFile, appendFile, mkdir, readdir, stat } from 'fs/promises';
 import { readFileSync, readdirSync, statSync, existsSync as existsSyncFs } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Message } from '../agent/types.js';
+import type { SubagentJournal } from '../agent/subagent-journal.js';
 import type { ToolTranscriptValidation } from '../agent/tools/transcript-validator.js';
 import type { PendingSecurityDecision } from '../permission/runtime-gate.js';
 import {
@@ -306,23 +307,67 @@ function mintId(prefix: string, content: string): string {
 
 export class SessionStore {
   private readonly sessionsDir: string;
+  private readonly subagentsDir: string;
 
   constructor(baseDir?: string) {
     const base = baseDir ?? join(homedir(), '.micode');
     this.sessionsDir = join(base, 'sessions');
+    this.subagentsDir = join(base, 'subagents');
   }
 
   /** 往会话 append 一条消息。会话文件不存在则创建。 */
   async append(sessionId: string, message: Message): Promise<void> {
-    await mkdir(this.sessionsDir, { recursive: true });
-    const filePath = this.sessionPath(sessionId);
-    const record: SessionRecord = {
-      role: message.role,
-      content: message.content as string | unknown[],
-      timestamp: Date.now(),
-    };
-    const line = JSON.stringify(record) + '\n';
-    await appendFile(filePath, line, 'utf8');
+    await this.appendMessages(this.sessionPath(sessionId), [message]);
+  }
+
+  /**
+   * 把多条 message 序列化成现有 SessionRecord 形状并一次性 appendFile。
+   *
+   * 用于:
+   *   - {@link append}:单条消息落盘(向后兼容)
+   *   - {@link createSubagentJournal}.checkpoint:一个 checkpoint 边界内的新消息批量落盘
+   *
+   * 空数组立即返回(不产生空写)。目录不存在则创建。一次调用 = 一次 appendFile
+   * (batch 单个边界内的全部新记录,不在边界之间缓冲)。
+   */
+  private async appendMessages(filePath: string, messages: readonly Message[]): Promise<void> {
+    if (messages.length === 0) return;
+    await mkdir(dirname(filePath), { recursive: true });
+    const now = Date.now();
+    const lines = messages
+      .map(message => {
+        const record: SessionRecord = {
+          role: message.role,
+          content: message.content as string | unknown[],
+          timestamp: now,
+        };
+        return JSON.stringify(record);
+      })
+      .join('\n') + '\n';
+    await appendFile(filePath, lines, 'utf8');
+  }
+
+  /**
+   * 读取一个 JSONL 文件的全部 Message 记录(按 append 顺序)。
+   *
+   * 行为与 {@link load} 一致:文件不存在返回空数组;损坏/部分写入的行被跳过,
+   * 保留更早的有效记录(crash-tolerant append-only 恢复)。
+   */
+  private async loadMessages(filePath: string): Promise<Message[]> {
+    if (!existsSync(filePath)) return [];
+    const text = await readFile(filePath, 'utf8');
+    const messages: Message[] = [];
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const rec = JSON.parse(trimmed) as SessionRecord;
+        messages.push({ role: rec.role, content: rec.content as Message['content'] });
+      } catch {
+        // 跳过损坏行(部分写入等)—— 与 load() 行为一致
+      }
+    }
+    return messages;
   }
 
   /**
@@ -365,21 +410,46 @@ export class SessionStore {
 
   /** 读取整个会话的消息列表（按 append 顺序）。不存在返回空数组。 */
   async load(sessionId: string): Promise<Message[]> {
-    const filePath = this.sessionPath(sessionId);
-    if (!existsSync(filePath)) return [];
-    const text = await readFile(filePath, 'utf8');
-    const messages: Message[] = [];
-    for (const line of text.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const rec = JSON.parse(trimmed) as SessionRecord;
-        messages.push({ role: rec.role, content: rec.content as Message['content'] });
-      } catch {
-        // 跳过损坏行（部分写入等）
-      }
-    }
-    return messages;
+    return this.loadMessages(this.sessionPath(sessionId));
+  }
+
+  // ═══════════════════════════════════════════
+  // 子代理工作日志 sidecar
+  // ═══════════════════════════════════════════
+  // 物理本质:会话日志本旁边的"子代理专用流水账"。
+  // 主日志 <id>.jsonl 只存 Provider 可见的消息(user/assistant turn);
+  // 子代理流水账 subagents/<parentSessionId>/<executionId>.jsonl 独立存放,
+  // 每行一条 Message 记录(复用 SessionRecord 形状),供子代理失败时恢复已完成工作。
+  //
+  // 不变量:
+  //   - 与主日志严格隔离:list() / load() / loadSync() / getLastSessionIdSync()
+  //     绝不读 subagents/ 目录(它甚至不在 sessions/ 下)。
+  //   - 每个 child 拥有独立 executionId + 独立文件;兄弟 child 不写同一文件。
+  //   - checkpoint 是增量的:同一 journal 多次 checkpoint 同样快照,只追加新消息。
+  //   - 写入串行(一个 journal 一个 writer),不需要 sequence number 修复乱序。
+  //   - retention 跟随 parent session 生命周期(本修复不加独立 TTL / 删除调度)。
+
+  /**
+   * 创建一个绑定到 (parentSessionId, executionId) 的子代理工作日志。
+   *
+   * 每个 child 接收一个新鲜的 executionId(由调用方 randomUUID 生成),因此对应
+   * 一个独立的 JSONL 文件。返回的 journal 内部维护 persistedCount 游标,
+   * checkpoint(messages) 只追加 messages.slice(persistedCount) 的新消息。
+   */
+  createSubagentJournal(parentSessionId: string, executionId: string): SubagentJournal {
+    const filePath = join(this.subagentsDir, parentSessionId, `${executionId}.jsonl`);
+    let persistedCount = 0;
+
+    return {
+      executionId,
+      reference: filePath,
+      checkpoint: async messages => {
+        const pending = messages.slice(persistedCount);
+        await this.appendMessages(filePath, pending);
+        persistedCount = messages.length;
+      },
+      load: async () => this.loadMessages(filePath),
+    };
   }
 
   // ═══════════════════════════════════════════

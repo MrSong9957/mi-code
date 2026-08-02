@@ -21,9 +21,16 @@ import type {
   SubagentResult,
   SubagentExecutionResult,
 } from '../subagent.js';
+import type { SubagentJournalFactory } from '../subagent-journal.js';
+import { formatSubagentResult } from '../subagent-result-format.js';
 import { ROLE_REGISTRY, type Role, type SubagentModel } from '../roles.js';
 import type { ToolExecutionRuntime } from '../tool-execution.js';
 import type { DelegationGateDecision } from '../../permission/delegation.js';
+
+// 共享 envelope formatter 从 subagent-result-format.ts 导入并 re-export,
+// 保持现有 `import { formatSubagentResult } from '../tools/spawn-agent-tool.js'`
+// 的调用方源兼容(spawn-agent-tool 仍是该函数的公开入口之一)。
+export { formatSubagentResult } from '../subagent-result-format.js';
 
 /** 子代理执行器类型（用于依赖注入，便于测试） */
 type SubagentRunner = (
@@ -38,37 +45,6 @@ type SubagentContractedRunner = (
   tools: ToolRegistry,
   options: SubagentOptions,
 ) => Promise<SubagentExecutionResult>;
-
-/**
- * AUTO-0025 Task 5:把 SubagentResult 序列化为带结构化 status 前缀的字符串。
- *
- * 物理本质:派工单回执上的"工单状态戳"。主 agent 看到戳就能区分:
- * - status=completed → 子代理成功,直接用后面的 summary 文本
- * - status=incomplete reason=xxx → 子代理未完成,不要静默用自己的工具重做(显式委派场景)
- * - status=unverified → 子代理没拿到证据,结果不可信
- *
- * 格式:
- *   [Subagent status=completed]
- *   <summary>
- *
- *   [Subagent status=incomplete reason=max_turns]
- *   <partial or diagnostic text>
- *
- * reason 仅在非 completed 时附加(从 terminationReason 映射)。
- */
-export function formatSubagentResult(result: SubagentResult): string {
-  const status = result.status;
-  if (status === 'background') {
-    // background 不加 status 戳(它不是最终结果,只是"已派发"通知)
-    return result.text;
-  }
-  // reason 仅在 incomplete 时附加:incomplete 的诊断价值在于"为什么没完成"(max_turns/user_abort/error)。
-  // unverified 是独立状态(无证据),end_turn 对它无诊断意义,不加 reason 避免噪音。
-  const reasonPart = status === 'incomplete' && result.terminationReason
-    ? ` reason=${result.terminationReason}`
-    : '';
-  return `[Subagent status=${status}${reasonPart}]\n${result.text}`;
-}
 
 /**
  * RC-4 Wave A: 把新的 {@link SubagentExecutionResult} discriminated union 序列化为
@@ -151,6 +127,16 @@ export function createSpawnAgentTool(
     prompt: string;
     fork: boolean;
   }) => Promise<DelegationGateDecision>,
+  /**
+   * 子代理工作日志工厂(可靠性路径)。
+   *
+   * 每次前台子代理执行调用一次,创建一个绑定到新 executionId 的独立 journal,
+   * 透传给 runSubagentFn。这样即使 provider 崩溃,已完成的工作也能从 journal 恢复。
+   * 不传时(LEGACY / 直接调用 runSubagent 的测试)行为不变。
+   *
+   * 必须在 input 校验和 delegation gate 通过之后创建 —— 否定委派 / 无效输入不分配 journal。
+   */
+  journalFactory?: SubagentJournalFactory,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
   // 动态生成工具描述：从 ROLE_REGISTRY 的 whenToUse 字段拼装
   const roleLines = (['explore', 'plan', 'general'] as Role[])
@@ -217,6 +203,10 @@ export function createSpawnAgentTool(
         // allowed_once / awaiting_user(已 resolved 为 approved)→ 继续派发
       }
 
+      // 子代理工作日志:在 input/gate 校验通过后、fork 分支前创建一次,
+      // 让 fork 和 role-based 两条 foreground 路径复用同一 journal 实例。
+      const journal = journalFactory?.();
+
       if (fork) {
         if (!getParentSystemPrompt) {
           return 'Error: fork mode is not available (no parent system prompt access).';
@@ -242,6 +232,7 @@ export function createSpawnAgentTool(
           forkMode: true,
           parentSystem: getParentSystemPrompt(),
           // role 不传（undefined）→ filterToolsByRole 返回全量减黑名单
+          journal,
         });
         // AUTO-0025 Task 5:输出携带结构化 status 前缀
         return formatSubagentResult(result);
@@ -271,6 +262,7 @@ export function createSpawnAgentTool(
         executionRuntime,
         maxSteps,
         skillsDescription,
+        journal,
       });
       // AUTO-0025 Task 5:输出携带结构化 status 前缀
       return formatSubagentResult(result);

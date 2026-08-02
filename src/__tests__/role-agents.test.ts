@@ -8,6 +8,7 @@ import { ToolRegistry } from '../agent/tool-registry.js';
 import type { ToolDefinition, ToolExecutor, RegisteredTool } from '../agent/types.js';
 import type { SubagentOptions, SubagentResult } from '../agent/subagent.js';
 import { runSubagent, enhanceSubagentSystemPrompt } from '../agent/subagent.js';
+import type { SubagentJournal } from '../agent/subagent-journal.js';
 import type { StreamingLLMClient } from '../agent/types.js';
 import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
 
@@ -412,5 +413,68 @@ describe('enhanceSubagentSystemPrompt', () => {
   it('无技能描述时不追加', () => {
     const result = enhanceSubagentSystemPrompt('base');
     expect(result).not.toContain('Available skills');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// 子代理工作日志注入:每次前台 spawn 创建一个独立 journal 并传给 runSubagent。
+//
+// 物理本质:派工时给临时工发一本"流水账本",每完成一步就记一笔。
+// 这样即使临时工中途失联(provider 崩溃),已经记下的工作仍可恢复。
+// 关键不变量:journalFactory 每次前台执行调用一次;journal 透传到 runSubagentFn。
+// ════════════════════════════════════════════════════════════════════
+describe('createSpawnAgentTool journal 注入', () => {
+  function makeRegistry(): ToolRegistry {
+    const registry = new ToolRegistry();
+    const def: ToolDefinition = { name: 'read_file', description: 'd', parameters: { type: 'object' } };
+    registry.register(def, async () => 'ok');
+    return registry;
+  }
+
+  function makeJournal(id: string): SubagentJournal {
+    return {
+      executionId: id,
+      reference: `memory://${id}`,
+      checkpoint: async () => {},
+      load: async () => [],
+    };
+  }
+
+  it('journalFactory 每次前台执行调用一次,并把 journal 透传给 runSubagentFn', async () => {
+    const registry = makeRegistry();
+    const journal = makeJournal('child-1');
+    const journalFactory = vi.fn(() => journal);
+    const runSubagentFn = vi.fn(async (): Promise<SubagentResult> => ({
+      text: 'recovered work',
+      isBackground: false,
+      status: 'incomplete',
+      terminationReason: 'error',
+      evidence: { toolCallCount: 1, successfulToolResultCount: 1 },
+    }));
+
+    const { executor } = createSpawnAgentTool(
+      registry,
+      undefined,
+      executionRuntime,
+      runSubagentFn,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      journalFactory,
+    );
+
+    const output = await executor({ role: 'explore', prompt: 'inspect files' });
+
+    expect(journalFactory).toHaveBeenCalledTimes(1);
+    expect(runSubagentFn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.anything(),
+      expect.objectContaining({ journal }),
+    );
+    // envelope 格式与 task 一致
+    expect(output).toContain('[Subagent status=incomplete reason=error]');
+    expect(output).toContain('recovered work');
   });
 });
