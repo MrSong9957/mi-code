@@ -32,7 +32,7 @@
 
 - 不修改 submit-transformer、history、transcript store、消息类型或 reducer。
 - 不修改 streaming、interrupted、lexer fallback、tool 或 system 渲染。
-- 不建立通用 `PhysicalRow[]` 或其他全局消息中间模型。
+- 不建立通用 `PhysicalRow[]` 或其他全局消息中间模型；AssistantBlockLine 内部用于检查 token 首尾空白的局部行结果不属于全局模型。
 - 不顺带重构相邻渲染组件。
 - 不承诺操作系统或终端的原生鼠标选区会排除背景填充单元格；应用持有的消息文本和选区模型不得增加视觉填充字符。
 
@@ -98,12 +98,15 @@ layoutUserBlockRows(text: string, width: number): string[]
 ```text
 completed AssistantBlock
   -> marked lexer
-  -> token 边界规范化
-  -> 现有 raw/table token renderer
+  -> 各非 space token 复用现有 raw/table 逻辑生成局部可检查行结果
+  -> 检查相邻 token 的 trailing/leading 外部空白行
+  -> inter-token 边界归一为恰好 1 个空白物理行
   -> 终端物理行
 ```
 
-规范化器只处理 token 之间的段落边界：
+这是 `AssistantBlockLine` 内部的局部两阶段布局，不建立可供其他消息类型消费的物理行模型。第一阶段把每个非 `space` token 转成保留现有 raw/table 表现的可检查行结果；第二阶段只处理 token 之间的段落边界。局部行结果只需明确区分“有效内容行”和“显式空白行”：有效内容行之后仍可由 Ink 软折，显式空白行则一对一对应段落边界的空白物理行。边界规范化不得根据非空内容的软折结果作判断。
+
+边界规则如下：
 
 - 连续 `space` token 合并为一个待处理边界。
 - 只有当边界位于两个可渲染 token 之间时才输出。
@@ -119,8 +122,11 @@ completed AssistantBlock
 
 ### 6.1 Prefix
 
-- 当 `width >= displayWidth('❯ ') + 1`，首个物理行显示 `❯ ` 后再显示正文。
-- 当 `width < displayWidth('❯ ') + 1`，完全省略 prompt prefix，优先保留正文。
+- 先在 Tab 展开后的首个逻辑行中取得正文首个 grapheme，并计算其显示宽度。
+- 若存在正文首 grapheme，只有 `displayWidth('❯ ') + displayWidth(firstGrapheme) <= width` 时才显示 `❯ `；否则完全省略 prefix，优先保留正文。
+- 若不存在正文首 grapheme，只有 prefix 自身能合法容纳时才允许显示；该兼容边界不得挤占后续逻辑行的正文宽度。
+- prefix 决策完成后，首行使用扣除 prefix 后的预算折行；所有后续物理行使用完整 `width`。
+- 例如 `width=3` 时，ASCII 首字符 `a` 可以显示为 `❯ a`；CJK 首字符 `中` 必须省略 prefix 并直接显示正文。
 - 后续硬换行和软折行不注入额外缩进；原输入中的空格由渲染副本保留。
 - `❯` 继续使用当前绿色粗体样式，正文前景色保持现状。
 
@@ -144,6 +150,7 @@ completed AssistantBlock
 ## 7. Assistant 详细行为
 
 - 仅正常 completed Assistant Markdown 进入 token 边界规范化。
+- 每个非 `space` token 先通过现有 raw/table 逻辑转换成 AssistantBlockLine 内部的可检查行结果，再执行跨 token 归一化。
 - 边界规则针对两个可渲染 token 之间的最终物理结果，不以 `space` token 数量作为结果。
 - 连续多个 `space` token、或相邻 renderer 已产生边界空行时，最终都只能保留 1 个空白物理行。
 - token 首尾的外部空白行参与上述计数和归一化；token 有效内容内部的空白行不参与。
@@ -168,7 +175,8 @@ completed AssistantBlock
 - Tab 在返回行中展开为 4 空格，输入文本仍保留原始 `\t`。
 - 连续 `\n` 产生对应的空逻辑行。
 - ASCII、CJK、Emoji 和组合字符按 grapheme 显示宽度折行。
-- `width=3` 显示 `❯ `；`width=2` 和 `width=1` 省略 prefix。
+- `width=3` 且首字符为 ASCII 时显示 `❯ `；同宽度下首字符为 CJK 时省略 prefix。
+- 任意宽度下，只有 prefix 与正文首 grapheme 能在首行合法共存时才显示 prefix。
 - 单个 grapheme 显示宽度大于 `width` 时不拆分、不丢失，只允许该 grapheme 的最小必要溢出。
 - 其他所有返回行的显示宽度不超过 `width`。
 - 返回行不含仅为背景添加的尾随空格。
@@ -186,6 +194,7 @@ completed AssistantBlock
 ### 9.3 Completed Assistant
 
 - 两个普通段落之间最终恰好 1 个空白物理行。
+- 非 `space` token 先生成局部可检查行结果，测试以组合后的最终行结果断言边界数量。
 - 连续多个 `space` token 仍只产生 1 行。
 - 开头和结尾的段落边界不产生额外空行。
 - 相邻 renderer 已留下边界空行时不叠加第二行。
