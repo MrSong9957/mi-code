@@ -784,7 +784,7 @@ export async function* streamingQuery(
           registry,
           block,
           executionRuntime,
-          { signal },
+          { signal, origin },
         );
         const output = executionResult.output;
         toolResults.push({
