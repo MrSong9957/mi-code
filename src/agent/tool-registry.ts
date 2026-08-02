@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import { Encoder } from '../output/encoder.js';
 import { killProcessTree } from './process-tree.js';
 import { formatUnknownError } from '../utils/error-message.js';
+import { ToolOperationalError } from './tool-execution.js';
 import type { ToolDefinition, ToolExecutor, RegisteredTool, ToolExecutionContext } from './types.js';
 import { createReadFileTool, createWriteFileTool, createEditFileTool } from './tools/index.js';
 import { createGlobTool, createGrepTool } from './tools/search-tools.js';
@@ -283,12 +284,26 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
             type: 'string',
             description: 'The shell command to execute (Git Bash syntax on Windows).',
           },
+          timeout_ms: {
+            type: 'number',
+            description: 'Timeout in milliseconds (1-600000). Defaults to 30000.',
+            minimum: 1,
+            maximum: 600_000,
+          },
         },
         required: ['command'],
       },
     },
-    executor: async (input) => {
+    executor: async (input, ctx) => {
       const command = input.command as string;
+      const timeoutMs = (input.timeout_ms as number | undefined) ?? 30_000;
+
+      // 已经中止的信号:在 spawn 前直接拒绝,避免起无谓的子进程。
+      if (ctx?.signal?.aborted) {
+        const error = new Error('Command aborted');
+        error.name = 'AbortError';
+        throw error;
+      }
 
       // BRC-6 / M-063：子进程环境清洗。
       // 父进程 process.env 在此 ONCE 读取（sanctioned read point），交给
@@ -320,7 +335,7 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
       // 异步 spawn + 手动超时 + 进程树终止（替代 spawnSync 的孤儿进程泄漏）
       // 物理本质：spawnSync 超时只杀门面接待员（cmd.exe），孙进程（dev server）变孤儿。
       // 改用 spawn + killProcessTree 做"全楼清场"，超时后整棵进程树请走。
-      return new Promise<string>((resolve) => {
+      return new Promise<string>((resolve, reject) => {
         const child = spawn(command, {
           shell: true,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -336,7 +351,6 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
         let stderrLen = 0;
         let stdoutCapped = false;
         let stderrCapped = false;
-        let timedOut = false;
 
         // 流式截断：超 1MB 后停止 push（但不 pause/destroy 流，防 backpressure 挂死）
         if (child.stdout) {
@@ -366,20 +380,42 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
           });
         }
 
-        // 超时定时器：30s 后杀整棵进程树
-        const timer = setTimeout(() => {
-          timedOut = true;
-          if (child.pid) killProcessTree(child.pid);
-        }, 30000);
+        // 即时结算状态机：guard → cleanup → 可选进程树终止 → settle。
+        // timeout/Abort 立即 reject 对应分类错误；close 正常 resolve；error 仍 resolve 字符串(Task 4 改)。
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        // eslint-disable-next-line prefer-const -- cleanup 闭包需前向引用 abortHandler 做解绑
+        let abortHandler: (() => void) | undefined;
+
+        const cleanup = (): void => {
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+          if (abortHandler) {
+            ctx?.signal?.removeEventListener('abort', abortHandler);
+          }
+        };
+
+        const settleFailure = (error: Error, terminateTree: boolean): void => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          if (terminateTree && child.pid) killProcessTree(child.pid);
+          reject(error);
+        };
+
+        timer = setTimeout(() => {
+          const error = new Error(`Command timed out after ${timeoutMs} ms`);
+          error.name = 'TimeoutError';
+          settleFailure(error, true);
+        }, timeoutMs);
 
         // 进程结束（stdio 流关闭后触发 close）
         child.on('close', (code) => {
-          clearTimeout(timer);
-
-          if (timedOut) {
-            resolve('Command timed out after 30 seconds');
-            return;
-          }
+          if (settled) return;
+          settled = true;
+          cleanup();
 
           const stdout = stdoutChunks.length > 0 ? Encoder.decodeBuffer(Buffer.concat(stdoutChunks)) : '';
           const stderr = stderrChunks.length > 0 ? Encoder.decodeBuffer(Buffer.concat(stderrChunks)) : '';
@@ -398,11 +434,27 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
           resolve(stdout);
         });
 
-        // spawn 失败（命令不存在等）
+        // spawn 失败（命令不存在等）:统一包成 ToolOperationalError,
+        // 由 executeToolCall 的 classifyExecutorError 归类为 operational_error。
+        // terminateTree=false:spawn 失败时没有进程树可杀。
         child.on('error', (err) => {
-          clearTimeout(timer);
-          resolve(`Command failed: ${err.message}`);
+          const code = 'code' in err
+            && typeof (err as NodeJS.ErrnoException).code === 'string'
+            ? (err as NodeJS.ErrnoException).code
+            : undefined;
+          settleFailure(new ToolOperationalError(err.message, code), false);
         });
+
+        // in-flight Abort:挂载 listener + 注册后再查一次,关闭 pre-spawn 检查与
+        // listener attach 之间的竞态。settled 守卫保证两次调用无副作用。
+        abortHandler = (): void => {
+          const error = new Error('Command aborted');
+          error.name = 'AbortError';
+          settleFailure(error, true);
+        };
+
+        ctx?.signal?.addEventListener('abort', abortHandler, { once: true });
+        if (ctx?.signal?.aborted) abortHandler();
       });
     },
   };
