@@ -238,6 +238,71 @@ describe('executeToolCall lookup, validation, and success', () => {
     });
   });
 
+  it.each([
+    { value: 0, message: '$.timeout_ms: expected number >= 1' },
+    { value: 600_001, message: '$.timeout_ms: expected number <= 600000' },
+  ])('rejects $value outside inclusive number bounds', async ({ value, message }) => {
+    const registry = register({
+      name: 'bounded-number',
+      description: 'bounded number',
+      parameters: {
+        type: 'object',
+        properties: {
+          timeout_ms: {
+            type: 'number',
+            minimum: 1,
+            maximum: 600_000,
+          },
+        },
+        required: ['timeout_ms'],
+      },
+    });
+
+    const result = await executeToolCall(
+      registry,
+      call('bounded-number', { timeout_ms: value }),
+      createToolExecutionRuntime(),
+    );
+
+    expect(result).toMatchObject({
+      status: 'failure',
+      failure: {
+        kind: 'invalid_input',
+        stage: 'validation',
+        message,
+      },
+    });
+  });
+
+  it.each([1, 1.5, 600_000])(
+    'accepts %s inside inclusive number bounds',
+    async (value) => {
+      const registry = register({
+        name: 'bounded-number',
+        description: 'bounded number',
+        parameters: {
+          type: 'object',
+          properties: {
+            timeout_ms: {
+              type: 'number',
+              minimum: 1,
+              maximum: 600_000,
+            },
+          },
+          required: ['timeout_ms'],
+        },
+      });
+
+      const result = await executeToolCall(
+        registry,
+        call('bounded-number', { timeout_ms: value }),
+        createToolExecutionRuntime(),
+      );
+
+      expect(result.status).toBe('success');
+    },
+  );
+
   it('allows extra object properties', async () => {
     const registry = register({
       name: 'echo',

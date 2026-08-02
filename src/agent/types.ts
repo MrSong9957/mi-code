@@ -62,6 +62,10 @@ export interface ToolParameter {
   properties?: Record<string, ToolParameter>;
   required?: string[];
   items?: ToolParameter;
+  /** 数值下界(含)。validateToolInput 在 type==='number' 时强制。 */
+  minimum?: number;
+  /** 数值上界(含)。validateToolInput 在 type==='number' 时强制。 */
+  maximum?: number;
 }
 
 /** 工具定义 */

@@ -130,10 +130,18 @@ function validateToolInput(
       return typeof value === 'string'
         ? { valid: true }
         : invalid(path, 'expected string');
-    case 'number':
-      return typeof value === 'number' && Number.isFinite(value)
-        ? { valid: true }
-        : invalid(path, 'expected number');
+    case 'number': {
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return invalid(path, 'expected number');
+      }
+      if (schema.minimum !== undefined && value < schema.minimum) {
+        return invalid(path, `expected number >= ${schema.minimum}`);
+      }
+      if (schema.maximum !== undefined && value > schema.maximum) {
+        return invalid(path, `expected number <= ${schema.maximum}`);
+      }
+      return { valid: true };
+    }
     case 'boolean':
       return typeof value === 'boolean'
         ? { valid: true }
