@@ -119,6 +119,16 @@ describe('layoutUserBlockRows', () => {
     expect(layoutUserBlockRows('\n\tsudo whoami', width)).toEqual(expected);
   });
 
+  it('does not combine indentation with a wide grapheme when the row would overflow', () => {
+    const rows = layoutUserBlockRows('\n  中', 3);
+
+    expect(rows).toEqual(['❯ ', '  ', '中']);
+    expect(rows.join('')).toBe('❯   中');
+    for (const row of rows) {
+      expect(stringWidth(row)).toBeLessThanOrEqual(3);
+    }
+  });
+
   it('shows the prompt at width 3 for ASCII but omits it for CJK', () => {
     expect(shouldShowUserPrompt('a', 3)).toBe(true);
     expect(layoutUserBlockRows('a', 3)).toEqual(['❯ a']);
@@ -159,7 +169,7 @@ Run:
 npx vitest run src/__tests__/tui/inline-v2/user-block-layout.test.ts
 ```
 
-Expected: FAIL solely because `src/tui/inline-v2/user-block-layout.ts` does not exist, after Vitest successfully parses the complete file containing every Tab, leading-space, blank-line, prefix, grapheme and invalid-width case. Do not create a test stub that returns constants.
+Expected: FAIL solely because `src/tui/inline-v2/user-block-layout.ts` does not exist, after Vitest successfully parses the complete file containing every Tab, leading-space, indent-plus-wide-grapheme, blank-line, prefix, grapheme and invalid-width case. Do not create a test stub that returns constants.
 
 - [ ] **Step 4: 写最小生产实现**
 
@@ -224,6 +234,17 @@ function wrapUserLinePreservingLeadingSpaces(
     return rows;
   }
 
+  const bodyFirstGrapheme = firstGrapheme(body);
+  if (
+    remainingSpaces !== ''
+    && bodyFirstGrapheme !== undefined
+    && stringWidth(remainingSpaces) + stringWidth(bodyFirstGrapheme) > currentWidth
+  ) {
+    rows.push(remainingSpaces);
+    remainingSpaces = '';
+    currentWidth = continuationWidth;
+  }
+
   const wrappedBody = wrapLineWithSpans(
     body,
     currentWidth - remainingSpaces.length,
@@ -267,7 +288,7 @@ export function layoutUserBlockRows(text: string, width: number): string[] {
 }
 ```
 
-`wrapUserLinePreservingLeadingSpaces` is intentionally private and UserBlock-specific. Rows containing only spaces represent source-derived indentation, not background padding. Do not modify `src/tui/state/wrap-line.ts`; its existing tokenizer still supplies grapheme-safe wrapping for the non-indent body.
+`wrapUserLinePreservingLeadingSpaces` is intentionally private and UserBlock-specific. Rows containing only spaces represent source-derived indentation, not background padding. Before combining remaining indentation with the body, it must check the first body grapheme's display width: if the combination exceeds `currentWidth`, emit the remaining indentation first and wrap the body with the full continuation width. If that grapheme itself is wider than the continuation width, only the standalone grapheme may overflow. Do not modify `src/tui/state/wrap-line.ts`; its existing tokenizer still supplies grapheme-safe wrapping for the non-indent body.
 
 - [ ] **Step 5: 运行当前测试，确认 GREEN**
 
@@ -277,7 +298,7 @@ Run:
 npx vitest run src/__tests__/tui/inline-v2/user-block-layout.test.ts
 ```
 
-Expected: PASS with all UserBlock layout cases green. Widths 4, 8 and 11 must retain exactly four source-derived leading spaces even though the Step 1 shared-wrapper probe loses them at narrower widths. Do not weaken the grapheme, prefix, Tab, leading-space or no-background-padding contracts.
+Expected: PASS with all UserBlock layout cases green. Widths 4, 8 and 11 must retain exactly four source-derived leading spaces even though the Step 1 shared-wrapper probe loses them at narrower widths. The width-3 `"  中"` case must render as separate indentation and grapheme rows, with no combined overflow. Do not weaken the grapheme, prefix, Tab, leading-space or no-background-padding contracts.
 
 - [ ] **Step 6: 提交 Task 1**
 
@@ -769,7 +790,7 @@ Expected: FAIL because the current component renders `space` token raw text dire
 
 In `src/tui/inline-v2/AssistantBlockLine.tsx`:
 
-1. Change the marked import to `import { lexer, type Token } from 'marked';`.
+1. Keep the marked import aligned with the token declaration. The existing `let tokens: Token[];` remains explicit in this plan, so use `import { lexer, type Token } from 'marked';`. If implementation instead removes that explicit `Token` annotation and relies on `lexer()` inference, use only `import { lexer } from 'marked';`; never leave an unused `type Token` import.
 2. Remove the direct `layoutMarkdownTable` import, keeping `TableLayoutLine` and `TableSpan` as type imports from `table-layout.js`.
 3. Add:
 
