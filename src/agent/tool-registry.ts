@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import { Encoder } from '../output/encoder.js';
 import { killProcessTree } from './process-tree.js';
 import { formatUnknownError } from '../utils/error-message.js';
+import { ToolOperationalError } from './tool-execution.js';
 import type { ToolDefinition, ToolExecutor, RegisteredTool, ToolExecutionContext } from './types.js';
 import { createReadFileTool, createWriteFileTool, createEditFileTool } from './tools/index.js';
 import { createGlobTool, createGrepTool } from './tools/search-tools.js';
@@ -383,6 +384,7 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
         // timeout/Abort 立即 reject 对应分类错误；close 正常 resolve；error 仍 resolve 字符串(Task 4 改)。
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
+        // eslint-disable-next-line prefer-const -- cleanup 闭包需前向引用 abortHandler 做解绑
         let abortHandler: (() => void) | undefined;
 
         const cleanup = (): void => {
@@ -432,12 +434,15 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
           resolve(stdout);
         });
 
-        // spawn 失败（命令不存在等）
+        // spawn 失败（命令不存在等）:统一包成 ToolOperationalError,
+        // 由 executeToolCall 的 classifyExecutorError 归类为 operational_error。
+        // terminateTree=false:spawn 失败时没有进程树可杀。
         child.on('error', (err) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resolve(`Command failed: ${err.message}`);
+          const code = 'code' in err
+            && typeof (err as NodeJS.ErrnoException).code === 'string'
+            ? (err as NodeJS.ErrnoException).code
+            : undefined;
+          settleFailure(new ToolOperationalError(err.message, code), false);
         });
 
         // in-flight Abort:挂载 listener + 注册后再查一次,关闭 pre-spawn 检查与

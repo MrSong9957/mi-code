@@ -222,4 +222,37 @@ describe('run_bash timeout contract', () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
     expect(mocks.killProcessTree).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      label: 'without code',
+      error: new Error('plain spawn failure'),
+      expectedCode: undefined,
+    },
+    {
+      label: 'with string code',
+      error: Object.assign(new Error('coded spawn failure'), { code: 'ENOENT' }),
+      expectedCode: 'ENOENT',
+    },
+  ])(
+    'returns failure(operational_error) for child error $label',
+    async ({ error, expectedCode }) => {
+      const child = makeChild();
+      mocks.spawn.mockReturnValue(child);
+
+      const execution = executeBash({ command: 'echo unavailable' });
+      await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledOnce());
+      child.emit('error', error);
+
+      await expect(execution).resolves.toMatchObject({
+        status: 'failure',
+        failure: {
+          kind: 'operational_error',
+          stage: 'execution',
+          message: error.message,
+          code: expectedCode,
+        },
+      });
+    },
+  );
 });
