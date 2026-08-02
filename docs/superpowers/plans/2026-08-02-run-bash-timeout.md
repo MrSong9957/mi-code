@@ -746,7 +746,7 @@ it.each([
 Run:
 
 ```bash
-npx vitest run src/__tests__/agent/run-bash-tool.test.ts -t "spawn error"
+npx vitest run src/__tests__/agent/run-bash-tool.test.ts -t "child error"
 ```
 
 Expected: both cases FAIL because Task 3 still resolves a `"Command failed: ..."` string, so `executeToolCall` reports `status: 'success'`. The plain-error case additionally proves that rejecting the original error would be insufficient because the existing classifier would rethrow it.
@@ -780,7 +780,7 @@ Passing `false` prevents a spawn failure from attempting to kill a process tree.
 Run:
 
 ```bash
-npx vitest run src/__tests__/agent/run-bash-tool.test.ts -t "spawn error"
+npx vitest run src/__tests__/agent/run-bash-tool.test.ts -t "child error"
 npx vitest run src/__tests__/agent/run-bash-tool.test.ts
 npx vitest run src/__tests__/agent/tool-execution.test.ts src/__tests__/agent/run-bash-tool.test.ts
 npm run typecheck
