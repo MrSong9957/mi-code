@@ -283,12 +283,19 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
             type: 'string',
             description: 'The shell command to execute (Git Bash syntax on Windows).',
           },
+          timeout_ms: {
+            type: 'number',
+            description: 'Timeout in milliseconds (1-600000). Defaults to 30000.',
+            minimum: 1,
+            maximum: 600_000,
+          },
         },
         required: ['command'],
       },
     },
     executor: async (input) => {
       const command = input.command as string;
+      const timeoutMs = (input.timeout_ms as number | undefined) ?? 30_000;
 
       // BRC-6 / M-063：子进程环境清洗。
       // 父进程 process.env 在此 ONCE 读取（sanctioned read point），交给
@@ -320,7 +327,7 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
       // 异步 spawn + 手动超时 + 进程树终止（替代 spawnSync 的孤儿进程泄漏）
       // 物理本质：spawnSync 超时只杀门面接待员（cmd.exe），孙进程（dev server）变孤儿。
       // 改用 spawn + killProcessTree 做"全楼清场"，超时后整棵进程树请走。
-      return new Promise<string>((resolve) => {
+      return new Promise<string>((resolve, reject) => {
         const child = spawn(command, {
           shell: true,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -336,7 +343,6 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
         let stderrLen = 0;
         let stdoutCapped = false;
         let stderrCapped = false;
-        let timedOut = false;
 
         // 流式截断：超 1MB 后停止 push（但不 pause/destroy 流，防 backpressure 挂死）
         if (child.stdout) {
@@ -366,20 +372,37 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
           });
         }
 
-        // 超时定时器：30s 后杀整棵进程树
-        const timer = setTimeout(() => {
-          timedOut = true;
-          if (child.pid) killProcessTree(child.pid);
-        }, 30000);
+        // 即时结算状态机：guard → cleanup → 可选进程树终止 → settle。
+        // timeout/Abort 立即 reject 对应分类错误；close 正常 resolve；error 仍 resolve 字符串(Task 4 改)。
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+
+        const cleanup = (): void => {
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+        };
+
+        const settleFailure = (error: Error, terminateTree: boolean): void => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          if (terminateTree && child.pid) killProcessTree(child.pid);
+          reject(error);
+        };
+
+        timer = setTimeout(() => {
+          const error = new Error(`Command timed out after ${timeoutMs} ms`);
+          error.name = 'TimeoutError';
+          settleFailure(error, true);
+        }, timeoutMs);
 
         // 进程结束（stdio 流关闭后触发 close）
         child.on('close', (code) => {
-          clearTimeout(timer);
-
-          if (timedOut) {
-            resolve('Command timed out after 30 seconds');
-            return;
-          }
+          if (settled) return;
+          settled = true;
+          cleanup();
 
           const stdout = stdoutChunks.length > 0 ? Encoder.decodeBuffer(Buffer.concat(stdoutChunks)) : '';
           const stderr = stderrChunks.length > 0 ? Encoder.decodeBuffer(Buffer.concat(stderrChunks)) : '';
@@ -400,7 +423,9 @@ export function createBashTool(): { definition: ToolDefinition; executor: ToolEx
 
         // spawn 失败（命令不存在等）
         child.on('error', (err) => {
-          clearTimeout(timer);
+          if (settled) return;
+          settled = true;
+          cleanup();
           resolve(`Command failed: ${err.message}`);
         });
       });
