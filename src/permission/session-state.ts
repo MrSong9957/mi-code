@@ -29,6 +29,7 @@ import {
   type PermissionSnapshot,
   type PermissionUpdate,
 } from './permission-updates.js';
+import type { PromptAttachment } from '../agent/prompt/auto-attachments.js';
 
 /** auto 拒绝计数（设计 §3 AutoPermissionState.denial） */
 export interface DenialState {
@@ -47,6 +48,12 @@ export class SessionState {
   private readonly allowlist: SessionAllowlist;
   private _snapshot: PermissionSnapshot = EMPTY_SNAPSHOT;
   private _denial: DenialState = { consecutive: 0, total: 0 };
+  /**
+   * auto_mode_exit attachment 队列（设计 §11 / A75）。
+   * 每次 exit auto 时入队一个 attachment；takeAttachments 消费并清空。
+   * transitionTo 清空此队列（A88）。
+   */
+  private _attachments: PromptAttachment[] = [];
 
   constructor(allowlist: SessionAllowlist, initialId: string) {
     this.allowlist = allowlist;
@@ -73,6 +80,11 @@ export class SessionState {
     return this.allowlist;
   }
 
+  /** 是否有未消费的 auto_mode_exit attachment（设计 §10 A88）。 */
+  get exitAttachmentPending(): boolean {
+    return this._attachments.length > 0;
+  }
+
   /**
    * 切换到新 sessionId。唯一允许的 session 变更入口。
    * newId !== currentId → 清空 session 级瞬态缓存(allowlist + denial + stash)+ 更新 id。
@@ -86,13 +98,14 @@ export class SessionState {
     if (newId !== this._currentId) {
       this.allowlist.clear();
       this._denial = { consecutive: 0, total: 0 };
-      // 清瞬态：stash + rules 归零，但保留 mode（会话语义）
+      // 清瞬态：stash + rules + attachment 队列归零，但保留 mode（会话语义）
       const keptMode = this._snapshot.mode;
       this._snapshot = Object.freeze({
         mode: keptMode,
         rules: Object.freeze([]) as readonly never[],
         strippedDangerousRules: Object.freeze([]) as readonly never[],
       });
+      this._attachments = [];
     }
     this._currentId = newId;
   }
@@ -117,5 +130,28 @@ export class SessionState {
   /** 记录一次 allow（consecutive 重置 0, total 保留）。 */
   recordAllow(): void {
     this._denial = { consecutive: 0, total: this._denial.total };
+  }
+
+  /**
+   * 退出 auto 模式时入队一个 auto_mode_exit attachment（设计 §11 / A75）。
+   *
+   * 每次 session transition（从 auto 退出）最多产生一个 attachment（debounce）。
+   * 非 auto 模式下调用为 no-op。
+   * takeAttachments 消费并清空队列。
+   */
+  exitAuto(): void {
+    if (this._snapshot.mode !== 'auto') return;
+    // debounce：已有 pending attachment 不再追加
+    if (this._attachments.length > 0) return;
+    this._attachments.push({ type: 'auto_mode_exit' });
+  }
+
+  /**
+   * 消费并返回当前所有 attachment，清空队列（设计 §11 / A75）。
+   */
+  takeAttachments(): PromptAttachment[] {
+    const out = this._attachments;
+    this._attachments = [];
+    return out;
   }
 }

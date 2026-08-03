@@ -51,6 +51,12 @@ export function transitionPermissionMode(
     return [];
   }
 
+  // Task 12 A75：从 auto 退出时入队 auto_mode_exit attachment。
+  // 在 applyPermissionUpdate(setMode) 前调用，此时 mode 仍为 auto。
+  if (current === 'auto' && next !== 'auto') {
+    state.exitAuto();
+  }
+
   // 经 applyPermissionUpdate(setMode) —— 唯一状态变换入口
   state.applyPermissionUpdate({ kind: 'setMode', mode: next });
 
