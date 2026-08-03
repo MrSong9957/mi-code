@@ -8,6 +8,9 @@
 //   4. rewriteToAllow 仅供 session allowlist 命中场景(Task 5)使用,不在此处自动触发。
 
 import { createSecurityDecision, SECURITY_PROTOCOL_VERSION, type SecurityDecision } from './decisions.js';
+import { createDenialState, type DenialState } from './denial-tracker.js';
+import { normalizePermissionToolName } from './rules.js';
+import type { PermissionRule, PermissionMode } from './types.js';
 
 /** safety_uncertain 别名:checker 产出的"无法确认安全"类 reason_code。 */
 const SAFETY_UNCERTAIN = new Set([
@@ -87,4 +90,114 @@ function rewriteDecision(
     provenance_refs:
       base.provenance_refs.length > 0 ? [...base.provenance_refs] : [fallbackTag],
   });
+}
+
+// ─── Task 5: forkPermissionSession（子代理 session 隔离 / A36-A39）──────────────
+
+/** 父权限快照（fork 输入） */
+export interface ParentPermissionSnapshot {
+  readonly mode: PermissionMode;
+  /** 父 privileged evaluation mode（bypassPermissions 等）；优先于 child 声明 */
+  readonly evaluationMode?: string;
+  readonly rules: readonly PermissionRule[];
+  readonly sessionAllows: readonly string[];
+  readonly denial: DenialState;
+  readonly strippedDangerousRules: readonly PermissionRule[];
+}
+
+/** fork 子代理 session 选项 */
+export interface ForkPermissionSessionOptions {
+  /** child 声明的模式；父 privileged mode 优先（A36） */
+  permissionMode?: PermissionMode;
+  /** child 允许的工具列表；替换 child session rules（A37），先 canonicalize */
+  allowedTools?: readonly string[];
+}
+
+/** fork 后的 child session（独立 denial/stash/transient） */
+export interface ForkedPermissionSession {
+  /** 最终生效的模式（父 privileged > child 声明） */
+  readonly mode: PermissionMode;
+  /** 最终生效的 evaluation mode（父 privileged 优先） */
+  readonly evaluationMode?: string;
+  /** child session rules（allowedTools 替换后的值） */
+  readonly sessionRules: PermissionRule[];
+  /** 继承的规则快照值（深拷贝，不共享引用） */
+  readonly rules: PermissionRule[];
+  /** child 独立 denial tracker（从 0 开始） */
+  readonly denialState: DenialState;
+  /** child 独立 dangerous stash（值拷贝，不共享引用） */
+  readonly strippedDangerousRules: PermissionRule[];
+  /** child 状态：running / aborted（denial 达阈值） */
+  readonly status: 'running' | 'aborted';
+  /** 记录 denial（child 独立计数） */
+  recordDenials(count: number): void;
+}
+
+/** child denial 阈值（与 denial-tracker 一致：3 consecutive） */
+const CHILD_DENIAL_ABORT_THRESHOLD = 3;
+
+/**
+ * fork 子代理 permission session（设计 §6 / A36-A39）。
+ *
+ * 语义：
+ *   - 父 privileged mode（auto / bypassPermissions）优先于 child 声明（A36）；
+ *   - allowedTools 先 canonicalize（Task/Agent/AgentTool -> spawn_agent），替换 child session rules（A37），
+ *     不 append 父 session allow；
+ *   - child 继承父规则快照的值（深拷贝），但 denial/stash 拥有独立引用（A39）；
+ *   - child denial 累计达阈值只终止 child，不影响 parent（A38）。
+ */
+export function forkPermissionSession(
+  parent: ParentPermissionSnapshot,
+  options: ForkPermissionSessionOptions,
+): ForkedPermissionSession {
+  // A36: 父 privileged mode 优先
+  const mode = parent.mode;
+  const evaluationMode = parent.evaluationMode;
+
+  // A37: allowedTools canonicalize + 替换 child session rules
+  let sessionRules: PermissionRule[];
+  if (options.allowedTools) {
+    sessionRules = options.allowedTools.map((t) => ({
+      tool: normalizePermissionToolName(t),
+      behavior: 'allow' as const,
+    }));
+  } else {
+    sessionRules = [];
+  }
+
+  // A39: 规则值深拷贝（不共享引用）
+  const rules = parent.rules.map((r) => ({ ...r }));
+  // stash 值拷贝（不共享引用）
+  const stash = parent.strippedDangerousRules.map((r) => ({ ...r }));
+
+  // child denial 用可变 holder 跟踪（recordDenials 更新；对外经 getter 暴露当前值）
+  const denialHolder: { state: DenialState; status: 'running' | 'aborted' } = {
+    state: createDenialState(),
+    status: 'running',
+  };
+
+  const session: ForkedPermissionSession = {
+    mode,
+    evaluationMode,
+    sessionRules,
+    rules,
+    get denialState() {
+      return denialHolder.state;
+    },
+    strippedDangerousRules: stash,
+    get status() {
+      return denialHolder.status;
+    },
+    recordDenials(count: number) {
+      if (denialHolder.status === 'aborted') return;
+      denialHolder.state = {
+        consecutive: denialHolder.state.consecutive + count,
+        total: denialHolder.state.total + count,
+      };
+      if (denialHolder.state.consecutive >= CHILD_DENIAL_ABORT_THRESHOLD) {
+        denialHolder.status = 'aborted';
+      }
+    },
+  };
+  return session;
 }

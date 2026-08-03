@@ -171,6 +171,15 @@ export function createSpawnAgentTool(
             type: 'boolean',
             description: 'Set to true for a subagent that inherits your full system prompt. Use when you need a worker with your exact capabilities for an independent parallel subtask.',
           },
+          allowedTools: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional explicit allowlist of tool names for the child session. Replaces (not appends) the child session rules. Task/Agent/AgentTool are canonicalized to spawn_agent.',
+          },
+          permissionMode: {
+            type: 'string',
+            description: 'Optional child-declared permission mode (build/plan/auto). Parent privileged mode takes precedence.',
+          },
         },
         required: ['role', 'prompt'],
       },
@@ -178,6 +187,8 @@ export function createSpawnAgentTool(
     executor: async (input) => {
       const role = input.role as string;
       const prompt = (input.prompt as string)?.trim();
+      const allowedTools = Array.isArray(input.allowedTools) ? (input.allowedTools as string[]) : undefined;
+      const permissionMode = input.permissionMode as 'build' | 'plan' | 'auto' | undefined;
 
       if (!['explore', 'plan', 'general'].includes(role)) {
         return `Error: invalid role "${role}". Must be one of: explore, plan, general.`;
@@ -220,6 +231,8 @@ export function createSpawnAgentTool(
             skillsDescription,
             forkMode: true,
             parentSystem: getParentSystemPrompt(),
+            allowedTools,
+            permissionMode,
           });
           return formatSubagentExecutionResult(result);
         }
@@ -233,6 +246,8 @@ export function createSpawnAgentTool(
           parentSystem: getParentSystemPrompt(),
           // role 不传（undefined）→ filterToolsByRole 返回全量减黑名单
           journal,
+          allowedTools,
+          permissionMode,
         });
         // AUTO-0025 Task 5:输出携带结构化 status 前缀
         return formatSubagentResult(result);
@@ -252,6 +267,8 @@ export function createSpawnAgentTool(
           executionRuntime,
           maxSteps,
           skillsDescription,
+          allowedTools,
+          permissionMode,
         });
         return formatSubagentExecutionResult(result);
       }
@@ -263,6 +280,8 @@ export function createSpawnAgentTool(
         maxSteps,
         skillsDescription,
         journal,
+        allowedTools,
+        permissionMode,
       });
       // AUTO-0025 Task 5:输出携带结构化 status 前缀
       return formatSubagentResult(result);

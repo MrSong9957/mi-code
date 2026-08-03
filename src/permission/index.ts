@@ -77,6 +77,21 @@ export {
   parseStage2Decision,
   type ClassifierDecision,
 } from './classifier.js';
+// Task 5: PermissionRequest hooks + fork session
+export {
+  runPermissionRequestHooks,
+  resolveHeadlessAsk,
+  type PermissionRequestHook,
+  type HeadlessAskInput,
+  type ResolveHeadlessAskOptions,
+  type HeadlessResolution,
+} from './permission-request-hooks.js';
+export {
+  forkPermissionSession,
+  type ParentPermissionSnapshot,
+  type ForkPermissionSessionOptions,
+  type ForkedPermissionSession,
+} from './subagent-silent-policy.js';
 // RC-5 结构化安全决策（spec §11）
 export {
   SECURITY_PROTOCOL_VERSION,
