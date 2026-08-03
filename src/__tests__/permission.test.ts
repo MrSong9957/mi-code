@@ -189,10 +189,14 @@ describe('PermissionChecker - Gate 3 (mode)', () => {
     expect(checker.check('todo_write', {}).behavior).toBe('allow');
   });
 
-  it('auto mode allows everything not hard-denied', () => {
+  it('auto mode no longer unconditionally allows writes (Task 3 A15)', () => {
+    // Task 3 A15：auto 不再无条件 allow；未决 write/run_bash -> ask（交 resolver/classifier）。
+    // auto 的 allow 由后续 resolver/classifier 决定，同步 checker 只产出 ask。
     const checker = new PermissionChecker({ mode: 'auto' });
-    expect(checker.check('write_file', { path: 'a.txt', content: 'x' }).behavior).toBe('allow');
-    expect(checker.check('run_bash', { command: 'echo hi' }).behavior).toBe('allow');
+    expect(checker.check('write_file', { path: 'a.txt', content: 'x' }).behavior).toBe('ask');
+    // run_bash 未决也 -> ask（auto 不再无条件放行 bash；resolver 决定）
+    expect(checker.check('run_bash', { command: 'echo hi' }).behavior).toBe('ask');
+    // 纯只读工具（read_file 在 READ_ONLY_TOOLS）仍 allow
     expect(checker.check('read_file', { path: 'a.txt' }).behavior).toBe('allow');
   });
 

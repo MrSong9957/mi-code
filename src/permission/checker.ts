@@ -20,6 +20,17 @@ import {
   type SecurityDecision,
 } from './decisions.js';
 
+/**
+ * 内部 evaluation mode（设计 §2 / Task 3）。
+ * - build/plan/auto：用户可见模式
+ * - acceptEdits：内部 fast-path，discretionary allow 写操作（不暴露 CLI/TUI）
+ * - bypassPermissions：内部，放行普通写但不绕过 protected settings / explicit ask / requiresInteraction
+ * - dontAsk：内部，不弹窗（Task 3 预留，resolver 使用）
+ *
+ * checkWithEvaluationMode 用这些值；check() 仍只接受 PermissionMode。
+ */
+export type PermissionEvaluationMode = PermissionMode | 'acceptEdits' | 'bypassPermissions' | 'dontAsk';
+
 /** PermissionChecker 构造参数 */
 export interface PermissionCheckerOptions {
   mode?: PermissionMode;
@@ -42,7 +53,7 @@ export interface PermissionCheckerOptions {
    */
   commandPolicyHook?: (
     command: string,
-    controlMode: PermissionMode,
+    controlMode: PermissionEvaluationMode,
   ) => 'allow' | 'ask' | 'deny' | null;
 }
 
@@ -51,6 +62,20 @@ const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file']);
 
 /** 带路径的文件类工具（闸门 1 越界预检：读+写统一硬拦截） */
 const FILE_PATH_TOOLS = new Set(['read_file', 'write_file', 'edit_file']);
+
+/**
+ * requiresUserInteraction 工具集（Task 3 A14）。
+ * 这些工具的本质是“需要用户交互”，任何 evaluation mode（含 bypassPermissions）都不能放行，
+ * 必须保持 ask。
+ */
+const REQUIRES_INTERACTION_TOOLS = new Set(['ask_user_question']);
+
+/**
+ * 受保护设置路径前缀（Task 3 A12）。
+ * 这些路径是项目/仓库的关键配置，bypassPermissions 也不能放行写操作，必须 ask。
+ * 物理本质：改这些文件 = 改权限/仓库边界，不能静默。
+ */
+const PROTECTED_SETTING_PATHS = ['.git/', '.git\\', '.micode/', '.micode\\'];
 
 export class PermissionChecker {
   private mode: PermissionMode;
@@ -103,7 +128,7 @@ export class PermissionChecker {
   }
 
   /**
-   * 检查权限：四步管道
+   * 检查权限：使用当前 mode 调用内部管道。
    *
    * 返回 { behavior, reason }：
    * - deny：调用方直接拦截，不执行
@@ -111,38 +136,90 @@ export class PermissionChecker {
    * - allow：直接执行
    */
   check(toolName: string, input: Record<string, unknown>): PermissionDecision {
-    // ── 闸门 0：Wave D Task 14 (M-064 / DRC-5) Command Structural Policy ──
+    return this.checkInternal(toolName, input, this.mode);
+  }
+
+  /**
+   * Task 3 A12-A14：按指定 evaluation mode 检查权限。
+   *
+   * evaluationMode 可为 build/plan/auto（用户可见模式）或 acceptEdits/bypassPermissions/dontAsk
+   * （内部 evaluation mode，不暴露 CLI/TUI）。
+   *
+   * 不变量（设计 §5、§10 A12-A14）：
+   *   - protected settings 写：任何 mode（含 bypassPermissions）都 ask；
+   *   - explicit ask 规则：任何 mode（含 bypassPermissions）都 ask；
+   *   - requiresUserInteraction 工具：任何 mode 都 ask；
+   *   - acceptEdits/bypassPermissions：普通写 discretionary allow。
+   */
+  checkWithEvaluationMode(
+    toolName: string,
+    input: Record<string, unknown>,
+    evaluationMode: PermissionEvaluationMode,
+  ): PermissionDecision {
+    return this.checkInternal(toolName, input, evaluationMode);
+  }
+
+  /**
+   * 唯一同步权限管道（设计 §5，顺序不可重排）：
+   *
+   *   tool/raw strong rules → parsed subcommand strong rules
+   *   → raw-input safety/requiresInteraction → too-complex fallback
+   *   → discretionary allow → ordinary allow → ask
+   *
+   * 关键不变量：
+   *   - deny 直接终止，不能被后续 mode/allow/ask 覆盖；
+   *   - compound Bash 任一子命令命中 deny/ask，整命令对应 deny/ask；
+   *   - AST too-complex 不能提前吞掉 raw deny/ask/可由 raw input 判断的 safety/interaction；
+   *   - auto 不再无条件 allow；未决 write → ask。
+   */
+  private checkInternal(
+    toolName: string,
+    input: Record<string, unknown>,
+    evaluationMode: PermissionEvaluationMode,
+  ): PermissionDecision {
+    // ── 闸门 1：tool/raw strong rules（deny 优先于 ask，不可被后续覆盖） ──
     //
-    // 物理本质: "安检前的 X 光机"。在现有 4 步管道之前, 对 run_bash 做结构化 AST
-    // policy 检查。这是最严格的前置门:
-    //   - hook 返回 'deny'/'ask' → 直接返回(不进入后续管道, 更严格)
-    //   - hook 返回 'allow'/null → 继续走原 4 步管道(hook 不放松硬门)
+    // 先扫所有 deny 规则，再扫 ask 规则；任一 deny 命中直接返回。
+    // 对 run_bash compound 命令，按子命令逐一匹配（A10）。
+    for (const rule of this.rules) {
+      if (rule.behavior === 'deny' && this.ruleMatchesWithSubcommands(rule, toolName, input)) {
+        return { behavior: 'deny', reason: `Matched deny rule (tool=${rule.tool})`, reason_code: 'permission.rule_deny' };
+      }
+    }
+    for (const rule of this.rules) {
+      if (rule.behavior === 'ask' && this.ruleMatchesWithSubcommands(rule, toolName, input)) {
+        return { behavior: 'ask', reason: `Matched ask rule (tool=${rule.tool})`, reason_code: 'permission.explicit_ask' };
+      }
+    }
+
+    // ── 闸门 2：parsed subcommand strong rules（commandPolicyHook / AST 子命令） ──
     //
-    // hook 由调用方提供(负责构造 CommandPolicyEvaluationInput + 调用
-    // composeCommandStructuralDecision)。不传时 LEGACY 跳过, 4 步管道行为不变。
-    // 生产路径在 DRC-5 Activation Gate 通过后传入此 hook。
+    // commandPolicyHook 对 run_bash 做 AST 子命令级 policy；返回 deny/ask 时直接生效。
+    // 但 too-complex（返回 null）不提前吞掉闸门 1 的 deny/ask（已在闸门 1 处理），
+    // 也不吞掉闸门 3 的 raw safety/interaction。
     if (this.commandPolicyHook && toolName === 'run_bash') {
       const command = (input.command as string) || '';
-      const astBehavior = this.commandPolicyHook(command, this.mode);
+      const astBehavior = this.commandPolicyHook(command, evaluationMode);
       if (astBehavior === 'deny') {
         return { behavior: 'deny', reason: 'Command structural policy denied (AST gate)', reason_code: 'permission.command_policy_denied' };
       }
       if (astBehavior === 'ask') {
         return { behavior: 'ask', reason: 'Command structural policy requires review (AST gate)', reason_code: 'permission.command_policy_denied' };
       }
-      // 'allow' 或 null: 继续走原管道(不放松硬门)
+      // 'allow' 或 null：继续（不放松硬门；null = too-complex，由闸门 3/兜底 ask 处理）
     }
 
-    // ── 闸门 1：硬 deny（内置安全策略，不可被规则/模式绕过） ──
+    // ── 闸门 3：raw-input safety / requiresInteraction（内置硬约束） ──
+    //
+    // 这些可由 raw input 确定，必须在 too-complex fallback 之前求值；
+    // too-complex 不能吞掉它们（设计 §5）。
     if (toolName === 'run_bash') {
       const command = (input.command as string) || '';
-      // 1a. 危险命令黑名单（sudo/rm-rf/$()/fork bomb...）
+      // 3a. 危险命令黑名单（sudo/rm-rf/$()/fork bomb...）—— deny
       if (isDangerousBash(command)) {
         return { behavior: 'deny', reason: 'Dangerous command blocked by built-in policy', reason_code: 'permission.dangerous_command' };
       }
-      // 1b. 路径围栏（Phase 1：解析 + 路径越界检测）
-      // 解析命令里的路径参数，发现指向工作区外的 → deny；
-      // 解析失败/变量未知 → ask（不自动放行，升级人审）。
+      // 3b. 路径围栏：解析命令路径参数；越界 deny，解析失败/变量未知 ask（too-complex fallback）
       const { paths, parseFailed, unresolvableVars } = extractBashPaths(command);
       if (parseFailed) {
         return { behavior: 'ask', reason: 'Bash command unparseable, needs review', reason_code: 'permission.command_unparseable' };
@@ -163,26 +240,30 @@ export class PermissionChecker {
         return { behavior: 'deny', reason: `${op} outside workspace is blocked by built-in policy`, reason_code: 'permission.path_outside_workspace' };
       }
     }
-
-    // ── 闸门 2：用户 deny 规则 ──
-    for (const rule of this.rules) {
-      if (rule.behavior === 'deny' && matchesRule(rule, toolName, input)) {
-        return { behavior: 'deny', reason: `Matched deny rule (tool=${rule.tool})`, reason_code: 'permission.rule_deny' };
+    // 3c. requiresUserInteraction 工具：任何 evaluation mode 都 ask（A14）
+    if (REQUIRES_INTERACTION_TOOLS.has(toolName)) {
+      return { behavior: 'ask', reason: 'Tool requires user interaction', reason_code: 'permission.requires_interaction' };
+    }
+    // 3d. protected settings 写：任何 evaluation mode（含 bypassPermissions）都 ask（A12）
+    if (FILE_WRITE_TOOLS.has(toolName)) {
+      const filePath = ((input.path as string) || '').replace(/\\/g, '/');
+      if (PROTECTED_SETTING_PATHS.some((prefix) => filePath.startsWith(prefix.replace(/\\/g, '/')))) {
+        return { behavior: 'ask', reason: 'Protected settings cannot be auto-approved', reason_code: 'permission.protected_settings' };
       }
     }
 
-    // ── 闸门 3：模式检查 ──
-    if (this.mode === 'plan') {
-      // plan 目录白名单：write_file/edit_file 目标在 planDir 内则放行
-      // （让 AI 能用 write_file 写 plan 文件，但不能写其它）
+    // ── 闸门 4：discretionary allow（按 evaluation mode / 用户可见 mode） ──
+    //
+    // plan / acceptEdits / bypassPermissions 各自的 discretionary allow；
+    // auto 模式不再无条件 allow（A15：未决 write → ask），与 build 一样走 ordinary allow + 兜底 ask。
+    if (evaluationMode === 'plan') {
+      // plan 目录白名单
       if (FILE_WRITE_TOOLS.has(toolName) && this.planDir) {
         const filePath = (input.path as string) || '';
         if (filePath && !isPathOutsideWorkspace(filePath, this.planDir)) {
           return { behavior: 'allow', reason: 'Plan mode allows writing inside plan dir', reason_code: 'permission.default' };
         }
       }
-      // run_bash 精细判定：写命令（mkdir/echo>/git commit/...）deny，只读命令（ls/cat/grep）allow
-      // 这是 plan 模式与 explore 角色子代理的核心：允许只读探索，但拦任何文件改动。
       if (toolName === 'run_bash') {
         const command = (input.command as string) || '';
         if (isWriteBash(command)) {
@@ -196,38 +277,63 @@ export class PermissionChecker {
       return { behavior: 'allow', reason: 'Plan mode allows read operations', reason_code: 'permission.default' };
     }
 
-    if (this.mode === 'auto') {
-      // auto 模式：危险命令已在闸门1挡住，其余自动放行
-      return { behavior: 'allow', reason: 'Auto mode allows this operation', reason_code: 'permission.default' };
+    if (evaluationMode === 'acceptEdits' || evaluationMode === 'bypassPermissions') {
+      // discretionary allow：普通写放行（受保护设置已在闸门 3d 拦截）
+      if (toolName === 'run_bash') {
+        // 写 bash 仍按 acceptEdits 放行（plan 才拦）；bypassPermissions 同样
+        return { behavior: 'allow', reason: `${evaluationMode} allows this operation`, reason_code: 'permission.default' };
+      }
+      if (FILE_WRITE_TOOLS.has(toolName) || WRITE_TOOLS.includes(toolName)) {
+        return { behavior: 'allow', reason: `${evaluationMode} allows write operations`, reason_code: 'permission.default' };
+      }
+      // 非写工具继续走 ordinary allow / 兜底
     }
 
-    // ── 闸门 4：用户 allow 规则 ──
+    // build / auto：auto 不再有特殊无条件 allow，与 build 同流程（A15）
+
+    // ── 闸门 5：ordinary allow 规则 ──
     for (const rule of this.rules) {
-      if (rule.behavior === 'allow' && matchesRule(rule, toolName, input)) {
+      if (rule.behavior === 'allow' && this.ruleMatchesWithSubcommands(rule, toolName, input)) {
         return { behavior: 'allow', reason: `Matched allow rule (tool=${rule.tool})`, reason_code: 'permission.rule_allow' };
       }
     }
 
-    // ── 默认行为（default 模式未命中规则时） ──
-    // 用户 ask 规则显式要求确认
-    for (const rule of this.rules) {
-      if (rule.behavior === 'ask' && matchesRule(rule, toolName, input)) {
-        return { behavior: 'ask', reason: `Matched ask rule (tool=${rule.tool})`, reason_code: 'permission.default' };
-      }
-    }
-
-    // 委派工具(派子代理):build 模式静默 allow。
-    // 派代理本身不直接改文件系统;子代理内部工具仍由 PermissionChecker + origin silent policy 约束。
+    // ── 闸门 6：delegation / read-only 默认 allow（build/auto） ──
     if (DELEGATION_TOOLS.includes(toolName)) {
       return { behavior: 'allow', reason: 'Delegation tools are allowed by default in build mode', reason_code: 'permission.default' };
     }
-
     if (READ_ONLY_TOOLS.includes(toolName)) {
       return { behavior: 'allow', reason: 'Read operations are safe by default', reason_code: 'permission.default' };
     }
 
-    // 写操作需用户确认
+    // ── 兜底：未决写 → ask（A15）──
     return { behavior: 'ask', reason: 'Write operation needs user confirmation', reason_code: 'permission.user_confirmation_required' };
+  }
+
+  /**
+   * 规则匹配（含 compound bash 子命令逐一匹配，A10）。
+   *
+   * 对 run_bash，命令可能含 `&&` / `;` / `|` 连接的多个子命令；
+   * 任一子命令命中规则即视为整命令命中（compound 任一 deny -> 整命令 deny）。
+   * 非 run_bash 工具直接用 matchesRule。
+   */
+  private ruleMatchesWithSubcommands(
+    rule: PermissionRule,
+    toolName: string,
+    input: Record<string, unknown>,
+  ): boolean {
+    if (toolName !== 'run_bash' || rule.tool !== 'run_bash') {
+      return matchesRule(rule, toolName, input);
+    }
+    const command = (input.command as string) || '';
+    // 先整体匹配
+    if (matchesRule(rule, toolName, input)) return true;
+    // 拆分 compound 子命令，逐一匹配
+    const subcommands = command.split(/\s*(?:&&|;|\|\|)\s*/).filter(Boolean);
+    for (const sub of subcommands) {
+      if (matchesRule(rule, toolName, { command: sub })) return true;
+    }
+    return false;
   }
 
   /**

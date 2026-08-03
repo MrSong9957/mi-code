@@ -194,19 +194,20 @@ describe('权限↔执行↔磁盘 端到端集成', () => {
       expect(result).toBe(realContent);
     });
 
-    it('auto 模式 + write_file：文件真的写出，内容正确', async () => {
+    it('auto 模式 + write_file：Task 3 A15 后同步 checker 产出 ask（resolver 决定）', async () => {
+      // Task 3 A15：auto 不再无条件 allow；同步 checker 产出 ask，由后续 resolver/classifier 决定。
+      // 此集成无 resolver/classifier，故 ask fail closed，文件不写。
       const checker = new PermissionChecker({ mode: 'auto', workdir });
       const decision = checker.check('write_file', { path: 'auto.txt', content: 'auto模式' });
-      expect(decision.behavior).toBe('allow');
+      expect(decision.behavior).toBe('ask');
 
       const block: ToolUseBlock = {
         type: 'tool_use', id: 't5', name: 'write_file',
         input: { path: 'auto.txt', content: 'auto模式' },
       };
       await runThroughExecutor(registry, checker, block);
-      // 现场验证：文件真写出，内容字节级一致
-      const written = readFileSync(join(workdir, 'auto.txt'), 'utf8');
-      expect(written).toBe('auto模式');
+      // ask fail closed：文件未写出
+      expect(existsSync(join(workdir, 'auto.txt'))).toBe(false);
     });
   });
 
