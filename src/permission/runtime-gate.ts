@@ -20,6 +20,7 @@
 
 import { randomUUID } from 'crypto';
 import type { SecurityDecision, UserDecision } from './decisions.js';
+import { logPermissionDecision, type PermissionAuditSink } from './audit.js';
 
 // ─────────────────────────────────────────────
 // 类型(spec §12.3 逐字落地)
@@ -77,6 +78,13 @@ export interface RuntimeSecurityGateOptions {
   channel: UserDecisionChannel | null;
   /** 可选:用于 derive pending.session_id(默认 'runtime-gate')。 */
   sessionId?: string;
+  /**
+   * Task 13 A86: 权限审计 sink。
+   * authorize 在最终决定出口（return 前）调用一次，发出 result event。
+   * sink 异常被静默吞掉，不改变授权结果（设计 §9）。
+   * 不传 → LEGACY 行为（无审计）。
+   */
+  auditSink?: PermissionAuditSink;
 }
 
 // ─────────────────────────────────────────────
@@ -102,19 +110,50 @@ export class RuntimeSecurityGate {
   private readonly pendingStore: PendingDecisionStore;
   private readonly channel: UserDecisionChannel | null;
   private readonly sessionId: string;
+  private readonly auditSink?: PermissionAuditSink;
 
   constructor(options: RuntimeSecurityGateOptions) {
     this.options = options;
     this.pendingStore = options.pendingStore;
     this.channel = options.channel;
     this.sessionId = options.sessionId ?? 'runtime-gate';
+    this.auditSink = options.auditSink;
   }
 
   /**
    * Authorize 一个 action。绝不调用 executor——executor 由调用方在 authorized 时自行调用,
    * 或用 execute() 便利方法。
+   *
+   * Task 13 A86：在最终决定出口发出恰好一个 result audit event（如果提供了 auditSink）。
+   * audit 异常被静默吞掉，不改变授权结果。
    */
   async authorize(decision: SecurityDecision): Promise<AuthorizedAction | DeniedAction> {
+    const startTime = performance.now();
+    const result = await this.authorizeInternal(decision);
+    // 最终决定出口：fan-out 恰好一个 result audit event
+    if (this.auditSink) {
+      const latencyMs = performance.now() - startTime;
+      const behavior: 'allow' | 'deny' = result.kind === 'authorized' ? 'allow' : 'deny';
+      const reasonCode = result.kind === 'denied' ? result.reason_code : decision.reason_code;
+      logPermissionDecision(
+        {
+          decisionId: decision.decision_id,
+          toolName: decision.action.subject_id,
+          behavior,
+          reasonCode,
+          source: decision.deciding_layer,
+          latencyMs,
+        },
+        this.auditSink,
+      );
+    }
+    return result;
+  }
+
+  /**
+   * authorize 内部逻辑（无 audit）。6 个出口点返回 authorized/denied。
+   */
+  private async authorizeInternal(decision: SecurityDecision): Promise<AuthorizedAction | DeniedAction> {
     // ─── allow ───
     if (decision.behavior === 'allow') {
       // 不动 channel、不写 pending(allow 不是永久规则,只是 per-action-snapshot 的即时放行)

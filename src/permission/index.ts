@@ -123,6 +123,15 @@ export {
   type RestrictionResult,
   type RuntimeTransitionResult,
 } from './mode-transition.js';
+// Task 13: 脱敏权限审计（设计 §9、§10 A86-A87）
+export {
+  buildAuditEvent,
+  logPermissionDecision,
+  toLatencyBucket,
+  type PermissionAuditEvent,
+  type PermissionAuditSink,
+  type PermissionDecisionInput,
+} from './audit.js';
 // RC-5 结构化安全决策（spec §11）
 export {
   SECURITY_PROTOCOL_VERSION,
