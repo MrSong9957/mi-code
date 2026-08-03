@@ -98,10 +98,18 @@ export {
   DefaultPermissionAskResolver,
   type PermissionAskResolutionRequest,
   type PermissionAskResolver,
+  type PendingAutomaticDecision,
   type ResolverClassifier,
   type ResolverEvaluator,
   type DefaultPermissionAskResolverOptions,
 } from './ask-resolver.js';
+// Task 7: Interactive ask
+export {
+  resolveInteractiveAsk,
+  type InteractiveAskInput,
+  type InteractiveAskOptions,
+  type DialogResult,
+} from './interactive-ask.js';
 // RC-5 结构化安全决策（spec §11）
 export {
   SECURITY_PROTOCOL_VERSION,

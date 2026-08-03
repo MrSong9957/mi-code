@@ -47,6 +47,16 @@ export const AUTO_SAFE_TOOL_ALLOWLIST = new Set<string>([
   'read_plan_file',
 ]);
 
+/**
+ * pending automatic decision contract（Task 6/7）。
+ * resolver 在 resolveByClassifier 构造：promise 是 classifier 裁决，abort 取消 RPC。
+ * resolveInteractiveAsk 持有此对象；ESC 时自行调用 abort()，不创建第二个 controller。
+ */
+export interface PendingAutomaticDecision {
+  readonly promise: Promise<SecurityDecision>;
+  readonly abort: () => void;
+}
+
 /** resolver 请求 */
 export interface PermissionAskResolutionRequest {
   readonly decision: SecurityDecision;
