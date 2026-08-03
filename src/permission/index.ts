@@ -12,7 +12,6 @@ export {
 // Task 1: canonical 规则解析、通配匹配、canonical 别名归一化与 MCP 匹配
 export {
   parsePermissionRule,
-  serializePermissionRule,
   matchWildcardPattern,
   normalizePermissionToolName,
   parseMcpToolId,

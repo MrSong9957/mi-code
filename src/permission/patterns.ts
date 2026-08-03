@@ -85,21 +85,69 @@ export function isWriteBash(command: string): boolean {
 /**
  * 将简单 glob 模式转换为正则表达式
  *
- * 支持的通配符：
- * - `*` 匹配任意字符（含分隔符）
- * - `?` 匹配单个字符
- * - 其余字符按字面量转义
+ * Task 1 委托：`*` / 反斜杠转义 / dotAll / 单尾部 `*` 可选语义必须与
+ * `rules.ts matchWildcardPattern` 一致——这是权限通配匹配的唯一真相源。
+ * 此处保留旧的 `?`（单字符）语义供文件 glob 使用（A1-A82 不覆盖 `?`，
+ * 但既有 permission.test.ts 锁定了它）。
  *
- * 物理本质：把"模糊描述"翻译成"精确规则"。
+ * 语义（与 rules.ts 对齐）：
+ * - `*` 匹配任意字符（含分隔符），dotAll（多行/heredoc，A5）。
+ * - `\x` 反斜杠转义使 `x` 成为字面量（`\*` 字面星，A3）。
+ * - 单个尾部 `*` 把“参数”视为可选（A2：`git *` 匹配 `git`）。
+ * - `?` 匹配单个任意字符（保留既有文件 glob 行为）。
+ * - 其余字符按字面量转义（如 `[` `]` 是字面量，非字符类）。
+ *
+ * 物理本质：把"模糊描述"翻译成"精确规则"。token 化实现与 rules.ts 同源。
  */
 export function globToRegex(pattern: string): RegExp {
-  let regex = '';
-  for (const ch of pattern) {
-    if (ch === '*') regex += '.*';
-    else if (ch === '?') regex += '.';
-    else regex += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // token 化：`\x` -> literal x；`*` -> wildcard star；`?` -> single char；其余 literal
+  const tokens: Array<{ kind: 'literal'; ch: string } | { kind: 'star' } | { kind: 'any1' }> = [];
+  let unescapedStarCount = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '\\' && i + 1 < pattern.length) {
+      tokens.push({ kind: 'literal', ch: pattern[i + 1] });
+      i++; // 跳过被转义的下一个字符
+    } else if (ch === '*') {
+      tokens.push({ kind: 'star' });
+      unescapedStarCount++;
+    } else if (ch === '?') {
+      tokens.push({ kind: 'any1' });
+    } else {
+      tokens.push({ kind: 'literal', ch });
+    }
   }
-  return new RegExp(`^${regex}$`);
+
+  // trailingStar：恰好一个未转义 `*` 且在末尾 -> 参数可选（A2）
+  const trailingStar =
+    unescapedStarCount === 1 &&
+    tokens.length > 0 &&
+    tokens[tokens.length - 1].kind === 'star';
+
+  const buildBody = (toks: typeof tokens): string => {
+    let r = '';
+    for (const t of toks) {
+      if (t.kind === 'star') r += '.*';
+      else if (t.kind === 'any1') r += '.';
+      else r += t.ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+    return r;
+  };
+
+  // 非 trailingStar：单一正则，dotAll（A5 多行内容）
+  if (!trailingStar) {
+    return new RegExp(`^${buildBody(tokens)}$`, 's');
+  }
+
+  // trailingStar：两种命中合一 —— 完整通配 OR 剥去尾部 `*`+紧邻空白后的前缀
+  //   `git *` -> `^(git\ .*)$` OR `^(git)$`
+  let prefixTokens = tokens.slice(0, -1);
+  for (;;) {
+    const last = prefixTokens[prefixTokens.length - 1];
+    if (!last || last.kind !== 'literal' || !/\s/.test(last.ch)) break;
+    prefixTokens = prefixTokens.slice(0, -1);
+  }
+  return new RegExp(`^(?:${buildBody(tokens)}|${buildBody(prefixTokens)})$`, 's');
 }
 
 /** 检查路径是否在指定工作目录之外（含 `..` 穿越检测） */

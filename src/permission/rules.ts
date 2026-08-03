@@ -67,14 +67,6 @@ export function parsePermissionRule(raw: string): ParsedRule {
   return { type: 'exact', command: raw };
 }
 
-/** 序列化 { toolName, ruleContent } 为规则串（A8 roundtrip）。 */
-export function serializePermissionRule(input: {
-  toolName: string;
-  ruleContent: string;
-}): string {
-  return input.ruleContent;
-}
-
 // ─── 通配匹配（A1-A5、A82）─────────────────────────────────────────────────────
 
 /**
