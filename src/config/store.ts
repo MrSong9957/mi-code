@@ -328,16 +328,26 @@ export class ConfigStore {
    */
   private serializeWithUnknownFields(): Record<string, unknown> {
     // 用 rawConfig 做基，再用 config 覆盖所有 schema 字段
-    return {
+    const merged: Record<string, unknown> = {
       ...this.rawConfig,
       providers: this.config.providers,
       defaultProvider: this.config.defaultProvider,
       permissions: this.config.permissions,
       theme: this.config.theme,
       spinnerVerbs: this.config.spinnerVerbs,
-      ...(this.config.plansDirectory !== undefined ? { plansDirectory: this.config.plansDirectory } : {}),
-      ...(this.config.capability_overrides !== undefined ? { capability_overrides: this.config.capability_overrides } : {}),
     };
+    // 可选字段：undefined 表示删除（清除配置），非 undefined 表示设置
+    if (this.config.plansDirectory !== undefined) {
+      merged.plansDirectory = this.config.plansDirectory;
+    } else {
+      delete merged.plansDirectory;
+    }
+    if (this.config.capability_overrides !== undefined) {
+      merged.capability_overrides = this.config.capability_overrides;
+    } else {
+      delete merged.capability_overrides;
+    }
+    return merged;
   }
 
   /**
