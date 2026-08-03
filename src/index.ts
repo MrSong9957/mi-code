@@ -900,19 +900,18 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   tuiHandle?.setSpinnerLabel('Connecting');
   spinnerStarted = true;
   try {
-    // Task 12 A75：从 auto 退出后，下一次 Agent prompt 携带 auto_mode_exit attachment。
-    // 消费后清空（takeAttachments），下一次不再携带。static system prompt 不因该追加改变。
-    const pendingAttachments = sessionState.takeAttachments();
-    const attachmentText = renderAttachmentsForPrompt(pendingAttachments);
-    const systemPromptWithAttachments = attachmentText
-      ? `${systemPrompt}\n\n---\n\n${attachmentText}`
-      : systemPrompt;
-    // 不传 maxTurns：对齐 Claude Code，默认无限循环，依赖 LLM 自主 end_turn + 用户 ESC +
-    // budget 软限制退出。需要时可通过 StreamingQueryOptions.maxTurns 显式注入安全网。
+    // Task 12 A75：auto_mode_exit 走 dynamic plane（不污染 static systemPrompt）。
+    // consumeAutoAttachments hook 在 streamingQuery 内部消费 sessionState.takeAttachments()，
+    // 作为 dynamic section 追加到 system prompt。static systemPrompt 保持纯净。
+    // hook 内消费队列（一次性语义）：第一次请求含 attachment，第二次已消费不再含。
     for await (const msg of streamingQuery(streamClient, toolRegistry, userMessageForAgent ?? userInput, {
-      systemPrompt: systemPromptWithAttachments, tools, signal: ac.signal,
+      systemPrompt, tools, signal: ac.signal,
       eventBus, compactClient, executionRuntime,
       authoredByUser: true, // Task 4 provenance：真实用户输入边界
+      consumeAutoAttachments: () => {
+        const text = renderAttachmentsForPrompt(sessionState.takeAttachments());
+        return text || null;
+      },
       initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
       // revised:只捕获查询结束时的完整快照,持久化交给 commitFinalizedTurn 统一 awaited。
       // 原 onMessages 用 void sessionStore.append(非 awaited)启动追加,若进程在追加完成前

@@ -173,6 +173,17 @@ export interface StreamingQueryOptions {
    */
   clientForModel?: (model: string) => StreamingLLMClient;
   /**
+   * Task 12 A75: auto_mode_exit dynamic attachment 消费 hook。
+   *
+   * streamingQuery 在构造 baseSystemPrompt 前（memory section 之后）调用此 hook。
+   * hook 返回非空字符串时，作为 dynamic section 以 `\n\n---\n\n` 分隔追加到 system
+   * prompt 的 dynamic plane。返回 null/空时不追加。
+   *
+   * 调用方负责在 hook 内部 takeAttachments 消费队列（一次性语义）。
+   * 不传 → LEGACY 行为不变（无 attachment 注入）。
+   */
+  consumeAutoAttachments?: () => string | null;
+  /**
    * 初始历史消息（resume 时传入之前的会话）。
    * 若提供，本次查询会在这些历史基础上继续，而非从单条 user 消息开始。
    */
@@ -395,6 +406,7 @@ export async function* streamingQuery(
     model = 'claude-sonnet-4-20250514',
     compactClient,
     clientForModel,
+    consumeAutoAttachments,
     initialMessages,
     onMessages,
     onMessageCheckpoint,
@@ -452,9 +464,29 @@ export async function* streamingQuery(
       ? `${systemPrompt}\n\n---\n\n${memorySectionContent}`
       : systemPrompt;
 
+  // Task 12 A75: auto_mode_exit 作为 dynamic attachment 注入（不污染 static systemPrompt）。
+  // 与 memory section 同一 dynamic plane 模式：hook 返回非空时以分隔符追加。
+  // 调用方在 hook 内消费 sessionState.takeAttachments()（一次性语义）。
+  let attachmentSectionContent: string | null = null;
+  if (consumeAutoAttachments) {
+    try {
+      const result = consumeAutoAttachments();
+      if (result && typeof result === 'string' && result.length > 0) {
+        attachmentSectionContent = result;
+      }
+    } catch {
+      // 静默失败：不改变 systemPrompt
+      attachmentSectionContent = null;
+    }
+  }
+  const systemPromptWithAttachments =
+    attachmentSectionContent !== null
+      ? `${systemPromptWithMemory}\n\n---\n\n${attachmentSectionContent}`
+      : systemPromptWithMemory;
+
   const baseSystemPrompt = noToolActive
-    ? `${systemPromptWithMemory}\n\nThis request operates under a No-Tool Contract. Do not call any tools. Return only a text response based on the input.`
-    : systemPromptWithMemory;
+    ? `${systemPromptWithAttachments}\n\nThis request operates under a No-Tool Contract. Do not call any tools. Return only a text response based on the input.`
+    : systemPromptWithAttachments;
 
   // Task 11 A62: engine 可能因 foreground fallback model 切换而重建。
   // 初始用主 client；retry 时若 recovery 降级了 currentModel 且提供了 clientForModel，
