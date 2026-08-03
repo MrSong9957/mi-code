@@ -165,6 +165,14 @@ export interface StreamingQueryOptions {
    */
   compactClient?: StreamingLLMClient;
   /**
+   * Task 11 A62: foreground fallback model 工厂。
+   *
+   * 当 recovery 把 currentModel 降级为 FALLBACK_MODEL 后，retry 时用此回调
+   * 构造对应 model 的 client。不提供时 retry 继续用原 client（旧行为，fallback
+   * 是死代码）。提供后，retry 实际使用 fallback model 的 client。
+   */
+  clientForModel?: (model: string) => StreamingLLMClient;
+  /**
    * 初始历史消息（resume 时传入之前的会话）。
    * 若提供，本次查询会在这些历史基础上继续，而非从单条 user 消息开始。
    */
@@ -386,6 +394,7 @@ export async function* streamingQuery(
     eventBus,
     model = 'claude-sonnet-4-20250514',
     compactClient,
+    clientForModel,
     initialMessages,
     onMessages,
     onMessageCheckpoint,
@@ -447,7 +456,10 @@ export async function* streamingQuery(
     ? `${systemPromptWithMemory}\n\nThis request operates under a No-Tool Contract. Do not call any tools. Return only a text response based on the input.`
     : systemPromptWithMemory;
 
-  const engine = new QueryEngine(client);
+  // Task 11 A62: engine 可能因 foreground fallback model 切换而重建。
+  // 初始用主 client；retry 时若 recovery 降级了 currentModel 且提供了 clientForModel，
+  // 用 fallback model 的 client 重建 engine。
+  let engine = new QueryEngine(client);
   // 初始历史：resume 时传入之前的会话 + 本次 user 消息；否则从单条 user 消息开始。
   // ★ model-context 边界:initialMessages 可能含 uiOnly final-feedback 状态块(落盘保留),
   //   喂模型前必须用 sanitizer 剔除,否则 LLM 会从历史模仿状态块(阻断 A)。
@@ -687,6 +699,12 @@ export async function* streamingQuery(
         if (errorType === 'rate_limited_429') {
           const delay = jitteredBackoff(recoveryState.retryAttempt);
           await sleep(delay);
+        }
+        // Task 11 A62: foreground fallback model 真正接通。
+        // recovery 把 currentModel 降级为 FALLBACK_MODEL 后，若提供了 clientForModel，
+        // 用 fallback model 的 client 重建 engine。不提供时继续用原 client（旧行为）。
+        if (clientForModel && recoveryState.currentModel !== model) {
+          engine = new QueryEngine(clientForModel(recoveryState.currentModel));
         }
         continue;
       } else {

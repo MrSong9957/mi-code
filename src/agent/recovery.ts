@@ -185,8 +185,14 @@ export function handleError(
     }
 
     case 'rate_limited_429': {
-      state.currentModel = FALLBACK_MODEL;
-      inbox.add(errorType, 'rate limited', state.retryAttempt, `degrade model to ${FALLBACK_MODEL}`);
+      // Task 11 A62: 前 2 次 retry 保持 primary model；第 3 次（retryAttempt >= 3）降级到 fallback。
+      // 设计 §10 A62："foreground fallback activates after three 529s"。
+      if (state.retryAttempt >= 3) {
+        state.currentModel = FALLBACK_MODEL;
+        inbox.add(errorType, 'rate limited', state.retryAttempt, `degrade model to ${FALLBACK_MODEL}`);
+      } else {
+        inbox.add(errorType, 'rate limited', state.retryAttempt, `retry on primary model`);
+      }
       return true;
     }
 
