@@ -6,6 +6,7 @@ import {
   applySubagentSilentPolicy,
   rewriteToAllow,
 } from '../permission/subagent-silent-policy.js';
+import type { PermissionAskResolver } from '../permission/ask-resolver.js';
 import { freezeSnapshot } from './contracts/identities.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type {
@@ -94,6 +95,12 @@ export interface ToolExecutionRuntime {
    * gate onAuthorized 回调在 remember=true 时写入。deny/safety_uncertain 永不读 allowlist。
    */
   sessionAllowlist?: SessionAllowlist;
+  /**
+   * Task 6：auto ask resolver。提供后，auto 模式下 checkDecision 产生的 ask 经此 resolver
+   * 解析（allowlist/acceptEdits simulation/classifier），替代旧 origin 静默分流短路。
+   * 未提供时（LEGACY）保持既有 origin 路由行为。
+   */
+  askResolver?: PermissionAskResolver;
 }
 
 export class ToolOperationalError extends Error {
@@ -411,13 +418,26 @@ export async function executeToolCall(
   // ── origin 路由:在 checkDecision 后、gate.execute 前改写 effectiveDecision ──
   // tool executor 永远只有 runtimeGate.execute 一个执行入口(不变量)。
   // deny/safety_uncertain 已被 checkDecision 先行拦截,到达此处时:
-  //   - origin=subagent → applySubagentSilentPolicy 静默分流(ask→allow/deny),仍走 gate
-  //   - origin=main + allowlist exact-match 命中 → rewriteToAllow 把 ask 改写为 allow,仍走 gate
-  // 三层正交过滤保证 deny/safety_uncertain 到不了 rewriteToAllow(allowlist 不覆盖 deny)。
+  //   - askResolver 提供（Task 6）→ auto ask 经 resolver 解析（allowlist/acceptEdits/classifier）
+  //   - origin=subagent（LEGACY 无 resolver）→ applySubagentSilentPolicy 静默分流
+  //   - origin=main + allowlist exact-match 命中（LEGACY）→ rewriteToAllow
   const origin = context.origin ?? 'main';
   let effectiveDecision = decision;
 
-  if (origin === 'subagent') {
+  if (decision.behavior === 'ask' && runtime.askResolver) {
+    // Task 6：auto ask resolver。classifier pending 时此处 await，gate/executor 不调用。
+    effectiveDecision = await runtime.askResolver.resolve({
+      decision,
+      executableToolCall: {
+        callId: call.id,
+        canonicalToolName: call.name,
+        input: executorInput,
+      },
+      messages: [], // messages 由上游 session 提供（Task 6 resolver 测试直接注入）
+      origin,
+      permissionContext: null,
+    });
+  } else if (origin === 'subagent') {
     // 子代理:按 reason_code 静默分流(ask→allow/deny 改写),仍走 gate。
     effectiveDecision = applySubagentSilentPolicy(decision);
   } else if (

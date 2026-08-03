@@ -92,6 +92,16 @@ export {
   type ForkPermissionSessionOptions,
   type ForkedPermissionSession,
 } from './subagent-silent-policy.js';
+// Task 6: Auto ask resolver
+export {
+  AUTO_SAFE_TOOL_ALLOWLIST,
+  DefaultPermissionAskResolver,
+  type PermissionAskResolutionRequest,
+  type PermissionAskResolver,
+  type ResolverClassifier,
+  type ResolverEvaluator,
+  type DefaultPermissionAskResolverOptions,
+} from './ask-resolver.js';
 // RC-5 结构化安全决策（spec §11）
 export {
   SECURITY_PROTOCOL_VERSION,
