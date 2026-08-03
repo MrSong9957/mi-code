@@ -121,6 +121,10 @@ export function classifyError(error: unknown): ErrorType {
   if (lower.includes('429') || lower.includes('rate_limit') || lower.includes('rate limit') || lower.includes('too many requests')) {
     return 'rate_limited_429';
   }
+  // 529 overloaded 归类为 rate_limited（设计 §9：529 可重试，与 429 同策略）
+  if (lower.includes('529') || lower.includes('overloaded') || lower.includes('overload')) {
+    return 'rate_limited_429';
+  }
   if (lower.includes('idle timeout') || lower.includes('stream_idle_timeout')) {
     return 'stream_idle_timeout';
   }
