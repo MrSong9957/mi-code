@@ -43,6 +43,10 @@ export interface TurnRuntimeDeps {
   readonly sessionAllowlist: SessionAllowlist;
   readonly sessionState: SessionState;
   readonly hooks?: readonly PermissionRequestHook[];
+  /** Task 7：main-origin dialog 函数（经 resolveInteractiveAsk 竞速）；未提供时 main 走直等 classifier */
+  readonly dialogProvider?: (input: import('./interactive-ask.js').InteractiveAskInput) => Promise<import('./interactive-ask.js').DialogResult>;
+  /** Task 7：dialog 创建延迟 ms（竞速窗口），默认 2000 */
+  readonly dialogDelayMs?: number;
 }
 
 /**
@@ -98,15 +102,20 @@ function createResolver(deps: TurnRuntimeDeps): PermissionAskResolver {
     modelContext,
   });
 
-  // 4. evaluateWithMode：acceptEdits simulation 桥接。
-  // resolver 的 ResolverEvaluator 签名是 (toolName, mode) → SecurityDecision，
-  // 不含 input 参数。生产接线中 acceptEdits simulation 需要 input 做精确判定，
-  // 但 resolver 调用时不传 input。因此这里返回 ask（让 resolver 继续到 classifier）。
-  // 这是安全的：跳过 acceptEdits fast-path 不影响正确性，classifier 仍会裁决。
-  // 完整 input-aware simulation 需要扩展 ResolverEvaluator 签名（Task 6 后续）。
-  const evaluateWithMode = (toolName: string, evaluationMode: string): Promise<SecurityDecision> => {
-    void toolName; void evaluationMode;
-    return Promise.resolve(legacyToSecurityDecision('ask', toolName, evaluationMode));
+  // 4. evaluateWithMode：桥接 permissionChecker.checkWithEvaluationMode → SecurityDecision。
+  // acceptEdits simulation（A25）：CWD write 在 acceptEdits 下 allow → resolver 直接放行，
+  // classifier = 0 calls。
+  const evaluateWithMode = (
+    toolName: string,
+    input: Record<string, unknown>,
+    evaluationMode: string,
+  ): Promise<SecurityDecision> => {
+    const legacyDecision = deps.permissionChecker.checkWithEvaluationMode(
+      toolName,
+      input,
+      evaluationMode as 'build' | 'plan' | 'auto' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk',
+    );
+    return Promise.resolve(legacyToSecurityDecision(legacyDecision.behavior, toolName, evaluationMode));
   };
 
   // 5. resolver
@@ -115,6 +124,8 @@ function createResolver(deps: TurnRuntimeDeps): PermissionAskResolver {
     evaluateWithMode,
     hooks: deps.hooks ?? [],
     denialState: deps.sessionState.denialState,
+    ...(deps.dialogProvider !== undefined ? { dialogProvider: deps.dialogProvider } : {}),
+    ...(deps.dialogDelayMs !== undefined ? { dialogDelayMs: deps.dialogDelayMs } : {}),
   });
 }
 

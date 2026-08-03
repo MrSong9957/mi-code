@@ -81,7 +81,7 @@ export interface ResolverClassifier {
 
 /** acceptEdits evaluation 契约 */
 export interface ResolverEvaluator {
-  (toolName: string, evaluationMode: string): Promise<SecurityDecision>;
+  (toolName: string, input: Record<string, unknown>, evaluationMode: string): Promise<SecurityDecision>;
 }
 
 /** resolver 构造参数 */
@@ -176,6 +176,7 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
     // 7. acceptEdits simulation
     const simulated = await this.evaluateWithMode(
       request.executableToolCall.canonicalToolName,
+      request.executableToolCall.input,
       'acceptEdits',
     );
     if (simulated.behavior === 'allow') return simulated;

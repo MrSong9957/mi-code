@@ -172,6 +172,7 @@ import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL 
 import { renderAttachmentsForPrompt } from './agent/prompt/auto-attachments.js';
 import { resolveAuthority } from './permission/cutover.js';
 import { createExecutionRuntimeForTurn } from './permission/authority-gate.js';
+import type { ToolExecutionRuntime } from './agent/tool-execution.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
 const cliOpts = parseCliArgs();
@@ -424,9 +425,9 @@ const runtimeGate = new RuntimeSecurityGate({
 // 默认 enforced（env 未设置时走新权限链）。
 const permissionAuthority = resolveAuthority(process.env.AUTO_PERMISSION_AUTHORITY);
 // executionRuntime 装配:复用前面构造的 sessionAllowlist(绑定到 sessionState)。
-// 顶层 runtime 供 subagent 工具使用（不含 askResolver）；turn-local runtime 在
-// handleUserSubmit 内通过 createExecutionRuntimeForTurn 构造（含 resolver/classifier）。
-const executionRuntime = { permissionChecker, runtimeGate, sessionAllowlist };
+// 顶层 runtime 是 mutable container——subagent 工具持有此引用，
+// 每 turn handleUserSubmit 更新其 askResolver（A35：subagent 共享 parent turn resolver）。
+const executionRuntime: ToolExecutionRuntime = { permissionChecker, runtimeGate, sessionAllowlist };
 
 // 子代理工作日志工厂:用动态 sessionId 闭包,确保 resume/session 轮换后仍绑定当前会话。
 // 每次前台子代理执行调用一次,创建一个绑定到新 executionId 的独立 journal。
@@ -922,6 +923,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       sessionState,
       hooks: [],
     });
+    // A35：subagent 工具持有顶层 executionRuntime 引用，每 turn 同步 askResolver，
+    // 使 subagent 共享 parent turn 的 resolver/classifier（而非无 resolver 的 legacy runtime）。
+    executionRuntime.askResolver = turnRuntime.askResolver;
     // Task 12 A75：auto_mode_exit 走 dynamic plane（不污染 static systemPrompt）。
     // consumeAutoAttachments hook 在 streamingQuery 内部消费 sessionState.takeAttachments()，
     // 作为 dynamic section 追加到 system prompt。static systemPrompt 保持纯净。

@@ -74,7 +74,9 @@ function makeDeps(overrides: Partial<TurnRuntimeDeps> = {}): TurnRuntimeDeps {
 }
 
 function writeCall(id = 'call-1'): ToolUseBlock {
-  return { type: 'tool_use', id, name: 'write_file', input: { path: 'src/a.ts', content: 'x' } };
+  // protected settings path：acceptEdits 下闸门 3d 仍 ask（不被 fast-path 放行），
+  // 继续到 classifier。用此验证 classifier 被调用。
+  return { type: 'tool_use', id, name: 'write_file', input: { path: '.micode/config.json', content: 'x' } };
 }
 
 async function runToolCall(runtime: ReturnType<typeof createExecutionRuntimeForTurn>): Promise<void> {

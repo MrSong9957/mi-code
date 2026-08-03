@@ -121,7 +121,7 @@ describe('auto resolver core', () => {
     const r = resolver({ classifier, checkWithEvaluationMode: check });
     const result = await r.resolve(writeCall());
     expect(result.behavior).toBe('allow');
-    expect(check).toHaveBeenCalledWith(expect.anything(), 'acceptEdits');
+    expect(check).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'acceptEdits');
     expect(classifier.classify).not.toHaveBeenCalled();
   });
 
@@ -134,7 +134,7 @@ describe('auto resolver core', () => {
     const r = resolver({ classifier, checkWithEvaluationMode: check });
     const result = await r.resolve(writeCall());
     expect(result.behavior).toBe('deny');
-    expect(check).toHaveBeenCalledWith(expect.anything(), 'acceptEdits');
+    expect(check).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'acceptEdits');
     expect(classifier.classify).not.toHaveBeenCalled();
   });
 
