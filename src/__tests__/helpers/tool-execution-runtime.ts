@@ -6,7 +6,7 @@ import {
   type PendingSecurityDecision,
   type UserDecisionChannel,
 } from '../../permission/runtime-gate.js';
-import type { PermissionMode } from '../../permission/types.js';
+import type { PermissionMode, PermissionRule } from '../../permission/types.js';
 
 class InMemoryPendingDecisionStore implements PendingDecisionStore {
   private readonly decisions: PendingSecurityDecision[] = [];
@@ -33,12 +33,14 @@ export function createToolExecutionRuntime(
     mode?: PermissionMode;
     channel?: UserDecisionChannel | null;
     callbacks?: ToolExecutionCallbacks;
+    rules?: PermissionRule[];
   } = {},
 ): ToolExecutionRuntime {
   return {
     permissionChecker: new PermissionChecker({
       mode: options.mode ?? 'auto',
       workdir: process.cwd(),
+      ...(options.rules ? { rules: options.rules } : {}),
     }),
     runtimeGate: new RuntimeSecurityGate({
       pendingStore: new InMemoryPendingDecisionStore(),
