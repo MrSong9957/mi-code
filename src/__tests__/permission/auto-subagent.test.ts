@@ -201,6 +201,49 @@ describe('subagent permission boundary', () => {
     // headless 路径不创建 dialog —— 无 UI 副作用
     expect(result.behavior).toBe('deny');
   });
+
+  // ─── safety_uncertain / non-classifierApprovable ask 必须先经过 hooks ─────────
+  //
+  // 批准语义：任何进入 headless ask resolution 的 ask，都先运行 PermissionRequest hooks；
+  // 首个明确 allow/deny 生效；hook error/null 继续；全部无决定后才 fail-closed deny。
+  // applySubagentSilentPolicy 不允许在 hooks 前把 ask 终结为 deny 或 allow。
+
+  test('safety_uncertain ask: hook allow must take effect (hooks run before silent-deny)', async () => {
+    // command_unparseable 是 safety_uncertain 别名；旧实现 silent-deny 在 hooks 前，hook 没机会。
+    const safetyAsk: HeadlessAskInput = {
+      decision: makeDecision('ask', 'permission.command_unparseable'),
+    };
+    const allowHook: PermissionRequestHook = vi.fn().mockResolvedValue('allow');
+    const result = await resolveHeadlessAsk(safetyAsk, [allowHook]);
+    expect(allowHook).toHaveBeenCalledOnce(); // hook 必须被调用
+    expect(result.behavior).toBe('allow'); // hook allow 生效
+  });
+
+  test('safety_uncertain ask: hooks all null/error -> fail-closed deny', async () => {
+    const safetyAsk: HeadlessAskInput = {
+      decision: makeDecision('ask', 'permission.command_unresolvable_var'),
+    };
+    // 全 null -> deny
+    const nullHook: PermissionRequestHook = vi.fn().mockResolvedValue(null);
+    const result = await resolveHeadlessAsk(safetyAsk, [nullHook]);
+    expect(nullHook).toHaveBeenCalledOnce();
+    expect(result.behavior).toBe('deny');
+    // 抛异常 -> deny
+    const throwingHook: PermissionRequestHook = vi.fn().mockRejectedValue(new Error('crash'));
+    const result2 = await resolveHeadlessAsk(safetyAsk, [throwingHook]);
+    expect(throwingHook).toHaveBeenCalledOnce();
+    expect(result2.behavior).toBe('deny');
+  });
+
+  test('unknown ask reason_code: hooks still run first, then fail-closed deny', async () => {
+    const unknownAsk: HeadlessAskInput = {
+      decision: makeDecision('ask', 'permission.some_unknown_category'),
+    };
+    const denyHook: PermissionRequestHook = vi.fn().mockResolvedValue('deny');
+    const result = await resolveHeadlessAsk(unknownAsk, [denyHook]);
+    expect(denyHook).toHaveBeenCalledOnce();
+    expect(result.behavior).toBe('deny');
+  });
 });
 
 // ─── runPermissionRequestHooks 直接单测 ─────────────────────────────────────────

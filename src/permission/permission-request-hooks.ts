@@ -13,7 +13,6 @@
 //   - hook 异常 -> null（不改变结果）。
 
 import type { SecurityDecision } from './decisions.js';
-import { applySubagentSilentPolicy } from './subagent-silent-policy.js';
 
 /** PermissionRequest hook 输入 */
 export interface HeadlessAskInput {
@@ -62,12 +61,14 @@ export async function runPermissionRequestHooks(
 /**
  * 解析 headless ask（设计 §8 / A34 / A40 / A41）。
  *
- * 顺序：
- *   1. 先经 applySubagentSilentPolicy（subagent origin 的既有静默分流）；
- *   2. 非 ask 直接返回；
- *   3. ask 经 runPermissionRequestHooks：首个 allow/deny 生效；
- *   4. hooks 无决定：bubbleEnabled=true -> bubble；否则 deny（fail-closed）。
+ * 批准语义（hooks 是统一决策入口）：
+ *   1. 非 ask 直接返回（deny/allow 透传）；
+ *   2. 任何 ask（含 safety_uncertain / unknown category）都先运行 PermissionRequest hooks；
+ *      首个明确 allow/deny 立即生效；hook error/null 继续；
+ *   3. hooks 无决定：bubbleEnabled=true -> bubble；否则 deny（fail-closed）。
  *
+ * applySubagentSilentPolicy 不在 hooks 前终结 ask —— 它只用于 subagent origin 的
+ * 既有静默分流（tool-execution.ts 调用），不参与 headless hook 解析。
  * headless 绝不创建 dialog。
  */
 export async function resolveHeadlessAsk(
@@ -75,21 +76,12 @@ export async function resolveHeadlessAsk(
   hooks: readonly PermissionRequestHook[],
   options: ResolveHeadlessAskOptions = {},
 ): Promise<HeadlessResolution> {
-  // 非 ask 直接返回（deny/allow 透传）
+  // 1. 非 ask 直接返回（deny/allow 透传）
   if (ask.decision.behavior !== 'ask') {
     return ask.decision;
   }
 
-  // 1. hooks 是 headless 唯一外部 allow/deny 通道（A40）。
-  //    不使用 applySubagentSilentPolicy 的 silent-allow 快捷方式——headless 下
-  //    只有 hook 能 allow；silent policy 的 safety_uncertain deny 仍可作为前置 deny。
-  const silenced = applySubagentSilentPolicy(ask.decision);
-  // safety_uncertain / unknown ask -> silent deny，直接 fail-closed（不经 hook）
-  if (silenced.behavior === 'deny') {
-    return silenced;
-  }
-
-  // 2. hooks（首个 allow/deny 生效）
+  // 2. hooks 是 headless ask 的统一决策入口（任何 ask 都先经 hooks）
   const hookResult = await runPermissionRequestHooks(ask, hooks);
   if (hookResult === 'allow') {
     return rewriteBehavior(ask.decision, 'allow', 'permission.headless_hook_allow');
