@@ -21,4 +21,9 @@ export class SessionAllowlist {
   clear(): void {
     this.entries.clear();
   }
+
+  /** 当前缓存条目数（Task 2：供 SessionState 瞬态清理测试断言）。 */
+  get size(): number {
+    return this.entries.size;
+  }
 }

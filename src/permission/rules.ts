@@ -73,7 +73,7 @@ export function parsePermissionRule(raw: string): ParsedRule {
  * 判断规则串中是否存在未转义的 `*`。
  * 反斜杠转义的 `\*` 视为字面量，不算通配。
  */
-function hasUnescapedStar(s: string): boolean {
+export function hasUnescapedStar(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
     if (s[i] === '\\' && i + 1 < s.length) {
       i++; // 跳过被转义的下一个字符

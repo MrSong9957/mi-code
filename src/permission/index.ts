@@ -23,6 +23,14 @@ export {
   type UnreachableRule,
   type WildcardCorpusSample,
 } from './rules.js';
+// Task 2: 单一 PermissionUpdate 与危险 allow 分区
+export {
+  isDangerousAllowRule,
+  partitionDangerousAllows,
+  applyPermissionUpdate,
+  type PermissionSnapshot,
+  type PermissionUpdate,
+} from './permission-updates.js';
 // RC-5 结构化安全决策（spec §11）
 export {
   SECURITY_PROTOCOL_VERSION,
