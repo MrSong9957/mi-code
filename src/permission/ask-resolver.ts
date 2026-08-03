@@ -27,6 +27,7 @@ import type { PermissionClassifierInput, ExecutableToolCall } from './classifier
 import type { ClassifierDecision } from './classifier.js';
 import { projectPermissionClassifierInput } from './classifier-input.js';
 import { resolveHeadlessAsk, type PermissionRequestHook } from './permission-request-hooks.js';
+import { resolveInteractiveAsk, type InteractiveAskInput, type DialogResult } from './interactive-ask.js';
 import type { Message } from '../agent/types.js';
 
 /**
@@ -89,6 +90,10 @@ export interface DefaultPermissionAskResolverOptions {
   readonly evaluateWithMode: ResolverEvaluator;
   readonly hooks: readonly PermissionRequestHook[];
   readonly denialState: { readonly consecutive: number; readonly total: number };
+  /** Task 7：main-origin dialog 函数（经 resolveInteractiveAsk 竞速）；未提供时 main 走原 classifier 直等 */
+  readonly dialogProvider?: (input: import('./interactive-ask.js').InteractiveAskInput) => Promise<import('./interactive-ask.js').DialogResult>;
+  /** Task 7：dialog 创建延迟 ms（竞速窗口） */
+  readonly dialogDelayMs?: number;
 }
 
 /** non-classifierApprovable safety 的 reason_code 集合（设计 §6.3） */
@@ -119,12 +124,16 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
   private readonly evaluateWithMode: ResolverEvaluator;
   private readonly hooks: readonly PermissionRequestHook[];
   private readonly denialState: { readonly consecutive: number; readonly total: number };
+  private readonly dialogProvider?: (input: InteractiveAskInput) => Promise<DialogResult>;
+  private readonly dialogDelayMs: number;
 
   constructor(opts: DefaultPermissionAskResolverOptions) {
     this.classifier = opts.classifier;
     this.evaluateWithMode = opts.evaluateWithMode;
     this.hooks = opts.hooks;
     this.denialState = opts.denialState;
+    this.dialogProvider = opts.dialogProvider;
+    this.dialogDelayMs = opts.dialogDelayMs ?? 2000;
   }
 
   async resolve(request: PermissionAskResolutionRequest): Promise<SecurityDecision> {
@@ -192,15 +201,21 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
   }
 
   /**
-   * classifier 路径（设计 §6 / §7）：
+   * classifier 路径（设计 §6 / §7 / §8）：
    * resolver 是唯一 AbortController 创建者，每个 tool call 独立 controller。
    * signal 贯穿 Stage1/Stage2/provider RPC。registerAbort 暴露 abort handle。
+   *
+   * main-origin + dialogProvider → 经 resolveInteractiveAsk 竞速（Task 7）：
+   *   - 构造 PendingAutomaticDecision { promise, abort }（复用同一 controller）；
+   *   - resolveInteractiveAsk 不创建第二个 controller，ESC 时自行调用 abort()。
+   * subagent-origin 或无 dialogProvider → 直等 classifier（headless）。
    */
   private resolveByClassifier(request: PermissionAskResolutionRequest): Promise<SecurityDecision> {
     const input = projectPermissionClassifierInput(request.messages, request.executableToolCall);
     const controller = new AbortController();
     request.registerAbort?.(() => controller.abort());
-    return this.classifier
+
+    const classifyPromise = this.classifier
       .classify(input, controller.signal)
       .then((d: ClassifierDecision) =>
         d.behavior === 'allow'
@@ -208,6 +223,28 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
           : this.deny('permission.classifier_resolved_deny'),
       )
       .catch(() => this.deny('permission.classifier_failure'));
+
+    // main-origin + dialogProvider → resolveInteractiveAsk 竞速
+    if (request.origin === 'main' && this.dialogProvider) {
+      const automatic: PendingAutomaticDecision = {
+        promise: classifyPromise,
+        abort: () => controller.abort(),
+      };
+      const interactiveInput: InteractiveAskInput = {
+        decision: request.decision,
+        toolName: request.executableToolCall.canonicalToolName,
+        input: { ...request.executableToolCall.input },
+        origin: 'main',
+      };
+      return resolveInteractiveAsk(interactiveInput, {
+        automatic,
+        dialog: this.dialogProvider,
+        dialogDelayMs: this.dialogDelayMs,
+      });
+    }
+
+    // subagent / 无 dialog → 直等 classifier
+    return classifyPromise;
   }
 
   private allow(reasonCode: string): SecurityDecision {
