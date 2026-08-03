@@ -110,6 +110,19 @@ export {
   type InteractiveAskOptions,
   type DialogResult,
 } from './interactive-ask.js';
+// Task 8: Mode transition
+export {
+  transitionPermissionMode,
+  resolveRequestedStartupMode,
+  applyModeRestrictions,
+  applyRuntimeModeTransition,
+  type ModeTransitionEffects,
+  type TransitionDestination,
+  type StartupModeInput,
+  type RestrictionGates,
+  type RestrictionResult,
+  type RuntimeTransitionResult,
+} from './mode-transition.js';
 // RC-5 结构化安全决策（spec §11）
 export {
   SECURITY_PROTOCOL_VERSION,

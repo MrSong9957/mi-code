@@ -167,6 +167,7 @@ import type { SecurityDecision, UserDecision } from './permission/decisions.js';
 import type { AskQuestionRequest, AskQuestionOutcome } from './agent/ask-user-types.js';
 import { SessionAllowlist } from './permission/session-allowlist.js';
 import { SessionState } from './permission/session-state.js';
+import { transitionPermissionMode } from './permission/mode-transition.js';
 import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
@@ -513,11 +514,15 @@ function handleTab(
   }
 
   // 分支 2：模式切换（build→plan→auto→build）
+  // Task 8：经统一 transition port（与 slash /build /plan /auto 一致入口）
   completion.hide();
   const order: PermissionMode[] = ['build', 'plan', 'auto'];
   const cur = checker.getMode();
   const idx = order.indexOf(cur);
   const next = order[(idx + 1) % order.length]!;
+  if (sessionState) {
+    transitionPermissionMode(sessionState, next, 'session');
+  }
   checker.setMode(next);
   cfgStore.setPermissionMode(next);
   handle.statusStore.getState().setMode(next);
@@ -701,7 +706,18 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       const result = executeCommand(cmd, { skillRegistry, negotiator: skillNegotiator, userId: 'default' });
       printLine(result.message);
     } else {
-      const result = executeCommand(cmd, configStore, { permissionChecker, themeStore: tuiHandle?.themeStore });
+      const result = executeCommand(cmd, configStore, {
+        permissionChecker,
+        themeStore: tuiHandle?.themeStore,
+        // Task 8：slash /build /plan /auto 经统一 transition port
+        onModeTransition: (mode) => {
+          transitionPermissionMode(sessionState, mode, 'userSettings', {
+            save: (cfg) => configStore.setPermissionMode(cfg.permissions.mode),
+          });
+          permissionChecker.setMode(mode);
+          tuiHandle?.statusStore.getState().setMode(mode);
+        },
+      });
       printLine(result.message);
       if (cmd.name === 'plan' || cmd.name === 'build' || cmd.name === 'auto') {
         tuiHandle?.statusStore.getState().setMode(permissionChecker.getMode());
