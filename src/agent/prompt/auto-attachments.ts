@@ -84,6 +84,17 @@ function renderAttachment(attachment: PromptAttachment): string {
   }
 }
 
+/**
+ * 把 attachment 列表渲染为可注入 systemPrompt 的文本段（生产接线用）。
+ *
+ * 多个 attachment 以换行分隔。空列表返回空字符串（调用方据此决定是否追加）。
+ * 返回值非空时，index.ts 以 `\n\n---\n\n` 分隔追加到 static system prompt 之后。
+ */
+export function renderAttachmentsForPrompt(attachments: readonly PromptAttachment[]): string {
+  if (attachments.length === 0) return '';
+  return attachments.map(renderAttachment).join('\n');
+}
+
 /** sha256 hex */
 function sha256(s: string): string {
   return createHash('sha256').update(s, 'utf8').digest('hex');
