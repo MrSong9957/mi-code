@@ -171,6 +171,7 @@ import { transitionPermissionMode } from './permission/mode-transition.js';
 import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
 import { renderAttachmentsForPrompt } from './agent/prompt/auto-attachments.js';
 import { resolveAuthority } from './permission/cutover.js';
+import { createExecutionRuntimeForTurn } from './permission/authority-gate.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
 const cliOpts = parseCliArgs();
@@ -421,13 +422,10 @@ const runtimeGate = new RuntimeSecurityGate({
 // Task 14 A83/A85：auto 权限链 cutover authority。
 // resolveAuthority 决定是否走新权限链（enforced/shadow）或 legacy fast-path。
 // 默认 enforced（env 未设置时走新权限链）。
-// enforced 时如有 resolver 实例则接入 executionRuntime.askResolver；
-// legacy/shadow 模式下不提供 askResolver（legacy fast-path）。
-// 当前 askResolver 生产接线需要 provider client + classifier 组件（Task 6 域），
-// authority 解析已就绪，resolver 接线留给后续完成。
 const permissionAuthority = resolveAuthority(process.env.AUTO_PERMISSION_AUTHORITY);
-void permissionAuthority; // cutover gate：enforced 走新链，legacy/shadow 走诊断模式
 // executionRuntime 装配:复用前面构造的 sessionAllowlist(绑定到 sessionState)。
+// 顶层 runtime 供 subagent 工具使用（不含 askResolver）；turn-local runtime 在
+// handleUserSubmit 内通过 createExecutionRuntimeForTurn 构造（含 resolver/classifier）。
 const executionRuntime = { permissionChecker, runtimeGate, sessionAllowlist };
 
 // 子代理工作日志工厂:用动态 sessionId 闭包,确保 resume/session 轮换后仍绑定当前会话。
@@ -910,13 +908,27 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   tuiHandle?.setSpinnerLabel('Connecting');
   spinnerStarted = true;
   try {
+    // Task 14 A83/A85：authority gate——根据 permissionAuthority 构造 turn-local runtime。
+    // enforced：真实 resolver + classifier 链；legacy：无 resolver（fast-path）；
+    // shadow：candidate 真实运行但 legacy 决定。streamClient 作为 DirectProviderTextClient。
+    const turnRuntime = createExecutionRuntimeForTurn({
+      authority: permissionAuthority,
+      streamClient,
+      providerId: provider,
+      modelId: model,
+      permissionChecker,
+      runtimeGate,
+      sessionAllowlist,
+      sessionState,
+      hooks: [],
+    });
     // Task 12 A75：auto_mode_exit 走 dynamic plane（不污染 static systemPrompt）。
     // consumeAutoAttachments hook 在 streamingQuery 内部消费 sessionState.takeAttachments()，
     // 作为 dynamic section 追加到 system prompt。static systemPrompt 保持纯净。
     // hook 内消费队列（一次性语义）：第一次请求含 attachment，第二次已消费不再含。
     for await (const msg of streamingQuery(streamClient, toolRegistry, userMessageForAgent ?? userInput, {
       systemPrompt, tools, signal: ac.signal,
-      eventBus, compactClient, executionRuntime,
+      eventBus, compactClient, executionRuntime: turnRuntime,
       authoredByUser: true, // Task 4 provenance：真实用户输入边界
       consumeAutoAttachments: () => {
         const text = renderAttachmentsForPrompt(sessionState.takeAttachments());

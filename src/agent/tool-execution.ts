@@ -426,7 +426,7 @@ export async function executeToolCall(
 
   if (decision.behavior === 'ask' && runtime.askResolver) {
     // Task 6：auto ask resolver。classifier pending 时此处 await，gate/executor 不调用。
-    effectiveDecision = await runtime.askResolver.resolve({
+    const resolved = await runtime.askResolver.resolve({
       decision,
       executableToolCall: {
         callId: call.id,
@@ -437,6 +437,9 @@ export async function executeToolCall(
       origin,
       permissionContext: null,
     });
+    // resolver 可能返回简化 decision（只有 behavior + reason_code）；
+    // 合并原始 decision 的结构字段（action/protocol_version 等），保证 gate 能读 snapshot_id。
+    effectiveDecision = { ...decision, ...resolved, action: decision.action };
   } else if (origin === 'subagent') {
     // 子代理:按 reason_code 静默分流(ask→allow/deny 改写),仍走 gate。
     effectiveDecision = applySubagentSilentPolicy(decision);
