@@ -138,7 +138,9 @@ export interface ProjectedClassifierConfig {
 /** 投影 classifier config sources（设计 §9.4 / A70 / A79）。
  *
  * 只采用 user/local/flag/policy，按 user -> local -> flag -> policy 稳定顺序拼接 rules。
- * classifierModel 按 flag > local > user 取首个非空（policy 的 model 也可信，但优先级最低）。
+ * classifierModel 按 user -> local -> flag -> policy 逐层覆盖（后者覆盖前者），
+ * 最终优先级 policy > flag > local > user；policy 不可被 flag 覆盖（§9.4 "组织 policy
+ * section 不可被替换" + §9.1 权威方向 policy 最强）。
  * project/command/session/cliArg/sdk 全部排除并记录到 rejected。
  * 组织 policy section 位置固定（最后），不可被排除来源替换。
  */
@@ -167,15 +169,15 @@ export function projectClassifierConfigSources(
     }
   }
 
-  // classifierModel：flag > local > user > policy（取首个非空）
-  // 设计 §9.4 稳定顺序 user -> local -> flag -> policy；model 优先级 flag > local > user
-  // 取可信来源中首个非空 classifierModel
-  const modelOrder: Array<keyof ClassifierConfigSourcesInput> = ['flagSettings', 'localSettings', 'userSettings', 'policySettings'];
+  // classifierModel：按设计 §9.4 投影顺序 user -> local -> flag -> policy 逐层覆盖，
+  // 后者覆盖前者，最终优先级 policy > flag > local > user。
+  // “组织 policy section 不可被替换”（§9.4）+ §9.1 权威方向 policy 最强：
+  // managed policy 的 classifierModel 不得被 CLI flag / settings 覆盖。
   let classifierModel: string | undefined;
-  for (const src of modelOrder) {
-    if (input[src]?.classifierModel) {
-      classifierModel = input[src]!.classifierModel;
-      break;
+  for (const src of CLASSIFIER_SECTION_ORDER) {
+    const model = input[src]?.classifierModel;
+    if (model !== undefined) {
+      classifierModel = model;
     }
   }
 

@@ -166,9 +166,40 @@ describe('[A70/A79] classifier config trusted sources', () => {
       projectSettings: { classifierModel: 'project-model' },
       flagSettings: { classifierModel: 'flag-model' },
     });
-    // flag > local > user：flag 优先（设计 §9.4 user -> local -> flag -> policy 中 flag 高于 user）
+    // 投影顺序 user -> local -> flag -> policy，后者覆盖前者：
+    // 最终优先级 policy > flag > local > user。
+    // 设计 §9.4“组织 policy section 不可被替换”+ §9.1 权威方向 policy 最强。
+    // 此处无 policy/local，故 flag 胜出（覆盖 user）。
     expect(projected.classifierModel).toBe('flag-model');
     expect(projected.rejected.some((r) => r.source === 'projectSettings')).toBe(true);
+  });
+
+  test('[A70 RED] policy classifierModel overrides user/local/flag', () => {
+    // 设计 §9.4 稳定 section 顺序 user -> local -> flag -> policy，逐层覆盖，
+    // 最终优先级 policy > flag > local > user。policy 不可被 flag 覆盖。
+    const projected = projectClassifierConfigSources({
+      userSettings: { classifierModel: 'user-model' },
+      localSettings: { classifierModel: 'local-model' },
+      flagSettings: { classifierModel: 'flag-model' },
+      policySettings: { classifierModel: 'policy-model' },
+    });
+    expect(projected.classifierModel).toBe('policy-model');
+  });
+
+  test('[A70] flag overrides local and user when no policy', () => {
+    const projected = projectClassifierConfigSources({
+      userSettings: { classifierModel: 'user-model' },
+      localSettings: { classifierModel: 'local-model' },
+      flagSettings: { classifierModel: 'flag-model' },
+    });
+    expect(projected.classifierModel).toBe('flag-model');
+  });
+
+  test('[A70] user wins when alone', () => {
+    const projected = projectClassifierConfigSources({
+      userSettings: { classifierModel: 'user-model' },
+    });
+    expect(projected.classifierModel).toBe('user-model');
   });
 
   test('organization policy section cannot be overridden by excluded sources', () => {
