@@ -132,6 +132,16 @@ export {
   type PermissionAuditSink,
   type PermissionDecisionInput,
 } from './audit.js';
+// Task 14: Compatibility Corpus 与 Shadow Cutover（§10 A83/A85）
+export {
+  resolveAuthority,
+  evaluateAuthority,
+  type PermissionAuthority,
+  type AuthorityDecision,
+  type AuthorityObservation,
+  type EvaluateAuthorityInput,
+  type EvaluateAuthorityResult,
+} from './cutover.js';
 // RC-5 结构化安全决策（spec §11）
 export {
   SECURITY_PROTOCOL_VERSION,

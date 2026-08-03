@@ -170,6 +170,7 @@ import { SessionState } from './permission/session-state.js';
 import { transitionPermissionMode } from './permission/mode-transition.js';
 import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
 import { renderAttachmentsForPrompt } from './agent/prompt/auto-attachments.js';
+import { resolveAuthority } from './permission/cutover.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
 const cliOpts = parseCliArgs();
@@ -417,6 +418,15 @@ const runtimeGate = new RuntimeSecurityGate({
   pendingStore: makePendingStore(() => sessionState.currentId),
   channel: getDecisionChannel(),
 });
+// Task 14 A83/A85：auto 权限链 cutover authority。
+// resolveAuthority 决定是否走新权限链（enforced/shadow）或 legacy fast-path。
+// 默认 enforced（env 未设置时走新权限链）。
+// enforced 时如有 resolver 实例则接入 executionRuntime.askResolver；
+// legacy/shadow 模式下不提供 askResolver（legacy fast-path）。
+// 当前 askResolver 生产接线需要 provider client + classifier 组件（Task 6 域），
+// authority 解析已就绪，resolver 接线留给后续完成。
+const permissionAuthority = resolveAuthority(process.env.AUTO_PERMISSION_AUTHORITY);
+void permissionAuthority; // cutover gate：enforced 走新链，legacy/shadow 走诊断模式
 // executionRuntime 装配:复用前面构造的 sessionAllowlist(绑定到 sessionState)。
 const executionRuntime = { permissionChecker, runtimeGate, sessionAllowlist };
 
