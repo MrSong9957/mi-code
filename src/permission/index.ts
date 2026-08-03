@@ -31,6 +31,51 @@ export {
   type PermissionSnapshot,
   type PermissionUpdate,
 } from './permission-updates.js';
+// Task 4: 独立两阶段 PermissionClassifier
+export {
+  projectPermissionClassifierInput,
+  type AuthenticUserMessage,
+  type ExecutableToolCall,
+  type PermissionClassifierInput,
+} from './classifier-input.js';
+export {
+  shouldFallbackToPrompting,
+  recordAllow,
+  recordDenial,
+  createDenialState,
+  DENIAL_CONSECUTIVE_THRESHOLD,
+  DENIAL_TOTAL_THRESHOLD,
+  type DenialState,
+} from './denial-tracker.js';
+export {
+  DefaultClassifierModelPolicy,
+  ClassifierModelUnavailableError,
+  type ModelRef,
+  type ClassifierModelContext,
+  type ClassifierModelPolicy,
+} from './classifier-model-policy.js';
+export {
+  buildClassifierPromptPrefix,
+  renderClassifierRuleSections,
+  STAGE1_INSTRUCTION,
+  STAGE2_INSTRUCTION,
+} from './classifier-prompt.js';
+export {
+  buildClassifierProviderRequest,
+  unsupportedClassifierCapabilities,
+  normalizeStaticClassifierCapabilities,
+  toDirectTextRequest,
+  type PermissionClassifierProvider,
+  type ClassifierProviderCapabilities,
+  type ClassifierProviderRequest,
+  type DirectProviderTextClient,
+} from './classifier-provider.js';
+export {
+  DefaultPermissionClassifier,
+  parseStage1Decision,
+  parseStage2Decision,
+  type ClassifierDecision,
+} from './classifier.js';
 // RC-5 结构化安全决策（spec §11）
 export {
   SECURITY_PROTOCOL_VERSION,
