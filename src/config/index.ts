@@ -10,3 +10,26 @@ export {
   type CapabilityOverrideRecord,
   type CapabilityOverrideTrustEvidence,
 } from './capability-override.js';
+
+// Task 9: 权限配置来源与安全持久化（设计 §9.1-§9.4、§10）
+export {
+  PERMISSION_RULE_SOURCE_PRECEDENCE,
+  isPermissionRuleSource,
+  mergePermissionRules,
+  projectClassifierConfigSources,
+  mergeAutoModeRules,
+  loadStaticClassifierProviderMetadata,
+  mergeRawConfig,
+  loadLegacyConfig,
+  type PermissionRuleSource,
+  type MergedPermissionRule,
+  type SourcedPermissionRules,
+  type ClassifierConfigSourcesInput,
+  type ProjectedClassifierConfig,
+  type RejectedClassifierSource,
+  type AutoModeRuleSource,
+  type ProviderMetadataInput,
+  type StaticProviderMetadata,
+  type LegacyConfig,
+  type LoadedLegacyConfig,
+} from './permission-sources.js';

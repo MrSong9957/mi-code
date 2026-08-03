@@ -178,6 +178,22 @@ const sessionStore = new SessionStore();
 // 结构上消除"调用方直接赋值 sessionId 而忘记 clear"的双写风险。
 const sessionAllowlist = new SessionAllowlist();
 const sessionState = new SessionState(sessionAllowlist, randomUUID());
+// 启动时让 sessionState 反映持久权限配置（设计 §10 A64：持久规则 reload/repartition 形成稳定状态）。
+// 先同步 mode（auto 下 dangerous allow 才会被分区到 stash），再 replaceRules 持久规则。
+// sessionState 不持有 PermissionChecker 引用——二者是独立观察者，均由 configStore 初始化。
+const startupPermissionMode = configStore.getPermissionMode();
+if (startupPermissionMode !== 'build') {
+  sessionState.applyPermissionUpdate({ kind: 'setMode', mode: startupPermissionMode });
+}
+const startupRules = configStore.getPermissionRules().map((r) => ({
+  tool: r.tool,
+  behavior: r.behavior,
+  ...(r.path !== undefined ? { path: r.path } : {}),
+  ...(r.content !== undefined ? { content: r.content } : {}),
+}));
+if (startupRules.length > 0) {
+  sessionState.applyPermissionUpdate({ kind: 'replaceRules', rules: startupRules });
+}
 let currentPlanContext: PlanContext | null = null;
 // 当前会话累积消息（resume 时预载，streamingQuery onMessages 时更新）
 let sessionMessages: Message[] = [];

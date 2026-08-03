@@ -1,20 +1,37 @@
 // 配置存储：读写配置文件，合并环境变量
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, fsyncSync, openSync, closeSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import type { MiCodeConfig, ProviderConfig, PermissionMode, PermissionRuleConfig, ThemeName, SpinnerVerbConfig, CapabilityOverrideConfig, CapabilitySupportValue } from './schema.js';
 import { DEFAULT_CONFIG, DEFAULT_MODELS } from './schema.js';
 import type { CapabilityOverrideRecord } from './capability-override.js';
+import type { PermissionRule } from '../permission/types.js';
+import type { PermissionUpdate } from '../permission/permission-updates.js';
+import type { SessionState } from '../permission/session-state.js';
 
 export class ConfigStore {
   private config: MiCodeConfig;
   private configDir: string;
   private configFile: string;
+  /**
+   * 原始 JSON 解析结果（含未知字段）。
+   * save() 写盘时基于此对象，保证未知字段 byte-for-value 保留（设计 §10 / A72）。
+   * 损坏 JSON 时保留 last-known-good（设计 §10 / A67）。
+   */
+  private rawConfig: Record<string, unknown>;
+  /** 当前项目路径（reloadForProject 跟踪） */
+  private _currentProject: string | undefined;
 
   constructor(configPath?: string) {
     this.configDir = configPath || join(homedir(), '.micode');
     this.configFile = join(this.configDir, 'config.json');
+    this.rawConfig = {};
     this.config = this.load();
+  }
+
+  /** 当前项目路径（reloadForProject 设置） */
+  get currentProject(): string | undefined {
+    return this._currentProject;
   }
 
   /** 加载配置（用户级文件 + 环境变量覆盖） */
@@ -29,11 +46,15 @@ export class ConfigStore {
       },
     };
 
+    // rawConfig 初始化（保留未知字段，损坏时保留 last-known-good）
+    let parsed: Record<string, unknown> | null = null;
+
     // 读取用户级配置文件
     if (existsSync(this.configFile)) {
       try {
         const raw = readFileSync(this.configFile, 'utf8');
         const saved = JSON.parse(raw) as Partial<MiCodeConfig>;
+        parsed = saved as Record<string, unknown>;
         if (saved.providers) {
           for (const [name, provider] of Object.entries(saved.providers)) {
             config.providers[name] = provider;
@@ -81,8 +102,14 @@ export class ConfigStore {
           config.capability_overrides = saved.capability_overrides;
         }
       } catch {
-        // 配置文件损坏，使用默认
+        // 配置文件损坏，使用默认（rawConfig 保留 last-known-good：若已有则不动）
+        parsed = null;
       }
+    }
+
+    // rawConfig：成功解析则采用，损坏则保留已有 last-known-good（首次为空）
+    if (parsed) {
+      this.rawConfig = parsed;
     }
 
     // 环境变量覆盖（不写入文件）
@@ -277,10 +304,152 @@ export class ConfigStore {
     return masked;
   }
 
-  /** 保存到文件 */
+  /**
+   * 原子保存到文件（设计 §10）。
+   *
+   * 流程：同目录临时文件 -> 写入 + fsync -> rename。
+   * 失败保留原文件（rename 前 temp 文件不影响原文件）。
+   * 基于完整对象（合并 rawConfig + schema 校验后的 config），保留未知字段。
+   * 写盘成功后同步 rawConfig，使后续 reload 的 last-known-good 包含本次变更。
+   */
   save(): void {
     mkdirSync(this.configDir, { recursive: true });
-    writeFileSync(this.configFile, JSON.stringify(this.config, null, 2), 'utf8');
+    // 合并：以 rawConfig 为基（保留未知字段），用 schema 的 config 覆盖已知字段
+    const merged = this.serializeWithUnknownFields();
+    const json = JSON.stringify(merged, null, 2);
+    this.atomicWrite(this.configFile, json);
+    // 写盘成功：rawConfig 同步为 merged（含未知字段 + schema 字段最新值）
+    this.rawConfig = merged;
+  }
+
+  /**
+   * 把当前 config 与 rawConfig 合并成完整对象。
+   * rawConfig 的未知字段保留；config 的 schema 字段权威（覆盖 rawConfig 中的对应键）。
+   */
+  private serializeWithUnknownFields(): Record<string, unknown> {
+    // 用 rawConfig 做基，再用 config 覆盖所有 schema 字段
+    return {
+      ...this.rawConfig,
+      providers: this.config.providers,
+      defaultProvider: this.config.defaultProvider,
+      permissions: this.config.permissions,
+      theme: this.config.theme,
+      spinnerVerbs: this.config.spinnerVerbs,
+      ...(this.config.plansDirectory !== undefined ? { plansDirectory: this.config.plansDirectory } : {}),
+      ...(this.config.capability_overrides !== undefined ? { capability_overrides: this.config.capability_overrides } : {}),
+    };
+  }
+
+  /**
+   * 原子写：同目录 temp -> write + fsync -> rename（设计 §10）。
+   * rename 在同目录下是 POSIX 原子操作；失败时原文件不受影响。
+   */
+  private atomicWrite(filePath: string, content: string): void {
+    const tmpPath = filePath + '.tmp';
+    const fd = openSync(tmpPath, 'w');
+    try {
+      writeFileSync(fd, content, 'utf8');
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmpPath, filePath);
+  }
+
+  // ─── Task 9: reload / readRaw / replaceRawFile（设计 §10 / A67） ─────────────
+
+  /**
+   * 重新从磁盘加载配置（设计 §10 / A67）。
+   * 损坏 JSON 时保留 last-known-good（rawConfig 与 config 都不变）。
+   * 返回当前 config 快照。
+   */
+  reload(): MiCodeConfig {
+    const previousRaw = this.rawConfig;
+    const previousConfig = this.config;
+    this.rawConfig = {};
+    this.config = this.load();
+    // load() 解析失败时 rawConfig 保持空对象 -> 恢复 last-known-good
+    if (Object.keys(this.rawConfig).length === 0) {
+      this.rawConfig = previousRaw;
+      this.config = previousConfig;
+    }
+    return this.config;
+  }
+
+  /**
+   * 替换磁盘上的原始配置文件内容（测试用，设计 §10 / A67）。
+   * 不经过 schema 校验——用于模拟外部写入损坏 JSON。
+   */
+  replaceRawFile(content: string): void {
+    mkdirSync(this.configDir, { recursive: true });
+    writeFileSync(this.configFile, content, 'utf8');
+  }
+
+  /** 读取磁盘上的原始 JSON 字符串（含未知字段，未经 schema 校验）。 */
+  readRaw(): Record<string, unknown> {
+    try {
+      const raw = readFileSync(this.configFile, 'utf8');
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return { ...this.rawConfig };
+    }
+  }
+
+  // ─── Task 9: persistPermissionUpdate（设计 §10 / A72） ───────────────────────
+
+  /**
+   * 持久化一个 PermissionUpdate 到 settings（设计 §10 / A72）。
+   *
+   * 行为：
+   *   - setMode：更新 permissions.mode 并原子写盘；
+   *   - addRule / removeRule / replaceRules：更新 permissions.rules 并原子写盘；
+   *   - 未知字段 byte-for-value 保留（save 基于 rawConfig + config 合并）。
+   *
+   * 不改变 session 瞬态状态——session 状态由调用方通过 SessionState 管理。
+   */
+  persistPermissionUpdate(update: PermissionUpdate): void {
+    switch (update.kind) {
+      case 'setMode':
+        this.setPermissionMode(update.mode);
+        break;
+      case 'addRule': {
+        const rules = this.getPermissionRules();
+        rules.push(toPermissionRuleConfig(update.rule));
+        this.setPermissionRules(rules);
+        break;
+      }
+      case 'removeRule': {
+        const rules = this.getPermissionRules().filter((r) => !ruleConfigEqual(r, update.rule));
+        this.setPermissionRules(rules);
+        break;
+      }
+      case 'replaceRules': {
+        this.setPermissionRules(update.rules.map(toPermissionRuleConfig));
+        break;
+      }
+    }
+  }
+
+  // ─── Task 9: reloadForProject（设计 §10 / A66） ──────────────────────────────
+
+  /**
+   * 切换项目并重载权限规则（设计 §10 / A66）。
+   *
+   * 行为：
+   *   - 更新 currentProject；
+   *   - 通过 session.applyPermissionUpdate(replaceRules) 更新 session 快照（唯一状态变换入口）；
+   *   - auto 模式下危险 allow 自动进入 stash（由 applyPermissionUpdate 内部 partition 负责）。
+   *
+   * 不写盘——project 规则是运行时来源，不持久化到 settings。
+   */
+  reloadForProject(
+    projectPath: string,
+    rules: readonly PermissionRule[],
+    session: SessionState,
+  ): void {
+    this._currentProject = projectPath;
+    // 唯一状态变换入口：replaceRules 会按当前 mode 分区（auto -> 危险 allow 进 stash）
+    session.applyPermissionUpdate({ kind: 'replaceRules', rules: [...rules] });
   }
 }
 
@@ -289,6 +458,28 @@ function maskApiKey(key: string): string {
   if (!key) return '';
   if (key.length <= 8) return '***';
   return key.slice(0, 8) + '***';
+}
+
+// ─── Task 9: PermissionRule <-> PermissionRuleConfig 桥接（结构相同，独立类型） ──
+
+/** PermissionRule（permission/types.ts）-> PermissionRuleConfig（config/schema.ts），结构相同 */
+function toPermissionRuleConfig(rule: PermissionRule): PermissionRuleConfig {
+  return {
+    tool: rule.tool,
+    behavior: rule.behavior,
+    ...(rule.path !== undefined ? { path: rule.path } : {}),
+    ...(rule.content !== undefined ? { content: rule.content } : {}),
+  };
+}
+
+/** 结构化比较 PermissionRuleConfig 与 PermissionRule（跨类型相等） */
+function ruleConfigEqual(config: PermissionRuleConfig, rule: PermissionRule): boolean {
+  return (
+    config.tool === rule.tool &&
+    config.behavior === rule.behavior &&
+    config.path === rule.path &&
+    config.content === rule.content
+  );
 }
 
 /** 合法的 capability support value 字面量集合(精确匹配)。 */

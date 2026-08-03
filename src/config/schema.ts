@@ -7,6 +7,21 @@ export interface ProviderConfig {
   baseUrl?: string;
   /** 轻量任务（子代理、压缩摘要）所用模型 */
   smallModel?: string;
+  /**
+   * classifier（auto 权限裁决）使用的 fast 模型（advisory，设计 §7.4）。
+   * 未配置时 classifier 绑定 session 主模型；静态已知不可选时也回退主模型。
+   */
+  fastClassifierModel?: string;
+  /**
+   * provider 静态声明的 classifier capability（设计 §7.3）。
+   * 只来自 adapter/config 静态声明，不做运行时 discovery RPC。
+   */
+  classifierCapabilities?: {
+    reasoningControl?: boolean;
+    minimumOutputTokens?: number;
+    decodingControl?: boolean;
+    promptCache?: boolean;
+  };
   /** 可选模型列表(/model 选择界面用)。配置后替换硬编码预设。
    *  格式:[{ "value": "model-id", "label": "显示名", "description": "描述" }] */
   models?: Array<{ value: string; label: string; description?: string }>;
