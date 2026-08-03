@@ -282,6 +282,51 @@ export class AnthropicStreamClient implements StreamingLLMClient {
     }
   }
 
+  /**
+   * Task 4 direct classifier RPC：一次非流式 messages.create，返回 raw text。
+   *
+   * 不经过 streamingQuery / Agent / tool registry / 正常 message 流；只发一次底层
+   * provider 请求，拼回 text block 为完整字符串返回。不 trim、不解析 ALLOW/FLAG、不容错。
+   * request 不含 tools（classifier 不用工具）。signal 贯穿底层请求。
+   */
+  async completeText(request: {
+    readonly model: { readonly providerId: string; readonly modelId: string };
+    readonly systemPrompt: string;
+    readonly prompt: string;
+    readonly signal: AbortSignal;
+    readonly reasoning?: 'disabled' | 'enabled';
+    readonly maxOutputTokens?: number;
+    readonly temperature?: 0;
+  }): Promise<string> {
+    const response = await this.client.messages.create(
+      {
+        model: request.model.modelId,
+        max_tokens: request.maxOutputTokens ?? 1024,
+        system: request.systemPrompt,
+        messages: [{ role: 'user' as const, content: request.prompt }],
+        tools: undefined,
+        stream: false,
+        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      },
+      { signal: request.signal },
+    );
+    // 拼回所有 text block（不 trim、不解析）
+    const blocks = (response as { content?: Array<{ type: string; text?: string }> }).content ?? [];
+    return blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
+  }
+
+  /**
+   * Task 4：adapter-owned 静态 classifier capability 声明。
+   * Anthropic 支持 reasoning/thinking 控制、temperature、最小输出预算。
+   */
+  classifierCapabilities(): import('../permission/classifier-provider.js').ClassifierProviderCapabilities {
+    return {
+      reasoningControl: true,
+      decodingControl: true,
+      promptCache: true,
+    };
+  }
+
   /** 将内部消息格式转换为 Anthropic API 格式 */
   private convertMessages(messages: Message[]): Anthropic.MessageParam[] {
     return messages.map(m => ({

@@ -161,3 +161,28 @@ export function toDirectTextRequest(
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
   };
 }
+
+/**
+ * 从一个实现了 DirectProviderTextClient 的真实 adapter 构造 PermissionClassifierProvider。
+ *
+ * wrapper 持有 adapter 引用 + 其静态 classifier capabilities；
+ * invoke 把 ClassifierProviderRequest 翻译为 completeText 入参，原样上抛 raw response。
+ * wrapper 不持有 ToolRegistry/RuntimeSecurityGate/Agent state/messageSink/TuiCallback。
+ */
+export function classifierProviderFromTextClient(
+  client: DirectProviderTextClient,
+  capabilities?: ClassifierProviderCapabilities,
+): PermissionClassifierProvider {
+  const caps =
+    capabilities ??
+    (typeof (client as unknown as { classifierCapabilities?: () => ClassifierProviderCapabilities }).classifierCapabilities ===
+    'function'
+      ? (client as unknown as { classifierCapabilities: () => ClassifierProviderCapabilities }).classifierCapabilities()
+      : unsupportedClassifierCapabilities());
+  return {
+    capabilities: normalizeStaticClassifierCapabilities(caps),
+    async invoke(req: ClassifierProviderRequest): Promise<unknown> {
+      return client.completeText(toDirectTextRequest(req));
+    },
+  };
+}

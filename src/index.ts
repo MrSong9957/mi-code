@@ -866,6 +866,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     for await (const msg of streamingQuery(streamClient, toolRegistry, userMessageForAgent ?? userInput, {
       systemPrompt, tools, signal: ac.signal,
       eventBus, compactClient, executionRuntime,
+      authoredByUser: true, // Task 4 provenance：真实用户输入边界
       initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
       // revised:只捕获查询结束时的完整快照,持久化交给 commitFinalizedTurn 统一 awaited。
       // 原 onMessages 用 void sessionStore.append(非 awaited)启动追加,若进程在追加完成前

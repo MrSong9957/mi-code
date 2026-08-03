@@ -65,6 +65,7 @@ export {
   unsupportedClassifierCapabilities,
   normalizeStaticClassifierCapabilities,
   toDirectTextRequest,
+  classifierProviderFromTextClient,
   type PermissionClassifierProvider,
   type ClassifierProviderCapabilities,
   type ClassifierProviderRequest,

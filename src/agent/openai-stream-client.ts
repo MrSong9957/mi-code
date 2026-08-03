@@ -250,6 +250,45 @@ export class OpenAIStreamClient implements StreamingLLMClient {
     yield { type: 'message_stop' };
   }
 
+  /**
+   * Task 4 direct classifier RPC：一次非流式 chat.completions.create，返回 raw text。
+   * 不经过 streamingQuery/Agent/tool registry；request 不含 tools；不 trim/不解析/不容错。
+   */
+  async completeText(request: {
+    readonly model: { readonly providerId: string; readonly modelId: string };
+    readonly systemPrompt: string;
+    readonly prompt: string;
+    readonly signal: AbortSignal;
+    readonly reasoning?: 'disabled' | 'enabled';
+    readonly maxOutputTokens?: number;
+    readonly temperature?: 0;
+  }): Promise<string> {
+    const response = await this.client.chat.completions.create(
+      {
+        model: request.model.modelId,
+        messages: [
+          { role: 'system' as const, content: request.systemPrompt },
+          { role: 'user' as const, content: request.prompt },
+        ],
+        stream: false,
+        ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
+        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      },
+      { signal: request.signal },
+    );
+    const content = (response as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content;
+    return typeof content === 'string' ? content : '';
+  }
+
+  /** Task 4：adapter-owned 静态 classifier capability。 */
+  classifierCapabilities(): import('../permission/classifier-provider.js').ClassifierProviderCapabilities {
+    return {
+      reasoningControl: false, // OpenAI chat completions 无显式 thinking 开关
+      decodingControl: true,
+      promptCache: false,
+    };
+  }
+
   /** 内部消息 → OpenAI 消息格式 */
   private convertMessages(messages: Message[]): Array<Record<string, unknown>> {
     const result: Array<Record<string, unknown>> = [];

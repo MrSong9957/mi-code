@@ -21,9 +21,9 @@ import type { Message } from '../../agent/types.js';
 
 // ─── fixture helpers ────────────────────────────────────────────────────────────
 
-/** 真实用户文本消息 */
+/** 真实用户文本消息（authoredByUser: true —— Task 4 provenance 边界） */
 function userMessage(text: string): Message {
-  return { role: 'user', content: text };
+  return { role: 'user', content: text, authoredByUser: true };
 }
 /** assistant prose */
 function assistantMessage(text: string): Message {
@@ -108,10 +108,11 @@ describe('permission classifier input boundary', () => {
   });
 
   test('user message with array content containing only text blocks is authentic', () => {
-    // user 消息 content 是 [TextBlock] —— 仍算真实用户文本（非 tool_result）
+    // user 消息 content 是 [TextBlock] + authoredByUser: true —— 仍算真实用户文本（非 tool_result）
     const userTextArray: Message = {
       role: 'user',
       content: [{ type: 'text', text: 'hello from user' } as never],
+      authoredByUser: true,
     };
     const current = executableCall('call-a', 'read_file', { path: 'a.ts' });
     const projected = projectPermissionClassifierInput([userTextArray], current);

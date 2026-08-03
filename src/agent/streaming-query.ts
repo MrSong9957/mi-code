@@ -175,6 +175,12 @@ export interface StreamingQueryOptions {
    */
   onMessages?: (messages: Message[]) => void;
   /**
+   * Task 4 provenance：本次 userMessage 是否由真实用户输入（handleUserSubmit 边界）。
+   * 为 true 时，构建的 user 消息标记 authoredByUser: true，permission classifier
+   * 据此识别 authentic user intent。subagent/recovery 等内部路径不设此字段。
+   */
+  authoredByUser?: boolean;
+  /**
    * 子代理工作日志 checkpoint:每完成一条消息边界(awaited)落盘一次。
    *
    * 物理本质:子代理每打完一回合("工具调用 + 工具结果配对完成"或"无工具的最终
@@ -390,6 +396,7 @@ export async function* streamingQuery(
     referenceValidationHook,
     boundedMemoryIntegration,
     postCompactReconstruction,
+    authoredByUser,
   } = options;
 
   if (tools.length > 0 && !executionRuntime) {
@@ -449,8 +456,8 @@ export async function* streamingQuery(
     ? sanitizeMessagesForModel(initialMessages)
     : undefined;
   let messages: Message[] = sanitizedInitial && sanitizedInitial.length > 0
-    ? [...sanitizedInitial, { role: 'user' as const, content: userMessage }]
-    : [{ role: 'user' as const, content: userMessage }];
+    ? [...sanitizedInitial, { role: 'user' as const, content: userMessage, ...(authoredByUser ? { authoredByUser: true as const } : {}) }]
+    : [{ role: 'user' as const, content: userMessage, ...(authoredByUser ? { authoredByUser: true as const } : {}) }];
   let turnCount = 0;
 
   // 错误恢复状态
