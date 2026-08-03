@@ -96,6 +96,12 @@ export interface ToolExecutionContext {
   /** 用户取消、turn 中断或 timeout 信号。 */
   signal?: AbortSignal;
   /**
+   * Task 6：当前 session 的 message 历史（含 authoredByUser: true 的真实用户消息）。
+   * 供 PermissionAskResolver 投影 classifier 输入。由 streaming-query/streaming-executor
+   * 在调用 executeToolCall 时注入。未传时 resolver 收到空数组（LEGACY 兼容）。
+   */
+  messages?: Message[];
+  /**
    * Wave E Task 14 (M-065 / ERC-4): Sanitized Execution Plan。
    *
    * 仅 run_bash 工具消费;cutover 后 enforced 路径缺 plan 直接拒绝。

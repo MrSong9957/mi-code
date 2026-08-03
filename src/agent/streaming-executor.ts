@@ -9,7 +9,7 @@
 // getRemainingResults → 等所有包裹拆完，按顺序取结果
 
 import type { ToolRegistry } from './tool-registry.js';
-import type { ToolUseBlock, ContentBlock } from './types.js';
+import type { ToolUseBlock, ContentBlock, Message } from './types.js';
 import { READ_ONLY_TOOLS } from '../permission/types.js';
 import {
   executeToolCall,
@@ -58,6 +58,7 @@ export class StreamingToolExecutor {
   private readonly runtime: ToolExecutionRuntime;
   private readonly signal?: AbortSignal;
   private readonly origin: 'main' | 'subagent';
+  private readonly messages?: Message[];
   private tools: TrackedTool[] = [];
   private discarded = false;
   private progressResolve?: () => void;
@@ -67,11 +68,13 @@ export class StreamingToolExecutor {
     runtime: ToolExecutionRuntime,
     signal?: AbortSignal,
     origin?: 'main' | 'subagent',
+    messages?: Message[],
   ) {
     this.registry = registry;
     this.runtime = runtime;
     this.signal = signal;
     this.origin = origin ?? 'main';
+    this.messages = messages;
   }
 
   /**
@@ -134,7 +137,7 @@ export class StreamingToolExecutor {
         this.registry,
         tool.block,
         this.runtime,
-        { signal: this.signal, origin: this.origin },
+        { signal: this.signal, origin: this.origin, messages: this.messages },
       );
       tool.executionResult = executionResult;
       tool.results = [{ type: 'text', text: executionResult.output }];

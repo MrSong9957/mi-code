@@ -433,7 +433,7 @@ export async function executeToolCall(
         canonicalToolName: call.name,
         input: executorInput,
       },
-      messages: [], // messages 由上游 session 提供（Task 6 resolver 测试直接注入）
+      messages: context.messages ?? [], // 真实 session 历史（含 authoredByUser 标记）
       origin,
       permissionContext: null,
     });
