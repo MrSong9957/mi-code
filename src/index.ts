@@ -456,8 +456,14 @@ const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
     clearSessionMessages: () => { sessionMessages = []; },
     rotateSessionId: () => { sessionState.transitionTo(randomUUID()); },
     resetContextUsage: () => tuiHandle?.statusStore.getState().setContextPct(0),
-    setPermissionMode: (next) => permissionChecker.setMode(next),
-    setConfigMode: (next) => configStore.setPermissionMode(next),
+    // Task 8：plan approval 经统一 transitionPermissionMode port（与 slash/TAB 一致）
+    setPermissionMode: (next) => {
+      transitionPermissionMode(sessionState, next, 'userSettings', {
+        save: (cfg) => configStore.setPermissionMode(cfg.permissions.mode),
+      });
+      permissionChecker.setMode(next);
+    },
+    setConfigMode: () => { /* 已由 transitionPermissionMode save 处理 */ },
     setStatusMode: (next) => tuiHandle?.statusStore.getState().setMode(next),
   }),
 });
