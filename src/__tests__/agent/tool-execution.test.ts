@@ -14,6 +14,35 @@ import type {
   ToolUseBlock,
 } from '../../agent/types.js';
 import { createToolExecutionRuntime } from '../helpers/tool-execution-runtime.js';
+import type { PermissionRule } from '../../permission/types.js';
+
+/**
+ * 本文件所有 stub 工具的 allow 规则。
+ * 这些测试验证的是 executeToolCall 管线（校验/错误分类/回调），不是权限行为；
+ * A15 后 auto 模式对未决工具返回 ask 会阻塞执行，故显式 allow 这些 stub 工具，
+ * 把权限隔离为被控依赖。只 allow 本文件实际用到的工具，不扩大范围。
+ */
+const STUB_ALLOW_RULES: PermissionRule[] = [
+  'echo',
+  'profile',
+  'questions',
+  'count',
+  'bounded-number',
+  'snapshot',
+  'write_file',
+  'Error',
+  'NonErrorThrown',
+].map((tool) => ({ tool, behavior: 'allow' as const }));
+
+/**
+ * 本文件专用 runtime 工厂：默认带入 STUB_ALLOW_RULES，允许透传 mode/callbacks。
+ * 保持与 createToolExecutionRuntime 相同的 options 形状，只是预填 rules。
+ */
+function stubRuntime(
+  options: Omit<Parameters<typeof createToolExecutionRuntime>[0], 'rules'> = {},
+) {
+  return createToolExecutionRuntime({ rules: STUB_ALLOW_RULES, ...options });
+}
 
 function call(
   name: string,
@@ -81,7 +110,7 @@ describe('executeToolCall lookup, validation, and success', () => {
     const result = await executeToolCall(
       new ToolRegistry(),
       call('missing', { value: 1 }),
-      createToolExecutionRuntime(),
+      stubRuntime(),
     );
 
     expect(result).toMatchObject({
@@ -113,7 +142,7 @@ describe('executeToolCall lookup, validation, and success', () => {
     const result = await executeToolCall(
       registry,
       call('echo', { text: 'hello' }),
-      createToolExecutionRuntime(),
+      stubRuntime(),
     );
 
     expect(result).toMatchObject({
@@ -143,7 +172,7 @@ describe('executeToolCall lookup, validation, and success', () => {
     const result = await executeToolCall(
       registry,
       call('echo', {}),
-      createToolExecutionRuntime(),
+      stubRuntime(),
     );
 
     expect(result).toMatchObject({
@@ -176,7 +205,7 @@ describe('executeToolCall lookup, validation, and success', () => {
     const result = await executeToolCall(
       registry,
       call('profile', { profile: { name: 42 } }),
-      createToolExecutionRuntime(),
+      stubRuntime(),
     );
 
     expect(result).toMatchObject({
@@ -207,7 +236,7 @@ describe('executeToolCall lookup, validation, and success', () => {
     const result = await executeToolCall(
       registry,
       call('questions', { questions: [{ header: false }] }),
-      createToolExecutionRuntime(),
+      stubRuntime(),
     );
 
     expect(result).toMatchObject({
@@ -229,7 +258,7 @@ describe('executeToolCall lookup, validation, and success', () => {
     const result = await executeToolCall(
       registry,
       call('count', { count: '1' }),
-      createToolExecutionRuntime(),
+      stubRuntime(),
     );
 
     expect(result).toMatchObject({
@@ -261,7 +290,7 @@ describe('executeToolCall lookup, validation, and success', () => {
     const result = await executeToolCall(
       registry,
       call('bounded-number', { timeout_ms: value }),
-      createToolExecutionRuntime(),
+      stubRuntime(),
     );
 
     expect(result).toMatchObject({
@@ -296,7 +325,7 @@ describe('executeToolCall lookup, validation, and success', () => {
       const result = await executeToolCall(
         registry,
         call('bounded-number', { timeout_ms: value }),
-        createToolExecutionRuntime(),
+        stubRuntime(),
       );
 
       expect(result.status).toBe('success');
@@ -316,7 +345,7 @@ describe('executeToolCall lookup, validation, and success', () => {
     const result = await executeToolCall(
       registry,
       call('echo', { text: 'hello', extra: true }),
-      createToolExecutionRuntime(),
+      stubRuntime(),
     );
 
     expect(result.status).toBe('success');
@@ -339,7 +368,7 @@ describe('executeToolCall lookup, validation, and success', () => {
     const result = await executeToolCall(
       registry,
       call('write_file', {}),
-      createToolExecutionRuntime({ mode: 'plan' }),
+      stubRuntime({ mode: 'plan' }),
     );
 
     expect(result).toMatchObject({
@@ -371,7 +400,7 @@ describe('executeToolCall lookup, validation, and success', () => {
     const result = await executeToolCall(
       registry,
       call('snapshot', input),
-      createToolExecutionRuntime(),
+      stubRuntime(),
     );
     input.nested.value = 'after';
 
@@ -388,7 +417,7 @@ describe('executeToolCall pre-execution input identity', () => {
       executorInput = structuredClone(input);
       return `echo: ${input.text}`;
     });
-    const runtime = createToolExecutionRuntime({
+    const runtime = stubRuntime({
       callbacks: {
         onPreExecute: () => ({
           updatedInput: { text: 'replacement', nested: { value: 'final' } },
@@ -430,7 +459,7 @@ describe('executeToolCall pre-execution input identity', () => {
       echoDefinition,
       async (input) => `echo: ${input.text}`,
     );
-    const runtime = createToolExecutionRuntime({
+    const runtime = stubRuntime({
       callbacks: {
         onPreExecute: (context) => {
           preInputWasFrozen = Object.isFrozen(context.input)
@@ -456,7 +485,7 @@ describe('executeToolCall pre-execution input identity', () => {
 
   it('treats updatedInput as a replacement rather than a patch', async () => {
     const registry = register(echoDefinition);
-    const runtime = createToolExecutionRuntime({
+    const runtime = stubRuntime({
       callbacks: {
         onPreExecute: () => ({ updatedInput: { nested: { value: 'only' } } }),
       },
@@ -483,7 +512,7 @@ describe('executeToolCall pre-execution input identity', () => {
     await expect(executeToolCall(
       registry,
       call('echo', { text: 'original' }),
-      createToolExecutionRuntime({ callbacks: { onPreExecute } }),
+      stubRuntime({ callbacks: { onPreExecute } }),
     )).rejects.toThrow('onPreExecute returned an invalid result');
   });
 
@@ -495,7 +524,7 @@ describe('executeToolCall pre-execution input identity', () => {
     const result = await executeToolCall(
       register(echoDefinition),
       call('echo', {}),
-      createToolExecutionRuntime({ callbacks: { onPreExecute } }),
+      stubRuntime({ callbacks: { onPreExecute } }),
     );
 
     expect(result).toMatchObject({
@@ -516,7 +545,7 @@ describe('executeToolCall pre-execution input identity', () => {
     const result = await executeToolCall(
       registry,
       call('echo', { text: 'original' }),
-      createToolExecutionRuntime({
+      stubRuntime({
         callbacks: {
           onPreExecute: () => ({
             updatedInput: { text: 'final', nested: { value: 'snapshot' } },
@@ -540,7 +569,7 @@ describe('executeToolCall executor error classification', () => {
     return executeToolCall(
       registry,
       call('echo', { text: 'hello' }),
-      createToolExecutionRuntime(),
+      stubRuntime(),
     );
   }
 
@@ -625,7 +654,7 @@ describe('executeToolCall callback exception post-processing', () => {
   it('bubbles a Pre Error and does not authorize or execute', async () => {
     const preError = new Error('pre failed');
     const executor = vi.fn(async () => 'unreachable');
-    const runtime = createToolExecutionRuntime({
+    const runtime = stubRuntime({
       callbacks: {
         onPreExecute: () => {
           throw preError;
@@ -645,7 +674,7 @@ describe('executeToolCall callback exception post-processing', () => {
 
   it('bubbles a non-Error thrown by Pre unchanged', async () => {
     const thrown = { stage: 'pre', reason: 'contract failed' };
-    const runtime = createToolExecutionRuntime({
+    const runtime = stubRuntime({
       callbacks: {
         onPreExecute: () => {
           throw thrown;
@@ -665,7 +694,7 @@ describe('executeToolCall callback exception post-processing', () => {
     const postError = Object.assign(new Error('post failed'), {
       code: 'POST_FAILED',
     });
-    const runtime = createToolExecutionRuntime({
+    const runtime = stubRuntime({
       callbacks: {
         onPostExecute: (result) => {
           callbackResult = result;
@@ -699,7 +728,7 @@ describe('executeToolCall callback exception post-processing', () => {
   it('safely serializes a non-Error thrown by Post', async () => {
     const circular: Record<string, unknown> = { reason: 'post failed' };
     circular.self = circular;
-    const runtime = createToolExecutionRuntime({
+    const runtime = stubRuntime({
       callbacks: {
         onPostExecute: () => {
           throw circular;
@@ -733,7 +762,7 @@ describe('executeToolCall callback exception post-processing', () => {
         });
       },
     };
-    const runtime = () => createToolExecutionRuntime({ callbacks });
+    const runtime = () => stubRuntime({ callbacks });
 
     await executeToolCall(
       new ToolRegistry(),
@@ -752,7 +781,7 @@ describe('executeToolCall callback exception post-processing', () => {
         parameters: { type: 'object' },
       }),
       call('write_file', {}),
-      createToolExecutionRuntime({ mode: 'plan', callbacks }),
+      stubRuntime({ mode: 'plan', callbacks }),
     );
     await executeToolCall(
       register(echoDefinition, async () => {
@@ -771,7 +800,7 @@ describe('executeToolCall callback exception post-processing', () => {
   });
 
   it('preserves failure and attaches an Error thrown by Failure notification', async () => {
-    const runtime = createToolExecutionRuntime({
+    const runtime = stubRuntime({
       callbacks: {
         onFailure: () => {
           throw new Error('failure notification failed');
@@ -801,7 +830,7 @@ describe('executeToolCall callback exception post-processing', () => {
     const result = await executeToolCall(
       new ToolRegistry(),
       call('missing', {}),
-      createToolExecutionRuntime({
+      stubRuntime({
         callbacks: {
           onFailure: () => {
             throw thrown;
@@ -823,7 +852,11 @@ describe('executeToolCall callback exception post-processing', () => {
   it('excludes blocked Post time from durationMs', async () => {
     const postEntered = deferred();
     const releasePost = deferred();
+    // Task 13 在 runtime-gate.authorize 入口新增 performance.now 计时（startTime，审计用），
+    // 与 executeToolCall 的 startedAt/durationMs 交错。本测试未提供 auditSink，故 gate 只调 1 次：
+    //   call1=startedAt(tool,100) → call2=gate.startTime(100,不影响) → call3=durationMs(tool,125)
     const nowSpy = vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(100)
       .mockReturnValueOnce(100)
       .mockReturnValueOnce(125);
     let releaseIfBlocked = false;
@@ -832,7 +865,7 @@ describe('executeToolCall callback exception post-processing', () => {
       const execution = executeToolCall(
         register(echoDefinition),
         call('echo', { text: 'hello' }),
-        createToolExecutionRuntime({
+        stubRuntime({
           callbacks: {
             onPostExecute: async () => {
               releaseIfBlocked = true;
@@ -860,6 +893,8 @@ describe('executeToolCall callback exception post-processing', () => {
   it('excludes blocked Failure notification time from durationMs', async () => {
     const failureEntered = deferred();
     const releaseFailure = deferred();
+    // 此测试走校验失败路径（空 input），durationMs 在 gate.execute 之前计算，不经过 gate 计时：
+    //   call1=startedAt(tool,200) → call2=durationMs(tool,240)
     const nowSpy = vi.spyOn(performance, 'now')
       .mockReturnValueOnce(200)
       .mockReturnValueOnce(240);
@@ -869,7 +904,7 @@ describe('executeToolCall callback exception post-processing', () => {
       const execution = executeToolCall(
         register(echoDefinition),
         call('echo', {}),
-        createToolExecutionRuntime({
+        stubRuntime({
           callbacks: {
             onFailure: async () => {
               releaseIfBlocked = true;

@@ -104,6 +104,8 @@ function fakeGate(): RuntimeSecurityGate & { execute: ReturnType<typeof vi.fn> }
 }
 function fakeChecker(behavior: 'allow' | 'ask' | 'deny', rc = 'permission.user_confirmation_required'): PermissionChecker {
   return {
+    // 这 3 个用例验证 auto resolver 路径；mode guard (tool-execution.ts) 要求 getMode()==='auto' 才放行 resolver。
+    getMode: () => 'auto',
     check: () => ({ behavior, reason: 'test', reason_code: rc }),
     checkDecision: () => ({
       protocol_version: '1', decision_id: 'd', action: { kind: 'tool_call', subject_id: 't', snapshot_id: 's' },

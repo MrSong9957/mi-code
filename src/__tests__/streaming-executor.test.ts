@@ -36,7 +36,9 @@ describe('StreamingToolExecutor v2', () => {
   beforeEach(() => {
     executor = new StreamingToolExecutor(
       createTestRegistry(),
-      createToolExecutionRuntime(),
+      // A15 后 auto 模式 echo 返回 ask；read_file 只读自动放行。本组测试验证
+      // 流式执行器行为，显式 allow echo 以隔离权限依赖。
+      createToolExecutionRuntime({ rules: [{ tool: 'echo', behavior: 'allow' }] }),
       new AbortController().signal,
     );
   });
@@ -128,7 +130,19 @@ describe('StreamingToolExecutor v2', () => {
     });
     const serialExecutor = new StreamingToolExecutor(
       registry,
-      createToolExecutionRuntime(),
+      // ask_user_question 被设计为 requiresInteraction（A14），allow rule 无法放行，
+      // 需注入自动批准的 ask channel 才能真实执行。本测试验证串行化，非权限行为。
+      createToolExecutionRuntime({
+        channel: {
+          request: (decision) =>
+            Promise.resolve({
+              protocol_version: '1',
+              decision_id: decision.decision_id,
+              response: 'approved_once' as const,
+              decided_at: new Date().toISOString(),
+            }),
+        },
+      }),
       new AbortController().signal,
     );
 
@@ -194,7 +208,7 @@ describe('StreamingToolExecutor v2', () => {
     });
     const signalExecutor = new StreamingToolExecutor(
       registry,
-      createToolExecutionRuntime(),
+      createToolExecutionRuntime({ rules: [{ tool: 'echo', behavior: 'allow' }] }),
       controller.signal,
     );
 
@@ -216,7 +230,7 @@ describe('StreamingToolExecutor v2', () => {
     });
     const failingExecutor = new StreamingToolExecutor(
       registry,
-      createToolExecutionRuntime(),
+      createToolExecutionRuntime({ rules: [{ tool: 'echo', behavior: 'allow' }] }),
       new AbortController().signal,
     );
     failingExecutor.addTool(createToolUseBlock('call-error', 'echo', {}));

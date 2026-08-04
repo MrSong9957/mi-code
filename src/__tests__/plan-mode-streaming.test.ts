@@ -208,7 +208,9 @@ describe('Plan 模式流式拦截', () => {
         signal: ac.signal,
         maxTurns: 5,
         enableStreamingExecution: true,
-        executionRuntime: createToolExecutionRuntime(),
+        // A15 后 auto 模式 write_file 返回 ask；本测试验证流式执行器在 auto 下的执行行为，
+        // 显式 allow write_file 以隔离权限依赖（保留"auto 下工具自动执行"的测试意图）。
+        executionRuntime: createToolExecutionRuntime({ rules: [{ tool: 'write_file', behavior: 'allow' }] }),
       }),
     );
 

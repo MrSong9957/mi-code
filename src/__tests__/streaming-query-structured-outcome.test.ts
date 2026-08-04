@@ -105,7 +105,17 @@ describe('streamingQuery structuredOutcome 透传', () => {
       systemPrompt: 'sys',
       tools: [askTool.definition],
       signal: new AbortController().signal,
-      executionRuntime: createToolExecutionRuntime(),
+      // ask_user_question 是 requiresInteraction（A14），allow rule 无法放行，需自动批准 channel。
+      executionRuntime: createToolExecutionRuntime({
+        channel: {
+          request: (decision) => Promise.resolve({
+            protocol_version: '1',
+            decision_id: decision.decision_id,
+            response: 'approved_once' as const,
+            decided_at: new Date().toISOString(),
+          }),
+        },
+      }),
       eventBus,
       onMessages: m => { messages.push(...m); },
     });
@@ -170,7 +180,8 @@ describe('streamingQuery structuredOutcome 透传', () => {
         parameters: { type: 'object', properties: { text: { type: 'string' } } },
       }],
       signal: new AbortController().signal,
-      executionRuntime: createToolExecutionRuntime(),
+      // A15 后 auto 模式 slow_echo 返回 ask；本测试验证 structured result，显式 allow。
+      executionRuntime: createToolExecutionRuntime({ rules: [{ tool: 'slow_echo', behavior: 'allow' }] }),
       eventBus,
     });
 
@@ -205,7 +216,8 @@ describe('streamingQuery structuredOutcome 透传', () => {
       systemPrompt: 'sys',
       tools: [{ name: 'plain_tool', description: 'p', parameters: { type: 'object', properties: {} } }],
       signal: new AbortController().signal,
-      executionRuntime: createToolExecutionRuntime(),
+      // A15 后 auto 模式 plain_tool 返回 ask；本测试验证 unified 执行输出，显式 allow。
+      executionRuntime: createToolExecutionRuntime({ rules: [{ tool: 'plain_tool', behavior: 'allow' }] }),
       eventBus,
     });
     for await (const _ of gen) { void _; }
@@ -376,7 +388,8 @@ describe('streamingQuery unified tool execution', () => {
         tools: [definition],
         signal: new AbortController().signal,
         enableStreamingExecution: false,
-        executionRuntime: createToolExecutionRuntime(),
+        // A15 后 auto 模式 plain_tool 返回 ask；本测试验证 serial 模式 structured result，显式 allow。
+        executionRuntime: createToolExecutionRuntime({ rules: [{ tool: 'plain_tool', behavior: 'allow' }] }),
       },
     ));
     const result = messages.find(message => message.type === 'tool_result');
@@ -412,7 +425,8 @@ describe('streamingQuery unified tool execution', () => {
         tools: [definition],
         signal: new AbortController().signal,
         enableStreamingExecution: false,
-        executionRuntime: createToolExecutionRuntime(),
+        // A15 后 auto 模式 buggy_tool 返回 ask；本测试验证 unclassified error 上抛，显式 allow。
+        executionRuntime: createToolExecutionRuntime({ rules: [{ tool: 'buggy_tool', behavior: 'allow' }] }),
       },
     ))).rejects.toBe(bug);
   });

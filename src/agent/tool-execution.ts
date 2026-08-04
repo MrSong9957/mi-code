@@ -424,7 +424,14 @@ export async function executeToolCall(
   const origin = context.origin ?? 'main';
   let effectiveDecision = decision;
 
-  if (decision.behavior === 'ask' && runtime.askResolver) {
+  if (
+    decision.behavior === 'ask' &&
+    runtime.askResolver &&
+    // mode 守卫：auto askResolver（resolver/classifier）只服务于 auto 模式。
+    // build/plan 等非 auto 模式的 ask 必须保留原语义（交正常 gate / 用户决策），
+    // 否则 resolver 的 acceptEdits 模拟会在 build 模式静默放行写操作（Code Review Critical）。
+    runtime.permissionChecker.getMode() === 'auto'
+  ) {
     // Task 6：auto ask resolver。classifier pending 时此处 await，gate/executor 不调用。
     const resolved = await runtime.askResolver.resolve({
       decision,
