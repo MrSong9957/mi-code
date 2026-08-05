@@ -53,6 +53,15 @@ export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlo
 export interface Message {
   role: MessageRole;
   content: string | ContentBlock[];
+  /**
+   * 真实用户输入 provenance 标记（Task 4 classifier 安全边界）。
+   *
+   * 只在用户输入的可信边界（handleUserSubmit）设为 true；所有内部生成消息
+   * （hook 注入、background 通知、recovery/compaction 占位、agent 转述、subagent prompt、
+   * replay/resume 加载）均不得设此字段。permission classifier 只接受 authoredByUser === true
+   * 的消息作为授权证据；未知来源一律排除（默认未知 ≠ 用户）。
+   */
+  authoredByUser?: true;
 }
 
 /** 工具参数定义（兼容 JSON Schema） */
@@ -86,6 +95,12 @@ export interface ToolExecutionContext {
   toolUseId: string;
   /** 用户取消、turn 中断或 timeout 信号。 */
   signal?: AbortSignal;
+  /**
+   * Task 6：当前 session 的 message 历史（含 authoredByUser: true 的真实用户消息）。
+   * 供 PermissionAskResolver 投影 classifier 输入。由 streaming-query/streaming-executor
+   * 在调用 executeToolCall 时注入。未传时 resolver 收到空数组（LEGACY 兼容）。
+   */
+  messages?: Message[];
   /**
    * Wave E Task 14 (M-065 / ERC-4): Sanitized Execution Plan。
    *

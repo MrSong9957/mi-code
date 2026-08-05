@@ -51,7 +51,9 @@ function executeBash(
   return executeToolCall(
     registry,
     call,
-    createToolExecutionRuntime(),
+    // A15 后 auto 模式 run_bash 返回 ask；本组测试验证 timeout 契约而非权限行为，
+    // 显式 allow run_bash 以隔离权限依赖。
+    createToolExecutionRuntime({ rules: [{ tool: 'run_bash', behavior: 'allow' }] }),
     context,
   );
 }

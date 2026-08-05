@@ -20,6 +20,11 @@ export interface CommandContext {
   negotiator?: SkillNegotiator;
   userId?: string;
   themeStore?: ThemeStore;
+  /**
+   * Task 8：统一 mode transition port。提供后，handleModeSwitch 经此回调切换模式
+   * （由 index.ts 注入，内部调 transitionPermissionMode）。未提供时走 LEGACY 路径。
+   */
+  onModeTransition?: (mode: PermissionMode) => void;
 }
 
 // COMMAND_NAMES + COMMAND_SUGGESTIONS 已迁移到 suggestion-data.ts(单一真相源)
@@ -270,9 +275,13 @@ function handleModel(cmd: Command, config: ConfigStore): CommandResult {
  *   /auto  = VIP 自助（除危险动作外全放行）
  */
 function handleModeSwitch(mode: PermissionMode, config: ConfigStore, ctx?: CommandContext): CommandResult {
-  // 即时生效：更新运行中的 PermissionChecker
+  // Task 8：统一 mode transition port（slash /auto /build /plan 经此入口）
+  if (ctx?.onModeTransition) {
+    ctx.onModeTransition(mode);
+    return { message: `Permission mode set to: ${mode}` };
+  }
+  // LEGACY：直接 checker.setMode + config 持久化（向后兼容）
   ctx?.permissionChecker?.setMode(mode);
-  // 持久化：写入配置文件，重启后恢复
   config.setPermissionMode(mode);
   return { message: `Permission mode set to: ${mode}` };
 }

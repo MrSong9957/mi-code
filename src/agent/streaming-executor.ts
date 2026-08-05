@@ -9,7 +9,7 @@
 // getRemainingResults → 等所有包裹拆完，按顺序取结果
 
 import type { ToolRegistry } from './tool-registry.js';
-import type { ToolUseBlock, ContentBlock } from './types.js';
+import type { ToolUseBlock, ContentBlock, Message } from './types.js';
 import { READ_ONLY_TOOLS } from '../permission/types.js';
 import {
   executeToolCall,
@@ -30,6 +30,18 @@ export interface TrackedTool {
   executionResult?: ToolExecutionResult;
   executionError?: unknown;
   error?: string;
+}
+
+/**
+ * 判断一个已完成的工具结果是否为"execution failure"（设计 §8 / A54）。
+ *
+ * 只有 execution 阶段的失败（operational_error / cancelled / timeout）才算 execution failure，
+ * 会触发 run_bash 的 sibling abort。permission_denied 属于权限阶段，不算 execution failure。
+ */
+function isExecutionFailure(result: ToolExecutionResult | undefined): boolean {
+  if (!result || result.status !== 'failure') return false;
+  const kind = result.failure.kind;
+  return kind === 'operational_error' || kind === 'cancelled' || kind === 'timeout';
 }
 
 /**
@@ -58,6 +70,7 @@ export class StreamingToolExecutor {
   private readonly runtime: ToolExecutionRuntime;
   private readonly signal?: AbortSignal;
   private readonly origin: 'main' | 'subagent';
+  private readonly messages?: Message[];
   private tools: TrackedTool[] = [];
   private discarded = false;
   private progressResolve?: () => void;
@@ -67,11 +80,13 @@ export class StreamingToolExecutor {
     runtime: ToolExecutionRuntime,
     signal?: AbortSignal,
     origin?: 'main' | 'subagent',
+    messages?: Message[],
   ) {
     this.registry = registry;
     this.runtime = runtime;
     this.signal = signal;
     this.origin = origin ?? 'main';
+    this.messages = messages;
   }
 
   /**
@@ -134,18 +149,58 @@ export class StreamingToolExecutor {
         this.registry,
         tool.block,
         this.runtime,
-        { signal: this.signal, origin: this.origin },
+        { signal: this.signal, origin: this.origin, messages: this.messages },
       );
       tool.executionResult = executionResult;
       tool.results = [{ type: 'text', text: executionResult.output }];
       tool.status = 'completed';
+      // 设计 §8 / A54：只有 run_bash 的 execution failure abort 未完成 sibling。
+      // 其他 unsafe tool（write_file 等）failure 与 read failure 都只记录自身。
+      if (tool.block.name === 'run_bash' && isExecutionFailure(executionResult)) {
+        this.abortQueuedSiblings(tool.id);
+      }
     } catch (error) {
       tool.executionError = error;
       tool.error = String(error);
       tool.status = 'completed';
+      // run_bash 的 unclassified throw 也按 execution failure 处理（safety-conservative）。
+      if (tool.block.name === 'run_bash') {
+        this.abortQueuedSiblings(tool.id);
+      }
     } finally {
       this.progressResolve?.();
     }
+  }
+
+  /**
+   * abort 所有 queued 的 sibling（设计 §8 / A54）。
+   *
+   * 只 abort status === 'queued' 的工具（尚未开始执行的）。
+   * 正在 executing 的工具不在此处理范围（它们的 abort 由各自的 signal 控制）。
+   * 被 abort 的工具标记为 completed + cancelled failure，不执行 executor body。
+   */
+  private abortQueuedSiblings(excludeId: string): void {
+    for (const t of this.tools) {
+      if (t.id === excludeId) continue;
+      if (t.status !== 'queued') continue;
+      t.status = 'completed';
+      t.executionResult = {
+        status: 'failure',
+        toolUseId: t.id,
+        toolName: t.block.name,
+        inputUsed: t.block.input,
+        durationMs: 0,
+        stageHits: { preExecute: false, postExecute: false, failure: true },
+        output: `[Aborted] Sibling run_bash execution failed`,
+        failure: {
+          kind: 'cancelled',
+          stage: 'execution',
+          message: 'Aborted due to sibling run_bash execution failure',
+        },
+      };
+      t.results = [{ type: 'text', text: t.executionResult.output }];
+    }
+    this.progressResolve?.();
   }
 
   /**

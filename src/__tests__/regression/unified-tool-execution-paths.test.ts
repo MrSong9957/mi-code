@@ -72,3 +72,121 @@ describe('ESLint enforcement of the unified execution boundary', () => {
     );
   });
 });
+
+// ─── Task 6: resolver 路径统一经 gate 执行 ──────────────────────────────────────
+//
+// legacy 路径（无 askResolver）与 resolver 路径（有 askResolver）都经 runtimeGate.execute
+// 唯一执行入口。messages 从 context 传入 resolver。
+import { vi, it as _it } from 'vitest';
+import { executeToolCall } from '../../agent/tool-execution.js';
+import type { ToolExecutionRuntime } from '../../agent/tool-execution.js';
+import type { PermissionAskResolver } from '../../permission/ask-resolver.js';
+import type { SecurityDecision } from '../../permission/decisions.js';
+import type { RuntimeSecurityGate } from '../../permission/runtime-gate.js';
+import type { PermissionChecker } from '../../permission/checker.js';
+import type { ToolUseBlock, Message } from '../../agent/types.js';
+const it6 = _it;
+
+function makeBlock(name: string, input: Record<string, unknown>, id = 't1'): ToolUseBlock {
+  return { type: 'tool_use', id, name, input };
+}
+function fakeExecutor(output = 'ok'): ReturnType<typeof vi.fn> {
+  return vi.fn().mockResolvedValue(output);
+}
+function fakeGate(): RuntimeSecurityGate & { execute: ReturnType<typeof vi.fn> } {
+  return {
+    execute: vi.fn(async (decision: SecurityDecision, run: () => Promise<unknown>) => {
+      if (decision.behavior === 'deny') return { kind: 'denied' as const };
+      const result = await run();
+      return { kind: 'executed' as const, result };
+    }),
+  } as unknown as RuntimeSecurityGate & { execute: ReturnType<typeof vi.fn> };
+}
+function fakeChecker(behavior: 'allow' | 'ask' | 'deny', rc = 'permission.user_confirmation_required'): PermissionChecker {
+  return {
+    // 这 3 个用例验证 auto resolver 路径；mode guard (tool-execution.ts) 要求 getMode()==='auto' 才放行 resolver。
+    getMode: () => 'auto',
+    check: () => ({ behavior, reason: 'test', reason_code: rc }),
+    checkDecision: () => ({
+      protocol_version: '1', decision_id: 'd', action: { kind: 'tool_call', subject_id: 't', snapshot_id: 's' },
+      behavior, deciding_layer: 'p', risk_kind: 'r', policy_id: 'p', policy_version: '1',
+      reason_code: rc, human_reason: 'h', provenance_refs: behavior === 'allow' ? ['t'] : [],
+    }),
+    checkWithEvaluationMode: () => ({ behavior, reason: 'test', reason_code: rc }),
+  } as unknown as PermissionChecker;
+}
+function makeRuntime(opts: { gate: RuntimeSecurityGate; checker: PermissionChecker; askResolver?: PermissionAskResolver }): ToolExecutionRuntime {
+  return { permissionChecker: opts.checker, runtimeGate: opts.gate, askResolver: opts.askResolver };
+}
+function toolRegistry(name: string, executor: ReturnType<typeof vi.fn>): Map<string, { definition: { name: string; description: string; parameters: { type: 'object'; properties: Record<string, never> } }; executor: ReturnType<typeof vi.fn> }> {
+  return new Map([[name, { definition: { name, description: 'd', parameters: { type: 'object' as const, properties: {} } }, executor }]]);
+}
+
+describe('unified tool execution paths: resolver integration (Task 6)', () => {
+  it6('resolver path: ask resolved to allow, then gate executes', async () => {
+    const executor = fakeExecutor();
+    const gate = fakeGate();
+    const askResolver: PermissionAskResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        protocol_version: '1', decision_id: 'd', action: { kind: 'tool_call', subject_id: 't', snapshot_id: 's' },
+        behavior: 'allow', deciding_layer: 'p', risk_kind: 'r', policy_id: 'p', policy_version: '1',
+        reason_code: 'permission.classifier_allow', human_reason: 'h', provenance_refs: ['t'],
+      } as SecurityDecision),
+    };
+    const runtime = makeRuntime({ gate, checker: fakeChecker('ask'), askResolver });
+    const result = await executeToolCall(
+      toolRegistry('write_file', executor),
+      makeBlock('write_file', { path: 'a.ts', content: 'x' }),
+      runtime,
+      { toolUseId: 't1', origin: 'main' },
+    );
+    expect(result.status).toBe('success');
+    expect(askResolver.resolve).toHaveBeenCalledOnce();
+    expect(gate.execute).toHaveBeenCalledOnce();
+    expect(executor).toHaveBeenCalledOnce();
+  });
+
+  it6('resolver path: ask resolved to deny, executor 0', async () => {
+    const executor = fakeExecutor();
+    const gate = fakeGate();
+    const askResolver: PermissionAskResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        protocol_version: '1', decision_id: 'd', action: { kind: 'tool_call', subject_id: 't', snapshot_id: 's' },
+        behavior: 'deny', deciding_layer: 'p', risk_kind: 'r', policy_id: 'p', policy_version: '1',
+        reason_code: 'permission.classifier_deny', human_reason: 'h', provenance_refs: [],
+      } as SecurityDecision),
+    };
+    const runtime = makeRuntime({ gate, checker: fakeChecker('ask'), askResolver });
+    const result = await executeToolCall(
+      toolRegistry('write_file', executor),
+      makeBlock('write_file', { path: 'a.ts', content: 'x' }),
+      runtime,
+      { toolUseId: 't1', origin: 'main' },
+    );
+    expect(result.status).toBe('failure');
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it6('resolver receives context.messages (authoredByUser preserved)', async () => {
+    const executor = fakeExecutor();
+    const gate = fakeGate();
+    const resolveSpy = vi.fn().mockResolvedValue({
+      protocol_version: '1', decision_id: 'd', action: { kind: 'tool_call', subject_id: 't', snapshot_id: 's' },
+      behavior: 'allow', deciding_layer: 'p', risk_kind: 'r', policy_id: 'p', policy_version: '1',
+      reason_code: 'permission.classifier_allow', human_reason: 'h', provenance_refs: ['t'],
+    } as SecurityDecision);
+    const askResolver: PermissionAskResolver = { resolve: resolveSpy };
+    const runtime = makeRuntime({ gate, checker: fakeChecker('ask'), askResolver });
+    const messages: Message[] = [{ role: 'user', content: 'real user intent', authoredByUser: true }];
+    await executeToolCall(
+      toolRegistry('write_file', executor),
+      makeBlock('write_file', { path: 'a.ts', content: 'x' }),
+      runtime,
+      { toolUseId: 't1', origin: 'main', messages },
+    );
+    expect(resolveSpy).toHaveBeenCalledOnce();
+    const req = resolveSpy.mock.calls[0][0];
+    expect(req.messages).toBe(messages);
+    expect(req.messages[0].authoredByUser).toBe(true);
+  });
+});

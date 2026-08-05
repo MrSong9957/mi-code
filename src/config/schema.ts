@@ -7,6 +7,21 @@ export interface ProviderConfig {
   baseUrl?: string;
   /** 轻量任务（子代理、压缩摘要）所用模型 */
   smallModel?: string;
+  /**
+   * classifier（auto 权限裁决）使用的 fast 模型（advisory，设计 §7.4）。
+   * 未配置时 classifier 绑定 session 主模型；静态已知不可选时也回退主模型。
+   */
+  fastClassifierModel?: string;
+  /**
+   * provider 静态声明的 classifier capability（设计 §7.3）。
+   * 只来自 adapter/config 静态声明，不做运行时 discovery RPC。
+   */
+  classifierCapabilities?: {
+    reasoningControl?: boolean;
+    minimumOutputTokens?: number;
+    decodingControl?: boolean;
+    promptCache?: boolean;
+  };
   /** 可选模型列表(/model 选择界面用)。配置后替换硬编码预设。
    *  格式:[{ "value": "model-id", "label": "显示名", "description": "描述" }] */
   models?: Array<{ value: string; label: string; description?: string }>;
@@ -27,6 +42,17 @@ export interface PermissionRuleConfig {
 export interface PermissionConfig {
   mode: PermissionMode;
   rules: PermissionRuleConfig[];
+  /**
+   * Task 9：用户级 classifier rules（trusted userSettings 来源）。
+   * 经 projectClassifierConfigSources 投影后进入 classifier prompt 的 Rules 段。
+   */
+  classifierRules?: string[];
+  /**
+   * Task 9：用户级显式 classifier model（trusted userSettings 来源）。
+   * 经 projectClassifierConfigSources 投影后进入 ClassifierModelContext.classifierModel。
+   * 必须在 provider 声明的模型列表中，否则 ClassifierModelUnavailableError。
+   */
+  classifierModel?: string;
 }
 
 /** Spinner 动词配置：默认追加内置词库，也可完全替换。 */

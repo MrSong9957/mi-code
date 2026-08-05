@@ -89,6 +89,15 @@ export interface SubagentOptions {
    * 未设置或传 system 字段时，行为与原版一致（全量工具 + 默认 prompt）。
    */
   role?: Role;
+  /**
+   * Task 5：child 允许的工具列表（替换 child session rules，先 canonicalize）。
+   * 由 spawn_agent 工具传入；tool-execution origin 路由消费（Task 6 接线 forkPermissionSession）。
+   */
+  allowedTools?: readonly string[];
+  /**
+   * Task 5：child 声明的 permission mode。父 privileged mode 优先（A36）。
+   */
+  permissionMode?: 'build' | 'plan' | 'auto';
   executionRuntime: ToolExecutionRuntime;
   /**
    * 流式 LLM 客户端（多 provider 支持）。

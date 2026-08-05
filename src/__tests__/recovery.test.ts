@@ -174,16 +174,26 @@ describe('handleError: prompt_too_long', () => {
 // handleError 测试：429 恢复
 // ============================================================
 describe('handleError: rate_limited_429', () => {
-  it('应降级模型', () => {
+  it('前两次 retry 保持 primary model；第三次降级到 fallback（A62）', () => {
     const state = createRecoveryState();
     const inbox = new FailureInbox();
     const messages: Message[] = [];
 
-    const canRetry = handleError('rate_limited_429', state, inbox, messages, m => m);
+    // 第 1 次 429: retryAttempt 0→1, 保持 primary
+    let canRetry = handleError('rate_limited_429', state, inbox, messages, m => m);
+    expect(canRetry).toBe(true);
+    expect(state.currentModel).toBe('claude-sonnet-4-20250514');
 
+    // 第 2 次 429: retryAttempt 1→2, 保持 primary
+    canRetry = handleError('rate_limited_429', state, inbox, messages, m => m);
+    expect(canRetry).toBe(true);
+    expect(state.currentModel).toBe('claude-sonnet-4-20250514');
+
+    // 第 3 次 429: retryAttempt 2→3, 降级到 fallback
+    canRetry = handleError('rate_limited_429', state, inbox, messages, m => m);
     expect(canRetry).toBe(true);
     expect(state.currentModel).toBe('claude-3-5-haiku');
-    expect(inbox.getHistory()[0]!.action).toContain('degrade model');
+    expect(inbox.getHistory()[2]!.action).toContain('degrade model');
   });
 });
 

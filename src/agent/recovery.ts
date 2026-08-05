@@ -121,6 +121,10 @@ export function classifyError(error: unknown): ErrorType {
   if (lower.includes('429') || lower.includes('rate_limit') || lower.includes('rate limit') || lower.includes('too many requests')) {
     return 'rate_limited_429';
   }
+  // 529 overloaded 归类为 rate_limited（设计 §9：529 可重试，与 429 同策略）
+  if (lower.includes('529') || lower.includes('overloaded') || lower.includes('overload')) {
+    return 'rate_limited_429';
+  }
   if (lower.includes('idle timeout') || lower.includes('stream_idle_timeout')) {
     return 'stream_idle_timeout';
   }
@@ -181,8 +185,14 @@ export function handleError(
     }
 
     case 'rate_limited_429': {
-      state.currentModel = FALLBACK_MODEL;
-      inbox.add(errorType, 'rate limited', state.retryAttempt, `degrade model to ${FALLBACK_MODEL}`);
+      // Task 11 A62: 前 2 次 retry 保持 primary model；第 3 次（retryAttempt >= 3）降级到 fallback。
+      // 设计 §10 A62："foreground fallback activates after three 529s"。
+      if (state.retryAttempt >= 3) {
+        state.currentModel = FALLBACK_MODEL;
+        inbox.add(errorType, 'rate limited', state.retryAttempt, `degrade model to ${FALLBACK_MODEL}`);
+      } else {
+        inbox.add(errorType, 'rate limited', state.retryAttempt, `retry on primary model`);
+      }
       return true;
     }
 

@@ -190,7 +190,9 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
 
   // ── 正向基线：allow 正确放行 ──
 
-  it('auto 模式 write_file 放行执行', async () => {
+  // A15：auto 模式不再无条件放行写操作；未决 write_file 返回 ask，
+  // 在无 resolver/channel 的最小 runtime 中 fail closed（不执行）。
+  it('auto 模式 write_file 未决 → ask → 无通道时 fail closed（不执行）', async () => {
     const checker = new PermissionChecker({ mode: 'auto', workdir: process.cwd() });
     const block: ToolUseBlock = {
       type: 'tool_use',
@@ -199,7 +201,7 @@ describe('流式权限放行回归（StreamingToolExecutor）', () => {
       input: { path: 'inside.txt', content: 'x' },
     };
     const text = await getResultText(checker, block);
-    expect(text).toBe('EXECUTED');
+    expect(text).toContain('Asking the user is required');
   });
 
   it('build 模式 read_file 放行执行', async () => {

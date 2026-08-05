@@ -167,7 +167,12 @@ import type { SecurityDecision, UserDecision } from './permission/decisions.js';
 import type { AskQuestionRequest, AskQuestionOutcome } from './agent/ask-user-types.js';
 import { SessionAllowlist } from './permission/session-allowlist.js';
 import { SessionState } from './permission/session-state.js';
+import { transitionPermissionMode } from './permission/mode-transition.js';
 import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
+import { renderAttachmentsForPrompt } from './agent/prompt/auto-attachments.js';
+import { resolveAuthority } from './permission/cutover.js';
+import { createConfiguredExecutionRuntimeForTurn } from './permission/authority-gate.js';
+import type { ToolExecutionRuntime } from './agent/tool-execution.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
 const cliOpts = parseCliArgs();
@@ -177,6 +182,22 @@ const sessionStore = new SessionStore();
 // 结构上消除"调用方直接赋值 sessionId 而忘记 clear"的双写风险。
 const sessionAllowlist = new SessionAllowlist();
 const sessionState = new SessionState(sessionAllowlist, randomUUID());
+// 启动时让 sessionState 反映持久权限配置（设计 §10 A64：持久规则 reload/repartition 形成稳定状态）。
+// 先同步 mode（auto 下 dangerous allow 才会被分区到 stash），再 replaceRules 持久规则。
+// sessionState 不持有 PermissionChecker 引用——二者是独立观察者，均由 configStore 初始化。
+const startupPermissionMode = configStore.getPermissionMode();
+if (startupPermissionMode !== 'build') {
+  sessionState.applyPermissionUpdate({ kind: 'setMode', mode: startupPermissionMode });
+}
+const startupRules = configStore.getPermissionRules().map((r) => ({
+  tool: r.tool,
+  behavior: r.behavior,
+  ...(r.path !== undefined ? { path: r.path } : {}),
+  ...(r.content !== undefined ? { content: r.content } : {}),
+}));
+if (startupRules.length > 0) {
+  sessionState.applyPermissionUpdate({ kind: 'replaceRules', rules: startupRules });
+}
 let currentPlanContext: PlanContext | null = null;
 // 当前会话累积消息（resume 时预载，streamingQuery onMessages 时更新）
 let sessionMessages: Message[] = [];
@@ -399,8 +420,14 @@ const runtimeGate = new RuntimeSecurityGate({
   pendingStore: makePendingStore(() => sessionState.currentId),
   channel: getDecisionChannel(),
 });
+// Task 14 A83/A85：auto 权限链 cutover authority。
+// resolveAuthority 决定是否走新权限链（enforced/shadow）或 legacy fast-path。
+// 默认 enforced（env 未设置时走新权限链）。
+const permissionAuthority = resolveAuthority(process.env.AUTO_PERMISSION_AUTHORITY);
 // executionRuntime 装配:复用前面构造的 sessionAllowlist(绑定到 sessionState)。
-const executionRuntime = { permissionChecker, runtimeGate, sessionAllowlist };
+// 顶层 runtime 是 mutable container——subagent 工具持有此引用，
+// 每 turn handleUserSubmit 更新其 askResolver（A35：subagent 共享 parent turn resolver）。
+const executionRuntime: ToolExecutionRuntime = { permissionChecker, runtimeGate, sessionAllowlist };
 
 // 子代理工作日志工厂:用动态 sessionId 闭包,确保 resume/session 轮换后仍绑定当前会话。
 // 每次前台子代理执行调用一次,创建一个绑定到新 executionId 的独立 journal。
@@ -455,8 +482,14 @@ const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
     clearSessionMessages: () => { sessionMessages = []; },
     rotateSessionId: () => { sessionState.transitionTo(randomUUID()); },
     resetContextUsage: () => tuiHandle?.statusStore.getState().setContextPct(0),
-    setPermissionMode: (next) => permissionChecker.setMode(next),
-    setConfigMode: (next) => configStore.setPermissionMode(next),
+    // Task 8：plan approval 经统一 transitionPermissionMode port（与 slash/TAB 一致）
+    setPermissionMode: (next) => {
+      transitionPermissionMode(sessionState, next, 'userSettings', {
+        save: (cfg) => configStore.setPermissionMode(cfg.permissions.mode),
+      });
+      permissionChecker.setMode(next);
+    },
+    setConfigMode: () => { /* 已由 transitionPermissionMode save 处理 */ },
     setStatusMode: (next) => tuiHandle?.statusStore.getState().setMode(next),
   }),
 });
@@ -513,11 +546,15 @@ function handleTab(
   }
 
   // 分支 2：模式切换（build→plan→auto→build）
+  // Task 8：经统一 transition port（与 slash /build /plan /auto 一致入口）
   completion.hide();
   const order: PermissionMode[] = ['build', 'plan', 'auto'];
   const cur = checker.getMode();
   const idx = order.indexOf(cur);
   const next = order[(idx + 1) % order.length]!;
+  if (sessionState) {
+    transitionPermissionMode(sessionState, next, 'session');
+  }
   checker.setMode(next);
   cfgStore.setPermissionMode(next);
   handle.statusStore.getState().setMode(next);
@@ -701,7 +738,18 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       const result = executeCommand(cmd, { skillRegistry, negotiator: skillNegotiator, userId: 'default' });
       printLine(result.message);
     } else {
-      const result = executeCommand(cmd, configStore, { permissionChecker, themeStore: tuiHandle?.themeStore });
+      const result = executeCommand(cmd, configStore, {
+        permissionChecker,
+        themeStore: tuiHandle?.themeStore,
+        // Task 8：slash /build /plan /auto 经统一 transition port
+        onModeTransition: (mode) => {
+          transitionPermissionMode(sessionState, mode, 'userSettings', {
+            save: (cfg) => configStore.setPermissionMode(cfg.permissions.mode),
+          });
+          permissionChecker.setMode(mode);
+          tuiHandle?.statusStore.getState().setMode(mode);
+        },
+      });
       printLine(result.message);
       if (cmd.name === 'plan' || cmd.name === 'build' || cmd.name === 'auto') {
         tuiHandle?.statusStore.getState().setMode(permissionChecker.getMode());
@@ -861,11 +909,46 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   tuiHandle?.setSpinnerLabel('Connecting');
   spinnerStarted = true;
   try {
-    // 不传 maxTurns：对齐 Claude Code，默认无限循环，依赖 LLM 自主 end_turn + 用户 ESC +
-    // budget 软限制退出。需要时可通过 StreamingQueryOptions.maxTurns 显式注入安全网。
+    // Task 14 A83/A85：authority gate——根据 permissionAuthority 构造 turn-local runtime。
+    // enforced：真实 resolver + classifier 链；legacy：无 resolver（fast-path）；
+    // shadow：candidate 真实运行但 legacy 决定。streamClient 作为 DirectProviderTextClient。
+    // Task 9：通过 composition seam 构造 auto-mode production runtime。
+    const providerConfig = configStore.getProvider(provider);
+    const providerModelIds = getModelsForProvider(provider, undefined, providerConfig?.models).map((m) => m.value);
+    const classifierConfigSources = {
+      // userSettings：当前架构唯一可用的 trusted classifier config 来源（config 文件）。
+      userSettings: configStore.getClassifierUserSettings(),
+      // localSettings / flagSettings / policySettings：当前架构未实现，保留为 undefined。
+    };
+    const turnRuntime = createConfiguredExecutionRuntimeForTurn({
+      authority: permissionAuthority,
+      streamClient,
+      providerId: provider,
+      modelId: model,
+      providerConfig,
+      providerModelIds,
+      classifierConfigSources,
+      permissionChecker,
+      runtimeGate,
+      sessionAllowlist,
+      sessionState,
+      hooks: [],
+    });
+    // A35：subagent 工具持有顶层 executionRuntime 引用，每 turn 同步 askResolver，
+    // 使 subagent 共享 parent turn 的 resolver/classifier（而非无 resolver 的 legacy runtime）。
+    executionRuntime.askResolver = turnRuntime.askResolver;
+    // Task 12 A75：auto_mode_exit 走 dynamic plane（不污染 static systemPrompt）。
+    // consumeAutoAttachments hook 在 streamingQuery 内部消费 sessionState.takeAttachments()，
+    // 作为 dynamic section 追加到 system prompt。static systemPrompt 保持纯净。
+    // hook 内消费队列（一次性语义）：第一次请求含 attachment，第二次已消费不再含。
     for await (const msg of streamingQuery(streamClient, toolRegistry, userMessageForAgent ?? userInput, {
       systemPrompt, tools, signal: ac.signal,
-      eventBus, compactClient, executionRuntime,
+      eventBus, compactClient, executionRuntime: turnRuntime,
+      authoredByUser: true, // Task 4 provenance：真实用户输入边界
+      consumeAutoAttachments: () => {
+        const text = renderAttachmentsForPrompt(sessionState.takeAttachments());
+        return text || null;
+      },
       initialMessages: sessionMessages.length > 0 ? sessionMessages : undefined,
       // revised:只捕获查询结束时的完整快照,持久化交给 commitFinalizedTurn 统一 awaited。
       // 原 onMessages 用 void sessionStore.append(非 awaited)启动追加,若进程在追加完成前

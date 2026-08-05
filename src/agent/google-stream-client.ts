@@ -233,6 +233,43 @@ export class GoogleStreamClient implements StreamingLLMClient {
     yield { type: 'message_stop' };
   }
 
+  /**
+   * Task 4 direct classifier RPC：一次非流式 generateContent，返回 raw text。
+   * 不经过 streamingQuery/Agent/tool registry；request 不含 tools；不 trim/不解析/不容错。
+   */
+  async completeText(request: {
+    readonly model: { readonly providerId: string; readonly modelId: string };
+    readonly systemPrompt: string;
+    readonly prompt: string;
+    readonly signal: AbortSignal;
+    readonly reasoning?: 'disabled' | 'enabled';
+    readonly maxOutputTokens?: number;
+    readonly temperature?: 0;
+  }): Promise<string> {
+    const response = await this.client.models.generateContent({
+      model: request.model.modelId,
+      contents: [{ role: 'user', parts: [{ text: request.prompt }] }],
+      config: {
+        systemInstruction: request.systemPrompt,
+        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+        ...(request.signal ? { abortSignal: request.signal } : {}),
+      },
+    });
+    const parts = (response as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> })
+      .candidates?.[0]?.content?.parts ?? [];
+    return parts.map((p) => p.text ?? '').join('');
+  }
+
+  /** Task 4：adapter-owned 静态 classifier capability。 */
+  classifierCapabilities(): import('../permission/classifier-provider.js').ClassifierProviderCapabilities {
+    return {
+      reasoningControl: false, // Gemini thinking 控制经 model 前缀，非显式 param
+      decodingControl: true,
+      promptCache: false,
+    };
+  }
+
   /** 内部消息 → Gemini contents 格式 */
   private convertMessages(messages: Message[]): GeminiContent[] {
     const result: GeminiContent[] = [];

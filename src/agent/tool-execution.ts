@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { PermissionAuthority } from '../permission/cutover.js';
 import type { PermissionChecker } from '../permission/checker.js';
 import type { RuntimeSecurityGate } from '../permission/runtime-gate.js';
 import type { SessionAllowlist } from '../permission/session-allowlist.js';
@@ -6,6 +7,7 @@ import {
   applySubagentSilentPolicy,
   rewriteToAllow,
 } from '../permission/subagent-silent-policy.js';
+import type { PermissionAskResolver } from '../permission/ask-resolver.js';
 import { freezeSnapshot } from './contracts/identities.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type {
@@ -94,7 +96,22 @@ export interface ToolExecutionRuntime {
    * gate onAuthorized 回调在 remember=true 时写入。deny/safety_uncertain 永不读 allowlist。
    */
   sessionAllowlist?: SessionAllowlist;
+  /**
+   * Task 6：auto ask resolver。提供后，auto 模式下 checkDecision 产生的 ask 经此 resolver
+   * 解析（allowlist/acceptEdits simulation/classifier），替代旧 origin 静默分流短路。
+   * 未提供时（LEGACY）保持既有 origin 路由行为。
+   */
+  askResolver?: PermissionAskResolver;
+  /**
+   * Task 15（设计 §6.4）：当前 turn 的 authority。
+   * 由 createExecutionRuntimeForTurn 设置（唯一赋值点）；executeToolCall 据此判断
+   * enforced+auto+run_bash 强制 classifier 守卫是否生效。undefined 时按 legacy 处理（守卫不触发）。
+   */
+  authority?: PermissionAuthority;
 }
+
+/** enforced+auto 下 canonical run_bash 的 allow 降级 reason_code（设计 §6.4 锚点 1）。 */
+export const AUTO_RUN_BASH_REQUIRES_CLASSIFIER = 'permission.auto_run_bash_requires_classifier';
 
 export class ToolOperationalError extends Error {
   constructor(message: string, readonly code?: string) {
@@ -320,6 +337,18 @@ async function finalizeFailure(
   return result;
 }
 
+/** enforced+auto+canonical run_bash 必经 classifier（设计 §6.4）。 */
+function isEnforcedAutoRunBash(
+  runtime: ToolExecutionRuntime,
+  call: ToolUseBlock,
+): boolean {
+  return (
+    runtime.authority === 'enforced' &&
+    runtime.permissionChecker.getMode() === 'auto' &&
+    call.name === 'run_bash'
+  );
+}
+
 export async function executeToolCall(
   registry: ToolRegistry,
   call: ToolUseBlock,
@@ -411,22 +440,68 @@ export async function executeToolCall(
   // ── origin 路由:在 checkDecision 后、gate.execute 前改写 effectiveDecision ──
   // tool executor 永远只有 runtimeGate.execute 一个执行入口(不变量)。
   // deny/safety_uncertain 已被 checkDecision 先行拦截,到达此处时:
-  //   - origin=subagent → applySubagentSilentPolicy 静默分流(ask→allow/deny),仍走 gate
-  //   - origin=main + allowlist exact-match 命中 → rewriteToAllow 把 ask 改写为 allow,仍走 gate
-  // 三层正交过滤保证 deny/safety_uncertain 到不了 rewriteToAllow(allowlist 不覆盖 deny)。
+  //   - askResolver 提供（Task 6）→ auto ask 经 resolver 解析（allowlist/acceptEdits/classifier）
+  //   - origin=subagent（LEGACY 无 resolver）→ applySubagentSilentPolicy 静默分流
+  //   - origin=main + allowlist exact-match 命中（LEGACY）→ rewriteToAllow
   const origin = context.origin ?? 'main';
   let effectiveDecision = decision;
 
-  if (origin === 'subagent') {
+  // ── 锚点 1（设计 §6.4）：enforced+auto+run_bash 的 allow 不得直接进 gate ──
+  // 降级为 ask（auto_run_bash_requires_classifier），交 resolver/classifier。
+  // legacy/shadow 不降级（authority !== 'enforced'），保持既有 checker 决策。
+  // deny 不降级（同步阶段已产生最终 deny 可直接终止）；ask 不降级（已是 ask）。
+  if (
+    isEnforcedAutoRunBash(runtime, call) &&
+    effectiveDecision.behavior === 'allow'
+  ) {
+    effectiveDecision = {
+      ...effectiveDecision,
+      behavior: 'ask',
+      reason_code: AUTO_RUN_BASH_REQUIRES_CLASSIFIER,
+      human_reason: 'Auto mode requires classifier for run_bash',
+    };
+  }
+
+  if (
+    effectiveDecision.behavior === 'ask' &&
+    runtime.askResolver &&
+    // mode 守卫：auto askResolver（resolver/classifier）只服务于 auto 模式。
+    // build/plan 等非 auto 模式的 ask 必须保留原语义（交正常 gate / 用户决策），
+    // 否则 resolver 的 acceptEdits 模拟会在 build 模式静默放行写操作（Code Review Critical）。
+    runtime.permissionChecker.getMode() === 'auto'
+  ) {
+    // Task 6：auto ask resolver。classifier pending 时此处 await，gate/executor 不调用。
+    const resolved = await runtime.askResolver.resolve({
+      decision: effectiveDecision,
+      executableToolCall: {
+        callId: call.id,
+        canonicalToolName: call.name,
+        input: executorInput,
+      },
+      messages: context.messages ?? [], // 真实 session 历史（含 authoredByUser 标记）
+      origin,
+      permissionContext: null,
+    });
+    // resolver 可能返回简化 decision（只有 behavior + reason_code）；
+    // 合并原始 decision 的结构字段（action/protocol_version 等），保证 gate 能读 snapshot_id。
+    effectiveDecision = { ...effectiveDecision, ...resolved, action: effectiveDecision.action };
+  } else if (origin === 'subagent') {
     // 子代理:按 reason_code 静默分流(ask→allow/deny 改写),仍走 gate。
-    effectiveDecision = applySubagentSilentPolicy(decision);
+    // 锚点 3 守卫（§6.4）：enforced+auto+run_bash 不得被 subagent silent policy 静默 allow。
+    // （enforced 下 askResolver 存在时上面分支已处理；此处 defense-in-depth。）
+    effectiveDecision = isEnforcedAutoRunBash(runtime, call)
+      ? effectiveDecision   // 保持降级后的 ask，交 gate fail-closed（无 channel → denied）
+      : applySubagentSilentPolicy(decision);
   } else if (
-    decision.behavior === 'ask' &&
-    decision.reason_code === 'permission.user_confirmation_required' &&
+    effectiveDecision.behavior === 'ask' &&
+    effectiveDecision.reason_code === 'permission.user_confirmation_required' &&
     runtime.sessionAllowlist?.has(call.name, executorInput) === true
   ) {
     // 主 Agent allowlist exact-match 命中 → 把 ask 改写成 allow(不绕过 gate)。
-    effectiveDecision = rewriteToAllow(decision);
+    // 锚点 3 守卫（§6.4）：enforced+auto+run_bash 不得被 sessionAllowlist rewrite 绕过 classifier。
+    effectiveDecision = isEnforcedAutoRunBash(runtime, call)
+      ? effectiveDecision   // 保持降级后的 ask
+      : rewriteToAllow(decision);
   }
 
   // ★ 唯一执行入口:所有路径(子代理静默 / allowlist 命中 / 正常 ask)统一经 gate.execute。

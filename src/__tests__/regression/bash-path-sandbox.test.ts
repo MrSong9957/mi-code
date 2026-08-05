@@ -152,29 +152,30 @@ describe('run_bash 路径沙箱（Phase 1）', () => {
       expect(check('less ~/.ssh/id_rsa').behavior).toBe('deny');
     });
 
-    // ── 合法命令 → 不被路径围栏拦（auto 模式下应 allow）──
-    // 注：build 模式对所有 run_bash 默认 ask（设计如此），故用 auto 模式
-    // 验证路径围栏不误伤——只要不是 deny，说明路径检查放行了。
+    // ── 合法命令 → 不被路径围栏拦（auto 模式下为 ask，关键是路径围栏不 deny）──
+    // 注：build 模式对所有 run_bash 默认 ask（设计如此），故用 auto 模式。
+    // A15 后 auto 模式未决 run_bash 也返回 ask；本组只验证路径围栏不误伤——
+    // 只要不是 deny，说明路径检查放行了（最终 ask 交 resolver/classifier）。
     function checkAuto(command: string) {
       const checker = new PermissionChecker({ mode: 'auto', workdir });
       return checker.check('run_bash', { command });
     }
 
     it('cat 工作区内文件 → 不被路径围栏拦', () => {
-      expect(checkAuto('cat README.md').behavior).toBe('allow');
+      expect(checkAuto('cat README.md').behavior).not.toBe('deny');
     });
 
     it('ls 无路径参数 → 不被路径围栏拦', () => {
-      expect(checkAuto('ls -la').behavior).toBe('allow');
+      expect(checkAuto('ls -la').behavior).not.toBe('deny');
     });
 
     it('git commit flag 内含 / → 不被路径围栏拦', () => {
       // -m "fix / path" 里的 / 是消息文本，不是路径
-      expect(checkAuto('git commit -m "fix / path"').behavior).toBe('allow');
+      expect(checkAuto('git commit -m "fix / path"').behavior).not.toBe('deny');
     });
 
     it('curl URL → 不被路径围栏拦（URL 不当路径）', () => {
-      expect(checkAuto('curl https://example.com/a/b').behavior).toBe('allow');
+      expect(checkAuto('curl https://example.com/a/b').behavior).not.toBe('deny');
     });
 
     // ── 解析失败 / 变量未知 → ask ──

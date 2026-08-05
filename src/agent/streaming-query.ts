@@ -165,6 +165,25 @@ export interface StreamingQueryOptions {
    */
   compactClient?: StreamingLLMClient;
   /**
+   * Task 11 A62: foreground fallback model 工厂。
+   *
+   * 当 recovery 把 currentModel 降级为 FALLBACK_MODEL 后，retry 时用此回调
+   * 构造对应 model 的 client。不提供时 retry 继续用原 client（旧行为，fallback
+   * 是死代码）。提供后，retry 实际使用 fallback model 的 client。
+   */
+  clientForModel?: (model: string) => StreamingLLMClient;
+  /**
+   * Task 12 A75: auto_mode_exit dynamic attachment 消费 hook。
+   *
+   * streamingQuery 在构造 baseSystemPrompt 前（memory section 之后）调用此 hook。
+   * hook 返回非空字符串时，作为 dynamic section 以 `\n\n---\n\n` 分隔追加到 system
+   * prompt 的 dynamic plane。返回 null/空时不追加。
+   *
+   * 调用方负责在 hook 内部 takeAttachments 消费队列（一次性语义）。
+   * 不传 → LEGACY 行为不变（无 attachment 注入）。
+   */
+  consumeAutoAttachments?: () => string | null;
+  /**
    * 初始历史消息（resume 时传入之前的会话）。
    * 若提供，本次查询会在这些历史基础上继续，而非从单条 user 消息开始。
    */
@@ -174,6 +193,12 @@ export interface StreamingQueryOptions {
    * 用于会话持久化（落盘到 JSONL）。
    */
   onMessages?: (messages: Message[]) => void;
+  /**
+   * Task 4 provenance：本次 userMessage 是否由真实用户输入（handleUserSubmit 边界）。
+   * 为 true 时，构建的 user 消息标记 authoredByUser: true，permission classifier
+   * 据此识别 authentic user intent。subagent/recovery 等内部路径不设此字段。
+   */
+  authoredByUser?: boolean;
   /**
    * 子代理工作日志 checkpoint:每完成一条消息边界(awaited)落盘一次。
    *
@@ -380,6 +405,8 @@ export async function* streamingQuery(
     eventBus,
     model = 'claude-sonnet-4-20250514',
     compactClient,
+    clientForModel,
+    consumeAutoAttachments,
     initialMessages,
     onMessages,
     onMessageCheckpoint,
@@ -390,6 +417,7 @@ export async function* streamingQuery(
     referenceValidationHook,
     boundedMemoryIntegration,
     postCompactReconstruction,
+    authoredByUser,
   } = options;
 
   if (tools.length > 0 && !executionRuntime) {
@@ -436,11 +464,34 @@ export async function* streamingQuery(
       ? `${systemPrompt}\n\n---\n\n${memorySectionContent}`
       : systemPrompt;
 
-  const baseSystemPrompt = noToolActive
-    ? `${systemPromptWithMemory}\n\nThis request operates under a No-Tool Contract. Do not call any tools. Return only a text response based on the input.`
-    : systemPromptWithMemory;
+  // Task 12 A75: auto_mode_exit 作为 dynamic attachment 注入（不污染 static systemPrompt）。
+  // 与 memory section 同一 dynamic plane 模式：hook 返回非空时以分隔符追加。
+  // 调用方在 hook 内消费 sessionState.takeAttachments()（一次性语义）。
+  let attachmentSectionContent: string | null = null;
+  if (consumeAutoAttachments) {
+    try {
+      const result = consumeAutoAttachments();
+      if (result && typeof result === 'string' && result.length > 0) {
+        attachmentSectionContent = result;
+      }
+    } catch {
+      // 静默失败：不改变 systemPrompt
+      attachmentSectionContent = null;
+    }
+  }
+  const systemPromptWithAttachments =
+    attachmentSectionContent !== null
+      ? `${systemPromptWithMemory}\n\n---\n\n${attachmentSectionContent}`
+      : systemPromptWithMemory;
 
-  const engine = new QueryEngine(client);
+  const baseSystemPrompt = noToolActive
+    ? `${systemPromptWithAttachments}\n\nThis request operates under a No-Tool Contract. Do not call any tools. Return only a text response based on the input.`
+    : systemPromptWithAttachments;
+
+  // Task 11 A62: engine 可能因 foreground fallback model 切换而重建。
+  // 初始用主 client；retry 时若 recovery 降级了 currentModel 且提供了 clientForModel，
+  // 用 fallback model 的 client 重建 engine。
+  let engine = new QueryEngine(client);
   // 初始历史：resume 时传入之前的会话 + 本次 user 消息；否则从单条 user 消息开始。
   // ★ model-context 边界:initialMessages 可能含 uiOnly final-feedback 状态块(落盘保留),
   //   喂模型前必须用 sanitizer 剔除,否则 LLM 会从历史模仿状态块(阻断 A)。
@@ -449,8 +500,8 @@ export async function* streamingQuery(
     ? sanitizeMessagesForModel(initialMessages)
     : undefined;
   let messages: Message[] = sanitizedInitial && sanitizedInitial.length > 0
-    ? [...sanitizedInitial, { role: 'user' as const, content: userMessage }]
-    : [{ role: 'user' as const, content: userMessage }];
+    ? [...sanitizedInitial, { role: 'user' as const, content: userMessage, ...(authoredByUser ? { authoredByUser: true as const } : {}) }]
+    : [{ role: 'user' as const, content: userMessage, ...(authoredByUser ? { authoredByUser: true as const } : {}) }];
   let turnCount = 0;
 
   // 错误恢复状态
@@ -502,7 +553,7 @@ export async function* streamingQuery(
 
     // 创建流式工具执行器
     const streamingExecutor = enableStreamingExecution && executionRuntime
-      ? new StreamingToolExecutor(registry, executionRuntime, signal, origin)
+      ? new StreamingToolExecutor(registry, executionRuntime, signal, origin, messages)
       : null;
 
     // AUTO-0025 Task 4:判断本轮是否是"无工具的最终总结轮"。
@@ -681,6 +732,12 @@ export async function* streamingQuery(
           const delay = jitteredBackoff(recoveryState.retryAttempt);
           await sleep(delay);
         }
+        // Task 11 A62: foreground fallback model 真正接通。
+        // recovery 把 currentModel 降级为 FALLBACK_MODEL 后，若提供了 clientForModel，
+        // 用 fallback model 的 client 重建 engine。不提供时继续用原 client（旧行为）。
+        if (clientForModel && recoveryState.currentModel !== model) {
+          engine = new QueryEngine(clientForModel(recoveryState.currentModel));
+        }
         continue;
       } else {
         // 无法恢复，抛出错误
@@ -784,7 +841,7 @@ export async function* streamingQuery(
           registry,
           block,
           executionRuntime,
-          { signal, origin },
+          { signal, origin, messages },
         );
         const output = executionResult.output;
         toolResults.push({

@@ -58,12 +58,12 @@ describe('PermissionChecker reason_code 产出', () => {
     expect(d.reason_code).toBe('permission.plan_write_blocked');
   });
 
-  // auto 放行(保持 default — 不引入新码)
-  it('auto write_file → permission.default(保持)', () => {
+  // Task 3 A15：auto 不再无条件 allow；未决 write -> ask（user_confirmation_required）
+  it('auto write_file → ask (Task 3 A15)', () => {
     const c = new PermissionChecker({ mode: 'auto', workdir: process.cwd() });
     const d = c.check('write_file', { path: 'inside.txt', content: 'x' });
-    expect(d.behavior).toBe('allow');
-    expect(d.reason_code).toBe('permission.default');
+    expect(d.behavior).toBe('ask');
+    expect(d.reason_code).toBe('permission.user_confirmation_required');
   });
 
   // allow 规则(已有码,保持)

@@ -9,6 +9,139 @@ export {
   isPathOutsideWorkspace,
   matchesRule,
 } from './patterns.js';
+// Task 1: canonical 规则解析、通配匹配、canonical 别名归一化与 MCP 匹配
+export {
+  parsePermissionRule,
+  matchWildcardPattern,
+  normalizePermissionToolName,
+  parseMcpToolId,
+  toolMatchesRule,
+  detectUnreachableRules,
+  WILDCARD_CORPUS,
+  type ParsedRule,
+  type McpToolId,
+  type UnreachableRule,
+  type WildcardCorpusSample,
+} from './rules.js';
+// Task 2: 单一 PermissionUpdate 与危险 allow 分区
+export {
+  isDangerousAllowRule,
+  partitionDangerousAllows,
+  applyPermissionUpdate,
+  type PermissionSnapshot,
+  type PermissionUpdate,
+} from './permission-updates.js';
+// Task 4: 独立两阶段 PermissionClassifier
+export {
+  projectPermissionClassifierInput,
+  type AuthenticUserMessage,
+  type ExecutableToolCall,
+  type PermissionClassifierInput,
+} from './classifier-input.js';
+export {
+  shouldFallbackToPrompting,
+  recordAllow,
+  recordDenial,
+  createDenialState,
+  DENIAL_CONSECUTIVE_THRESHOLD,
+  DENIAL_TOTAL_THRESHOLD,
+  type DenialState,
+} from './denial-tracker.js';
+export {
+  DefaultClassifierModelPolicy,
+  ClassifierModelUnavailableError,
+  type ModelRef,
+  type ClassifierModelContext,
+  type ClassifierModelPolicy,
+} from './classifier-model-policy.js';
+export {
+  buildClassifierPromptPrefix,
+  renderClassifierRuleSections,
+  STAGE1_INSTRUCTION,
+  STAGE2_INSTRUCTION,
+} from './classifier-prompt.js';
+export {
+  buildClassifierProviderRequest,
+  unsupportedClassifierCapabilities,
+  normalizeStaticClassifierCapabilities,
+  toDirectTextRequest,
+  classifierProviderFromTextClient,
+  type PermissionClassifierProvider,
+  type ClassifierProviderCapabilities,
+  type ClassifierProviderRequest,
+  type DirectProviderTextClient,
+} from './classifier-provider.js';
+export {
+  DefaultPermissionClassifier,
+  parseStage1Decision,
+  parseStage2Decision,
+  type ClassifierDecision,
+} from './classifier.js';
+// Task 5: PermissionRequest hooks + fork session
+export {
+  runPermissionRequestHooks,
+  resolveHeadlessAsk,
+  type PermissionRequestHook,
+  type HeadlessAskInput,
+  type ResolveHeadlessAskOptions,
+  type HeadlessResolution,
+} from './permission-request-hooks.js';
+export {
+  forkPermissionSession,
+  type ParentPermissionSnapshot,
+  type ForkPermissionSessionOptions,
+  type ForkedPermissionSession,
+} from './subagent-silent-policy.js';
+// Task 6: Auto ask resolver
+export {
+  AUTO_SAFE_TOOL_ALLOWLIST,
+  DefaultPermissionAskResolver,
+  type PermissionAskResolutionRequest,
+  type PermissionAskResolver,
+  type PendingAutomaticDecision,
+  type ResolverClassifier,
+  type ResolverEvaluator,
+  type DefaultPermissionAskResolverOptions,
+} from './ask-resolver.js';
+// Task 7: Interactive ask
+export {
+  resolveInteractiveAsk,
+  type InteractiveAskInput,
+  type InteractiveAskOptions,
+  type DialogResult,
+} from './interactive-ask.js';
+// Task 8: Mode transition
+export {
+  transitionPermissionMode,
+  resolveRequestedStartupMode,
+  applyModeRestrictions,
+  applyRuntimeModeTransition,
+  type ModeTransitionEffects,
+  type TransitionDestination,
+  type StartupModeInput,
+  type RestrictionGates,
+  type RestrictionResult,
+  type RuntimeTransitionResult,
+} from './mode-transition.js';
+// Task 13: 脱敏权限审计（设计 §9、§10 A86-A87）
+export {
+  buildAuditEvent,
+  logPermissionDecision,
+  toLatencyBucket,
+  type PermissionAuditEvent,
+  type PermissionAuditSink,
+  type PermissionDecisionInput,
+} from './audit.js';
+// Task 14: Compatibility Corpus 与 Shadow Cutover（§10 A83/A85）
+export {
+  resolveAuthority,
+  evaluateAuthority,
+  type PermissionAuthority,
+  type AuthorityDecision,
+  type AuthorityObservation,
+  type EvaluateAuthorityInput,
+  type EvaluateAuthorityResult,
+} from './cutover.js';
 // RC-5 结构化安全决策（spec §11）
 export {
   SECURITY_PROTOCOL_VERSION,

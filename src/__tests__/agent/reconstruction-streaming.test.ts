@@ -348,7 +348,8 @@ describe('Wave G Task 10 — streamingQuery postCompactReconstruction hook', () 
         systemPrompt: 'sys',
         tools: registry.getDefinitions(),
         signal: ac.signal,
-        executionRuntime: createToolExecutionRuntime(),
+        // A15 后 auto 模式 echo 返回 ask；本测试验证 reconstruction 不重执行已完成工具，显式 allow。
+        executionRuntime: createToolExecutionRuntime({ rules: [{ tool: 'echo', behavior: 'allow' }] }),
         maxTurns: 5,
         enableStreamingExecution: false,
         postCompactReconstruction: async () => ({

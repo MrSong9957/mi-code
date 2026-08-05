@@ -141,7 +141,8 @@ describe('streamingQuery L4 压缩接入', () => {
       systemPrompt: 'sys',
       tools: registry.getDefinitions(),
       signal: ac.signal,
-      executionRuntime: createToolExecutionRuntime(),
+      // A15 后 auto 模式 big_output 返回 ask；本测试验证 L4 压缩，显式 allow 以隔离权限。
+      executionRuntime: createToolExecutionRuntime({ rules: [{ tool: 'big_output', behavior: 'allow' }] }),
       maxTurns: 5,
       enableStreamingExecution: false, // 走串行执行路径，更可控
       compactClient,
@@ -430,7 +431,8 @@ describe('streamingQuery 子代理 checkpoint seam', () => {
         systemPrompt: 'test',
         tools: registry.getDefinitions(),
         signal: new AbortController().signal,
-        executionRuntime: createToolExecutionRuntime(),
+        // A15 后 auto 模式 echo 返回 ask；本测试验证 checkpoint seam，显式 allow 以隔离权限。
+        executionRuntime: createToolExecutionRuntime({ rules: [{ tool: 'echo', behavior: 'allow' }] }),
         onMessageCheckpoint: async messages => {
           snapshots.push(structuredClone(messages) as Message[]);
           if (snapshots.length === 1) await firstWrite;

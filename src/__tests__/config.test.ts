@@ -326,8 +326,8 @@ describe('Command Executor', () => {
 
     expect(result.message).toContain('auto');
     expect(checker.getMode()).toBe('auto');
-    // auto 模式下写操作放行
-    expect(checker.check('write_file', { path: 'a.txt', content: 'x' }).behavior).toBe('allow');
+    // A15：auto 模式下未决写操作返回 ask（交 resolver/classifier），不再无条件 allow
+    expect(checker.check('write_file', { path: 'a.txt', content: 'x' }).behavior).toBe('ask');
     expect(store.getPermissionMode()).toBe('auto');
   });
 });
