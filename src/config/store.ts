@@ -246,6 +246,19 @@ export class ConfigStore {
     return [...this.config.permissions.rules];
   }
 
+  /** Task 9：读取用户级 classifier config（trusted userSettings 来源）。 */
+  getClassifierUserSettings(): { rules?: readonly string[]; classifierModel?: string } {
+    const perms = this.config.permissions;
+    const section: { rules?: readonly string[]; classifierModel?: string } = {};
+    if (perms.classifierRules && perms.classifierRules.length > 0) {
+      section.rules = [...perms.classifierRules];
+    }
+    if (perms.classifierModel) {
+      section.classifierModel = perms.classifierModel;
+    }
+    return section;
+  }
+
   /** 设置权限规则列表（持久化，替换全部） */
   setPermissionRules(rules: PermissionRuleConfig[]): void {
     this.config.permissions.rules = [...rules];

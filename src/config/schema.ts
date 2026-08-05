@@ -42,6 +42,17 @@ export interface PermissionRuleConfig {
 export interface PermissionConfig {
   mode: PermissionMode;
   rules: PermissionRuleConfig[];
+  /**
+   * Task 9：用户级 classifier rules（trusted userSettings 来源）。
+   * 经 projectClassifierConfigSources 投影后进入 classifier prompt 的 Rules 段。
+   */
+  classifierRules?: string[];
+  /**
+   * Task 9：用户级显式 classifier model（trusted userSettings 来源）。
+   * 经 projectClassifierConfigSources 投影后进入 ClassifierModelContext.classifierModel。
+   * 必须在 provider 声明的模型列表中，否则 ClassifierModelUnavailableError。
+   */
+  classifierModel?: string;
 }
 
 /** Spinner 动词配置：默认追加内置词库，也可完全替换。 */

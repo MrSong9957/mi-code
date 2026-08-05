@@ -30,7 +30,6 @@ import { EMPTY_SPINNER_CONTEXT } from './tui/state/spinner-store.js';
 import { finalizeTurnLifecycle, handleTurnLoopEnd, startTurnThinking, finishTurnThinking, idleTurnThinking, type TurnThinkingState } from './tui/turn-lifecycle.js';
 import { writeResumeHint } from './cli/resume-hint.js';
 import { ConfigStore, SUPPORTED_PROVIDERS } from './config/index.js';
-import { projectClassifierConfigSources, loadStaticClassifierProviderMetadata } from './config/permission-sources.js';
 import { parseCommand, executeCommand } from './commands/index.js';
 import { processImageCommand } from './commands/image-command.js';
 import { getModelsForProvider } from './commands/model-options.js';
@@ -172,7 +171,7 @@ import { transitionPermissionMode } from './permission/mode-transition.js';
 import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
 import { renderAttachmentsForPrompt } from './agent/prompt/auto-attachments.js';
 import { resolveAuthority } from './permission/cutover.js';
-import { createExecutionRuntimeForTurn } from './permission/authority-gate.js';
+import { createConfiguredExecutionRuntimeForTurn } from './permission/authority-gate.js';
 import type { ToolExecutionRuntime } from './agent/tool-execution.js';
 import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
@@ -913,50 +912,27 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     // Task 14 A83/A85：authority gate——根据 permissionAuthority 构造 turn-local runtime。
     // enforced：真实 resolver + classifier 链；legacy：无 resolver（fast-path）；
     // shadow：candidate 真实运行但 legacy 决定。streamClient 作为 DirectProviderTextClient。
-    // Task 9：从 provider config 加载 classifier metadata（fastClassifierModel + capabilities），
-    // 组装 ClassifierModelContext。projectClassifierConfigSources 的 rules 暂为空（config schema
-    // 暂无 classifierRules 字段；classifier prompt 的 Rules 段为空时依赖模型先验判断）。
+    // Task 9：通过 composition seam 构造 auto-mode production runtime。
     const providerConfig = configStore.getProvider(provider);
-    const classifierMetadata = providerConfig
-      ? loadStaticClassifierProviderMetadata({
-          fastClassifierModel: providerConfig.fastClassifierModel,
-          classifierCapabilities: providerConfig.classifierCapabilities,
-        }, {})
-      : { fastClassifierModel: undefined, capabilities: { reasoningControl: false, decodingControl: false, promptCache: false } };
-    const projectedClassifier = projectClassifierConfigSources({
-      // 当前 config 是单文件，作为 userSettings 来源。暂无 classifierRules 配置字段。
-      userSettings: undefined,
-    });
-    const turnRuntime = createExecutionRuntimeForTurn({
+    const providerModelIds = getModelsForProvider(provider, undefined, providerConfig?.models).map((m) => m.value);
+    const classifierConfigSources = {
+      // userSettings：当前架构唯一可用的 trusted classifier config 来源（config 文件）。
+      userSettings: configStore.getClassifierUserSettings(),
+      // localSettings / flagSettings / policySettings：当前架构未实现，保留为 undefined。
+    };
+    const turnRuntime = createConfiguredExecutionRuntimeForTurn({
       authority: permissionAuthority,
       streamClient,
       providerId: provider,
       modelId: model,
+      providerConfig,
+      providerModelIds,
+      classifierConfigSources,
       permissionChecker,
       runtimeGate,
       sessionAllowlist,
       sessionState,
       hooks: [],
-      classifierRules: projectedClassifier.rules,
-      classifierModelContext: {
-        sessionMainModel: { providerId: provider, modelId: model },
-        // 包含主模型 + 配置的 fast/classifier model（若不同），避免 ClassifierModelUnavailableError
-        staticallySelectableModels: [
-          { providerId: provider, modelId: model },
-          ...(classifierMetadata.fastClassifierModel !== undefined && classifierMetadata.fastClassifierModel !== model
-            ? [{ providerId: provider, modelId: classifierMetadata.fastClassifierModel }]
-            : []),
-          ...(projectedClassifier.classifierModel !== undefined && projectedClassifier.classifierModel !== model
-            ? [{ providerId: provider, modelId: projectedClassifier.classifierModel }]
-            : []),
-        ],
-        ...(classifierMetadata.fastClassifierModel !== undefined
-          ? { providerFastClassifierModel: { providerId: provider, modelId: classifierMetadata.fastClassifierModel } }
-          : {}),
-        ...(projectedClassifier.classifierModel !== undefined
-          ? { classifierModel: { providerId: provider, modelId: projectedClassifier.classifierModel } }
-          : {}),
-      },
     });
     // A35：subagent 工具持有顶层 executionRuntime 引用，每 turn 同步 askResolver，
     // 使 subagent 共享 parent turn 的 resolver/classifier（而非无 resolver 的 legacy runtime）。

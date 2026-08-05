@@ -31,6 +31,8 @@ import { DefaultPermissionClassifier } from './classifier.js';
 import { DefaultClassifierModelPolicy } from './classifier-model-policy.js';
 import { classifierProviderFromTextClient, type DirectProviderTextClient } from './classifier-provider.js';
 import { createSecurityDecision } from './decisions.js';
+import { projectClassifierConfigSources, loadStaticClassifierProviderMetadata, type ClassifierConfigSourcesInput } from '../config/permission-sources.js';
+import type { ProviderConfig } from '../config/schema.js';
 
 /** turn-local 依赖（由 index.ts 在 handleUserSubmit 内提供） */
 export interface TurnRuntimeDeps {
@@ -95,6 +97,69 @@ export function createExecutionRuntimeForTurn(deps: TurnRuntimeDeps): ToolExecut
 }
 
 /**
+ * Production composition seam (Task 9): 组装 classifier config 并构造 turn runtime。
+ *
+ * index.ts 必须通过此函数构造 auto-mode runtime，不得直接调 createExecutionRuntimeForTurn。
+ */
+export function createConfiguredExecutionRuntimeForTurn(input: {
+  readonly authority: PermissionAuthority;
+  readonly streamClient: StreamingLLMClient;
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly providerConfig?: ProviderConfig;
+  readonly providerModelIds: readonly string[];
+  readonly classifierConfigSources: ClassifierConfigSourcesInput;
+  readonly permissionChecker: PermissionChecker;
+  readonly runtimeGate: RuntimeSecurityGate;
+  readonly sessionAllowlist: SessionAllowlist;
+  readonly sessionState: SessionState;
+  readonly hooks?: readonly PermissionRequestHook[];
+  readonly dialogProvider?: (input: import('./interactive-ask.js').InteractiveAskInput) => Promise<import('./interactive-ask.js').DialogResult>;
+  readonly dialogDelayMs?: number;
+}): ToolExecutionRuntime {
+  const projected = projectClassifierConfigSources(input.classifierConfigSources);
+  const metadata = loadStaticClassifierProviderMetadata(
+    input.providerConfig
+      ? {
+          fastClassifierModel: input.providerConfig.fastClassifierModel,
+          classifierCapabilities: input.providerConfig.classifierCapabilities,
+        }
+      : {},
+    {},
+  );
+  // staticallySelectableModels 只来自 provider 声明的模型列表（不含 classifierModel 自举）
+  const staticallySelectableModels = input.providerModelIds.map((id) => ({
+    providerId: input.providerId,
+    modelId: id,
+  }));
+  const modelContext: ClassifierModelContext = {
+    sessionMainModel: { providerId: input.providerId, modelId: input.modelId },
+    staticallySelectableModels,
+    ...(metadata.fastClassifierModel !== undefined
+      ? { providerFastClassifierModel: { providerId: input.providerId, modelId: metadata.fastClassifierModel } }
+      : {}),
+    ...(projected.classifierModel !== undefined
+      ? { classifierModel: { providerId: input.providerId, modelId: projected.classifierModel } }
+      : {}),
+  };
+  return createExecutionRuntimeForTurn({
+    authority: input.authority,
+    streamClient: input.streamClient,
+    providerId: input.providerId,
+    modelId: input.modelId,
+    permissionChecker: input.permissionChecker,
+    runtimeGate: input.runtimeGate,
+    sessionAllowlist: input.sessionAllowlist,
+    sessionState: input.sessionState,
+    hooks: input.hooks,
+    classifierRules: projected.rules,
+    classifierModelContext: modelContext,
+    ...(input.dialogProvider !== undefined ? { dialogProvider: input.dialogProvider } : {}),
+    ...(input.dialogDelayMs !== undefined ? { dialogDelayMs: input.dialogDelayMs } : {}),
+  });
+}
+
+/**
  * 构造真实 DefaultPermissionAskResolver（enforced/shadow 共用）。
  */
 function createResolver(deps: TurnRuntimeDeps): PermissionAskResolver {
@@ -103,12 +168,12 @@ function createResolver(deps: TurnRuntimeDeps): PermissionAskResolver {
     deps.streamClient as unknown as DirectProviderTextClient,
   );
 
-  // 2. model context（Task 9：index.ts 用 loadStaticClassifierProviderMetadata + config 投影组装；
-  //    未提供时回退到 session 主模型）
-  const modelContext: ClassifierModelContext = deps.classifierModelContext ?? {
-    sessionMainModel: { providerId: deps.providerId, modelId: deps.modelId },
-    staticallySelectableModels: [{ providerId: deps.providerId, modelId: deps.modelId }],
-  };
+  // 2. model context（Task 9：由 composition seam 用 loadStaticClassifierProviderMetadata +
+  //    config 投影组装；enforced/shadow 缺失时 fail-closed，不再硬编码回退）
+  if (!deps.classifierModelContext) {
+    throw new Error('classifierModelContext is required for enforced/shadow authority (Task 9 production wiring)');
+  }
+  const modelContext = deps.classifierModelContext;
 
   // 3. classifier（Task 9：additional rules 从可信配置来源投影，append 到 mandatory baseline）
   const classifier = new DefaultPermissionClassifier({

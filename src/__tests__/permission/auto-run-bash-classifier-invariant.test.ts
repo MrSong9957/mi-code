@@ -72,6 +72,10 @@ function makeDeps(overrides: Partial<TurnRuntimeDeps> = {}): TurnRuntimeDeps {
     providerId: 'test', modelId: 'test-model',
     permissionChecker, runtimeGate, sessionAllowlist, sessionState,
     hooks: [],
+    classifierModelContext: {
+      sessionMainModel: { providerId: 'test', modelId: 'test-model' },
+      staticallySelectableModels: [{ providerId: 'test', modelId: 'test-model' }],
+    },
     ...overrides,
   };
 }
