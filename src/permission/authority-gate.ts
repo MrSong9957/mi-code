@@ -58,8 +58,9 @@ export interface TurnRuntimeDeps {
   readonly classifierRules?: readonly string[];
   /**
    * Task 9：classifier model context（含 providerFastClassifierModel + classifierModel）。
-   * 由 index.ts 用 loadStaticClassifierProviderMetadata + projectClassifierConfigSources 组装。
-   * 未提供时回退到 session 主模型（当前硬编码行为）。
+   * 由 composition seam（createConfiguredExecutionRuntimeForTurn）用
+   * loadStaticClassifierProviderMetadata + projectClassifierConfigSources 组装。
+   * enforced/shadow 未提供时 fail-closed（createResolver 抛错）；legacy 忽略此字段。
    */
   readonly classifierModelContext?: ClassifierModelContext;
 }
