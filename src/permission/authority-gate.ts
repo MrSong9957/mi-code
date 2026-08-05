@@ -24,6 +24,7 @@ import type { PermissionRequestHook } from './permission-request-hooks.js';
 import type { PermissionAskResolver } from './ask-resolver.js';
 import type { PermissionAskResolutionRequest } from './ask-resolver.js';
 import type { SecurityDecision } from './decisions.js';
+import type { ClassifierModelContext } from './classifier-model-policy.js';
 import type { PermissionAuthority } from './cutover.js';
 import { DefaultPermissionAskResolver } from './ask-resolver.js';
 import { DefaultPermissionClassifier } from './classifier.js';
@@ -47,6 +48,18 @@ export interface TurnRuntimeDeps {
   readonly dialogProvider?: (input: import('./interactive-ask.js').InteractiveAskInput) => Promise<import('./interactive-ask.js').DialogResult>;
   /** Task 7：dialog 创建延迟 ms（竞速窗口），默认 2000 */
   readonly dialogDelayMs?: number;
+  /**
+   * Task 9：从可信配置来源投影的 classifier rules（projectClassifierConfigSources 输出）。
+   * index.ts 在构造 turn runtime 前投影，传入此处作为 additional rules。
+   * 未提供时为空数组（classifier prompt 的 Rules 段为空，依赖模型先验判断）。
+   */
+  readonly classifierRules?: readonly string[];
+  /**
+   * Task 9：classifier model context（含 providerFastClassifierModel + classifierModel）。
+   * 由 index.ts 用 loadStaticClassifierProviderMetadata + projectClassifierConfigSources 组装。
+   * 未提供时回退到 session 主模型（当前硬编码行为）。
+   */
+  readonly classifierModelContext?: ClassifierModelContext;
 }
 
 /**
@@ -90,17 +103,19 @@ function createResolver(deps: TurnRuntimeDeps): PermissionAskResolver {
     deps.streamClient as unknown as DirectProviderTextClient,
   );
 
-  // 2. model context（session 主模型作为 fallback）
-  const modelContext = {
+  // 2. model context（Task 9：index.ts 用 loadStaticClassifierProviderMetadata + config 投影组装；
+  //    未提供时回退到 session 主模型）
+  const modelContext: ClassifierModelContext = deps.classifierModelContext ?? {
     sessionMainModel: { providerId: deps.providerId, modelId: deps.modelId },
     staticallySelectableModels: [{ providerId: deps.providerId, modelId: deps.modelId }],
   };
 
-  // 3. classifier
+  // 3. classifier（Task 9：additional rules 从可信配置来源投影，append 到 mandatory baseline）
   const classifier = new DefaultPermissionClassifier({
     provider,
     modelPolicy: new DefaultClassifierModelPolicy(),
     modelContext,
+    ...(deps.classifierRules !== undefined ? { rules: deps.classifierRules } : {}),
   });
 
   // 4. evaluateWithMode：桥接 permissionChecker.checkWithEvaluationMode → SecurityDecision。
