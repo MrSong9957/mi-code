@@ -13,8 +13,9 @@
 //   4. denial threshold：回退交互（main -> ask；headless -> hooks -> deny）
 //   5. explicit ask rule：跳过 allowlist + acceptEdits，直接 classifier
 //   6. auto safe allowlist（本文件唯一持有）：canonical exact match -> allow，classifier 0 调用
-//   7. acceptEdits simulation：discretionary allow / deny -> 直接返回；ask/passthrough 继续
-//   8. classifier：创建独立 AbortController，await 裁决
+//   7. canonical run_bash 强制 classifier 短路（§6.4 锚点 2）：跳过 acceptEdits，直接 classifier
+//   8. acceptEdits simulation：discretionary allow / deny -> 直接返回；ask/passthrough 继续
+//   9. classifier：创建独立 AbortController，await 裁决
 //
 // 不变量：
 //   - AUTO_SAFE_TOOL_ALLOWLIST 只存在于本文件；
@@ -173,7 +174,15 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
       return this.allow('permission.auto_allowlist');
     }
 
-    // 7. acceptEdits simulation
+    // 7. canonical run_bash 强制 classifier 短路（设计 §6.4 锚点 2）
+    //    覆盖 reason_code permission.auto_run_bash_requires_classifier（executeToolCall 降级产物）
+    //    以及任何其他原因进入 resolver 的 canonical run_bash ask。
+    //    按 tool name 短路（run_bash 不在 allowlist 已由第 6 步保证），永不进入 acceptEdits simulation。
+    if (request.executableToolCall.canonicalToolName === 'run_bash') {
+      return this.resolveByClassifier(request);
+    }
+
+    // 8. acceptEdits simulation
     const simulated = await this.evaluateWithMode(
       request.executableToolCall.canonicalToolName,
       request.executableToolCall.input,
@@ -182,7 +191,7 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
     if (simulated.behavior === 'allow') return simulated;
     if (simulated.behavior === 'deny') return simulated;
 
-    // 8. classifier
+    // 9. classifier
     return this.resolveByClassifier(request);
   }
 

@@ -62,6 +62,7 @@ export function createExecutionRuntimeForTurn(deps: TurnRuntimeDeps): ToolExecut
     permissionChecker: deps.permissionChecker,
     runtimeGate: deps.runtimeGate,
     sessionAllowlist: deps.sessionAllowlist,
+    authority: deps.authority,
   };
 
   // legacy：不构造 resolver

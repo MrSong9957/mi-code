@@ -145,12 +145,15 @@ describe('isolated classifier execution path', () => {
     const p1 = resolver.resolve(askRequest('call-a', 'write_file', { path: 'src/a.ts' }));
     const p2 = resolver.resolve(askRequest('call-b', 'run_bash', { command: 'git push' }));
     await vi.waitFor(() => expect(dc.calls).toHaveLength(2));
-    // 第一次 classify 的 input 只含 call-a 的 executableToolCall
-    const input1 = dc.calls[0].input as { executableToolCall: { callId: string }; authenticUserMessages: unknown[] };
-    expect(input1.executableToolCall.callId).toBe('call-a');
-    expect(Object.keys(input1).sort()).toEqual(['authenticUserMessages', 'executableToolCall']);
-    const input2 = dc.calls[1].input as { executableToolCall: { callId: string } };
-    expect(input2.executableToolCall.callId).toBe('call-b');
+    // 每个 classify 的 input 只含各自 executableToolCall（按 callId 查找，不依赖到达顺序：
+    // run_bash 经 §6.4 锚点 2 短路直进 classifier，write_file 经 acceptEdits simulation 后到达）
+    const findByCallId = (callId: string) =>
+      dc.calls.find(c => (c.input as { executableToolCall: { callId: string } }).executableToolCall.callId === callId);
+    const inputA = findByCallId('call-a')!.input as { executableToolCall: { callId: string }; authenticUserMessages: unknown[] };
+    expect(inputA.executableToolCall.callId).toBe('call-a');
+    expect(Object.keys(inputA).sort()).toEqual(['authenticUserMessages', 'executableToolCall']);
+    const inputB = findByCallId('call-b')!.input as { executableToolCall: { callId: string } };
+    expect(inputB.executableToolCall.callId).toBe('call-b');
     dc.resolveDeny();
     await p1; await p2;
   });
