@@ -286,6 +286,12 @@ function makeDeps(overrides: Partial<TurnRuntimeDeps> = {}): TurnRuntimeDeps {
     providerId: 'test', modelId: 'test-model',
     permissionChecker, runtimeGate, sessionAllowlist, sessionState,
     hooks: [],
+    // Task 9 fail-closed：enforced/shadow 缺 classifierModelContext 会 throw。
+    // legacy 测试（authority:'legacy'）不进 createResolver，不受影响。
+    classifierModelContext: {
+      sessionMainModel: { providerId: 'test', modelId: 'test-model' },
+      staticallySelectableModels: [{ providerId: 'test', modelId: 'test-model' }],
+    },
     ...overrides,
   };
 }
