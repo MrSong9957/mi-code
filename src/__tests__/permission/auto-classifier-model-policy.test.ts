@@ -15,6 +15,7 @@ import {
 } from '../../permission/classifier-model-policy.js';
 import {
   buildClassifierPromptPrefix,
+  buildClassifierSystemInstruction,
   renderClassifierRuleSections,
   STAGE1_INSTRUCTION,
   STAGE2_INSTRUCTION,
@@ -170,10 +171,16 @@ describe('classifier model binding and provider adapter', () => {
     // 非空 user 段替换 defaults；空 user 段回退 defaults
     expect(renderClassifierRuleSections({ defaults: ['D'], organization: ['O'], user: ['U'] })).toEqual(['U', 'O']);
     expect(renderClassifierRuleSections({ defaults: ['D'], organization: ['O'], user: [] })).toEqual(['D', 'O']);
-    const prefix = buildClassifierPromptPrefix(classifierInput(), ['U', 'O']);
-    const stage1 = buildClassifierProviderRequest(1, modelRef('main'), prefix, signal(), staticCapabilities());
-    const stage2 = buildClassifierProviderRequest(2, modelRef('main'), prefix, signal(), staticCapabilities());
+    const prompt = buildClassifierPromptPrefix(classifierInput());
+    const si1 = buildClassifierSystemInstruction(STAGE1_INSTRUCTION, ['U', 'O']);
+    const si2 = buildClassifierSystemInstruction(STAGE2_INSTRUCTION, ['U', 'O']);
+    const stage1 = buildClassifierProviderRequest(1, modelRef('main'), prompt, signal(), staticCapabilities(), si1);
+    const stage2 = buildClassifierProviderRequest(2, modelRef('main'), prompt, signal(), staticCapabilities(), si2);
+    // prompt (data region) shared across stages
     expect(stage1.prefix).toBe(stage2.prefix);
+    // system instruction contains additional rules
+    expect(stage1.instruction).toContain('U');
+    expect(stage1.instruction).toContain('O');
     expect(STAGE1_INSTRUCTION).toContain('ALLOW');
     expect(STAGE1_INSTRUCTION).toContain('FLAG');
     expect(STAGE2_INSTRUCTION).toContain('ALLOW');
@@ -189,7 +196,7 @@ describe('classifier model binding and provider adapter', () => {
   });
 
   test('prefix is frozen immutable', () => {
-    const prefix = buildClassifierPromptPrefix(classifierInput(), []);
+    const prefix = buildClassifierPromptPrefix(classifierInput());
     expect(Object.isFrozen(prefix)).toBe(true);
   });
 });

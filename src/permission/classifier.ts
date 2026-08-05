@@ -21,6 +21,7 @@
 import type { PermissionClassifierInput } from './classifier-input.js';
 import {
   buildClassifierPromptPrefix,
+  buildClassifierSystemInstruction,
   STAGE1_INSTRUCTION,
   STAGE2_INSTRUCTION,
 } from './classifier-prompt.js';
@@ -179,11 +180,12 @@ export class DefaultPermissionClassifier {
       // 2. 绑定 Stage1 模型（不可用 -> 抛错 -> deny，不 fallback）
       const stage1Model = this.modelPolicy.selectStage1(this.modelContext);
 
-      // 3. 构建不可变 prefix（Stage1/Stage2 共用）
-      const prefix = buildClassifierPromptPrefix(input, this.rules);
+      // 3. 构建不可变 prompt（动态数据区）+ system instruction（policy + stage）
+      const prompt = buildClassifierPromptPrefix(input);
 
-      // 4. Stage1 RPC（带 retry，复用同一 ModelRef + 同一 signal）
-      const stage1Raw = await this.invokeWithRetry(stage1Model, prefix, signal, STAGE1_INSTRUCTION, 1);
+      // 4. Stage1 RPC：systemPrompt = mandatory policy + precedence + additional rules + stage instruction
+      const stage1SystemInstruction = buildClassifierSystemInstruction(STAGE1_INSTRUCTION, this.rules);
+      const stage1Raw = await this.invokeWithRetry(stage1Model, prompt, signal, stage1SystemInstruction, 1);
       const stage1 = parseStage1Decision(stage1Raw);
 
       // ALLOW -> allow（Stage2=0）
@@ -191,9 +193,10 @@ export class DefaultPermissionClassifier {
         return allow('permission.classifier_stage1_allow');
       }
 
-      // FLAG -> Stage2 exactly once，同一 prefix + Stage1 绑定模型（带 retry）
+      // FLAG -> Stage2 exactly once，同一 prompt + Stage1 绑定模型（带 retry）
       const stage2Model = this.modelPolicy.selectStage2(this.modelContext, stage1Model);
-      const stage2Raw = await this.invokeWithRetry(stage2Model, prefix, signal, STAGE2_INSTRUCTION, 2);
+      const stage2SystemInstruction = buildClassifierSystemInstruction(STAGE2_INSTRUCTION, this.rules);
+      const stage2Raw = await this.invokeWithRetry(stage2Model, prompt, signal, stage2SystemInstruction, 2);
       const stage2 = parseStage2Decision(stage2Raw);
       return stage2 === 'ALLOW'
         ? allow('permission.classifier_stage2_allow')

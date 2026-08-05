@@ -26,6 +26,7 @@ import {
 } from '../../config/permission-sources.js';
 import {
   buildClassifierPromptPrefix,
+  buildClassifierSystemInstruction,
   renderClassifierRuleSections,
   STAGE1_INSTRUCTION,
   STAGE2_INSTRUCTION,
@@ -161,17 +162,17 @@ describe('[A78] bypass cannot approve protected settings', () => {
 describe('[A79] only trusted user/local/flag/policy sources affect classifier prompt', () => {
   test('classifier prompt contains only trusted rules', () => {
     const projected = projectClassifierConfigSources(allRuleSources());
-    const prompt = buildClassifierPromptPrefix(classifierInput(), projected.rules);
-    expect(prompt).toContain('USER_RULE');
-    expect(prompt).toContain('LOCAL_RULE');
-    expect(prompt).toContain('FLAG_RULE');
-    expect(prompt).toContain('POLICY_RULE');
+    const si = buildClassifierSystemInstruction(STAGE1_INSTRUCTION, projected.rules);
+    expect(si).toContain('USER_RULE');
+    expect(si).toContain('LOCAL_RULE');
+    expect(si).toContain('FLAG_RULE');
+    expect(si).toContain('POLICY_RULE');
     // 排除来源的规则不出现
-    expect(prompt).not.toContain('PROJECT_RULE');
-    expect(prompt).not.toContain('COMMAND_RULE');
-    expect(prompt).not.toContain('SESSION_RULE');
-    expect(prompt).not.toContain('CLI_ARG_RULE');
-    expect(prompt).not.toContain('SDK_RULE');
+    expect(si).not.toContain('PROJECT_RULE');
+    expect(si).not.toContain('COMMAND_RULE');
+    expect(si).not.toContain('SESSION_RULE');
+    expect(si).not.toContain('CLI_ARG_RULE');
+    expect(si).not.toContain('SDK_RULE');
   });
 });
 

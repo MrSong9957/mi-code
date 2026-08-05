@@ -56,6 +56,8 @@ export {
 } from './classifier-model-policy.js';
 export {
   buildClassifierPromptPrefix,
+  buildClassifierSystemInstruction,
+  DEFAULT_CLASSIFIER_THREAT_POLICY,
   renderClassifierRuleSections,
   STAGE1_INSTRUCTION,
   STAGE2_INSTRUCTION,
