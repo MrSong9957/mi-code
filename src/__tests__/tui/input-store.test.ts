@@ -575,3 +575,111 @@ describe('deleteForward（range 同步）', () => {
     expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
   });
 });
+
+describe('deleteToLineStart（code-point 坐标 + range 同步，保持现有 Ctrl+U 语义）', () => {
+  it('删光标到行首，触及 range → 失效', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('hello'); // range {0,5}
+    store.getState().moveCursorTo(3);      // hel|lo，进 range 内部
+    store.getState().deleteToLineStart();  // 删 [0,3)，触及 range → 失效
+    expect(store.getState().text).toBe('lo');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('range 在被删区间前方：不变（最后一行场景）', () => {
+    // 'XYZ\nabc'，cursor=7（第二行末尾），lineStart=4，删 [4,7)
+    const store = createInputStore();
+    store.getState().insertPaste('XYZ');   // range {0,3}
+    store.getState().insertNewline();      // text='XYZ\n', cursor=4, range 规则2 不变
+    store.getState().insert('abc');        // text='XYZ\nabc', cursor=7
+    store.getState().moveCursorTo(7);
+    store.getState().deleteToLineStart();  // 删 [4,7) → text='XYZ\n'
+    // range {0,3} r.end=3 <= ds=4 → 不变
+    expect(store.getState().text).toBe('XYZ\n');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+  });
+
+  it('非首行中间行：保持现有 Ctrl+U 语义（删 [lastNl, lineEnd+1)，上一行与下一行相连）', () => {
+    // 'abc\ndef\nghi'，cursor=4（第二行行首 d 之前），lineStart=4==cursor → 走"行首删整行"分支
+    // lastNl=3, 下一 \n 在 index 7 → lineEnd=7 → delEnd=8
+    // 删除区间 [3, 8) = '\ndef\n'，结果 'abcghi'（保持当前实现语义）
+    const store = createInputStore();
+    store.getState().insert('abc\ndef\nghi');
+    store.getState().moveCursorTo(4);
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('abcghi'); // 锁定现有行为
+    expect(store.getState().cursor).toBe(3);
+  });
+
+  it('非首行最后一行行首删整行：删到末尾，deletedLen=4 不越界', () => {
+    // 'XYZ\ndef'，cursor=4（第二行行首），lastNl=3，无下一 \n → delEnd=chars.length=7
+    // 删 [3,7) = '\ndef'，结果 'XYZ'，deletedLen=4（delEnd-lastNl = 7-3）
+    const store = createInputStore();
+    store.getState().insert('XYZ\ndef');
+    store.getState().moveCursorTo(4);
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('XYZ');
+    expect(store.getState().cursor).toBe(3);
+  });
+
+  it('非首行中间行：后方 paste range 按真实 deletedLen 平移', () => {
+    // 构造：'A\nBC\nXYZ'，cursor 在第二行 BC 行首删整行，验证第三行 paste range 平移
+    const store = createInputStore();
+    store.getState().insert('A\nBC\n');    // text='A\nBC\n', cursor=5
+    store.getState().insertPaste('XYZ');   // range {5,8}
+    store.getState().moveCursorTo(2);      // 第二行行首（BC 的 B 之前，index 2）
+    // lastNl=1（第一个 \n），下一 \n 在 index 4 → lineEnd=4 → delEnd=5
+    // 删 [1,5) = '\nBC\n'，deletedLen=4；range {5,8} 后方 → 左移 4 → {1,4}
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('AXYZ');
+    expect(store.getState().pasteRanges).toEqual([{ start: 1, end: 4 }]); // 左移 4，不是 5
+  });
+
+  it('非首行最后一行（无下一 \\n）：被删区间触及后方 paste range → 失效', () => {
+    // 此场景 paste 紧贴被删行后方（无 \n 分隔），删整行会连 paste 一起触及 → range 失效。
+    // 验证 delEnd=chars.length 不越界、触及判定正确。
+    const store = createInputStore();
+    store.getState().insert('A\nBC');       // text='A\nBC', cursor=4
+    store.getState().insertPaste('XYZ');    // 紧贴后方插，range {4,7}，text='A\nBCXYZ'
+    store.getState().moveCursorTo(2);       // 第二行 BC 行首（index 2）
+    // cursor=2, lastNl=1, lineStart=2==cursor → 行首删整行分支
+    // 无下一 \n → lineEnd=chars.length=7 → delEnd=7
+    // 删 [1,7) = '\nBCXYZ'，deletedLen=6；range {4,7} 触及（editStart=1 < end=7 且 editEnd=7 > start=4）→ 丢弃
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('A');
+    expect(store.getState().pasteRanges).toEqual([]); // range 被删区间触及，失效
+  });
+
+  it('首行行首 + 存在下一 \\n：删 [0, delEnd) 吃掉首行+换行', () => {
+    // 'abc\ndef'，cursor=0，首行行首分支，下一 \n 在 index 3
+    // lineEnd=3，delEnd=4，删 [0,4) = 'abc\n'，结果 'def'
+    const store = createInputStore();
+    store.getState().insert('abc\ndef');
+    store.getState().moveCursorTo(0);
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('def');
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('首行行首 + 无下一 \\n：整段就是一行，全删', () => {
+    const store = createInputStore();
+    store.getState().insert('hello');
+    store.getState().moveCursorToStart();
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('');
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('非 BMP：lineStart/lineEnd 按 code point 偏移，坐标闭合', () => {
+    // '𝄞ab\ncd'，cursor=4（第二行行首 c 之前）
+    // 𝄞 占 1 code point；'𝄞ab\ncd' 的 code points: 𝄞(0) a(1) b(2) \n(3) c(4) d(5)
+    // cursor=4，lastNl=3，无下一 \n → lineEnd=6 → delEnd=6
+    // 删 [3,6) = '\ncd'，结果 '𝄞ab'
+    const store = createInputStore();
+    store.getState().insert('𝄞ab\ncd');
+    store.getState().moveCursorTo(4);
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('𝄞ab');
+    expect(store.getState().cursor).toBe(3);
+  });
+});

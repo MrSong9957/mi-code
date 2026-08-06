@@ -223,29 +223,64 @@ export function createInputStore(opts: InputStoreOptions = {}): InputStore {
     }),
 
     deleteToLineStart: () => set((s) => {
-      // Unix 行编辑语义（Ctrl+U）：删光标到行首；光标已在行首时删整行（含内容 + 前导 \n），
-      // 光标移到上一行末尾。这样连续按 Ctrl+U 能从下往上逐行吞掉，直到全空。
-      const before = s.text.slice(0, s.cursor);
-      const lastNl = before.lastIndexOf('\n');
+      // Unix 行编辑语义（Ctrl+U）：删光标到行首；光标已在行首时删整行（含前导 \n）。
+      // 保持当前实现的既有用户语义不变，仅做两类一致性修复：
+      //   (1) 坐标：UTF-16 slice/indexOf → code-point 坐标（[...text] + spliceCodePoints）
+      //   (2) range 同步：所有分支加 reconcileRanges，并用
+      //       delEnd = 有下一\n ? lineEnd+1 : chars.length
+      //       统一删除终点，修复"最后一行 lineEnd+1 > chars.length 导致实际删除长度
+      //       与 reconcileRanges deletedLen 不一致"的 off-by-one。
+      const chars = [...s.text];
+      // 在 cursor 之前的 code points 里找最后一个 \n
+      let lastNl = -1;
+      for (let i = 0; i < s.cursor; i++) {
+        if (chars[i] === '\n') lastNl = i;
+      }
       const lineStart = lastNl + 1; // lastNl=-1 时 lineStart=0（首行行首）
+
       if (lineStart < s.cursor) {
         // 光标不在行首：删 [lineStart, cursor) 区间（光标前到行首）
-        const next = s.text.slice(0, lineStart) + s.text.slice(s.cursor);
-        return { text: next, cursor: lineStart };
+        const deletedLen = s.cursor - lineStart;
+        const next = spliceCodePoints(s.text, lineStart, s.cursor, '');
+        return {
+          text: next,
+          cursor: lineStart,
+          pasteRanges: reconcileRanges(s.pasteRanges, lineStart, deletedLen, 0),
+        };
       }
-      // 光标已在行首：删整行（本行全部内容 + 前导 \n），光标移到上一行末尾。
-      // 找本行的结尾（下一个 \n 或文本末尾）。
-      const restFromCursor = s.text.slice(s.cursor);
-      const nextNlInRest = restFromCursor.indexOf('\n');
-      const lineEnd = nextNlInRest === -1 ? s.text.length : s.cursor + nextNlInRest;
+      // 光标已在行首：找本行的结尾（下一个 \n 或文本末尾）
+      let nextNlInRest = -1;
+      for (let i = s.cursor; i < chars.length; i++) {
+        if (chars[i] === '\n') { nextNlInRest = i; break; }
+      }
+      const lineEnd = nextNlInRest === -1 ? chars.length : nextNlInRest;
+      // 统一删除终点：有下一 \n 时多删一个 \n（保持现有语义），无下一 \n 时到文本末尾
+      const delEnd = nextNlInRest === -1 ? chars.length : lineEnd + 1;
       if (s.cursor === 0) {
-        // 首行行首：删第一行内容。若后面还有 \n，保留后续行（吃掉首行 + 它的 \n）。
-        if (nextNlInRest === -1) return { text: '', cursor: 0 };
-        return { text: s.text.slice(lineEnd + 1), cursor: 0 };
+        // 首行行首：删 [0, delEnd)（首行内容，有下一\n 时含它的 \n）
+        if (nextNlInRest === -1) {
+          // 整段就是一行：全删
+          return {
+            text: '',
+            cursor: 0,
+            pasteRanges: reconcileRanges(s.pasteRanges, 0, chars.length, 0),
+          };
+        }
+        const next = spliceCodePoints(s.text, 0, delEnd, '');
+        return {
+          text: next,
+          cursor: 0,
+          pasteRanges: reconcileRanges(s.pasteRanges, 0, delEnd, 0),
+        };
       }
-      // 非首行行首：删 [lastNl, lineEnd]（前导 \n + 本行全部内容），光标移到 lastNl（上一行末尾位置）
-      const next = s.text.slice(0, lastNl) + s.text.slice(lineEnd + 1);
-      return { text: next, cursor: lastNl };
+      // 非首行行首：删 [lastNl, delEnd)（前导 \n + 本行内容，有下一\n 时含 lineEnd 处的 \n），
+      // 光标移到 lastNl（上一行末尾位置）
+      const next = spliceCodePoints(s.text, lastNl, delEnd, '');
+      return {
+        text: next,
+        cursor: lastNl,
+        pasteRanges: reconcileRanges(s.pasteRanges, lastNl, delEnd - lastNl, 0),
+      };
     }),
 
     submit: () => {
