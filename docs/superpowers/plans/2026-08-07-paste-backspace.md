@@ -580,9 +580,7 @@ describe('deleteForward（range 同步）', () => {
 
   it('deleteForward 在 range 前方：range 右移', () => {
     const store = createInputStore();
-    store.getState().insertPaste('AAA');   // range {0,3}
-    store.getState().moveCursorTo(0);      // 但要在前方需先有字符——构造：先手敲再 paste
-    store.clear();
+    store.getState().clear();
     store.getState().insert('a');          // text='a', cursor=1
     store.getState().insertPaste('AAA');   // range {1,4}
     store.getState().moveCursorTo(0);      // 前方
