@@ -108,7 +108,7 @@ auto permission dialog 发生在**非只读工具**（write_file / run_bash 等�
 此安全性依赖一个**非显式架构不变量**：
 > 所有调用 `askManager.ask()` 的工具（permission/ask_user_question/plan）都是非只读工具，受 streaming-executor 串行约束；只读工具从不调 askManager。
 
-若未来有人：(a) 把 ask_user_question 加入 READ_ONLY_TOOLS，或 (b) 引入新的调 askManager 的只读工具——`cancelled → escape` 映射将不再安全。必须用调度行为测试（§7.3 #7）固化此不变量。
+若未来有人：(a) 把 ask_user_question 加入 READ_ONLY_TOOLS，或 (b) 引入新的调 askManager 的只读工具——`cancelled → escape` 映射将不再安全。必须用调度行为测试（§7.3 #8）固化此不变量。
 
 ---
 
@@ -173,11 +173,15 @@ auto, main-origin, checker=ask → executeToolCall(line 466)
 | `chat` | `rejected` | 同 rejected |
 
 映射函数 `mapDialogResult` 的文档注释**必须明确记录**：
-> 「auto dialog 串行执行（streaming-executor 非只读工具串行 + 只读工具不调 askManager），因此 cancelled 的唯一来源是用户 ESC。此映射安全性依赖该架构不变量，见调度行为测试 §7.3 #7。」
+> 「auto dialog 串行执行（streaming-executor 非只读工具串行 + 只读工具不调 askManager），因此 cancelled 的唯一来源是用户 ESC。此映射安全性依赖该架构不变量，见调度行为测试 §7.3 #8。」
 
-### 5.3 ESC / remember 语义
+### 5.3 ESC / Reject / remember 语义
 
-- **ESC**：`cancelled → escape` → `resolveInteractiveAsk` 调 `automatic.abort()`，取消还在跑的 classifier RPC（signal 贯穿 stage1/2/provider）。与 Reject（`submitted{Reject} → rejected`，不 abort）在 adapter 边界区分。
+以 `handleDialogResult`（`interactive-ask.ts:139-172`）真实代码为准：
+
+- **escape**（`cancelled → escape`）：`handleDialogResult` 调 `automatic.abort()` + `deny(user_cancelled)`。
+- **rejected**（`submitted{Reject} → rejected`，或 `chat → rejected`）：`handleDialogResult` **同样调 `automatic.abort()`** + `deny(user_denied)`。即 **escape 与 rejected 都 abort classifier**（line 142、line 146），取消还在跑的 classifier RPC（signal 贯穿 stage1/2/provider），避免无谓 RPC。两者唯一差异是 deny 的 reason_code（`user_cancelled` vs `user_denied`）。
+- **adapter 边界区分的是 outcome → DialogResult 的映射**（cancelled→escape vs submitted{Reject}→rejected），**不是 abort 行为**——abort 由 resolver 层对 escape/rejected 统一执行。
 - **approved_session**：`onSessionAllow(toolName, input)` → 写 `SessionAllowlist`（exact match）。与 channel 路径的 `remember:true` 走同一 SessionAllowlist，统一存储，`add` 去重，无重复写入。
 - **approved_always**：`onPersistRule({type:'addRules', destination:'userSettings', rule})` → `ConfigStore.persistPermissionUpdate`，随后 `recheckAfterPersist()` 重新过 checker，hard deny/safety 兜底（不绕过）。
 
@@ -238,11 +242,12 @@ auto 模式 ask **先进 resolver**（executeToolCall line 466：askResolver 存
 | 2 | approved_session → resolver 调 onSessionAllow | 注入 spy onSessionAllow；dialog 返回 approved_session；onSessionAllow 被调；`sessionAllowlist.has` 为 true；gate 收到 allow |
 | 3 | **gate 不重复调 channel**（双重 dialog 防护） | dialog 返回 allow；`channel.request` 调用次数 = **0** |
 | 4 | approved_always → resolver 调 onPersistRule + recheckAfterPersist | 注入 spy persist + 硬 deny checker；dialog 返回 approved_always；persist 被调；recheck 返回 deny；gate 收到 deny |
-| 5 | **escape → automatic.abort + deny**（resolver 层；adapter 映射由 A1 证明） | classifier pending；直接注入 dialogProvider 返回 `escape`（跳过 adapter，聚焦 resolver abort）；classifier `signal.aborted === true`；Stage2=0；executor=0；最终 deny |
-| 6 | classifier 在 delay 内完成 → 不调 dialog | classifier 立即 resolve allow；dialogDelayMs 大；dialogProvider 调用次数 = **0**；gate 收到 allow |
-| 7 | **调度不变量**（经真实 StreamingToolExecutor queue） | run_bash 触发 1 次 askManager.ask；pending 期间 enqueue ask_user_question → **未启动**、**无第二次 askManager.ask**、**dialog 未收到 cancelled**；resolve 后 run_bash 闭环 |
+| 5 | **escape → automatic.abort + deny**（resolver 层；adapter 映射由 A1 证明） | classifier pending；直接注入 dialogProvider 返回 `escape`（跳过 adapter，聚焦 resolver abort）；classifier `signal.aborted === true`；Stage2=0；executor=0；最终 deny（reason=`user_cancelled`） |
+| 6 | **rejected → automatic.abort + deny**（resolver 层；与 escape 同样 abort，仅 reason_code 不同） | classifier pending；直接注入 dialogProvider 返回 `rejected`；classifier `signal.aborted === true`；Stage2=0；executor=0；最终 deny（reason=`user_denied`）。证明 rejected 与 escape 都 abort（§5.3），不只 escape abort |
+| 7 | classifier 在 delay 内完成 → 不调 dialog | classifier 立即 resolve allow；dialogDelayMs 大；dialogProvider 调用次数 = **0**；gate 收到 allow |
+| 8 | **调度不变量**（经真实 StreamingToolExecutor queue） | run_bash 触发 1 次 askManager.ask；pending 期间 enqueue ask_user_question → **未启动**、**无第二次 askManager.ask**、**dialog 未收到 cancelled**；resolve 后 run_bash 闭环 |
 
-> 测试 #5 显式标注：它注入返回 `escape` 的 dialogProvider（聚焦 resolver 的 escape 处理），**不覆盖** adapter 的 cancelled→escape 映射（那由 A1 覆盖）。两层分离，避免"用 resolver 测试冒充 adapter 映射验证"。
+> 测试 #5/#6 显式标注：注入返回 `escape`/`rejected` 的 dialogProvider（聚焦 resolver abort 处理），**不覆盖** adapter 的 cancelled→escape 映射（那由 §7.2 A1 覆盖）。两层分离，避免"用 resolver 测试冒充 adapter 映射验证"。
 
 源码契约测试（读 index.ts 断言传了 dialogProvider）**不作为主要验收**，因行为测试已从最接近生产的入口证明 wiring。
 
@@ -257,7 +262,7 @@ auto 模式 ask **先进 resolver**（executeToolCall line 466：askResolver 存
 | approved_always vs classifier 同时 deny | `recheckAfterPersist` 重新过 checker，hard deny 兜底；§7.3 #4 验证 |
 | 重复 remember 写入 | channel 与 auto dialog 都写同一 SessionAllowlist（exact match，`add` 去重） |
 | dialog 残留 | 同「dialog 显示后 classifier 完成」；dialog 只在用户操作后关闭 |
-| 非 ESC 的 pending 取消被误判为 escape | §3 并发不变量保证不可能；§7.3 #7 固化 |
+| 非 ESC 的 pending 取消被误判为 escape | §3 并发不变量保证不可能；§7.3 #8 固化 |
 
 ---
 
@@ -276,7 +281,7 @@ auto 模式 ask **先进 resolver**（executeToolCall line 466：askResolver 存
 - [x] 无 TBD/占位/未完成段落。
 - [x] §5 职责分层（dialogProvider 只到 DialogResult；副作用回调属 resolver wiring）与 §6 改动范围（ask-resolver/authority-gate 透传回调）一致。
 - [x] §6 与 §9 一致：`interactive-ask.ts` 不改；`ask-resolver.ts`/`authority-gate.ts` 扩展透传（接线必需）。
-- [x] §7 测试分层（adapter 映射 A1-A3 vs resolver abort #5）与 §5 数据流一致；测试编号引用已同步（§7.3 #3/#4/#7）。
+- [x] §7 测试分层（adapter 映射 A1-A3 vs resolver abort #5 escape / #6 rejected）与 §5.3 一致（escape 与 rejected 都 abort）；测试编号引用已同步（§7.3 #3/#4/#8）。
 - [x] §3 并发证明与 §4.2 修正（不新增全局 escaped）一致。
 - [x] 范围聚焦：单个实现计划可覆盖（4 个生产文件：permission-answer-mapping 新增 / ask-resolver 透传 / authority-gate 透传 / index.ts adapter+wiring；+ 测试文件）。TUI 层零改动。
 - [x] 无歧义：cancelled→escape 的安全性、dialog 显示后行为（§2.5 未规定区域）、与 channel 的互斥、adapter vs resolver 测试分层均已明确。
