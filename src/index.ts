@@ -169,6 +169,7 @@ import { SessionAllowlist } from './permission/session-allowlist.js';
 import { SessionState } from './permission/session-state.js';
 import { transitionPermissionMode } from './permission/mode-transition.js';
 import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
+import { createAutoPermissionDialogProvider } from './permission/auto-permission-dialog.js';
 import { renderAttachmentsForPrompt } from './agent/prompt/auto-attachments.js';
 import { resolveAuthority } from './permission/cutover.js';
 import { createConfiguredExecutionRuntimeForTurn } from './permission/authority-gate.js';
@@ -933,6 +934,20 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       sessionAllowlist,
       sessionState,
       hooks: [],
+      // Task 7 production wiring（spec §5）：auto-mode main-origin unresolved ask 经 dialog 竞速。
+      dialogProvider: createAutoPermissionDialogProvider(askManager),
+      dialogDelayMs: 2000,
+      onSessionAllow: (toolName, inp) => sessionAllowlist.add(toolName, inp),
+      onPersistRule: (update) => configStore.persistPermissionUpdate({
+        kind: 'addRule',
+        rule: update.rule as import('./permission/types.js').PermissionRule,
+      }),
+      recheck: (toolName, inp) => permissionChecker.checkDecision(toolName, inp, {
+        decision_id: `recheck:${toolName}`,
+        action_snapshot_id: 'recheck',
+        policy_id: 'permission-default',
+        policy_version: '1',
+      }),
     });
     // A35：subagent 工具持有顶层 executionRuntime 引用，每 turn 同步 askResolver，
     // 使 subagent 共享 parent turn 的 resolver/classifier（而非无 resolver 的 legacy runtime）。
