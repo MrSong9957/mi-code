@@ -111,6 +111,54 @@ describe('interactive permission asks', () => {
     vi.useRealTimers();
   });
 
+  // ─── A45b: dialog 显示后 classifier 永久失去决定权（回归） ────────────────────
+  //
+  // 锁定语义：classifier 的决定权只存在于 dialog delay 窗口内。一旦 delay 到期、
+  // dialog 已创建（用户已看见），automatic 从此永久失去本次 tool call 的决定权：
+  //   - delay 到期时 abort 尚未完成的 classifier；
+  //   - 即使 classifier 随后 resolve allow，也不能放行；
+  //   - 最终 decision 只能来自用户 dialog。
+  test('[A45b] after dialog shown, classifier allow must NOT win; dialog decides; abort called', async () => {
+    vi.useFakeTimers();
+    const autoDeferred = deferred<SecurityDecision>();
+    const abort = vi.fn();
+    const dialogDeferred = deferred<DialogResult>();
+    const dialog = vi.fn().mockReturnValue(dialogDeferred.promise);
+
+    const pending = resolveInteractiveAsk(mainAsk(), {
+      automatic: { promise: autoDeferred.promise, abort },
+      dialog,
+      dialogDelayMs: 100,
+    });
+
+    // 越过 delay：dialog 创建（用户看见），automatic 仍 pending
+    await vi.advanceTimersByTimeAsync(100);
+    expect(dialog, 'dialog created exactly once').toHaveBeenCalledOnce();
+
+    // classifier 在 dialog 显示后 resolve allow（用户尚未选择）
+    autoDeferred.resolve(allowDecision());
+    await vi.advanceTimersByTimeAsync(50);
+
+    // resolver 必须仍未返回（classifier 的 allow 不再赢得 race）
+    let resolved = false;
+    pending.then(() => { resolved = true; });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(resolved, 'resolver NOT returned after classifier allow (dialog shown)').toBe(false);
+
+    // 用户选择 approved_once
+    dialogDeferred.resolve(approveOnce());
+    const result = await pending;
+
+    // 最终结果严格等于 dialog 结果，不是 classifier allow
+    expect(result.behavior).toBe('allow');
+    expect(result.reason_code).toBe('permission.user_approved');
+    // dialog 只创建一次（classifier allow 没有触发第二次 dialog）
+    expect(dialog).toHaveBeenCalledOnce();
+    // 进入 dialog 路径后 abort 被调用（取消尚在跑的 classifier RPC）
+    expect(abort, 'abort called when entering dialog path').toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   // ─── A46: accept-session 记住 ─────────────────────────────────────────────────
 
   test('[A46] accept-session records exact tool+input in sessionAllowlist', async () => {
@@ -176,8 +224,9 @@ describe('interactive permission asks', () => {
     });
     await vi.advanceTimersByTimeAsync(1); // trigger dialog immediately
     const result = await pending;
-    // ESC -> 自行调用 abort()
-    expect(abort).toHaveBeenCalledOnce();
+    // ESC -> 自行调用 abort()（A45b 后：delay 到期进 dialog 时已 abort 取消 classifier，
+    // ESC 时 handleDialogResult 再调一次，幂等。断言 abort 被调，证明 ESC 路径触发取消。）
+    expect(abort).toHaveBeenCalled();
     expect(result.behavior).toBe('deny');
     vi.useRealTimers();
   });

@@ -93,35 +93,29 @@ export async function resolveInteractiveAsk(
     return runDialog(input, options);
   }
 
-  // 2. 竞速：automatic vs (delay → dialog)
-  //    delay 完成后检查 automatic 是否已赢；未赢才创建 dialog
+  // 2. 竞速：automatic 只在 dialog delay 窗口内有决定权。
+  //    delay 到期前 automatic 完成 → automatic 赢，不创建 dialog。
+  //    delay 先到期 → automatic 永久失去本次 tool call 的决定权：
+  //      abort 尚未完成的 classifier RPC，创建 dialog，最终 decision 只能来自用户。
+  //    （禁止 dialog 已显示后 classifier 仍能放行的结构。）
   const autoPromise = options.automatic.promise;
-  let autoWon = false;
-  const autoTracker = autoPromise.then((d) => {
-    autoWon = true;
-    return d;
-  });
+  const delayPromise = clock.delay(options.dialogDelayMs).then(() => 'delay-done' as const);
 
-  // dialogPath：delay 完成后检查 autoWon，未赢才创建 dialog
-  const dialogPath = clock.delay(options.dialogDelayMs).then(async () => {
-    if (autoWon) {
-      // automatic 已赢，不创建 dialog；返回一个永不 resolve 的占位（race 已结束）
-      return new Promise<DialogResult>(() => { /* never resolves */ });
-    }
-    return options.dialog(input);
-  });
-
-  const raceResult = await Promise.race([
-    autoTracker.then((d) => ({ source: 'automatic' as const, decision: d })),
-    dialogPath.then((r) => ({ source: 'dialog' as const, result: r })),
+  const earlyResult = await Promise.race([
+    autoPromise.then((decision) => ({ source: 'automatic' as const, decision })),
+    delayPromise.then(() => ({ source: 'delay' as const })),
   ]);
 
-  if (raceResult.source === 'automatic') {
-    return raceResult.decision;
+  // delay 窗口内 automatic 完成 → 返回 automatic decision，不创建 dialog
+  if (earlyResult.source === 'automatic') {
+    return earlyResult.decision;
   }
 
-  // dialog 赢了（或 automatic 还在 pending）
-  return handleDialogResult(raceResult.result, input, options);
+  // delay 先到期：automatic 永久失权。abort 尚未完成的 classifier（取消无谓 RPC）。
+  options.automatic.abort();
+  // 创建并等待 dialog；classifier 后续 resolve 被忽略（不再参与任何 race）。
+  const dialogResult = await options.dialog(input);
+  return handleDialogResult(dialogResult, input, options);
 }
 
 /** 无竞速直接 dialog（denial / requiresInteraction） */

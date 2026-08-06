@@ -66,13 +66,21 @@
 3. plan approval 工具（`plan-tools.ts:154`）
 4. （新增）auto permission dialog（本设计 adapter）
 
-### 2.5 A45/§8 对「dialog 显示后 classifier 完成」未规定
+### 2.5 A45/§8 对「dialog 显示后 classifier 完成」的最终语义
 
 - §8 原文：「自动决定在 2 秒内完成则不创建 dialog，超时才显示。ESC 产生 deny 并 abort 尚未完成的自动检查。」
 - A45 测试只覆盖「2 秒内完成→不创建 dialog」与「2 秒后→dialog 启动」。
 - **原文未规定**「dialog 已显示后 classifier 完成的处理」。
 
-→ 本设计保持当前 `resolveInteractiveAsk` 实现行为（dialog 显示后 race 结束、等用户操作，classifier 完成不自动关 dialog）。这是**原文未规定区域的实现选择**，非声称与 §8/A45 一致，但不与原文冲突。理由：(a) 用户已看到 dialog，自动消失会打断审阅；(b) dialog 操作后 classifier 的 pending promise 被自然丢弃，无副作用。
+**最终语义（修正了早期错误判断）：** classifier 的决定权**只存在于 dialog delay 窗口内**。一旦 delay 到期、dialog 已创建（用户已看见），automatic classifier **永久失去本次 tool call 的决定权**：
+
+1. delay 到期时，**abort 尚未完成的 classifier RPC**（取消无谓计算）。
+2. 即使 classifier 随后 resolve allow，也**不能放行**——其结果被忽略。
+3. 最终 decision **只能来自用户 dialog**。
+
+> **早期错误判断（已废弃）：** 本节曾写「保持当前实现（dialog 显示后 race 结束、等用户操作，classifier 完成不自动关 dialog）」。这是错的——实际当时的 `resolveInteractiveAsk` 用 `Promise.race([autoTracker, dialogPath])`，dialog 创建后 autoTracker 仍参与竞争，classifier 在 dialog 显示后 resolve allow 会立即赢得 race 放行工具（dialog 残留屏幕）。用户实测复现此 bug（dialog 显示 + 用户未选 + 工具已执行）。
+>
+> 修复（commit 见 plan 执行）：重写竞速为「delay 窗口内 race automatic vs delay；delay 先到期则 abort + 永久转入 dialog」。回归测试 `[A45b]` 锁定该语义。
 
 ---
 
