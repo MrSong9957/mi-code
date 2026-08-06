@@ -542,3 +542,36 @@ describe('backspace（整段删契约 + 普通删）', () => {
     expect(store.getState().text).toBe('');
   });
 });
+
+describe('deleteForward（range 同步）', () => {
+  it('deleteForward 触及 range 内部：range 失效', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('ABC');   // range {0,3}
+    store.getState().moveCursorTo(1);      // 进内部
+    store.getState().deleteForward();      // 删 B（位置 1），触及 {0,3} → 失效
+    expect(store.getState().text).toBe('AC');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('deleteForward 在 range 后方（删 range.end 之后字符）：不破坏 range', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');   // range {0,3}
+    store.getState().insert('x');          // text='AAAx', cursor=4
+    store.getState().moveCursorTo(3);      // cursor=3，删位置 3 处的 'x'
+    // editStart=3 == r.end=3 → reconcile 规则2（后方）不变；'x' 不在 range 内
+    store.getState().deleteForward();
+    expect(store.getState().text).toBe('AAA');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+  });
+
+  it('deleteForward 在 range 前方：range 右移', () => {
+    const store = createInputStore();
+    store.getState().clear();
+    store.getState().insert('a');          // text='a', cursor=1
+    store.getState().insertPaste('AAA');   // range {1,4}
+    store.getState().moveCursorTo(0);      // 前方
+    store.getState().deleteForward();      // 删 'a'（位置 0），editEnd=1 <= r.start=1 → 右移 -1 → {0,3}
+    expect(store.getState().text).toBe('AAA');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+  });
+});

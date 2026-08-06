@@ -166,9 +166,12 @@ export function createInputStore(opts: InputStoreOptions = {}): InputStore {
 
     deleteForward: () => set((s) => {
       if (s.cursor >= [...s.text].length) return s;
-      const chars = [...s.text];
-      chars.splice(s.cursor, 1);
-      return { text: chars.join(''), cursor: s.cursor };
+      const next = spliceCodePoints(s.text, s.cursor, s.cursor + 1, '');
+      return {
+        text: next,
+        cursor: s.cursor,
+        pasteRanges: reconcileRanges(s.pasteRanges, s.cursor, 1, 0),
+      };
     }),
 
     moveCursorLeft: () => set((s) => ({ cursor: Math.max(0, s.cursor - 1) })),
