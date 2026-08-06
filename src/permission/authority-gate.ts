@@ -50,6 +50,12 @@ export interface TurnRuntimeDeps {
   readonly dialogProvider?: (input: import('./interactive-ask.js').InteractiveAskInput) => Promise<import('./interactive-ask.js').DialogResult>;
   /** Task 7：dialog 创建延迟 ms（竞速窗口），默认 2000 */
   readonly dialogDelayMs?: number;
+  /** Task 7 A46：accept-session 回调（透传给 resolver.onSessionAllow）。 */
+  readonly onSessionAllow?: (toolName: string, input: Record<string, unknown>) => void;
+  /** Task 7 A47：always-allow 持久化回调（透传给 resolver.onPersistRule）。 */
+  readonly onPersistRule?: (update: { type: 'addRules'; destination: string; rule: unknown }) => void;
+  /** Task 7 A47：always-allow 后同步重检（透传给 resolver.recheck）。 */
+  readonly recheck?: (toolName: string, input: Record<string, unknown>) => import('./decisions.js').SecurityDecision;
   /**
    * Task 9：从可信配置来源投影的 classifier rules（projectClassifierConfigSources 输出）。
    * index.ts 在构造 turn runtime 前投影，传入此处作为 additional rules。
@@ -117,6 +123,9 @@ export function createConfiguredExecutionRuntimeForTurn(input: {
   readonly hooks?: readonly PermissionRequestHook[];
   readonly dialogProvider?: (input: import('./interactive-ask.js').InteractiveAskInput) => Promise<import('./interactive-ask.js').DialogResult>;
   readonly dialogDelayMs?: number;
+  readonly onSessionAllow?: (toolName: string, input: Record<string, unknown>) => void;
+  readonly onPersistRule?: (update: { type: 'addRules'; destination: string; rule: unknown }) => void;
+  readonly recheck?: (toolName: string, input: Record<string, unknown>) => import('./decisions.js').SecurityDecision;
 }): ToolExecutionRuntime {
   const projected = projectClassifierConfigSources(input.classifierConfigSources);
   const metadata = loadStaticClassifierProviderMetadata(
@@ -157,6 +166,9 @@ export function createConfiguredExecutionRuntimeForTurn(input: {
     classifierModelContext: modelContext,
     ...(input.dialogProvider !== undefined ? { dialogProvider: input.dialogProvider } : {}),
     ...(input.dialogDelayMs !== undefined ? { dialogDelayMs: input.dialogDelayMs } : {}),
+    ...(input.onSessionAllow !== undefined ? { onSessionAllow: input.onSessionAllow } : {}),
+    ...(input.onPersistRule !== undefined ? { onPersistRule: input.onPersistRule } : {}),
+    ...(input.recheck !== undefined ? { recheck: input.recheck } : {}),
   });
 }
 
@@ -208,6 +220,9 @@ function createResolver(deps: TurnRuntimeDeps): PermissionAskResolver {
     denialState: deps.sessionState.denialState,
     ...(deps.dialogProvider !== undefined ? { dialogProvider: deps.dialogProvider } : {}),
     ...(deps.dialogDelayMs !== undefined ? { dialogDelayMs: deps.dialogDelayMs } : {}),
+    ...(deps.onSessionAllow !== undefined ? { onSessionAllow: deps.onSessionAllow } : {}),
+    ...(deps.onPersistRule !== undefined ? { onPersistRule: deps.onPersistRule } : {}),
+    ...(deps.recheck !== undefined ? { recheck: deps.recheck } : {}),
   });
 }
 

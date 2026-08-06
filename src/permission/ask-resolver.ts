@@ -95,6 +95,12 @@ export interface DefaultPermissionAskResolverOptions {
   readonly dialogProvider?: (input: import('./interactive-ask.js').InteractiveAskInput) => Promise<import('./interactive-ask.js').DialogResult>;
   /** Task 7：dialog 创建延迟 ms（竞速窗口） */
   readonly dialogDelayMs?: number;
+  /** Task 7 A46：accept-session 回调（透传给 resolveInteractiveAsk.onSessionAllow）。 */
+  readonly onSessionAllow?: (toolName: string, input: Record<string, unknown>) => void;
+  /** Task 7 A47：always-allow 持久化回调（透传给 resolveInteractiveAsk.onPersistRule）。 */
+  readonly onPersistRule?: (update: { type: 'addRules'; destination: string; rule: unknown }) => void;
+  /** Task 7 A47：always-allow 后同步重检（带 tool/input；在 resolveByClassifier capture 当前调用）。 */
+  readonly recheck?: (toolName: string, input: Record<string, unknown>) => SecurityDecision;
 }
 
 /** non-classifierApprovable safety 的 reason_code 集合（设计 §6.3） */
@@ -127,6 +133,9 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
   private readonly denialState: { readonly consecutive: number; readonly total: number };
   private readonly dialogProvider?: (input: InteractiveAskInput) => Promise<DialogResult>;
   private readonly dialogDelayMs: number;
+  private readonly onSessionAllow?: (toolName: string, input: Record<string, unknown>) => void;
+  private readonly onPersistRule?: (update: { type: 'addRules'; destination: string; rule: unknown }) => void;
+  private readonly recheck?: (toolName: string, input: Record<string, unknown>) => SecurityDecision;
 
   constructor(opts: DefaultPermissionAskResolverOptions) {
     this.classifier = opts.classifier;
@@ -135,6 +144,9 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
     this.denialState = opts.denialState;
     this.dialogProvider = opts.dialogProvider;
     this.dialogDelayMs = opts.dialogDelayMs ?? 2000;
+    this.onSessionAllow = opts.onSessionAllow;
+    this.onPersistRule = opts.onPersistRule;
+    this.recheck = opts.recheck;
   }
 
   async resolve(request: PermissionAskResolutionRequest): Promise<SecurityDecision> {
@@ -250,6 +262,11 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
         automatic,
         dialog: this.dialogProvider,
         dialogDelayMs: this.dialogDelayMs,
+        ...(this.onSessionAllow !== undefined ? { onSessionAllow: this.onSessionAllow } : {}),
+        ...(this.onPersistRule !== undefined ? { onPersistRule: this.onPersistRule } : {}),
+        ...(this.recheck !== undefined
+          ? { recheckAfterPersist: () => this.recheck!(request.executableToolCall.canonicalToolName, request.executableToolCall.input) }
+          : {}),
       });
     }
 
