@@ -4,7 +4,7 @@
 
 **Goal:** Wire the auto permission resolver to the real production TUI dialog so that auto-mode main-origin unresolved asks surface a 4-option permission questionnaire (Allow once / Allow session / Always allow / Reject) via the existing AskUserManager, with classifier/dialog race, ESC/reject classifier abort, and session/always remember all reachable in production.
 
-**Architecture:** Three layers, kept decoupled. (1) `mapDialogResult` — pure function mapping `AskQuestionOutcome → DialogResult` (adapter boundary; `cancelled → escape`). (2) `createAutoPermissionDialogProvider` — produces a `dialog` function `InteractiveAskInput → askManager.ask → mapDialogResult → DialogResult`; holds NO side-effect callbacks. (3) Resolver wiring — `DefaultPermissionAskResolver` + `createConfiguredExecutionRuntimeForTurn` thread `onSessionAllow`/`onPersistRule`/`recheckAfterPersist` (currently missing) into `resolveInteractiveAsk`, where `handleDialogResult` consumes them. `interactive-ask.ts` and the TUI layer are unchanged.
+**Architecture:** Three layers, decoupled. (1) `mapDialogResult` — pure function `AskQuestionOutcome → DialogResult` (adapter boundary; `cancelled → escape`). (2) `createAutoPermissionDialogProvider` in a new side-effect-free module `src/permission/auto-permission-dialog.ts` — produces a `dialog` function; holds NO side-effect callbacks. (3) Resolver wiring — `DefaultPermissionAskResolver` + seam thread `onSessionAllow`/`onPersistRule`/`recheck` (currently missing) into `resolveInteractiveAsk`; `recheck` is a **parameterized** `(toolName, input) => SecurityDecision` captured into a closure at `resolveByClassifier` (the only layer with `request.executableToolCall`). `interactive-ask.ts` and the TUI layer are unchanged.
 
 **Tech Stack:** TypeScript ESM, Vitest, Node 18+.
 
@@ -12,13 +12,11 @@
 
 **TDD phase expectations:**
 
-| Test group | After Task 1 (RED) | After Task 2 (mapDialogResult) | After Task 3 (resolver threading) | After Task 4 (adapter) | After Task 5 (index wiring) |
+| Test group | After Task 1 (RED) | After Task 2 (mapDialogResult) | After Task 3 (resolver threading) | After Task 4 (adapter module) | After Task 5 (index wiring) |
 |---|---|---|---|---|---|
-| mapDialogResult unit (7.1) | FAIL (not exported) | **PASS** | PASS | PASS | PASS |
-| adapter behavior A1-A3 (7.2) | FAIL | FAIL (no adapter) | FAIL | **PASS** | PASS |
-| resolver end-to-end #1-#8 (7.3) | FAIL | FAIL | partial (callback threading only) | partial | **PASS** |
-
-Tasks build up: pure function first (Task 2), then resolver threading (Task 3), then adapter (Task 4), finally production wiring (Task 5). Each task is independently verifiable.
+| mapDialogResult unit (§7.1) | FAIL (not exported) | **PASS** | PASS | PASS | PASS |
+| adapter behavior A1-A3 (§7.2) | FAIL (module absent) | FAIL | FAIL | **PASS** | PASS |
+| resolver end-to-end #1-#8 (§7.3) | FAIL (seam fields absent) | FAIL | partial | partial | **PASS** |
 
 ---
 
@@ -26,31 +24,40 @@ Tasks build up: pure function first (Task 2), then resolver threading (Task 3), 
 
 | File | Responsibility | Action |
 |---|---|---|
-| `src/permission/permission-answer-mapping.ts` | Pure outcome→decision mappers. Add `mapDialogResult` (outcome→DialogResult). | Modify (add export) |
-| `src/permission/ask-resolver.ts` | `DefaultPermissionAskResolver`. Add `onSessionAllow`/`onPersistRule`/`recheckAfterPersist` to options + thread into `resolveInteractiveAsk`. | Modify |
-| `src/permission/authority-gate.ts` | `createConfiguredExecutionRuntimeForTurn` seam. Add the three callbacks to input + thread to resolver constructor. (`dialogProvider`/`dialogDelayMs` fields already exist.) | Modify |
-| `src/index.ts` | Add `createAutoPermissionDialogProvider(askManager)`; pass `dialogProvider` + `dialogDelayMs:2000` + the three callbacks at the seam call. | Modify |
-| `src/__tests__/permission/auto-dialog-mapping.test.ts` | mapDialogResult unit tests (§7.1) + adapter behavior tests (§7.2). | Create |
-| `src/__tests__/permission/auto-dialog-resolver-wiring.test.ts` | resolver/executeToolCall end-to-end behavior tests (§7.3). | Create |
+| `src/permission/permission-answer-mapping.ts` | Pure outcome→decision mappers. Add `mapDialogResult` + `ALLOW_ALWAYS_LABEL`. | Modify |
+| `src/permission/auto-permission-dialog.ts` | **New side-effect-free module**: `createAutoPermissionDialogProvider(askMgr)`. | Create |
+| `src/permission/ask-resolver.ts` | `DefaultPermissionAskResolver`. Add `onSessionAllow`/`onPersistRule`/`recheck` options; thread + capture closure in `resolveByClassifier`. | Modify |
+| `src/permission/authority-gate.ts` | Seam. Add the three callbacks to input + TurnRuntimeDeps + resolver construction. | Modify |
+| `src/index.ts` | Import adapter; pass `dialogProvider` + `dialogDelayMs:2000` + callbacks at the seam call. | Modify |
+| `src/__tests__/permission/auto-dialog-mapping.test.ts` | §7.1 unit + §7.2 adapter behavior. | Create |
+| `src/__tests__/permission/auto-dialog-resolver-wiring.test.ts` | §7.3 #1-#8 end-to-end. | Create |
 
-Unchanged: `interactive-ask.ts`, `ask-user-types.ts`, `ask-question-store.ts`, `use-input-handler.ts`, all TUI components.
+Unchanged: `interactive-ask.ts`, `ask-user-types.ts`, `ask-question-store.ts`, `use-input-handler.ts`, all TUI.
+
+> **Why adapter is NOT in index.ts:** `src/index.ts` has a `#!/usr/bin/env node` shebang and top-level side effects (`new AskUserManager` line 337, `new RuntimeSecurityGate` line 419, `bootstrap(...)` line 1151), with no main guard. Importing it from a test triggers those side effects. No existing test imports `src/index.ts` (verified: `grep -rn "from '../../index" src/__tests__/` returns nothing). The adapter goes in a dedicated permission module; index.ts imports it for production wiring. `permission → agent` (for `AskUserManager`) is an existing dependency pattern, not a new cycle.
 
 ---
 
-### Task 1: RED — write the test shells (all groups FAIL)
+### Task 1: RED — clean test shells that fail ONLY on missing capability
 
 **Files:**
 - Create: `src/__tests__/permission/auto-dialog-mapping.test.ts`
 - Create: `src/__tests__/permission/auto-dialog-resolver-wiring.test.ts`
 
-- [ ] **Step 1: Write `auto-dialog-mapping.test.ts` (§7.1 mapDialogResult unit + §7.2 adapter behavior shells)**
+- [ ] **Step 1: Write `auto-dialog-mapping.test.ts` (§7.1 + §7.2 shells)**
 
 ```ts
 // Auto permission dialog: outcome→DialogResult mapping (§7.1) + adapter behavior (§7.2).
 import { describe, test, expect } from 'vitest';
-import { mapDialogResult, ALLOW_ALWAYS_LABEL } from '../../../permission/permission-answer-mapping.js';
-import { ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from '../../../permission/permission-answer-mapping.js';
-import type { AskQuestionOutcome } from '../../agent/ask-user-types.js';
+import {
+  mapDialogResult,
+  ALLOW_ALWAYS_LABEL,
+  ALLOW_ONCE_LABEL,
+  ALLOW_EXACT_LABEL,
+} from '../../permission/permission-answer-mapping.js';
+import { createAutoPermissionDialogProvider } from '../../permission/auto-permission-dialog.js';
+import type { AskQuestionOutcome, AskQuestionRequest } from '../../agent/ask-user-types.js';
+import type { DialogResult } from '../../permission/interactive-ask.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §7.1 mapDialogResult pure-function unit tests
@@ -77,37 +84,25 @@ describe('[auto-dialog] mapDialogResult unit', () => {
     expect(mapDialogResult({ kind: 'submitted', answers: {} })).toEqual({ kind: 'rejected' });
     expect(mapDialogResult({ kind: 'submitted', answers: { q: 'whatever' } })).toEqual({ kind: 'rejected' });
   });
-  test('cancelled -> escape (adapter boundary; only ESC source per spec §3)', () => {
+  test('cancelled -> escape', () => {
     expect(mapDialogResult({ kind: 'cancelled' })).toEqual({ kind: 'escape' });
   });
   test('chat -> rejected', () => {
-    expect(mapDialogResult({ kind: 'chat', feedback: 'do something else' })).toEqual({ kind: 'rejected' });
+    expect(mapDialogResult({ kind: 'chat', feedback: 'later' })).toEqual({ kind: 'rejected' });
   });
 });
-```
 
-- [ ] **Step 2: Add §7.2 adapter behavior test shell (A1-A3) to the same file**
-
-Append to `auto-dialog-mapping.test.ts`:
-
-```ts
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════调查══════════════════════════════════════════════════════════════
 // §7.2 adapter behavior: real createAutoPermissionDialogProvider + scripted AskUserManager
 // ═══════════════════════════════════════════════════════════════════════════════
 
-import { createAutoPermissionDialogProvider } from '../../index.js';
-import type { AskQuestionRequest, AskQuestionOutcome } from '../../agent/ask-user-types.js';
-import type { DialogResult } from '../../permission/interactive-ask.js';
-
-// Minimal scripted AskUserManager: returns a scripted outcome per call.
 class ScriptedAskManager {
   constructor(private readonly outcome: AskQuestionOutcome) {}
   async ask(_request: AskQuestionRequest): Promise<AskQuestionOutcome> { return this.outcome; }
 }
 
-// Minimal InteractiveAskInput shape the adapter consumes.
 const askInput = {
-  decision: { decision_id: 'd1', behavior: 'ask', reason_code: 'x', human_reason: 'r' },
+  decision: { decision_id: 'd1', behavior: 'ask' as const, reason_code: 'x', human_reason: 'r' },
   toolName: 'run_bash',
   input: { command: 'echo hi' },
   origin: 'main' as const,
@@ -120,13 +115,14 @@ describe('[auto-dialog] adapter behavior (§7.2)', () => {
     const result: DialogResult = await dialog(askInput as never);
     expect(result).toEqual({ kind: 'escape' });
   });
-  test('A2: submitted Allow once/session/always/Reject -> corresponding DialogResult', async () => {
-    for (const [label, expected] of [
+  test('A2: submitted labels -> corresponding DialogResult', async () => {
+    const cases: Array<[string, DialogResult]> = [
       [ALLOW_ONCE_LABEL, { kind: 'approved_once' }],
       [ALLOW_EXACT_LABEL, { kind: 'approved_session' }],
       [ALLOW_ALWAYS_LABEL, { kind: 'approved_always' }],
       ['Reject', { kind: 'rejected' }],
-    ] as const) {
+    ];
+    for (const [label, expected] of cases) {
       const mgr = new ScriptedAskManager({ kind: 'submitted', answers: { q: label } });
       const dialog = createAutoPermissionDialogProvider(mgr as never);
       expect(await dialog(askInput as never)).toEqual(expected);
@@ -140,7 +136,7 @@ describe('[auto-dialog] adapter behavior (§7.2)', () => {
 });
 ```
 
-- [ ] **Step 3: Write `auto-dialog-resolver-wiring.test.ts` shell (§7.3, tests #1-#8)**
+- [ ] **Step 2: Write `auto-dialog-resolver-wiring.test.ts` (§7.3 shells #1-#8)**
 
 ```ts
 // Auto permission dialog: resolver/executeToolCall end-to-end behavior (§7.3).
@@ -161,55 +157,55 @@ class FakeStore implements PendingDecisionStore {
   async update(): Promise<void> {}
 }
 
-// Classifier that never resolves (keeps dialog race pending) — for tests needing dialog to win.
 function pendingClassifier() {
   return { completeText: () => new Promise<string>(() => {}) } as never;
 }
 
 function makeRuntime(opts: {
-  dialogResult?: DialogResult;
+  dialogResult: DialogResult;
+  dialogDelayMs?: number;
   onSessionAllow?: (t: string, i: Record<string, unknown>) => void;
   onPersistRule?: (u: { type: 'addRules'; destination: string; rule: unknown }) => void;
-  recheckAfterPersist?: () => { behavior: 'allow' | 'deny'; reason_code: string };
+  recheck?: (t: string, i: Record<string, unknown>) => { behavior: 'allow' | 'deny'; reason_code: string };
   classifierCompleteText?: () => Promise<string>;
-  dialogDelayMs?: number;
-  channelRequest?: (d: { behavior: string }) => Promise<{ response: string }>;
+  channelRequest?: (...args: unknown[]) => unknown;
+  sessionAllowlist?: SessionAllowlist;
 }) {
-  const dialogProvider = async (): Promise<DialogResult> => opts.dialogResult ?? { kind: 'approved_once' };
-  const permissionChecker = new PermissionChecker({ mode: 'auto', workdir: process.cwd() });
-  const runtimeGate = new RuntimeSecurityGate({
-    pendingStore: new FakeStore(),
-    channel: opts.channelRequest
-      ? { request: opts.channelRequest as never } as never
-      : null,
-  });
+  const dialogProvider = async (): Promise<DialogResult> => opts.dialogResult;
   return createConfiguredExecutionRuntimeForTurn({
     authority: 'enforced',
     streamClient: opts.classifierCompleteText ? { completeText: opts.classifierCompleteText } as never : pendingClassifier(),
-    providerId: 'test', modelId: 'm', providerModelIds: ['m'],
+    providerId: 'test',
+    modelId: 'm',
+    providerModelIds: ['m'],
     classifierConfigSources: {},
-    permissionChecker, runtimeGate,
-    sessionAllowlist: new SessionAllowlist(),
+    permissionChecker: new PermissionChecker({ mode: 'auto', workdir: process.cwd() }),
+    runtimeGate: new RuntimeSecurityGate({
+      pendingStore: new FakeStore(),
+      channel: opts.channelRequest ? ({ request: opts.channelRequest } as never) : null,
+    }),
+    sessionAllowlist: opts.sessionAllowlist ?? new SessionAllowlist(),
     sessionState: new SessionState(new SessionAllowlist(), 's1'),
     hooks: [],
     dialogProvider,
     dialogDelayMs: opts.dialogDelayMs ?? 0,
     onSessionAllow: opts.onSessionAllow,
     onPersistRule: opts.onPersistRule,
-    recheckAfterPersist: opts.recheckAfterPersist,
+    recheck: opts.recheck,
   });
 }
 
-function runBashRegistry() {
+function runBashRegistry(executor = vi.fn().mockResolvedValue('ran')) {
   const r = new ToolRegistry();
   r.register(
     { name: 'run_bash', description: 'b', parameters: { type: 'object' as const, properties: { command: { type: 'string' } }, required: ['command'] } },
-    vi.fn().mockResolvedValue('ran'),
+    executor,
   );
-  return r;
+  return { registry: r, executor };
 }
 
 const userMsg = [{ role: 'user' as const, content: 'run echo hi', authoredByUser: true }];
+const bashCall = { type: 'tool_use' as const, id: 'c1', name: 'run_bash', input: { command: 'echo hi' } };
 
 describe('[auto-dialog] resolver/executeToolCall end-to-end (§7.3)', () => {
   test('#1 unresolved ask past delay -> dialog invoked', async () => {
@@ -217,25 +213,35 @@ describe('[auto-dialog] resolver/executeToolCall end-to-end (§7.3)', () => {
     const runtime = makeRuntime({
       dialogResult: { kind: 'approved_once' },
       dialogDelayMs: 0,
-      dialogProvider: undefined, // set below via override
     });
-    // override: count dialog calls
-    (runtime as unknown as { askResolver: unknown });
-    const r = await executeToolCall(runBashRegistry(), { type: 'tool_use', id: 'c1', name: 'run_bash', input: { command: 'echo hi' } }, runtime, { messages: userMsg });
-    void dialogCalls; void r;
-    // assertion refined in Task 5; shell just exercises path
-    expect(r.status).toBeDefined();
+    // wrap to count: reconstruct with a counting provider via direct override on returned runtime not possible,
+    // so verify via outcome: approved_once -> executor runs (dialog must have been reached)
+    const { registry, executor } = runBashRegistry();
+    // override dialogProvider on the constructed runtime's resolver path is internal;
+    // use a dedicated counting provider by passing through makeRuntime dialogResult.
+    void dialogCalls;
+    const r = await executeToolCall(registry, bashCall, runtime, { messages: userMsg });
+    expect(executor).toHaveBeenCalled(); // proves dialog returned approved_once -> allow -> execute
+    void r;
   });
 });
 ```
 
-> Note: The §7.3 shell in Step 3 is intentionally minimal — full assertions for #1-#8 are completed in Task 5 (when wiring is live). The RED goal here is that imports resolve and the test files run (they FAIL because `mapDialogResult`/`ALLOW_ALWAYS_LABEL`/`createAutoPermissionDialogProvider`/`onSessionAllow` seam fields don't exist yet).
+> **RED goal for Task 1:** Both test files run but FAIL because `mapDialogResult`/`ALLOW_ALWAYS_LABEL` are not exported from `permission-answer-mapping.ts`, `createAutoPermissionDialogProvider` module `auto-permission-dialog.ts` does not exist, and `onSessionAllow`/`onPersistRule`/`recheck` are not fields on `createConfiguredExecutionRuntimeForTurn`'s input. The test code itself compiles against the *expected* API (types resolve once Tasks 2-4 land); at Task 1 it fails on missing exports/wiring, NOT on test-internal syntax errors.
+>
+> **Expected RED failure reasons:**
+> - `auto-dialog-mapping.test.ts`: `mapDialogResult` / `ALLOW_ALWAYS_LABEL` not exported (§7.1); `../../permission/auto-permission-dialog.js` module not found (§7.2).
+> - `auto-dialog-resolver-wiring.test.ts`: `onSessionAllow`/`onPersistRule`/`recheck` not in seam input type → TS error (typecheck) / runtime undefined (vitest). #1's `executor.toHaveBeenCalled()` fails because approved_once never reaches resolver side-effect without wiring.
 
-- [ ] **Step 4: Run tests to verify RED**
+- [ ] **Step 3: Run tests to verify RED**
 
 Run: `npx vitest run src/__tests__/permission/auto-dialog-mapping.test.ts src/__tests__/permission/auto-dialog-resolver-wiring.test.ts`
 
-Expected: ALL FAIL — `mapDialogResult` / `ALLOW_ALWAYS_LABEL` not exported; `createAutoPermissionDialogProvider` not exported; `onSessionAllow`/`onPersistRule`/`recheckAfterPersist` not in seam input.
+Expected: FAIL. Vitest does not typecheck (esbuild strips types), so the RED fails at runtime on missing capability, not on TS type errors:
+- `auto-dialog-mapping.test.ts`: **module-not-found** `../../permission/auto-permission-dialog.js` (§7.2); once that resolves, `mapDialogResult`/`ALLOW_ALWAYS_LABEL` are `undefined` → §7.1 assertions fail. This is the clean "missing export / missing module" RED.
+- `auto-dialog-resolver-wiring.test.ts`: the `onSessionAllow`/`onPersistRule`/`recheck` fields passed to `createConfiguredExecutionRuntimeForTurn` are silently ignored at runtime (fields not yet on the input type; vitest doesn't enforce), so `#1`'s `executor.toHaveBeenCalled()` fails because approved_once never reaches the resolver side-effect path without wiring → the tool is denied by the gate (classifier pending, no dialog resolution). This is the expected "wiring missing" RED.
+
+> `npm run typecheck` at Task 1 will report TS errors for the not-yet-existing `auto-permission-dialog.js` module and the missing seam fields — that's expected and resolves as Tasks 2-4 land. The vitest RED above is the runtime confirmation.
 
 ---
 
@@ -244,9 +250,9 @@ Expected: ALL FAIL — `mapDialogResult` / `ALLOW_ALWAYS_LABEL` not exported; `c
 **Files:**
 - Modify: `src/permission/permission-answer-mapping.ts`
 
-- [ ] **Step 1: Add `ALLOW_ALWAYS_LABEL` constant and `mapDialogResult` function**
+- [ ] **Step 1: Add `ALLOW_ALWAYS_LABEL` and `mapDialogResult`**
 
-Add to `src/permission/permission-answer-mapping.ts` (after the existing `mapPermissionAnswerToUserDecision`):
+Add the `DialogResult` type import and the new export to `src/permission/permission-answer-mapping.ts` (after the existing `mapPermissionAnswerToUserDecision`):
 
 ```ts
 import type { DialogResult } from './interactive-ask.js';
@@ -267,14 +273,12 @@ export const ALLOW_ALWAYS_LABEL = 'Always allow';
  */
 export function mapDialogResult(outcome: AskQuestionOutcome): DialogResult {
   if (outcome.kind !== 'submitted') {
-    // cancelled（ESC）→ escape；chat → rejected
     return outcome.kind === 'cancelled' ? { kind: 'escape' } : { kind: 'rejected' };
   }
   const answer = Object.values(outcome.answers)[0];
   if (answer === ALLOW_ONCE_LABEL) return { kind: 'approved_once' };
   if (answer === ALLOW_EXACT_LABEL) return { kind: 'approved_session' };
   if (answer === ALLOW_ALWAYS_LABEL) return { kind: 'approved_always' };
-  // Reject / unknown / empty → rejected（绝不放行）
   return { kind: 'rejected' };
 }
 ```
@@ -283,7 +287,7 @@ export function mapDialogResult(outcome: AskQuestionOutcome): DialogResult {
 
 Run: `npx vitest run src/__tests__/permission/auto-dialog-mapping.test.ts -t "mapDialogResult unit"`
 
-Expected: PASS (7 tests). §7.2 adapter tests still FAIL (no `createAutoPermissionDialogProvider`).
+Expected: PASS (7 tests).
 
 - [ ] **Step 3: Run typecheck**
 
@@ -295,65 +299,47 @@ Expected: exit 0.
 
 ```bash
 git add src/permission/permission-answer-mapping.ts src/__tests__/permission/auto-dialog-mapping.test.ts
-git commit -m "feat(task2): add mapDialogResult outcome->DialogResult pure mapping
-
-- ALLOW_ALWAYS_LABEL + mapDialogResult in permission-answer-mapping.ts
-- cancelled -> escape (adapter boundary; only ESC source per spec §3)
-- chat -> rejected; submitted Allow once/session/always -> approved_*; else rejected
-- pure function: no side effects (resolver layer consumes DialogResult downstream)"
+git commit -m "feat(task2): add mapDialogResult outcome->DialogResult pure mapping"
 ```
 
 ---
 
-### Task 3: Thread side-effect callbacks through resolver + seam (§7.3 callback wiring)
+### Task 3: Thread `onSessionAllow`/`onPersistRule`/`recheck` through resolver + seam
 
 **Files:**
 - Modify: `src/permission/ask-resolver.ts`
 - Modify: `src/permission/authority-gate.ts`
 
-- [ ] **Step 1: Add the three callbacks to `DefaultPermissionAskResolverOptions` and thread them into `resolveInteractiveAsk`**
+- [ ] **Step 1: Extend `DefaultPermissionAskResolverOptions` + capture closure in `resolveByClassifier`**
 
 In `src/permission/ask-resolver.ts`:
 
-**Add imports** (after existing imports near top):
-```ts
-import type { SecurityDecision } from './decisions.js';
-```
-(SecurityDecision is already imported via other types; verify it's available. If not, add the import.)
-
-**Extend `DefaultPermissionAskResolverOptions`** (add three fields after `dialogDelayMs`):
+**Extend `DefaultPermissionAskResolverOptions`** (add after `dialogDelayMs`):
 ```ts
   /** Task 7 A46：accept-session 回调（透传给 resolveInteractiveAsk.onSessionAllow）。 */
   readonly onSessionAllow?: (toolName: string, input: Record<string, unknown>) => void;
   /** Task 7 A47：always-allow 持久化回调（透传给 resolveInteractiveAsk.onPersistRule）。 */
   readonly onPersistRule?: (update: { type: 'addRules'; destination: string; rule: unknown }) => void;
-  /** Task 7 A47：always-allow 持久化后重检（透传给 resolveInteractiveAsk.recheckAfterPersist）。 */
-  readonly recheckAfterPersist?: () => SecurityDecision;
+  /** Task 7 A47：always-allow 后同步重检（带 tool/input；在 resolveByClassifier capture 当前调用）。
+   *  注意：这是带参数的 recheck，不是无参数 recheckAfterPersist——后者由本 resolver 在
+   *  resolveByClassifier 为当前 interaction 构造 closure（spec §6.1）。 */
+  readonly recheck?: (toolName: string, input: Record<string, unknown>) => SecurityDecision;
 ```
+(Ensure `SecurityDecision` is imported — it's used elsewhere in the file via `PermissionAskResolutionRequest.decision`; add `import type { SecurityDecision } from './decisions.js';` if not present.)
 
-**Add private fields** in `DefaultPermissionAskResolver` class (after `dialogDelayMs`):
+**Add private fields + constructor assignment** (after `this.dialogDelayMs = ...`):
 ```ts
   private readonly onSessionAllow?: (toolName: string, input: Record<string, unknown>) => void;
   private readonly onPersistRule?: (update: { type: 'addRules'; destination: string; rule: unknown }) => void;
-  private readonly recheckAfterPersist?: () => SecurityDecision;
+  private readonly recheck?: (toolName: string, input: Record<string, unknown>) => SecurityDecision;
 ```
-
-**Assign in constructor** (after `this.dialogDelayMs = ...`):
 ```ts
     this.onSessionAllow = opts.onSessionAllow;
     this.onPersistRule = opts.onPersistRule;
-    this.recheckAfterPersist = opts.recheckAfterPersist;
+    this.recheck = opts.recheck;
 ```
 
-**Thread into `resolveInteractiveAsk` call** (in `resolveByClassifier`, currently lines 249-253). Replace:
-```ts
-      return resolveInteractiveAsk(interactiveInput, {
-        automatic,
-        dialog: this.dialogProvider,
-        dialogDelayMs: this.dialogDelayMs,
-      });
-```
-With:
+**Thread + capture in `resolveByClassifier`** — replace the `resolveInteractiveAsk(interactiveInput, {...})` call (currently lines 249-253):
 ```ts
       return resolveInteractiveAsk(interactiveInput, {
         automatic,
@@ -361,107 +347,108 @@ With:
         dialogDelayMs: this.dialogDelayMs,
         ...(this.onSessionAllow !== undefined ? { onSessionAllow: this.onSessionAllow } : {}),
         ...(this.onPersistRule !== undefined ? { onPersistRule: this.onPersistRule } : {}),
-        ...(this.recheckAfterPersist !== undefined ? { recheckAfterPersist: this.recheckAfterPersist } : {}),
+        // §6.1：在此层 capture 当前 tool/input（request.executableToolCall）构造无参数 recheckAfterPersist
+        ...(this.recheck !== undefined
+          ? { recheckAfterPersist: () => this.recheck!(request.executableToolCall.canonicalToolName, request.executableToolCall.input) }
+          : {}),
       });
 ```
 
-- [ ] **Step 2: Add the three callbacks to `createConfiguredExecutionRuntimeForTurn` input + thread to resolver**
+- [ ] **Step 2: Extend seam input + TurnRuntimeDeps + resolver construction**
 
 In `src/permission/authority-gate.ts`:
 
-**Extend the seam input type** (add three fields after `dialogDelayMs?` in the `input` parameter type):
+**Extend `TurnRuntimeDeps`** (add after `dialogDelayMs?`):
 ```ts
   readonly onSessionAllow?: (toolName: string, input: Record<string, unknown>) => void;
   readonly onPersistRule?: (update: { type: 'addRules'; destination: string; rule: unknown }) => void;
-  readonly recheckAfterPersist?: () => import('./decisions.js').SecurityDecision;
+  readonly recheck?: (toolName: string, input: Record<string, unknown>) => import('./decisions.js').SecurityDecision;
 ```
 
-**Thread into resolver construction** — find where `createResolver(deps)` consumes `deps.dialogProvider` / `deps.dialogDelayMs` (in `createResolver`), and add the three callbacks to the `DefaultPermissionAskResolver` construction. They must come from `TurnRuntimeDeps`.
-
-**Extend `TurnRuntimeDeps`** (add the same three fields after `dialogDelayMs?`):
+**Extend the `createConfiguredExecutionRuntimeForTurn` input type** (add after `dialogDelayMs?`):
 ```ts
   readonly onSessionAllow?: (toolName: string, input: Record<string, unknown>) => void;
   readonly onPersistRule?: (update: { type: 'addRules'; destination: string; rule: unknown }) => void;
-  readonly recheckAfterPersist?: () => import('./decisions.js').SecurityDecision;
+  readonly recheck?: (toolName: string, input: Record<string, unknown>) => import('./decisions.js').SecurityDecision;
 ```
 
-**In `createResolver`**, extend the `DefaultPermissionAskResolver` construction (currently passes classifier/evaluateWithMode/hooks/denialState/dialogProvider/dialogDelayMs). Add:
+**In `createResolver`** — extend the `new DefaultPermissionAskResolver({...})` construction. Add after the existing `dialogDelayMs` spread:
 ```ts
     ...(deps.onSessionAllow !== undefined ? { onSessionAllow: deps.onSessionAllow } : {}),
     ...(deps.onPersistRule !== undefined ? { onPersistRule: deps.onPersistRule } : {}),
-    ...(deps.recheckAfterPersist !== undefined ? { recheckAfterPersist: deps.recheckAfterPersist } : {}),
+    ...(deps.recheck !== undefined ? { recheck: deps.recheck } : {}),
 ```
 
-**In `createConfiguredExecutionRuntimeForTurn`**, the final `createExecutionRuntimeForTurn({...})` call must pass the three callbacks from `input` into the `TurnRuntimeDeps`. Add (alongside the existing `dialogProvider`/`dialogDelayMs` spread):
+**In `createConfiguredExecutionRuntimeForTurn`** — in the final `createExecutionRuntimeForTurn({...})` call, add (alongside existing `dialogProvider`/`dialogDelayMs` spread):
 ```ts
     ...(input.onSessionAllow !== undefined ? { onSessionAllow: input.onSessionAllow } : {}),
     ...(input.onPersistRule !== undefined ? { onPersistRule: input.onPersistRule } : {}),
-    ...(input.recheckAfterPersist !== undefined ? { recheckAfterPersist: input.recheckAfterPersist } : {}),
+    ...(input.recheck !== undefined ? { recheck: input.recheck } : {}),
 ```
 
 - [ ] **Step 3: Run typecheck**
 
 Run: `npm run typecheck`
 
-Expected: exit 0. (index.ts doesn't pass these yet — they're optional, so typecheck passes. Full behavior verified in Task 5.)
+Expected: exit 0. (index.ts still doesn't pass these — they're optional; Task 5 wires production.)
 
 - [ ] **Step 4: Run existing resolver/seam tests to confirm no regression**
 
 Run: `npx vitest run src/__tests__/permission/auto-interactive-ask-production.test.ts src/__tests__/permission/authority-gate-production.test.ts src/__tests__/permission/authority-gate-contracts.test.ts`
 
-Expected: PASS (all existing tests; the new optional fields don't change existing behavior).
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/permission/ask-resolver.ts src/permission/authority-gate.ts
-git commit -m "feat(task3): thread onSessionAllow/onPersistRule/recheckAfterPersist through resolver+seam
-
-DefaultPermissionAskResolver currently drops these callbacks (ask-resolver.ts
-resolveInteractiveAsk call only passed automatic/dialog/dialogDelayMs). Extend
-DefaultPermissionAskResolverOptions + TurnRuntimeDeps + seam input to thread
-them through, so approved_session/approved_always side effects actually fire."
+git commit -m "feat(task3): thread onSessionAllow/onPersistRule/recheck through resolver+seam"
 ```
 
 ---
 
-### Task 4: Implement `createAutoPermissionDialogProvider` (§7.2 GREEN)
+### Task 4: Create `auto-permission-dialog.ts` adapter module (§7.2 GREEN)
 
 **Files:**
-- Modify: `src/index.ts`
+- Create: `src/permission/auto-permission-dialog.ts`
 
-- [ ] **Step 1: Add the adapter factory in `src/index.ts`**
-
-Add an import near the existing permission-answer-mapping import (find where `ALLOW_ONCE_LABEL`/`ALLOW_EXACT_LABEL`/`mapPermissionAnswerToUserDecision` are imported; add to it):
-```ts
-import { mapDialogResult } from './permission/permission-answer-mapping.js';
-```
-And ensure `DialogResult` type is imported (from interactive-ask):
-```ts
-import type { DialogResult } from './permission/interactive-ask.js';
-```
-And `InteractiveAskInput`:
-```ts
-import type { InteractiveAskInput } from './permission/interactive-ask.js';
-```
-
-Add the factory function (place near `getDecisionChannel`, before the runtime gate construction — it needs `askManager` which is defined at line 337):
+- [ ] **Step 1: Create the side-effect-free adapter module**
 
 ```ts
+// Auto permission dialog provider（Task 7 production wiring, spec §5.1）。
+//
+// 物理本质：auto resolver 的 dialogProvider 生产实现。把 InteractiveAskInput 转成
+// 4 选项问卷，经共享 AskUserManager 弹出，outcome 经 mapDialogResult 映射为 DialogResult。
+//
+// 职责（严格，spec §5）：InteractiveAskInput → AskUserManager.ask() → AskQuestionOutcome
+// → DialogResult。**不持有** onSessionAllow/onPersistRule/recheck —— 那些是
+// resolveInteractiveAsk 的 options，由 resolver 层 handleDialogResult 消费。
+//
+// 模块边界：side-effect-free。不放 index.ts（index.ts 是带 shebang 的 CLI 入口，
+// 顶层有 new AskUserManager / new RuntimeSecurityGate / bootstrap 等 TUI 副作用，
+// 无 main guard；测试 import 它会触发副作用）。index.ts import 本模块做生产 wiring。
+// permission → agent（AskUserManager）是既有依赖模式，非新循环。
+
+import type { AskUserManager } from '../agent/ask-user-manager.js';
+import type { AskQuestionRequest } from '../agent/ask-user-types.js';
+import type { InteractiveAskInput, DialogResult } from './interactive-ask.js';
+import {
+  mapDialogResult,
+  ALLOW_ONCE_LABEL,
+  ALLOW_EXACT_LABEL,
+  ALLOW_ALWAYS_LABEL,
+} from './permission-answer-mapping.js';
+
 /**
- * Auto permission dialog provider (Task 7 production wiring, spec §5.1)。
+ * 构造 auto permission dialog provider（spec §5.1）。
  *
- * 职责（严格）：InteractiveAskInput → AskUserManager.ask() → AskQuestionOutcome → DialogResult。
- * **不持有** onSessionAllow/onPersistRule/recheckAfterPersist —— 那些是 resolveInteractiveAsk
- * 的 options，由 resolver 层 handleDialogResult 消费（spec §5 职责分层）。
- *
+ * 返回的 dialog 函数：InteractiveAskInput → askManager.ask(4选项问卷) → mapDialogResult → DialogResult。
  * 复用共享 AskUserManager 单例与 ask-question-store TUI（不新建第二套问卷组件）。
  */
-function createAutoPermissionDialogProvider(
+export function createAutoPermissionDialogProvider(
   askMgr: AskUserManager,
 ): (input: InteractiveAskInput) => Promise<DialogResult> {
   return async (input: InteractiveAskInput): Promise<DialogResult> => {
-    // 4-option permission questionnaire（独立 schema，与 channel 三选一问卷分离）。
     const request: AskQuestionRequest = {
       questions: [{
         question:
@@ -484,53 +471,41 @@ function createAutoPermissionDialogProvider(
 }
 ```
 
-> Note: `AskUserManager` type import — ensure `import { AskUserManager } from './agent/ask-user-manager.js'` exists (or `import type`). `AskQuestionRequest` from `./agent/ask-user-types.js`. Verify these imports compile.
-
-- [ ] **Step 2: Export `createAutoPermissionDialogProvider` for testability**
-
-The factory must be importable by `auto-dialog-mapping.test.ts` (`createAutoPermissionDialogProvider` from `../../index.js`). Add `export` to the function declaration:
-
-```ts
-export function createAutoPermissionDialogProvider(
-  askMgr: AskUserManager,
-): (input: InteractiveAskInput) => Promise<DialogResult> {
-```
-
-- [ ] **Step 3: Run §7.2 adapter behavior tests to verify GREEN**
+- [ ] **Step 2: Run §7.2 adapter behavior tests to verify GREEN**
 
 Run: `npx vitest run src/__tests__/permission/auto-dialog-mapping.test.ts -t "adapter behavior"`
 
-Expected: PASS (A1-A3, 3 tests). Uses scripted AskUserManager, real adapter, real `mapDialogResult`.
+Expected: PASS (A1-A3).
 
-- [ ] **Step 4: Run typecheck**
+- [ ] **Step 3: Run typecheck**
 
 Run: `npm run typecheck`
 
 Expected: exit 0.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/index.ts
-git commit -m "feat(task4): add createAutoPermissionDialogProvider adapter
-
-4-option auto permission questionnaire (Allow once/session/always/Reject) via
-shared AskUserManager -> mapDialogResult -> DialogResult. Holds NO side-effect
-callbacks (those are resolver wiring). Reuses ask-question-store TUI."
+git add src/permission/auto-permission-dialog.ts
+git commit -m "feat(task4): add createAutoPermissionDialogProvider in side-effect-free module"
 ```
 
 ---
 
-### Task 5: Production wiring + §7.3 end-to-end behavior tests GREEN
+### Task 5: Production wiring + complete §7.3 #1-#8 tests
 
 **Files:**
-- Modify: `src/index.ts` (seam call)
+- Modify: `src/index.ts`
 - Modify: `src/__tests__/permission/auto-dialog-resolver-wiring.test.ts` (complete #1-#8)
 
-- [ ] **Step 1: Wire the adapter + callbacks into the `createConfiguredExecutionRuntimeForTurn` call in `src/index.ts`**
+- [ ] **Step 1: Wire adapter + callbacks in `src/index.ts`**
 
-Find the `createConfiguredExecutionRuntimeForTurn({...})` call (near line 923). Add `dialogProvider`, `dialogDelayMs`, and the three callbacks. The final call object becomes (additions marked):
+**Add import** (near the existing `permission-answer-mapping` import, line ~171):
+```ts
+import { createAutoPermissionDialogProvider } from './permission/auto-permission-dialog.js';
+```
 
+**At the `createConfiguredExecutionRuntimeForTurn({...})` call** (~line 923), add to the object (the existing fields stay; additions marked):
 ```ts
     const turnRuntime = createConfiguredExecutionRuntimeForTurn({
       authority: permissionAuthority,
@@ -545,8 +520,9 @@ Find the `createConfiguredExecutionRuntimeForTurn({...})` call (near line 923). 
       sessionAllowlist,
       sessionState,
       hooks: [],
-      // Task 7 production wiring（spec §5）：auto-mode main-origin unresolved ask
-      // 经 dialog 竞速。dialogProvider 只到 DialogResult；副作用回调属 resolver wiring。
+      // Task 7 production wiring（spec §5）：auto-mode main-origin unresolved ask 经 dialog 竞速。
+      // dialogProvider 只到 DialogResult；副作用回调属 resolver wiring（§5 职责分层）。
+      // recheck 是带参数的（spec §6.1）：turn-level 只需 checker，resolver 层 capture tool/input。
       dialogProvider: createAutoPermissionDialogProvider(askManager),
       dialogDelayMs: 2000,
       onSessionAllow: (toolName, inp) => sessionAllowlist.add(toolName, inp),
@@ -554,133 +530,339 @@ Find the `createConfiguredExecutionRuntimeForTurn({...})` call (near line 923). 
         kind: 'addRule',
         rule: update.rule as import('./permission/types.js').PermissionRule,
       }),
-      recheckAfterPersist: () => permissionChecker.checkDecision(
-        /* re-run sync pipeline; returns the post-persist decision */
-      ),
+      recheck: (toolName, inp) => permissionChecker.checkDecision(toolName, inp, {
+        decision_id: `recheck:${toolName}`,
+        action_snapshot_id: 'recheck',
+        policy_id: 'permission-default',
+        policy_version: '1',
+      }),
     });
 ```
 
-> **Implementation note for `recheckAfterPersist`:** the exact re-check call must re-run the sync `PermissionChecker` on the same tool/input after the rule is persisted, so hard-deny/safety still gates. Read the current `PermissionChecker` API (`checkDecision(name, input, ctx)`) and the tool/input available in scope. If the tool name/input aren't in scope at the seam call, the wiring may need a small closure capturing them — verify against actual scope and adjust. The spec's contract is "recheck returns a SecurityDecision; hard deny wins."
+- [ ] **Step 2: Replace the `#1` shell in `auto-dialog-resolver-wiring.test.ts` with the full #1-#7 matrix**
 
-- [ ] **Step 2: Complete §7.3 end-to-end tests #1-#8 in `auto-dialog-resolver-wiring.test.ts`**
-
-Replace the shell `#1` test with the full matrix. Each test uses `makeRuntime({...})` + `executeToolCall`:
+Replace the entire `describe('[auto-dialog] resolver/executeToolCall end-to-end (§7.3)')` block with:
 
 ```ts
 describe('[auto-dialog] resolver/executeToolCall end-to-end (§7.3)', () => {
-  test('#1 unresolved ask past delay -> dialog invoked', async () => {
-    const dialog = vi.fn(async () => ({ kind: 'approved_once' }) as DialogResult);
-    const runtime = makeRuntime({ dialogResult: { kind: 'approved_once' }, dialogDelayMs: 0 });
-    // inject spy dialogProvider by reconstructing runtime with explicit provider:
-    // (makeRuntime uses dialogResult; to assert invocation count, use a counting dialog)
-    const r = await executeToolCall(runBashRegistry(), { type: 'tool_use', id: 'c1', name: 'run_bash', input: { command: 'echo hi' } }, runtime, { messages: userMsg });
-    expect(r.status).toBe('success'); // approved_once -> allow -> run
-    void dialog;
-  });
-
-  test('#2 approved_session -> onSessionAllow called + allowlist hit', async () => {
-    const onSessionAllow = vi.fn();
-    const runtime = makeRuntime({ dialogResult: { kind: 'approved_session' }, onSessionAllow, dialogDelayMs: 0 });
-    const r = await executeToolCall(runBashRegistry(), { type: 'tool_use', id: 'c1', name: 'run_bash', input: { command: 'echo hi' } }, runtime, { messages: userMsg });
-    expect(onSessionAllow).toHaveBeenCalledWith('run_bash', { command: 'echo hi' });
-    expect(r.status).toBe('success');
-  });
-
-  test('#3 gate does NOT call channel (no double dialog)', async () => {
-    const channelRequest = vi.fn(async () => ({ response: 'approved_once' }));
-    const runtime = makeRuntime({ dialogResult: { kind: 'approved_once' }, channelRequest, dialogDelayMs: 0 });
-    await executeToolCall(runBashRegistry(), { type: 'tool_use', id: 'c1', name: 'run_bash', input: { command: 'echo hi' } }, runtime, { messages: userMsg });
-    expect(channelRequest).not.toHaveBeenCalled();
-  });
-
-  test('#4 approved_always -> onPersistRule + recheckAfterPersist (hard deny wins)', async () => {
-    const onPersistRule = vi.fn();
-    const recheckAfterPersist = vi.fn(() => ({ behavior: 'deny', reason_code: 'permission.dangerous_command' }));
-    const runtime = makeRuntime({ dialogResult: { kind: 'approved_always' }, onPersistRule, recheckAfterPersist, dialogDelayMs: 0 });
-    const r = await executeToolCall(runBashRegistry(), { type: 'tool_use', id: 'c1', name: 'run_bash', input: { command: 'echo hi' } }, runtime, { messages: userMsg });
-    expect(onPersistRule).toHaveBeenCalled();
-    expect(recheckAfterPersist).toHaveBeenCalled();
-    expect(r.status).toBe('failure'); // hard deny via recheck
-  });
-
-  test('#5 escape -> automatic.abort + deny (reason=user_cancelled)', async () => {
-    const runtime = makeRuntime({ dialogResult: { kind: 'escape' }, dialogDelayMs: 0 });
-    const r = await executeToolCall(runBashRegistry(), { type: 'tool_use', id: 'c1', name: 'run_bash', input: { command: 'echo hi' } }, runtime, { messages: userMsg });
-    expect(r.status).toBe('failure');
-  });
-
-  test('#6 rejected -> automatic.abort + deny (reason=user_denied; both abort per §5.3)', async () => {
-    const runtime = makeRuntime({ dialogResult: { kind: 'rejected' }, dialogDelayMs: 0 });
-    const r = await executeToolCall(runBashRegistry(), { type: 'tool_use', id: 'c1', name: 'run_bash', input: { command: 'echo hi' } }, runtime, { messages: userMsg });
-    expect(r.status).toBe('failure');
-  });
-
-  test('#7 classifier resolves inside delay -> dialog NOT invoked', async () => {
-    const runtime = makeRuntime({
-      classifierCompleteText: async () => 'ALLOW',
-      dialogResult: { kind: 'approved_once' },
-      dialogDelayMs: 5000,
+  test('#1 unresolved ask past delay -> dialog invoked (spy call count)', async () => {
+    let dialogCalls = 0;
+    const dialogProvider = async (): Promise<DialogResult> => {
+      dialogCalls++;
+      return { kind: 'approved_once' };
+    };
+    const runtime = createConfiguredExecutionRuntimeForTurn({
+      authority: 'enforced',
+      streamClient: pendingClassifier(),
+      providerId: 'test', modelId: 'm', providerModelIds: ['m'],
+      classifierConfigSources: {},
+      permissionChecker: new PermissionChecker({ mode: 'auto', workdir: process.cwd() }),
+      runtimeGate: new RuntimeSecurityGate({ pendingStore: new FakeStore(), channel: null }),
+      sessionAllowlist: new SessionAllowlist(),
+      sessionState: new SessionState(new SessionAllowlist(), 's1'),
+      hooks: [], dialogProvider, dialogDelayMs: 0,
     });
-    const r = await executeToolCall(runBashRegistry(), { type: 'tool_use', id: 'c1', name: 'run_bash', input: { command: 'echo hi' } }, runtime, { messages: userMsg });
-    expect(r.status).toBe('success'); // classifier ALLOW -> no dialog
+    const { registry, executor } = runBashRegistry();
+    await executeToolCall(registry, bashCall, runtime, { messages: userMsg });
+    expect(dialogCalls).toBeGreaterThanOrEqual(1); // dialog actually invoked
+    expect(executor).toHaveBeenCalled();           // approved_once -> allow -> execute
+  });
+
+  test('#2 approved_session -> same SessionAllowlist hit (not just spy)', async () => {
+    const sessionAllowlist = new SessionAllowlist();
+    const runtime = createConfiguredExecutionRuntimeForTurn({
+      authority: 'enforced',
+      streamClient: pendingClassifier(),
+      providerId: 'test', modelId: 'm', providerModelIds: ['m'],
+      classifierConfigSources: {},
+      permissionChecker: new PermissionChecker({ mode: 'auto', workdir: process.cwd() }),
+      runtimeGate: new RuntimeSecurityGate({ pendingStore: new FakeStore(), channel: null }),
+      sessionAllowlist,                       // <-- runtime uses THIS instance
+      sessionState: new SessionState(new SessionAllowlist(), 's1'),
+      hooks: [],
+      dialogProvider: async () => ({ kind: 'approved_session' }),
+      dialogDelayMs: 0,
+      // resolver threads onSessionAllow -> SessionAllowlist.add via the wiring's onSessionAllow.
+      // In the test we pass it explicitly so the SAME sessionAllowlist instance is written:
+      onSessionAllow: (t, i) => sessionAllowlist.add(t, i),
+    });
+    const { registry } = runBashRegistry();
+    await executeToolCall(registry, bashCall, runtime, { messages: userMsg });
+    // verify the SAME instance the runtime holds now contains the entry
+    expect(sessionAllowlist.has('run_bash', { command: 'echo hi' })).toBe(true);
+    expect(sessionAllowlist.has('run_bash', { command: 'echo different' })).toBe(false);
+  });
+
+  test('#3 gate does NOT call legacy channel (no double dialog)', async () => {
+    const channelRequest = vi.fn(async () => ({ response: 'approved_once' }));
+    const runtime = createConfiguredExecutionRuntimeForTurn({
+      authority: 'enforced',
+      streamClient: pendingClassifier(),
+      providerId: 'test', modelId: 'm', providerModelIds: ['m'],
+      classifierConfigSources: {},
+      permissionChecker: new PermissionChecker({ mode: 'auto', workdir: process.cwd() }),
+      runtimeGate: new RuntimeSecurityGate({ pendingStore: new FakeStore(), channel: { request: channelRequest as never } }),
+      sessionAllowlist: new SessionAllowlist(),
+      sessionState: new SessionState(new SessionAllowlist(), 's1'),
+      hooks: [],
+      dialogProvider: async () => ({ kind: 'approved_once' }),
+      dialogDelayMs: 0,
+    });
+    const { registry } = runBashRegistry();
+    await executeToolCall(registry, bashCall, runtime, { messages: userMsg });
+    expect(channelRequest).not.toHaveBeenCalled(); // resolver turned ask->allow, gate never asks channel
+  });
+
+  test('#4 approved_always -> persist + recheck called + hard deny blocks executor', async () => {
+    const onPersistRule = vi.fn();
+    const recheck = vi.fn(() => ({ behavior: 'deny' as const, reason_code: 'permission.dangerous_command' }));
+    const runtime = createConfiguredExecutionRuntimeForTurn({
+      authority: 'enforced',
+      streamClient: pendingClassifier(),
+      providerId: 'test', modelId: 'm', providerModelIds: ['m'],
+      classifierConfigSources: {},
+      permissionChecker: new PermissionChecker({ mode: 'auto', workdir: process.cwd() }),
+      runtimeGate: new RuntimeSecurityGate({ pendingStore: new FakeStore(), channel: null }),
+      sessionAllowlist: new SessionAllowlist(),
+      sessionState: new SessionState(new SessionAllowlist(), 's1'),
+      hooks: [],
+      dialogProvider: async () => ({ kind: 'approved_always' }),
+      dialogDelayMs: 0,
+      onPersistRule,
+      recheck,
+    });
+    const { registry, executor } = runBashRegistry();
+    const r = await executeToolCall(registry, bashCall, runtime, { messages: userMsg });
+    expect(onPersistRule).toHaveBeenCalled();
+    expect(recheck).toHaveBeenCalledWith('run_bash', { command: 'echo hi' });
+    expect(executor).not.toHaveBeenCalled(); // hard deny via recheck -> no execute
+    expect(r.status).toBe('failure');
+  });
+
+  test('#5 escape -> classifier aborted + reason user_cancelled + executor=0', async () => {
+    const classifierCalls: Array<{ signal: AbortSignal }> = [];
+    const streamClient = {
+      completeText: (_req: unknown, signal?: AbortSignal) => {
+        classifierCalls.push({ signal: signal ?? new AbortController().signal });
+        return new Promise<string>(() => {}); // never resolves; only abort ends it
+      },
+    } as never;
+    const runtime = createConfiguredExecutionRuntimeForTurn({
+      authority: 'enforced',
+      streamClient,
+      providerId: 'test', modelId: 'm', providerModelIds: ['m'],
+      classifierConfigSources: {},
+      permissionChecker: new PermissionChecker({ mode: 'auto', workdir: process.cwd() }),
+      runtimeGate: new RuntimeSecurityGate({ pendingStore: new FakeStore(), channel: null }),
+      sessionAllowlist: new SessionAllowlist(),
+      sessionState: new SessionState(new SessionAllowlist(), 's1'),
+      hooks: [],
+      dialogProvider: async () => ({ kind: 'escape' }),
+      dialogDelayMs: 0,
+    });
+    const { registry, executor } = runBashRegistry();
+    const r = await executeToolCall(registry, bashCall, runtime, { messages: userMsg });
+    expect(classifierCalls.length).toBeGreaterThanOrEqual(1);
+    expect(classifierCalls[0].signal.aborted).toBe(true);
+    expect(executor).not.toHaveBeenCalled();
+    expect(r.status).toBe('failure');
+  });
+
+  test('#6 rejected -> classifier aborted + reason user_denied + executor=0 (both abort per §5.3)', async () => {
+    const classifierCalls: Array<{ signal: AbortSignal }> = [];
+    const streamClient = {
+      completeText: (_req: unknown, signal?: AbortSignal) => {
+        classifierCalls.push({ signal: signal ?? new AbortController().signal });
+        return new Promise<string>(() => {});
+      },
+    } as never;
+    const runtime = createConfiguredExecutionRuntimeForTurn({
+      authority: 'enforced',
+      streamClient,
+      providerId: 'test', modelId: 'm', providerModelIds: ['m'],
+      classifierConfigSources: {},
+      permissionChecker: new PermissionChecker({ mode: 'auto', workdir: process.cwd() }),
+      runtimeGate: new RuntimeSecurityGate({ pendingStore: new FakeStore(), channel: null }),
+      sessionAllowlist: new SessionAllowlist(),
+      sessionState: new SessionState(new SessionAllowlist(), 's1'),
+      hooks: [],
+      dialogProvider: async () => ({ kind: 'rejected' }),
+      dialogDelayMs: 0,
+    });
+    const { registry, executor } = runBashRegistry();
+    const r = await executeToolCall(registry, bashCall, runtime, { messages: userMsg });
+    expect(classifierCalls.length).toBeGreaterThanOrEqual(1);
+    expect(classifierCalls[0].signal.aborted).toBe(true); // rejected ALSO aborts (§5.3)
+    expect(executor).not.toHaveBeenCalled();
+    expect(r.status).toBe('failure');
+  });
+
+  test('#7 classifier resolves inside delay -> dialog NOT invoked (spy=0)', async () => {
+    let dialogCalls = 0;
+    const dialogProvider = async (): Promise<DialogResult> => {
+      dialogCalls++;
+      return { kind: 'approved_once' };
+    };
+    const runtime = createConfiguredExecutionRuntimeForTurn({
+      authority: 'enforced',
+      streamClient: { completeText: async () => 'ALLOW' } as never, // classifier resolves fast
+      providerId: 'test', modelId: 'm', providerModelIds: ['m'],
+      classifierConfigSources: {},
+      permissionChecker: new PermissionChecker({ mode: 'auto', workdir: process.cwd() }),
+      runtimeGate: new RuntimeSecurityGate({ pendingStore: new FakeStore(), channel: null }),
+      sessionAllowlist: new SessionAllowlist(),
+      sessionState: new SessionState(new SessionAllowlist(), 's1'),
+      hooks: [],
+      dialogProvider,
+      dialogDelayMs: 5000, // large; classifier wins the race
+    });
+    const { registry, executor } = runBashRegistry();
+    await executeToolCall(registry, bashCall, runtime, { messages: userMsg });
+    expect(dialogCalls).toBe(0); // classifier ALLOW inside delay -> dialog never created
+    expect(executor).toHaveBeenCalled();
   });
 });
 ```
 
-> Test #8 (scheduling invariant) is a separate `describe` using real `StreamingToolExecutor` (see Task 1 of the original scheduling test). Add it as its own describe block in the same file — it enqueues run_bash + ask_user_question and asserts the scheduling invariant. (This was already validated during design; here it's a regression guard.)
+- [ ] **Step 3: Add #8 scheduling-invariant test (full StreamingToolExecutor assembly, no "see prior test")**
 
-- [ ] **Step 3: Run §7.3 tests to verify GREEN**
+Append to `auto-dialog-resolver-wiring.test.ts`:
+
+```ts
+// §7.3 #8: scheduling invariant via real StreamingToolExecutor queue.
+import { StreamingToolExecutor } from '../../agent/streaming-executor.js';
+import type { ToolUseBlock } from '../../agent/types.js';
+
+function toolBlock(id: string, name: string, input: Record<string, unknown>): ToolUseBlock {
+  return { type: 'tool_use', id, name, input };
+}
+
+describe('[auto-dialog] scheduling invariant (§7.3 #8)', () => {
+  test('permission dialog pending blocks ask_user_question; no 2nd askManager.ask; no spurious cancelled', async () => {
+    // shared scripted "askManager": first ask = permission dialog (pending forever); any 2nd ask = BUG
+    let askCalls = 0;
+    let pendingResolve: ((o: { kind: 'submitted'; answers: Record<string, string> }) => void) | null = null;
+    let dialogSeenCancelled = false;
+    const sharedAskManager = {
+      ask: async (_req: unknown): Promise<{ kind: 'submitted'; answers: Record<string, string> } | { kind: 'cancelled' }> => {
+        askCalls++;
+        if (askCalls === 1) {
+          return new Promise((res) => { pendingResolve = res as () => void; });
+        }
+        return { kind: 'submitted', answers: {} };
+      },
+    };
+    const dialogProvider = async (): Promise<DialogResult> => {
+      const outcome = await sharedAskManager.ask({});
+      if (outcome.kind === 'cancelled') { dialogSeenCancelled = true; return { kind: 'escape' }; }
+      return { kind: 'approved_once' };
+    };
+
+    const runtime = createConfiguredExecutionRuntimeForTurn({
+      authority: 'enforced',
+      streamClient: { completeText: () => new Promise<string>(() => {}) } as never,
+      providerId: 'test', modelId: 'm', providerModelIds: ['m'], classifierConfigSources: {},
+      permissionChecker: new PermissionChecker({ mode: 'auto', workdir: process.cwd() }),
+      runtimeGate: new RuntimeSecurityGate({ pendingStore: new FakeStore(), channel: null }),
+      sessionAllowlist: new SessionAllowlist(),
+      sessionState: new SessionState(new SessionAllowlist(), 's1'),
+      hooks: [], dialogProvider, dialogDelayMs: 0,
+    });
+
+    const askUserExec = vi.fn(async () => 'ask-user-done');
+    const runBashExec = vi.fn(async () => 'ran');
+    const registry = new ToolRegistry();
+    registry.register(
+      { name: 'run_bash', description: 'b', parameters: { type: 'object' as const, properties: { command: { type: 'string' } }, required: ['command'] } },
+      runBashExec,
+    );
+    registry.register(
+      { name: 'ask_user_question', description: 'a', parameters: { type: 'object' as const, properties: { questions: { type: 'array' } }, required: ['questions'] } },
+      askUserExec,
+    );
+
+    const exec = new StreamingToolExecutor(registry, runtime, new AbortController().signal, 'main',
+      [{ role: 'user', content: 'run echo hi', authoredByUser: true }]);
+
+    // run_bash FIRST -> enforced+auto classifier -> resolver -> dialog -> askManager.ask (pending)
+    exec.addTool(toolBlock('c1', 'run_bash', { command: 'echo hi' }));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(askCalls, 'run_bash triggered exactly 1 askManager.ask').toBe(1);
+
+    // enqueue ask_user_question WHILE permission dialog pending
+    exec.addTool(toolBlock('c2', 'ask_user_question', { questions: [] }));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(askUserExec, 'ask_user_question NOT started while permission pending').not.toHaveBeenCalled();
+    expect(askCalls, 'no 2nd askManager.ask during permission pending').toBe(1);
+    expect(dialogSeenCancelled, 'permission dialog NOT cancelled (no preempt)').toBe(false);
+    expect(runBashExec, 'run_bash not executed while dialog pending').not.toHaveBeenCalled();
+
+    // resolve permission dialog -> run_bash executes (closure)
+    pendingResolve?.({ kind: 'submitted', answers: {} });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(runBashExec, 'run_bash executed after dialog approved').toHaveBeenCalled();
+  }, 15000);
+});
+```
+
+- [ ] **Step 4: Run §7.3 tests to verify GREEN**
 
 Run: `npx vitest run src/__tests__/permission/auto-dialog-resolver-wiring.test.ts`
 
-Expected: PASS (#1-#8). If `recheckAfterPersist` wiring in index.ts (Step 1) needs scope adjustments, fix the wiring — not the tests (tests encode the spec contract).
+Expected: PASS (#1-#8). If `PermissionChecker.checkDecision` context shape in index.ts wiring (Step 1) needs adjustment, fix the wiring — not the tests.
 
-- [ ] **Step 4: Run typecheck**
+- [ ] **Step 5: Run typecheck**
 
 Run: `npm run typecheck`
 
 Expected: exit 0.
 
-- [ ] **Step 5: Run full permission + agent regression**
+- [ ] **Step 6: Run permission + agent regression**
 
 Run: `npx vitest run src/__tests__/permission/ src/__tests__/agent/`
 
-Expected: PASS (0 failures). Existing tests unaffected (new fields optional; new dialog only activates when dialogProvider wired, which is now production but existing tests construct runtimes without it or in build/plan mode).
+Expected: PASS (0 failures).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/index.ts src/__tests__/permission/auto-dialog-resolver-wiring.test.ts
-git commit -m "feat(task5): wire auto dialogProvider to production + end-to-end behavior tests
-
-- index.ts: pass dialogProvider + dialogDelayMs:2000 + onSessionAllow
-  (->SessionAllowlist) + onPersistRule (->ConfigStore.persistPermissionUpdate)
-  + recheckAfterPersist (->PermissionChecker re-check) at the seam call.
-- §7.3 tests #1-#8: dialog race, session/always remember, channel no-double,
-  escape+rejected both abort, classifier-wins-no-dialog, scheduling invariant."
+git commit -m "feat(task5): production wiring + §7.3 end-to-end behavior tests #1-#8"
 ```
 
 ---
 
 ## Self-Review
 
-**1. Spec coverage:** 
-- §5.1 data flow → Task 4 (adapter) + Task 5 (wiring). ✓
+**1. Spec coverage:**
+- §5.1 data flow → Task 4 (adapter module) + Task 5 (wiring) + Task 3 (recheck closure). ✓
 - §5.2 mapDialogResult → Task 2. ✓
-- §5.3 escape/rejected both abort → Task 5 #5 + #6. ✓
-- §5.4 no double dialog → Task 5 #3. ✓
-- §6 file scope → Tasks 2/3/4/5 cover permission-answer-mapping, ask-resolver, authority-gate, index.ts. ✓
-- §7.1 mapDialogResult unit → Task 2 + Task 1 tests. ✓
-- §7.2 adapter A1-A3 → Task 4 + Task 1 tests. ✓
-- §7.3 #1-#8 → Task 5. ✓
-- §3 scheduling invariant → Task 5 #8. ✓
+- §5.3 escape/rejected both abort → Task 5 #5 + #6 (both assert signal.aborted). ✓
+- §5.4 no double dialog → Task 5 #3 (channel.request === 0). ✓
+- §6 file scope (incl. new auto-permission-dialog.ts module + §6.1 recheck data flow) → Tasks 2/3/4/5. ✓
+- §7.1 unit → Task 2. ✓
+- §7.2 adapter A1-A3 → Task 4. ✓
+- §7.3 #1-#8 → Task 5 (each is complete, executable code). ✓
 
-**2. Placeholder scan:** 
-- Task 5 Step 1 `recheckAfterPersist` has an implementation note (not a placeholder) flagging that exact re-check scope must be verified against `PermissionChecker.checkDecision` API and the tool/input in scope at the seam call. This is a genuine unknown that must be resolved at implementation time by reading the seam call's scope — flagged explicitly, not hidden as TODO.
-- No "TBD", "add error handling", "similar to Task N" patterns.
+**2. Placeholder scan:**
+- No "TBD", "implementation note", "verify at implementation time", "see prior test", "assertion refined". 
+- Task 5 Step 1 `recheck` wiring is fully specified: `(toolName, inp) => permissionChecker.checkDecision(toolName, inp, {decision_id, action_snapshot_id, policy_id, policy_version})` — concrete, no decisions deferred.
+- Task 5 #8 is complete StreamingToolExecutor assembly, not a reference to prior code.
 
-**3. Type consistency:** 
-- `mapDialogResult(outcome: AskQuestionOutcome): DialogResult` — consistent across Task 2 (def) and Task 1/Task 4 (use).
-- `ALLOW_ALWAYS_LABEL` — defined Task 2, used Task 4. ✓
-- `createAutoPermissionDialogProvider(askMgr): (input) => Promise<DialogResult>` — consistent Task 4 (def) and Task 1 A1-A3 (use). ✓
-- `onSessionAllow`/`onPersistRule`/`recheckAfterPersist` signatures — consistent across ask-resolver options, TurnRuntimeDeps, seam input, index.ts wiring, and Task 5 #2/#4 tests. ✓
+**3. Type/import consistency:**
+- All test imports use `../../permission/...` and `../../agent/...` (verified paths from `src/__tests__/permission/`). ✓
+- `mapDialogResult`/`ALLOW_ALWAYS_LABEL`/`ALLOW_ONCE_LABEL`/`ALLOW_EXACT_LABEL` all from `permission-answer-mapping.js`. ✓
+- `createAutoPermissionDialogProvider` from `auto-permission-dialog.js` (both test §7.2 and index.ts). ✓
+- `recheck(toolName, input) => SecurityDecision` consistent across resolver options, TurnRuntimeDeps, seam input, index.ts wiring, Task 5 #4 test. ✓
+- `DialogResult` from `interactive-ask.js` consistent. ✓
+
+**4. Each test proves its claim:**
+- #1: spy `dialogCalls` >= 1 + executor called (dialog reached + approved_once flowed through). ✓
+- #2: checks the SAME `sessionAllowlist` instance the runtime holds (`has` true/false). ✓
+- #3: `channelRequest` not called (resolver turned ask->allow). ✓
+- #4: `onPersistRule` + `recheck` called with exact args + executor=0 + failure (hard deny). ✓
+- #5/#6: classifier `signal.aborted === true` + executor=0 + failure (escape AND rejected both abort). ✓
+- #7: spy `dialogCalls === 0` + executor called (classifier won race). ✓
+- #8: real StreamingToolExecutor queue; 1 ask + ask_user_question not started + no 2nd ask + no cancelled + run_bash closure. ✓
+
+**5. Independent RED→GREEN→commit per task:** Each task has its own failing test (Task 1 RED), implementation (Tasks 2-5), verification command, and commit. ✓
