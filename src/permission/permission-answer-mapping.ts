@@ -2,6 +2,7 @@
 // 物理本质:柜台三按钮,只有前两个能放行,其余一律视为拒绝。
 // 关键安全不变量:Reject / unknown / empty / 非 submitted 绝不映射成 approved_once。
 import { SECURITY_PROTOCOL_VERSION, type UserDecision } from './decisions.js';
+import type { DialogResult } from './interactive-ask.js';
 import type { AskQuestionOutcome } from '../agent/ask-user-types.js';
 
 /** 两个放行选项的文案常量(单一真相源)。
@@ -40,4 +41,22 @@ export function mapPermissionAnswerToUserDecision(
   }
   // Reject / unknown → rejected(绝不 approved_once)
   return { ...base, response: 'rejected' };
+}
+
+/** auto permission dialog 第三个放行选项文案（always-allow，持久化）。 */
+export const ALLOW_ALWAYS_LABEL = 'Always allow';
+
+/**
+ * auto permission dialog 问卷 outcome → DialogResult（spec §5.2 adapter 边界）。
+ * 纯函数：只做映射，不触发副作用。cancelled→escape 安全性见 spec §3 / §7.3 #8。
+ */
+export function mapDialogResult(outcome: AskQuestionOutcome): DialogResult {
+  if (outcome.kind !== 'submitted') {
+    return outcome.kind === 'cancelled' ? { kind: 'escape' } : { kind: 'rejected' };
+  }
+  const answer = Object.values(outcome.answers)[0];
+  if (answer === ALLOW_ONCE_LABEL) return { kind: 'approved_once' };
+  if (answer === ALLOW_EXACT_LABEL) return { kind: 'approved_session' };
+  if (answer === ALLOW_ALWAYS_LABEL) return { kind: 'approved_always' };
+  return { kind: 'rejected' };
 }
