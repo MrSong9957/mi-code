@@ -270,7 +270,8 @@ ask-question store、4 处 setText 调用方、5 处只读 `.text` 判断。
 | 短 paste 直显 | `insertPaste('shortpastedtext')`，backspace 一次 → `text=''` |
 | 多行占位符 | `insertPaste(storePastedContent('a\nb\nc'))`，backspace 一次 → `text=''` |
 | 手敲回归 | 手敲 a/b/c，逐次 backspace → `ab`→`a`→`''`（未被误伤） |
-| 非 BMP 坐标闭合 | `text='𝄞'`（1 code point / 2 UTF-16 unit）后 `insertPaste('X')`，backspace 一次删 X，再 backspace 一次删 𝄞（验证整段删用 code point 坐标） |
+| 非 BMP 坐标闭合（防假阳性） | `insertPaste('𝄞')`（U+1D11E，1 code point / 2 UTF-16 unit）→ `insertPaste('X')`，**立即断言** `text === '𝄞X'` 且 `cursor === 2`（直接捕获 UTF-16 surrogate 被拆又恢复的假阳性：若坐标错则 text 乱码或 cursor=3）；随后 backspace 一次删 X（`text === '𝄞'`, `cursor === 1`），再 backspace 一次删 𝄞（`text === ''`） |
+| 前方插入右移（正 delta） | `insertPaste('AAA')`，moveCursorTo(0)，`insert('x')` → 断言 `text === 'xAAA'`；moveCursorToEnd，backspace 一次 → 断言 `text === 'x'`（证明 range 随前方插入右移，end 仍命中 cursor，覆盖 reconcileRanges 的正 delta） |
 
 ## 10. 验收方案
 
