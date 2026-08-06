@@ -139,9 +139,11 @@ auto, main-origin, checker=ask → executeToolCall(line 466)
   → askResolver.resolve → resolveByClassifier（构造 PendingAutomaticDecision）
   → resolveInteractiveAsk({
       automatic,                                  // resolver 构造
-      dialog: createAutoPermissionDialogProvider(askManager),  // 只到 DialogResult
+      dialog: createAutoPermissionDialogProvider(askManager),  // 只到 DialogResult（来自 auto-permission-dialog.ts）
       dialogDelayMs: 2000,                        // resolver wiring
-      onSessionAllow, onPersistRule, recheckAfterPersist  // resolver wiring（副作用回调）
+      onSessionAllow, onPersistRule,              // resolver wiring（透传）
+      recheckAfterPersist: () => recheck(tool, input)  // resolver 层 closure：tool/input 来自 request.executableToolCall（§6.1）
+    })
     })
        ├─ classifier 在 2s 内完成 → 返回 classifier 结果（dialog 不创建）
        └─ 超 2s → dialogProvider 调 askManager.ask（4 选项问卷）→ AskQuestionOutcome
@@ -193,7 +195,7 @@ auto 模式 ask **先进 resolver**（executeToolCall line 466：askResolver 存
 
 ## 6. 最小文件改动范围
 
-职责分层决定改动分布：dialogProvider（只到 DialogResult）与副作用回调（resolver wiring）解耦。
+职责分层决定改动分布：dialogProvider（只到 DialogResult，独立模块）与副作用回调（resolver wiring，recheck 在 resolver 层 capture tool/input）解耦。
 
 | 文件 | 改动 | 性质 |
 |---|---|---|
@@ -201,15 +203,29 @@ auto 模式 ask **先进 resolver**（executeToolCall line 466：askResolver 存
 | `src/agent/ask-user-types.ts` | **不改** | 不新增 escaped 变体 |
 | `src/tui/state/ask-question-store.ts` | **不改** | 不新增 escape action |
 | `src/tui/input/use-input-handler.ts` | **不改** | ESC 仍走 cancel() |
-| `src/permission/permission-answer-mapping.ts` | **新增** `mapDialogResult(outcome)`：`AskQuestionOutcome → DialogResult`（纯函数，含 cancelled→escape）。**只做映射，不触发副作用**。 | 新增 |
-| `src/permission/ask-resolver.ts` | **改**：`DefaultPermissionAskResolverOptions` 增加 `onSessionAllow`/`onPersistRule`/`recheckAfterPersist` 字段；`resolveByClassifier` 调 `resolveInteractiveAsk` 时透传这三个回调（当前 line 249-253 只传 automatic/dialog/dialogDelayMs，**回调缺失**）。 | 扩展（透传） |
-| `src/permission/authority-gate.ts` | **改**：`createConfiguredExecutionRuntimeForTurn` 的 input 增加 `onSessionAllow`/`onPersistRule`/`recheckAfterPersist`，透传给 `DefaultPermissionAskResolver` 构造。（dialogProvider + dialogDelayMs 字段已存在。） | 扩展（透传） |
-| `src/index.ts` | (a) 新增 `createAutoPermissionDialogProvider(askManager)`：`InteractiveAskInput` → 4 选项问卷 → `askManager.ask` → `mapDialogResult` → `DialogResult`。**只产 dialog 函数，不持有副作用回调**；(b) `createConfiguredExecutionRuntimeForTurn` 调用处传 `dialogProvider` + `dialogDelayMs: 2000` + `onSessionAllow`（→SessionAllowlist）/`onPersistRule`（→ConfigStore.persistPermissionUpdate）/`recheckAfterPersist`（→checker 重检）。 | 新增 adapter + wiring |
-| `src/__tests__/permission/`（新增测试文件） | 行为验收矩阵（§7） | 新增 |
+| `src/permission/permission-answer-mapping.ts` | **新增** `mapDialogResult(outcome)` + `ALLOW_ALWAYS_LABEL`：`AskQuestionOutcome → DialogResult`（纯函数，含 cancelled→escape）。**只做映射，不触发副作用**。 | 新增 |
+| `src/permission/auto-permission-dialog.ts` | **新建**：`createAutoPermissionDialogProvider(askMgr)` → `(InteractiveAskInput) => Promise<DialogResult>`。side-effect-free、职责单一（只产 dialog 函数）。**不放 index.ts**：index.ts 是带 shebang 的 CLI 入口，顶层有 `new AskUserManager`/`new RuntimeSecurityGate`/`bootstrap` 等 TUI 副作用，且无 main guard；测试 import 它会触发副作用。现有惯例：测试从不 import index.ts。adapter 依赖 `AskUserManager`（agent 层，permission→agent 是既有依赖模式，非新循环）+ `mapDialogResult`。 | 新建模块 |
+| `src/permission/ask-resolver.ts` | **改**：(a) `DefaultPermissionAskResolverOptions` 增加 `onSessionAllow` / `onPersistRule` / `recheck`（注意：是 `recheck(toolName,input) => SecurityDecision`，**带参数**，不是无参数 `recheckAfterPersist`——见 §6.1）；(b) `resolveByClassifier` 调 `resolveInteractiveAsk` 时透传 `onSessionAllow`/`onPersistRule`，并为当前 interaction 构造 `recheckAfterPersist = () => recheck(tool, input)` closure（此处有 `request.executableToolCall`，是唯一能 capture tool/input 的层）。 | 扩展（透传 + closure） |
+| `src/permission/authority-gate.ts` | **改**：`createConfiguredExecutionRuntimeForTurn` 的 input 增加 `onSessionAllow` / `onPersistRule` / `recheck`，透传给 resolver 构造。（dialogProvider + dialogDelayMs 字段已存在。） | 扩展（透传） |
+| `src/index.ts` | (a) `import { createAutoPermissionDialogProvider } from './permission/auto-permission-dialog.js'`；(b) seam 调用处传 `dialogProvider: createAutoPermissionDialogProvider(askManager)` + `dialogDelayMs: 2000` + `onSessionAllow`（→SessionAllowlist.add）+ `onPersistRule`（→ConfigStore.persistPermissionUpdate）+ `recheck`（→`(tool,input) => permissionChecker.checkDecision(tool, input, ctx)`）。**turn-level wiring 只需 checker，不需 tool/input**（后者由 resolver 层在 resolveByClassifier capture）。 | 新增 import + wiring |
+| `src/__tests__/permission/auto-dialog-mapping.test.ts` | §7.1 mapDialogResult 单测 + §7.2 adapter 行为测试 | 新建 |
+| `src/__tests__/permission/auto-dialog-resolver-wiring.test.ts` | §7.3 resolver/executeToolCall 端到端 #1-#8 | 新建 |
 
 **TUI 层零改动**。`interactive-ask.ts` 零改动。
 
-> 关键发现：当前 `DefaultPermissionAskResolver.resolveByClassifier`（`ask-resolver.ts:249-253`）调 `resolveInteractiveAsk` 时**未透传** onSessionAllow/onPersistRule/recheckAfterPersist，且其 options 类型（`DefaultPermissionAskResolverOptions`）也**没有这三个字段**。因此接线必须扩展 resolver + seam 的透传链路，否则 `approved_session`/`approved_always` 即使 dialog 返回正确 DialogResult，副作用也不会发生。
+### 6.1 recheckAfterPersist 的数据流（确定，不留实现时决定）
+
+**问题**：`recheckAfterPersist` 需用"当前 tool/input"重新过同步 checker。但 turn-level wiring（index.ts 的 seam 调用）在 turn 启动时构造 runtime，**此时还没有具体 tool call**，无法 capture tool/input。
+
+**解**：把重检能力建模为**带参数的 resolver option** `recheck(toolName, input) => SecurityDecision`，由 index.ts wiring 提供（只需 `permissionChecker`，不需 tool/input）；在 `resolveByClassifier`（有 `request.executableToolCall`）为当前 interaction 构造无参数 closure `() => recheck(tool, input)` 传给 `resolveInteractiveAsk.recheckAfterPersist`。
+
+**函数签名（最终确定）：**
+- resolver option：`recheck?: (toolName: string, input: Record<string, unknown>) => SecurityDecision`
+- resolveInteractiveAsk 仍接收无参数 `recheckAfterPersist?: () => SecurityDecision`（不改 interactive-ask.ts）。
+- resolver 内构造：`recheckAfterPersist: () => this.recheck(request.executableToolCall.canonicalToolName, request.executableToolCall.input)`
+- index.ts wiring：`recheck: (toolName, input) => permissionChecker.checkDecision(toolName, input, { decision_id: 'recheck', action_snapshot_id: 'recheck', policy_id: 'permission-default', policy_version: '1' })`
+
+**数据来源**：tool/input 来自 `request.executableToolCall`（resolver 层，line 223），checker 来自 turn-level wiring。两者在 resolver 的 `resolveByClassifier` 交汇，closure 在此层 capture。
 
 ---
 
