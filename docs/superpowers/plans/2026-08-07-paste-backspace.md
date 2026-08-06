@@ -628,9 +628,17 @@ git commit -m "feat(task4): deleteForward via spliceCodePoints + reconcileRanges
 
 ---
 
-## Task 5: deleteToLineStart 走 code-point 坐标 + reconcileRanges（修正 off-by-one）
+## Task 5: deleteToLineStart 走 code-point 坐标 + reconcileRanges
 
-**目标**：Ctrl+U 原语统一走 code-point 坐标 + range 同步。**关键修正**：非首行行首分支的删除区间为 `[lastNl, lineEnd)`（含前导 `\n` + 本行内容，**不含** lineEnd 处的 `\n`），让上一行与下一行保留一个 `\n` 分隔；仅"首行行首 + 存在下一 `\n`"分支删 `[0, lineEnd+1)`（吃掉首行 + 它的 `\n`）。
+**目标**：Ctrl+U 原语统一走 code-point 坐标 + range 同步。**严格保持既有 Ctrl+U 用户语义不变**（当前实现已是既定行为，本次不改变它；若该行为本身有问题，另开 issue）。
+
+本次只修两类一致性问题：
+- **坐标一致性**：现有 `slice(cursor)` / `indexOf` / `lastIndexOf` 是 UTF-16 坐标，重写为基于 `[...text]` 的 code-point 坐标，使删除位置与 reconcileRanges 的 `editStart`/`deletedLen` 同坐标系（非 BMP 字符场景下不再分叉）。
+- **range 同步一致性**：给所有分支加 reconcileRanges 调用，并修复"最后一行删整行时 `lineEnd + 1 > chars.length` 导致实际删除长度与 reconcileRanges 的 `deletedLen` 不一致"的 off-by-one（用 `delEnd = 有下一\n ? lineEnd+1 : chars.length` 统一）。
+
+非首行行首分支的删除区间（保持现有语义）：
+- 存在下一 `\n`：`[lastNl, lineEnd+1)` —— 含前导 `\n` + 本行内容 + lineEnd 处的 `\n`，即上一行与下一行直接相连（`'abc\ndef\nghi'` cursor=4 → `'abcghi'`，与当前实现一致）。
+- 不存在下一 `\n`（最后一行）：`[lastNl, chars.length)` —— 含前导 `\n` + 本行全部内容到文本末尾。
 
 **Files:**
 - Modify: `src/tui/state/input-store.ts`
@@ -664,21 +672,21 @@ describe('deleteToLineStart（code-point 坐标 + range 同步 + off-by-one 修�
     expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
   });
 
-  it('非首行中间行：删 [lastNl, lineEnd)，保留下一行前的换行', () => {
+  it('非首行中间行：保持现有 Ctrl+U 语义（删 [lastNl, lineEnd+1)，上一行与下一行相连）', () => {
     // 'abc\ndef\nghi'，cursor=4（第二行行首 d 之前），lineStart=4==cursor → 走"行首删整行"分支
     // lastNl=3, 下一 \n 在 index 7 → lineEnd=7
-    // 正确删除区间 [3,7) = '\ndef'，结果 'abc\nghi'
+    // 删除区间 [3, 7+1) = [3,8) = '\ndef\n'，结果 'abcghi'（保持当前实现语义）
     const store = createInputStore();
     store.getState().insert('abc\ndef\nghi');
     store.getState().moveCursorTo(4);
     store.getState().deleteToLineStart();
-    expect(store.getState().text).toBe('abc\nghi'); // 不是 'abcghi'！
+    expect(store.getState().text).toBe('abcghi'); // 锁定现有行为
     expect(store.getState().cursor).toBe(3);
   });
 
-  it('非首行最后一行行首删整行：删到末尾，无越界', () => {
-    // 'XYZ\ndef'，cursor=4（第二行行首），lastNl=3，无下一 \n → lineEnd=7=chars.length
-    // 删 [3,7) = '\ndef'，结果 'XYZ'，deletedLen=4
+  it('非首行最后一行行首删整行：删到末尾，deletedLen=4 不越界', () => {
+    // 'XYZ\ndef'，cursor=4（第二行行首），lastNl=3，无下一 \n → delEnd=chars.length=7
+    // 删 [3,7) = '\ndef'，结果 'XYZ'，deletedLen=4（delEnd-lastNl = 7-3）
     const store = createInputStore();
     store.getState().insert('XYZ\ndef');
     store.getState().moveCursorTo(4);
@@ -687,17 +695,43 @@ describe('deleteToLineStart（code-point 坐标 + range 同步 + off-by-one 修�
     expect(store.getState().cursor).toBe(3);
   });
 
-  it('非首行中间行：后方 paste range 左移 deletedLen', () => {
-    // 构造：'A\nBC\n[PASTED]'，cursor 在第二行行首删整行，验证第三行的 paste range 平移
+  it('非首行最后一行：后方 paste range 按真实 deletedLen 平移，不多移 1', () => {
+    // 关键 off-by-one 防护：旧实现的 lineEnd+1 在最后一行会超出 chars.length，
+    // 若 reconcileRanges 用 lineEnd+1-lastNl 作 deletedLen 会比实际多 1，导致 range 多移。
+    // 构造：'A\nBC\ndef'，cursor=2（第二行 BC 行首），删第二行 → 上一行 'A' 与 'def' 相连。
+    // 但要 paste range 在后方，需 paste 在被删行之后。
+    // 构造：'A\nBC\ndefXYZ'，其中 XYZ 是 paste；cursor 在第二行行首删第二行。
     const store = createInputStore();
-    store.getState().insert('A\nBC\n');    // text='A\nBC\n', cursor=5
-    store.getState().insertPaste('XYZ');   // range {5,8}
-    store.getState().moveCursorTo(2);      // 第二行行首（BC 的 B 之前，index 2）
-    // lastNl=1（第一个 \n），下一 \n 在 index 4 → lineEnd=4
-    // 删 [1,4) = '\nBC'，deletedLen=3；range {5,8} 后方 → 左移 3 → {2,5}
+    store.getState().insert('A\nBC\ndef');  // text='A\nBC\ndef', cursor=8
+    store.getState().insertPaste('XYZ');    // range {8,11}, cursor=11
+    store.getState().moveCursorTo(2);       // 第二行 BC 行首（index 2）
+    // lastNl=1（第一个 \n），无下一 \n → delEnd=chars.length=11
+    // 删 [1,11) = '\nBC\ndefXYZ'？不对——删到末尾会把 XYZ 也删了。重新构造。
+    store.clear();
+    // 改：被删行后面还有换行 + paste 行
+    store.getState().insert('A\nBC\n');     // text='A\nBC\n', cursor=5
+    store.getState().insertPaste('XYZ');    // range {5,8}, cursor=8
+    store.getState().moveCursorTo(2);       // 第二行 BC 行首（index 2）
+    // lastNl=1，下一 \n 在 index 4 → lineEnd=4 → delEnd=4+1=5
+    // 删 [1,5) = '\nBC\n'，deletedLen=4；range {5,8} 后方 → 左移 4 → {1,4}
     store.getState().deleteToLineStart();
-    expect(store.getState().text).toBe('A\nXYZ');
-    expect(store.getState().pasteRanges).toEqual([{ start: 2, end: 5 }]);
+    expect(store.getState().text).toBe('AXYZ');
+    expect(store.getState().pasteRanges).toEqual([{ start: 1, end: 4 }]); // 左移 4，不是 5
+  });
+
+  it('非首行最后一行（无下一 \\n）：被删区间触及后方 paste range → 失效', () => {
+    // 此场景 paste 紧贴被删行后方（无 \n 分隔），删整行会连 paste 一起触及 → range 失效。
+    // 验证 delEnd=chars.length 不越界、触及判定正确。
+    const store = createInputStore();
+    store.getState().insert('A\nBC');       // text='A\nBC', cursor=4
+    store.getState().insertPaste('XYZ');    // 紧贴后方插，range {4,7}，text='A\nBCXYZ'
+    store.getState().moveCursorTo(2);       // 第二行 BC 行首（index 2）
+    // cursor=2, lastNl=1, lineStart=2==cursor → 行首删整行分支
+    // 无下一 \n → lineEnd=chars.length=7 → delEnd=7
+    // 删 [1,7) = '\nBCXYZ'，deletedLen=6；range {4,7} 触及（editStart=1 < end=7 且 editEnd=7 > start=4）→ 丢弃
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('A');
+    expect(store.getState().pasteRanges).toEqual([]); // range 被删区间触及，失效
   });
 
   it('首行行首 + 存在下一 \\n：删 [0, lineEnd+1) 吃掉首行+换行', () => {
@@ -738,27 +772,27 @@ describe('deleteToLineStart（code-point 坐标 + range 同步 + off-by-one 修�
 - [ ] **Step 2: 运行测试确认失败**
 
 Run: `npx vitest run src/__tests__/tui/input-store.test.ts`
-Expected: FAIL — 当前 deleteToLineStart 用 UTF-16 `slice` 且删 `[lastNl, lineEnd+1)`：
-- "非首行中间行"测试会得到 `'abcghi'`（多吃一个 `\n`）而非 `'abc\nghi'`；
-- deleteToLineStart 后 pasteRanges 未同步（仍是 Task 1 建的 range）。
+Expected: FAIL — 当前 deleteToLineStart 不维护 pasteRanges（仅改 text/cursor）：
+- "删光标到行首，触及 range → 失效"：文本断言通过，但 `pasteRanges` 仍是 Task 1 建的 `[{start:0,end:5}]`，未清空 → 断言 `toEqual([])` 失败。
+- "range 在被删区间前方：不变"：文本通过，但 `pasteRanges` 断言失败（未同步或仍为原值）。
+- "非首行中间行" / "最后一行"：文本断言**通过**（当前实现的文本结果本就是 `'abcghi'`/`'XYZ'`，与锁定现有行为的期望一致），失败点在 `pasteRanges` 断言或"后方 paste range 左移"场景的 range 平移。
+- "非首行最后一行：后方 paste range 按真实 deletedLen 平移"：当前实现若有 off-by-one（lineEnd+1 > chars.length）会导致 range 多移，本测试锁定 deletedLen 正确。
 
-- [ ] **Step 3: 重写 deleteToLineStart（code-point 坐标 + 修正 off-by-one）**
+注意：部分测试的文本断言在当前代码下可能通过（因为保持现有语义），这正常——RED 的有效失败点是 pasteRanges 断言。只要 describe 块整体有测试失败即满足 RED。
+
+- [ ] **Step 3: 重写 deleteToLineStart（code-point 坐标 + 修复最后一行 off-by-one，保持现有 Ctrl+U 语义）**
 
 在 `src/tui/state/input-store.ts` 替换整个 `deleteToLineStart`（L126-150）：
 
 ```ts
     deleteToLineStart: () => set((s) => {
       // Unix 行编辑语义（Ctrl+U）：删光标到行首；光标已在行首时删整行（含前导 \n）。
-      //
-      // 全程 code-point 坐标：用 [...text] 数组做 \n 查找，实际删除走 spliceCodePoints，
-      // 使 editStart/deletedLen 与 reconcileRanges 同坐标系。
-      //
-      // 删除区间（off-by-one 修正后）：
-      //   - 光标不在行首：删 [lineStart, cursor)
-      //   - 首行行首 + 存在下一 \n：删 [0, lineEnd+1)（吃掉首行 + 它的 \n）
-      //   - 首行行首 + 无下一 \n：删 [0, chars.length)（整段全删）
-      //   - 非首行行首：删 [lastNl, lineEnd)（前导 \n + 本行内容，不含 lineEnd 处的 \n，
-      //     保留上一行与下一行之间的换行）
+      // 保持当前实现的既有用户语义不变，仅做两类一致性修复：
+      //   (1) 坐标：UTF-16 slice/indexOf → code-point 坐标（[...text] + spliceCodePoints）
+      //   (2) range 同步：所有分支加 reconcileRanges，并用
+      //       delEnd = 有下一\n ? lineEnd+1 : chars.length
+      //       统一删除终点，修复"最后一行 lineEnd+1 > chars.length 导致实际删除长度
+      //       与 reconcileRanges deletedLen 不一致"的 off-by-one。
       const chars = [...s.text];
       // 在 cursor 之前的 code points 里找最后一个 \n
       let lastNl = -1;
@@ -783,8 +817,10 @@ Expected: FAIL — 当前 deleteToLineStart 用 UTF-16 `slice` 且删 `[lastNl, 
         if (chars[i] === '\n') { nextNlInRest = i; break; }
       }
       const lineEnd = nextNlInRest === -1 ? chars.length : nextNlInRest;
+      // 统一删除终点：有下一 \n 时多删一个 \n（保持现有语义），无下一 \n 时到文本末尾
+      const delEnd = nextNlInRest === -1 ? chars.length : lineEnd + 1;
       if (s.cursor === 0) {
-        // 首行行首：删第一行内容。若后面还有 \n，吃掉首行 + 它的 \n。
+        // 首行行首：删 [0, delEnd)（首行内容，有下一\n 时含它的 \n）
         if (nextNlInRest === -1) {
           // 整段就是一行：全删
           return {
@@ -793,8 +829,6 @@ Expected: FAIL — 当前 deleteToLineStart 用 UTF-16 `slice` 且删 `[lastNl, 
             pasteRanges: reconcileRanges(s.pasteRanges, 0, chars.length, 0),
           };
         }
-        // 删 [0, lineEnd+1)（首行内容 + 它的 \n）
-        const delEnd = lineEnd + 1;
         const next = spliceCodePoints(s.text, 0, delEnd, '');
         return {
           text: next,
@@ -802,13 +836,13 @@ Expected: FAIL — 当前 deleteToLineStart 用 UTF-16 `slice` 且删 `[lastNl, 
           pasteRanges: reconcileRanges(s.pasteRanges, 0, delEnd, 0),
         };
       }
-      // 非首行行首：删 [lastNl, lineEnd)（前导 \n + 本行全部内容，不含 lineEnd 处的 \n），
+      // 非首行行首：删 [lastNl, delEnd)（前导 \n + 本行内容，有下一\n 时含 lineEnd 处的 \n），
       // 光标移到 lastNl（上一行末尾位置）
-      const next = spliceCodePoints(s.text, lastNl, lineEnd, '');
+      const next = spliceCodePoints(s.text, lastNl, delEnd, '');
       return {
         text: next,
         cursor: lastNl,
-        pasteRanges: reconcileRanges(s.pasteRanges, lastNl, lineEnd - lastNl, 0),
+        pasteRanges: reconcileRanges(s.pasteRanges, lastNl, delEnd - lastNl, 0),
       };
     }),
 ```
@@ -824,18 +858,18 @@ Run: `npx vitest run src/__tests__/tui/input-store.test.ts -t "deleteToLineStart
 Expected: 所有 deleteToLineStart 测试 PASS（含 §"input-store 多行" describe 里既有的回归测试 + 本任务新增测试）。
 
 **重点核对既有测试**（它们是契约保护，不能为通过新测试而改动）：
-- `'abc\ndef'` cursor=4 → `'abc'`：本版 lineEnd=7(无下一\n), 删 [3,7) = '\ndef' → 'abc' ✓
+- `'abc\ndef'` cursor=4 → `'abc'`：本版 delEnd=chars.length=7(无下一\n), 删 [3,7) = '\ndef' → 'abc' ✓
 - `'hello'` cursor=3 → `'lo'`：lineStart=0 < cursor=3，删 [0,3) → 'lo' ✓
 - CJK `'你好世界'` cursor=2 → `'世界'`：同上 ✓
-- "连续按能逐行删到全空"（`'aaa\nbbb\nccc'`）：依赖每步 cursor 跳到上一行末，本版保留该语义 ✓
+- "连续按能逐行删到全空"（`'aaa\nbbb\nccc'`）：依赖每步 cursor 跳到上一行末，本版保留该语义 ✓（非首行行首分支有下一\n时 delEnd=lineEnd+1，含本行末\n，与当前实现一致）
 
-如有既有测试失败：**不要修改既有测试**（那是契约），回到 Step 3 检查 code-point 重写是否引入 off-by-one（最常见错位点：非首行行首分支的 `lineEnd` vs `lineEnd+1`、`chars.length` vs `s.text.length`）。
+如有既有测试失败：**不要修改既有测试**（那是契约），回到 Step 3 检查 code-point 重写是否改变了既有语义。本次目标是**保持现有行为**，若某既有测试失败说明重写引入了语义偏差（最常见错位点：`delEnd` 公式、`chars.length` vs `s.text.length`、非首行行首分支漏掉 lineEnd 处的 `\n`）。
 
 - [ ] **Step 6: 提交**
 
 ```bash
 git add src/tui/state/input-store.ts src/__tests__/tui/input-store.test.ts
-git commit -m "feat(task5): deleteToLineStart via code-point coords + reconcileRanges; fix non-first-line off-by-one (delete [lastNl,lineEnd))"
+git commit -m "feat(task5): deleteToLineStart via code-point coords + reconcileRanges; preserve existing Ctrl+U semantics; fix last-line off-by-one (delEnd)"
 ```
 
 ---
@@ -936,12 +970,13 @@ git commit -m "feat(task6): wire insertPaste in usePaste callback"
 - `spliceCodePoints(text, start, end, inserted)` 在 Task 1 定义，Task 1/3/4/5 调用一致 ✓
 - `reconcileRanges(ranges, editStart, deletedLen, insertedLen)` 在 Task 1 定义，Task 1/3/4/5 调用一致 ✓
 
-**4. off-by-one 修正（Task 5 重点）**：
-- 非首行行首分支：删 `[lastNl, lineEnd)`，不含 lineEnd 处的 `\n`，结果保留上一行与下一行间的换行（`'abc\ndef\nghi'` cursor=4 → `'abc\nghi'`）✓
-- 首行行首 + 有下一 `\n`：删 `[0, lineEnd+1)`（吃首行 + 它的 `\n`）✓
+**4. deleteToLineStart 一致性修复（Task 5 重点，严格保持现有 Ctrl+U 语义）**：
+- 非首行行首分支：删 `[lastNl, delEnd)`，`delEnd = 有下一\n ? lineEnd+1 : chars.length`。保持现有语义——有下一\n时含 lineEnd 处的 `\n`（`'abc\ndef\nghi'` cursor=4 → `'abcghi'`，与当前实现一致）；无下一\n（最后一行）时到文本末尾。
+- 首行行首 + 有下一 `\n`：删 `[0, delEnd)`，delEnd=lineEnd+1（吃首行 + 它的 `\n`）✓
 - 首行行首 + 无下一 `\n`：删 `[0, chars.length)`（全删）✓
-- 与既有回归测试兼容：`'abc\ndef'` cursor=4 → `'abc'`（lineEnd=7 无下一\n，删 [3,7)='\ndef'）✓；`'hello'` cursor=3 → `'lo'`（删 [0,3)）✓
-- 新增锁定测试：中间行保留换行、最后一行不越界、后方 range 左移、非 BMP 坐标闭合 ✓
+- **off-by-one 修复点**：旧实现最后一行用 `lineEnd+1` 可能 `> chars.length`，导致实际删除长度与 reconcileRanges 的 `deletedLen` 不一致（差 1）；统一用 `delEnd = 有下一\n ? lineEnd+1 : chars.length` 后，实际删除 `[lastNl, delEnd)` 与 `deletedLen = delEnd - lastNl` 严格一致。
+- 与既有回归测试兼容：`'abc\ndef'` cursor=4 → `'abc'`（delEnd=7 无下一\n，删 [3,7)='\ndef'）✓；`'hello'` cursor=3 → `'lo'`（删 [0,3)）✓；`'aaa\nbbb\nccc'` 连续逐行删到全空 ✓
+- 新增锁定测试：中间行保持现有 `'abcghi'` 语义、最后一行 deletedLen=4 不越界、后方 paste range 按真实 deletedLen 平移（有下一\n场景 + 触及失效场景）、非 BMP 坐标闭合 ✓
 
 **5. 任务结构（去除临时 export 流程）**：
 - 旧 Task 1（spliceCodePoints 临时 export + 单测）+ 旧 Task 2（reconcileRanges 临时 export + 单测）+ 旧 Task 7（去 export + 删临时单测）→ 合并进新 Task 1（私有 helper + 首块实现一起落地）✓
