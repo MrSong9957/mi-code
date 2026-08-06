@@ -303,3 +303,81 @@ describe('input-store 多行', () => {
     }
   });
 });
+
+describe('input-store pasteRanges 字段（初始化）', () => {
+  it('初始：pasteRanges 为空数组', () => {
+    const store = createInputStore();
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+});
+
+describe('insertPaste / insert / insertNewline（range 创建与手敲同步）', () => {
+  it('insertPaste：在光标处插入并创建 range', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('ABC');
+    expect(store.getState().text).toBe('ABC');
+    expect(store.getState().cursor).toBe(3);
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+  });
+
+  it('insertPaste 在已有文本后方：range 起点是当前 cursor', () => {
+    const store = createInputStore();
+    store.getState().insert('xx');        // cursor=2, text='xx'
+    store.getState().insertPaste('ABC');  // range {2,5}
+    expect(store.getState().pasteRanges).toEqual([{ start: 2, end: 5 }]);
+    expect(store.getState().text).toBe('xxABC');
+  });
+
+  it('insert（手敲）紧贴 range.end 后方插入：不破坏该 range', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');  // range {0,3}, cursor=3
+    store.getState().insert('x');         // editStart=3==end=3 → reconcile 规则2 不变
+    expect(store.getState().text).toBe('AAAx');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+  });
+
+  it('insert（手敲）插进 range 内部：该 range 失效', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAAA');  // range {0,4}, cursor=4
+    store.getState().moveCursorTo(2);      // 进内部 AA|AA
+    store.getState().insert('x');          // editStart=2 < end=4 → 触及 → 丢弃
+    expect(store.getState().text).toBe('AAxAA');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('insert（手敲）在 range 前方插入：range 右移（正 delta）', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');   // range {0,3}
+    store.getState().moveCursorTo(0);
+    store.getState().insert('x');          // editStart=0, editEnd=0 <= r.start=0 → 规则1 右移 +1
+    expect(store.getState().text).toBe('xAAA');
+    expect(store.getState().pasteRanges).toEqual([{ start: 1, end: 4 }]);
+  });
+
+  it('insertPaste 空字符串：不创建空 range', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('');
+    expect(store.getState().text).toBe('');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('insertNewline：等同 insert("\\n")，与 range 同步', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');   // range {0,3}
+    store.getState().moveCursorTo(1);      // 进内部
+    store.getState().insertNewline();      // 触及 → 丢弃
+    expect(store.getState().text).toBe('A\nAA');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('非 BMP 坐标闭合：insertPaste 后立即断言防 surrogate 假阳性', () => {
+    // 𝄞 = U+1D11E，1 code point / 2 UTF-16 unit。
+    // 关键：insertPaste('X') 后立即断言 text/cursor，捕获 surrogate 被拆又恢复的假阳性。
+    const store = createInputStore();
+    store.getState().insertPaste('𝄞');      // text='𝄞', cursor=1, range {0,1}
+    store.getState().insertPaste('X');      // 立即断言
+    expect(store.getState().text).toBe('𝄞X'); // 若坐标错（UTF-16）：text 可能乱码
+    expect(store.getState().cursor).toBe(2);   // 若坐标错：cursor=3（surrogate 计 2）
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 1 }, { start: 1, end: 2 }]);
+  });
+});

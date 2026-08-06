@@ -11,13 +11,65 @@
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
 
+/** Paste 范围。半开区间 [start, end)，code point offset（与 cursor 同坐标系）。 */
+interface PasteRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * code-point 坐标下的文本替换：把 text 的 [start, end) 替换为 inserted。
+ * start/end/插入长度全部按 Unicode code point 计数（与 cursor 同坐标系）。
+ *
+ * 实现：[...text] 把字符串拆成 code point 数组（BMP=1 元素，非 BMP=1 元素，
+ * 不拆 UTF-16 surrogate pair），Array.splice 的 deleteCount/插入项按数组元素计，
+ * join('') 重组。保证 start/end 直接对应 cursor 偏移。模块私有。
+ */
+function spliceCodePoints(text: string, start: number, end: number, inserted: string): string {
+  const chars = [...text];
+  chars.splice(start, end - start, inserted);
+  return chars.join('');
+}
+
+/**
+ * 一次文本编辑后同步 paste ranges。模块私有。
+ *
+ * 编辑语义：把 [editStart, editStart+deletedLen) 替换为长度 insertedLen 的新内容。
+ * 三规则（等价于"被删 range 视角"，见 spec §6）：
+ *   - editEnd <= r.start（编辑完全在 range 前方）→ 右移 delta = insertedLen - deletedLen
+ *   - editStart >= r.end（编辑完全在 range 后方，含紧贴 end 插入）→ 不变
+ *   - 否则（触及 range 内容）→ 丢弃该 range
+ *
+ * code-point 坐标，与 spliceCodePoints / cursor 同坐标系。
+ */
+function reconcileRanges(
+  ranges: PasteRange[],
+  editStart: number,
+  deletedLen: number,
+  insertedLen: number,
+): PasteRange[] {
+  const editEnd = editStart + deletedLen;
+  const delta = insertedLen - deletedLen;
+  const next: PasteRange[] = [];
+  for (const r of ranges) {
+    if (editEnd <= r.start) next.push({ start: r.start + delta, end: r.end + delta });
+    else if (editStart >= r.end) next.push(r);
+    // 否则触及 range 内容 → 丢弃（不 push）
+  }
+  return next;
+}
+
 export type InputStore = StoreApi<InputState>;
 
 export interface InputState {
   text: string;
   cursor: number;
+  /** 来自一次 paste 的区段（半开 [start,end)，code point offset）。光标进入或局部编辑后退化为空。 */
+  pasteRanges: PasteRange[];
   /** 在光标处插入字符串，光标前移 str.length */
   insert: (str: string) => void;
+  /** 在光标处插入来自一次 paste 的字符串，光标前移，并记录该段为 paste range（仅 ConnectedApp.usePaste 调用）。 */
+  insertPaste: (str: string) => void;
   /** 删光标前一字符（Backspace），光标后移；光标=0 时无操作 */
   backspace: () => void;
   /** 删光标处字符（Delete），光标不动 */
@@ -57,11 +109,30 @@ export function createInputStore(opts: InputStoreOptions = {}): InputStore {
   return createStore<InputState>((set, get) => ({
     text: '',
     cursor: 0,
+    pasteRanges: [],
 
     insert: (str) => set((s) => {
-      const { text, cursor } = s;
-      const next = text.slice(0, cursor) + str + text.slice(cursor);
-      return { text: next, cursor: cursor + [...str].length };
+      const insertedLen = [...str].length;
+      const next = spliceCodePoints(s.text, s.cursor, s.cursor, str);
+      return {
+        text: next,
+        cursor: s.cursor + insertedLen,
+        pasteRanges: reconcileRanges(s.pasteRanges, s.cursor, 0, insertedLen),
+      };
+    }),
+
+    insertPaste: (str) => set((s) => {
+      const insertedLen = [...str].length;
+      if (insertedLen === 0) return s; // 空 paste 不创建 range
+      const next = spliceCodePoints(s.text, s.cursor, s.cursor, str);
+      return {
+        text: next,
+        cursor: s.cursor + insertedLen,
+        pasteRanges: [
+          ...reconcileRanges(s.pasteRanges, s.cursor, 0, insertedLen),
+          { start: s.cursor, end: s.cursor + insertedLen },
+        ],
+      };
     }),
 
     backspace: () => set((s) => {
@@ -86,9 +157,12 @@ export function createInputStore(opts: InputStoreOptions = {}): InputStore {
     clear: () => set({ text: '', cursor: 0 }),
     setText: (text) => set({ text, cursor: [...text].length }),
     insertNewline: () => set((s) => {
-      const { text, cursor } = s;
-      const next = text.slice(0, cursor) + '\n' + text.slice(cursor);
-      return { text: next, cursor: cursor + 1 };
+      const next = spliceCodePoints(s.text, s.cursor, s.cursor, '\n');
+      return {
+        text: next,
+        cursor: s.cursor + 1,
+        pasteRanges: reconcileRanges(s.pasteRanges, s.cursor, 0, 1),
+      };
     }),
     moveCursorUp: () => set((s) => {
       const lines = s.text.split('\n');
