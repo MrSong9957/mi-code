@@ -108,7 +108,7 @@ auto permission dialog 发生在**非只读工具**（write_file / run_bash 等�
 此安全性依赖一个**非显式架构不变量**：
 > 所有调用 `askManager.ask()` 的工具（permission/ask_user_question/plan）都是非只读工具，受 streaming-executor 串行约束；只读工具从不调 askManager。
 
-若未来有人：(a) 把 ask_user_question 加入 READ_ONLY_TOOLS，或 (b) 引入新的调 askManager 的只读工具——`cancelled → escape` 映射将不再安全。必须用调度行为测试（§6 测试 #7）固化此不变量。
+若未来有人：(a) 把 ask_user_question 加入 READ_ONLY_TOOLS，或 (b) 引入新的调 askManager 的只读工具——`cancelled → escape` 映射将不再安全。必须用调度行为测试（§7.3 #7）固化此不变量。
 
 ---
 
@@ -128,38 +128,52 @@ auto permission dialog 发生在**非只读工具**（write_file / run_bash 等�
 
 ## 5. 最终设计（方案 2）
 
-### 5.1 数据流（接线后）
+### 5.1 数据流与职责分层（接线后）
+
+**职责分层（关键）：**
+- **dialogProvider**（`createAutoPermissionDialogProvider` 产出）只负责：`InteractiveAskInput → AskUserManager.ask() → AskQuestionOutcome → DialogResult`。**不持有** `onSessionAllow`/`onPersistRule`/`recheckAfterPersist`。
+- **副作用回调**（`onSessionAllow`/`onPersistRule`/`recheckAfterPersist`）是 `resolveInteractiveAsk` 的 options，由 `handleDialogResult` 在 **resolver 层**消费。它们属于 **resolver runtime wiring** 的职责，与 dialogProvider 解耦。
 
 ```
 auto, main-origin, checker=ask → executeToolCall(line 466)
   → askResolver.resolve → resolveByClassifier（构造 PendingAutomaticDecision）
-  → resolveInteractiveAsk({ automatic, dialogProvider, dialogDelayMs:2000,
-                            onSessionAllow, onPersistRule, recheckAfterPersist })
+  → resolveInteractiveAsk({
+      automatic,                                  // resolver 构造
+      dialog: createAutoPermissionDialogProvider(askManager),  // 只到 DialogResult
+      dialogDelayMs: 2000,                        // resolver wiring
+      onSessionAllow, onPersistRule, recheckAfterPersist  // resolver wiring（副作用回调）
+    })
        ├─ classifier 在 2s 内完成 → 返回 classifier 结果（dialog 不创建）
-       └─ 超 2s → createAutoPermissionDialogProvider 调 askManager.ask（4 选项问卷）
-            ├─ submitted{Allow once}    → DialogResult.approved_once
-            ├─ submitted{Allow session} → DialogResult.approved_session
-            ├─ submitted{Always allow}  → DialogResult.approved_always
-            ├─ submitted{Reject}        → DialogResult.rejected
-            ├─ cancelled（ESC）          → DialogResult.escape → automatic.abort() + deny
-            └─ chat                     → DialogResult.rejected
-  → handleDialogResult → SecurityDecision + 副作用（persist/session/remember）
+       └─ 超 2s → dialogProvider 调 askManager.ask（4 选项问卷）→ AskQuestionOutcome
+            │   └─ mapDialogResult(outcome) → DialogResult（adapter 边界，到此为止）
+            ├─ submitted{Allow once}    → approved_once
+            ├─ submitted{Allow session} → approved_session
+            ├─ submitted{Always allow}  → approved_always
+            ├─ submitted{Reject}        → rejected
+            ├─ cancelled（ESC）          → escape
+            └─ chat                     → rejected
+  → handleDialogResult（resolver 层）→ SecurityDecision
+       │   ├─ escape/rejected → automatic.abort()（resolver 层，非 adapter）
+       │   ├─ approved_session → onSessionAllow（resolver 层回调）
+       │   └─ approved_always → onPersistRule + recheckAfterPersist（resolver 层回调）
   → effectiveDecision 回 executeToolCall → runtimeGate.execute（唯一执行入口）
 ```
 
-### 5.2 outcome → DialogResult 映射（adapter 边界）
+### 5.2 outcome → DialogResult 映射（adapter 边界，到此为止）
 
-| auto dialog 收到的 outcome | 映射到 DialogResult | 语义 |
+`mapDialogResult` 是纯函数，只做 outcome → DialogResult 映射。**它不触发任何副作用**（不写 SessionAllowlist、不 persist rule、不 abort classifier）——这些都由 resolver 层的 `handleDialogResult` 根据 DialogResult kind 在下游执行。
+
+| auto dialog 收到的 outcome | 映射到 DialogResult | resolver 层后续动作（非 adapter） |
 |---|---|---|
-| `submitted` + "Allow once" | `approved_once` | 用户明确选，不记忆 |
-| `submitted` + "Allow this session" | `approved_session` | 写 SessionAllowlist（exact match） |
-| `submitted` + "Always allow" | `approved_always` | onPersistRule + recheckAfterPersist |
-| `submitted` + "Reject" | `rejected` | 用户明确拒绝，不 abort classifier（race 已结束） |
-| `cancelled` | `escape` | **唯一来源是 ESC**（§3）→ automatic.abort() + deny |
-| `chat` | `rejected` | 用户转聊天，视为拒绝 |
+| `submitted` + "Allow once" | `approved_once` | 无副作用，返回 allow |
+| `submitted` + "Allow this session" | `approved_session` | resolver 调 `onSessionAllow`（写 SessionAllowlist） |
+| `submitted` + "Always allow" | `approved_always` | resolver 调 `onPersistRule` + `recheckAfterPersist` |
+| `submitted` + "Reject" | `rejected` | resolver 调 `automatic.abort()`，返回 deny |
+| `cancelled` | `escape` | resolver 调 `automatic.abort()`，返回 deny（ESC 语义） |
+| `chat` | `rejected` | 同 rejected |
 
 映射函数 `mapDialogResult` 的文档注释**必须明确记录**：
-> 「auto dialog 串行执行（streaming-executor 非只读工具串行 + 只读工具不调 askManager），因此 cancelled 的唯一来源是用户 ESC。此映射安全性依赖该架构不变量，见调度行为测试 #7。」
+> 「auto dialog 串行执行（streaming-executor 非只读工具串行 + 只读工具不调 askManager），因此 cancelled 的唯一来源是用户 ESC。此映射安全性依赖该架构不变量，见调度行为测试 §7.3 #7。」
 
 ### 5.3 ESC / remember 语义
 
@@ -175,18 +189,23 @@ auto 模式 ask **先进 resolver**（executeToolCall line 466：askResolver 存
 
 ## 6. 最小文件改动范围
 
+职责分层决定改动分布：dialogProvider（只到 DialogResult）与副作用回调（resolver wiring）解耦。
+
 | 文件 | 改动 | 性质 |
 |---|---|---|
-| `src/permission/interactive-ask.ts` | **不改** | 逻辑已完整 |
-| `src/permission/ask-resolver.ts` | **不改** | 已支持 dialogProvider |
+| `src/permission/interactive-ask.ts` | **不改** | resolveInteractiveAsk 逻辑已完整（含 onSessionAllow/onPersistRule/recheckAfterPersist 消费） |
 | `src/agent/ask-user-types.ts` | **不改** | 不新增 escaped 变体 |
 | `src/tui/state/ask-question-store.ts` | **不改** | 不新增 escape action |
 | `src/tui/input/use-input-handler.ts` | **不改** | ESC 仍走 cancel() |
-| `src/permission/permission-answer-mapping.ts` | **新增** `mapDialogResult(input, outcome)`：`AskQuestionOutcome → DialogResult`（纯函数，含 cancelled→escape） | 新增 |
-| `src/index.ts` | (a) 新增 `createAutoPermissionDialogProvider(askManager, ...)`：`InteractiveAskInput` → 4 选项问卷 → `askManager.ask` → `mapDialogResult` → `DialogResult`，内含 `onSessionAllow` / `onPersistRule`（→ConfigStore.persistPermissionUpdate）/ `recheckAfterPersist`（→checker 重检）；(b) `createConfiguredExecutionRuntimeForTurn` 调用处传 `dialogProvider` + `dialogDelayMs: 2000` | 新增 adapter + 1 处 wiring |
+| `src/permission/permission-answer-mapping.ts` | **新增** `mapDialogResult(outcome)`：`AskQuestionOutcome → DialogResult`（纯函数，含 cancelled→escape）。**只做映射，不触发副作用**。 | 新增 |
+| `src/permission/ask-resolver.ts` | **改**：`DefaultPermissionAskResolverOptions` 增加 `onSessionAllow`/`onPersistRule`/`recheckAfterPersist` 字段；`resolveByClassifier` 调 `resolveInteractiveAsk` 时透传这三个回调（当前 line 249-253 只传 automatic/dialog/dialogDelayMs，**回调缺失**）。 | 扩展（透传） |
+| `src/permission/authority-gate.ts` | **改**：`createConfiguredExecutionRuntimeForTurn` 的 input 增加 `onSessionAllow`/`onPersistRule`/`recheckAfterPersist`，透传给 `DefaultPermissionAskResolver` 构造。（dialogProvider + dialogDelayMs 字段已存在。） | 扩展（透传） |
+| `src/index.ts` | (a) 新增 `createAutoPermissionDialogProvider(askManager)`：`InteractiveAskInput` → 4 选项问卷 → `askManager.ask` → `mapDialogResult` → `DialogResult`。**只产 dialog 函数，不持有副作用回调**；(b) `createConfiguredExecutionRuntimeForTurn` 调用处传 `dialogProvider` + `dialogDelayMs: 2000` + `onSessionAllow`（→SessionAllowlist）/`onPersistRule`（→ConfigStore.persistPermissionUpdate）/`recheckAfterPersist`（→checker 重检）。 | 新增 adapter + wiring |
 | `src/__tests__/permission/`（新增测试文件） | 行为验收矩阵（§7） | 新增 |
 
-共 3 个生产/测试文件改动。**TUI 层零改动**。
+**TUI 层零改动**。`interactive-ask.ts` 零改动。
+
+> 关键发现：当前 `DefaultPermissionAskResolver.resolveByClassifier`（`ask-resolver.ts:249-253`）调 `resolveInteractiveAsk` 时**未透传** onSessionAllow/onPersistRule/recheckAfterPersist，且其 options 类型（`DefaultPermissionAskResolverOptions`）也**没有这三个字段**。因此接线必须扩展 resolver + seam 的透传链路，否则 `approved_session`/`approved_always` 即使 dialog 返回正确 DialogResult，副作用也不会发生。
 
 ---
 
@@ -194,17 +213,36 @@ auto 模式 ask **先进 resolver**（executeToolCall line 466：askResolver 存
 
 注入：spy `dialogProvider`（模拟 askManager.ask，返回脚本化 DialogResult）+ spy `runtimeGate.channel`（验证是否被调）+ 真实 PermissionChecker + 真实 SessionAllowlist + mock classifier。
 
+> **测试分层（关键）：** ESC 验证分两层，不可混用：
+> - **adapter 层**：验证 `createAutoPermissionDialogProvider`（真实 adapter）+ scripted AskUserManager 返回 `{kind:'cancelled'}` → adapter 输出 `DialogResult.escape`。证明 `cancelled → escape` 映射在真实 adapter 路径生效。
+> - **resolver 层**：验证 `escape → automatic.abort() + deny`（现有 `auto-interactive-ask-production.test.ts` A49 已覆盖，经真实 executeToolCall + 直接注入返回 escape 的 dialogProvider）。
+> - **不可**把"直接注入 dialogProvider 返回 escape"的 resolver 测试描述成覆盖 cancelled 映射——它跳过了 adapter 的 outcome→DialogResult 步骤。
+
+### 7.1 mapDialogResult 纯函数单测
+
+`mapDialogResult(outcome)` 独立单测：6 种 outcome（submitted × 4 label / cancelled / chat）→ 正确 DialogResult。**只验证映射，不验证副作用**。
+
+### 7.2 adapter 行为测试（真实 createAutoPermissionDialogProvider）
+
+| # | 测试 | 断言（行为） |
+|---|---|---|
+| A1 | **cancelled → escape（adapter 路径）** | scripted/shared AskUserManager 返回 `{kind:'cancelled'}`；真实 `createAutoPermissionDialogProvider` 返回 `DialogResult.escape` |
+| A2 | submitted{Allow once/session/always/Reject} → 对应 DialogResult | 真实 adapter + 4 种 scripted answer → 4 种 DialogResult |
+| A3 | chat → rejected | 真实 adapter + scripted `{kind:'chat'}` → rejected |
+
+### 7.3 resolver/executeToolCall 端到端行为测试
+
 | # | 测试 | 断言（行为） |
 |---|---|---|
 | 1 | unresolved ask 超 delay → 调 dialog | classifier 永不 resolve；dialogDelayMs=0；dialogProvider 被调用 ≥1 次；resolver 返回 dialog 结果 |
-| 2 | dialog 选择 → 对应 DialogResult 生效 | dialog 返回 approved_session；`sessionAllowlist.has(tool,input)` 为 true；gate 收到 allow |
+| 2 | approved_session → resolver 调 onSessionAllow | 注入 spy onSessionAllow；dialog 返回 approved_session；onSessionAllow 被调；`sessionAllowlist.has` 为 true；gate 收到 allow |
 | 3 | **gate 不重复调 channel**（双重 dialog 防护） | dialog 返回 allow；`channel.request` 调用次数 = **0** |
-| 4 | approved_always 连真实 persistence + recheck | dialog 返回 approved_always；注入 spy persist + 硬 deny checker；persist 被调；recheck 返回 deny；gate 收到 deny |
-| 5 | **ESC/cancel 的 classifier abort** | classifier pending；dialog 返回 escape（由 cancelled 映射）；classifier `signal.aborted === true`；Stage2=0；executor=0；最终 deny |
+| 4 | approved_always → resolver 调 onPersistRule + recheckAfterPersist | 注入 spy persist + 硬 deny checker；dialog 返回 approved_always；persist 被调；recheck 返回 deny；gate 收到 deny |
+| 5 | **escape → automatic.abort + deny**（resolver 层；adapter 映射由 A1 证明） | classifier pending；直接注入 dialogProvider 返回 `escape`（跳过 adapter，聚焦 resolver abort）；classifier `signal.aborted === true`；Stage2=0；executor=0；最终 deny |
 | 6 | classifier 在 delay 内完成 → 不调 dialog | classifier 立即 resolve allow；dialogDelayMs 大；dialogProvider 调用次数 = **0**；gate 收到 allow |
 | 7 | **调度不变量**（经真实 StreamingToolExecutor queue） | run_bash 触发 1 次 askManager.ask；pending 期间 enqueue ask_user_question → **未启动**、**无第二次 askManager.ask**、**dialog 未收到 cancelled**；resolve 后 run_bash 闭环 |
 
-`mapDialogResult` 另有独立单元测试（5 种 outcome × 4 种 answer label → 正确 DialogResult）。
+> 测试 #5 显式标注：它注入返回 `escape` 的 dialogProvider（聚焦 resolver 的 escape 处理），**不覆盖** adapter 的 cancelled→escape 映射（那由 A1 覆盖）。两层分离，避免"用 resolver 测试冒充 adapter 映射验证"。
 
 源码契约测试（读 index.ts 断言传了 dialogProvider）**不作为主要验收**，因行为测试已从最接近生产的入口证明 wiring。
 
@@ -214,12 +252,12 @@ auto 模式 ask **先进 resolver**（executeToolCall line 466：askResolver 存
 
 | 竞态场景 | 处理 |
 |---|---|
-| 双重 dialog（resolver + channel 同时弹） | resolver 把 ask→allow/deny 后，gate 收到非 ask，不调 channel。由 executeToolCall 分支顺序天然保证；测试 #3 验证 channel.request=0 |
+| 双重 dialog（resolver + channel 同时弹） | resolver 把 ask→allow/deny 后，gate 收到非 ask，不调 channel。由 executeToolCall 分支顺序天然保证；§7.3 #3 验证 channel.request=0 |
 | dialog 显示后 classifier 完成 | §2.5：原文未规定；保持当前实现（等用户）；spec 标注为「未规定区域的实现选择」 |
-| approved_always vs classifier 同时 deny | `recheckAfterPersist` 重新过 checker，hard deny 兜底；测试 #4 验证 |
+| approved_always vs classifier 同时 deny | `recheckAfterPersist` 重新过 checker，hard deny 兜底；§7.3 #4 验证 |
 | 重复 remember 写入 | channel 与 auto dialog 都写同一 SessionAllowlist（exact match，`add` 去重） |
 | dialog 残留 | 同「dialog 显示后 classifier 完成」；dialog 只在用户操作后关闭 |
-| 非 ESC 的 pending 取消被误判为 escape | §3 并发不变量保证不可能；测试 #7 固化 |
+| 非 ESC 的 pending 取消被误判为 escape | §3 并发不变量保证不可能；§7.3 #7 固化 |
 
 ---
 
@@ -228,7 +266,7 @@ auto 模式 ask **先进 resolver**（executeToolCall line 466：askResolver 存
 - 不实现「dialog 显示后 classifier 完成自动关闭 dialog」（原文未规定，作为未来独立增强）。
 - 不改 `AskQuestionOutcome` 全局类型（adapter 边界内解决 ESC/Reject 区分）。
 - 不新建第二套 TUI 问卷组件（复用 AskUserManager / ask-question-store）。
-- 不改 `interactive-ask.ts` / `ask-resolver.ts`（逻辑已完整，只缺生产 caller 传 options）。
+- 不改 `interactive-ask.ts`（resolveInteractiveAsk 逻辑已完整）。（注：`ask-resolver.ts` 需扩展透传 onSessionAllow/onPersistRule/recheckAfterPersist，见 §6；这是接线必需，非逻辑改动。）
 - 不动 legacy channel 路径（build/plan 继续走 channel）。
 
 ---
@@ -236,6 +274,9 @@ auto 模式 ask **先进 resolver**（executeToolCall line 466：askResolver 存
 ## 10. 自审检查清单
 
 - [x] 无 TBD/占位/未完成段落。
-- [x] §5 数据流与 §7 测试矩阵一致；§3 并发证明与 §4.2 修正一致。
-- [x] 范围聚焦：单个实现计划可覆盖（3 文件改动 + 1 测试文件）。
-- [x] 无歧义：cancelled→escape 的安全性、dialog 显示后行为、与 channel 的互斥均已明确。
+- [x] §5 职责分层（dialogProvider 只到 DialogResult；副作用回调属 resolver wiring）与 §6 改动范围（ask-resolver/authority-gate 透传回调）一致。
+- [x] §6 与 §9 一致：`interactive-ask.ts` 不改；`ask-resolver.ts`/`authority-gate.ts` 扩展透传（接线必需）。
+- [x] §7 测试分层（adapter 映射 A1-A3 vs resolver abort #5）与 §5 数据流一致；测试编号引用已同步（§7.3 #3/#4/#7）。
+- [x] §3 并发证明与 §4.2 修正（不新增全局 escaped）一致。
+- [x] 范围聚焦：单个实现计划可覆盖（4 个生产文件：permission-answer-mapping 新增 / ask-resolver 透传 / authority-gate 透传 / index.ts adapter+wiring；+ 测试文件）。TUI 层零改动。
+- [x] 无歧义：cancelled→escape 的安全性、dialog 显示后行为（§2.5 未规定区域）、与 channel 的互斥、adapter vs resolver 测试分层均已明确。
