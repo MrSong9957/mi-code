@@ -381,3 +381,27 @@ describe('insertPaste / insert / insertNewline（range 创建与手敲同步）'
     expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 1 }, { start: 1, end: 2 }]);
   });
 });
+
+describe('clear / setText / submit（清空 pasteRanges）', () => {
+  it('clear：清空 text 同时清空 pasteRanges', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');  // 建 range {0,3}
+    expect(store.getState().pasteRanges).toHaveLength(1);
+    store.getState().clear();
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('setText：替换文本同时清空 pasteRanges', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');
+    store.getState().setText('/plan');  // 补全/rewind 回填路径
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('submit：提交同时清空 pasteRanges', () => {
+    const store = createInputStore({ onSubmit: () => {} });
+    store.getState().insertPaste('abc');
+    store.getState().submit();
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+});

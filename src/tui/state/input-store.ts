@@ -154,8 +154,8 @@ export function createInputStore(opts: InputStoreOptions = {}): InputStore {
     moveCursorTo: (pos) => set((s) => ({ cursor: Math.max(0, Math.min([...s.text].length, pos)) })),
     moveCursorToStart: () => set({ cursor: 0 }),
     moveCursorToEnd: () => set((s) => ({ cursor: [...s.text].length })),
-    clear: () => set({ text: '', cursor: 0 }),
-    setText: (text) => set({ text, cursor: [...text].length }),
+    clear: () => set({ text: '', cursor: 0, pasteRanges: [] }),
+    setText: (text) => set({ text, cursor: [...text].length, pasteRanges: [] }),
     insertNewline: () => set((s) => {
       const next = spliceCodePoints(s.text, s.cursor, s.cursor, '\n');
       return {
@@ -227,7 +227,7 @@ export function createInputStore(opts: InputStoreOptions = {}): InputStore {
       const trimmed = get().text.trim();
       if (trimmed === '') return null;
       onSubmit?.(trimmed);
-      set({ text: '', cursor: 0 });
+      set({ text: '', cursor: 0, pasteRanges: [] });
       return trimmed;
     },
   }));
