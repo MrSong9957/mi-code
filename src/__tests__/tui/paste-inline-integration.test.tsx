@@ -20,8 +20,8 @@ import { useInputHandler } from '../../tui/input/use-input-handler.js';
 function PasteProbe({ store }: { store: ReturnType<typeof createInputStore> }) {
   useInputHandler(store, undefined, undefined, undefined, undefined, undefined, undefined);
   usePaste((text: string) => {
-    // 与 ConnectedApp 的 usePaste handler 完全一致
-    store.getState().insert(storePastedContent(text));
+    // 与 ConnectedApp 的 usePaste handler 完全一致：insertPaste 追踪 pasteRanges
+    store.getState().insertPaste(storePastedContent(text));
   });
   return React.createElement(Text, {}, `text="${store.getState().text}"`);
 }
@@ -41,6 +41,9 @@ describe('inline 模式 bracketed paste → 占位符生成', () => {
     expect(text).toContain('+4 lines]');
     // 原始内容不应出现（被占位符替换）
     expect(text).not.toContain('hello\nworld');
+    // insertPaste 应创建 pasteRange
+    expect(store.getState().pasteRanges.length).toBe(1);
+    expect(store.getState().pasteRanges[0].end).toBe(store.getState().cursor);
   });
 
   it('普通按键输入不受 usePaste 影响（仍走 useInput）', () => {
