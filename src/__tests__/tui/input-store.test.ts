@@ -303,3 +303,383 @@ describe('input-store 多行', () => {
     }
   });
 });
+
+describe('input-store pasteRanges 字段（初始化）', () => {
+  it('初始：pasteRanges 为空数组', () => {
+    const store = createInputStore();
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+});
+
+describe('insertPaste / insert / insertNewline（range 创建与手敲同步）', () => {
+  it('insertPaste：在光标处插入并创建 range', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('ABC');
+    expect(store.getState().text).toBe('ABC');
+    expect(store.getState().cursor).toBe(3);
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+  });
+
+  it('insertPaste 在已有文本后方：range 起点是当前 cursor', () => {
+    const store = createInputStore();
+    store.getState().insert('xx');        // cursor=2, text='xx'
+    store.getState().insertPaste('ABC');  // range {2,5}
+    expect(store.getState().pasteRanges).toEqual([{ start: 2, end: 5 }]);
+    expect(store.getState().text).toBe('xxABC');
+  });
+
+  it('insert（手敲）紧贴 range.end 后方插入：不破坏该 range', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');  // range {0,3}, cursor=3
+    store.getState().insert('x');         // editStart=3==end=3 → reconcile 规则2 不变
+    expect(store.getState().text).toBe('AAAx');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+  });
+
+  it('insert（手敲）插进 range 内部：该 range 失效', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAAA');  // range {0,4}, cursor=4
+    store.getState().moveCursorTo(2);      // 进内部 AA|AA
+    store.getState().insert('x');          // editStart=2 < end=4 → 触及 → 丢弃
+    expect(store.getState().text).toBe('AAxAA');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('insert（手敲）在 range 前方插入：range 右移（正 delta）', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');   // range {0,3}
+    store.getState().moveCursorTo(0);
+    store.getState().insert('x');          // editStart=0, editEnd=0 <= r.start=0 → 规则1 右移 +1
+    expect(store.getState().text).toBe('xAAA');
+    expect(store.getState().pasteRanges).toEqual([{ start: 1, end: 4 }]);
+  });
+
+  it('insertPaste 空字符串：不创建空 range', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('');
+    expect(store.getState().text).toBe('');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('insertNewline：等同 insert("\\n")，与 range 同步', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');   // range {0,3}
+    store.getState().moveCursorTo(1);      // 进内部
+    store.getState().insertNewline();      // 触及 → 丢弃
+    expect(store.getState().text).toBe('A\nAA');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('非 BMP 坐标闭合：insertPaste 后立即断言防 surrogate 假阳性', () => {
+    // 𝄞 = U+1D11E，1 code point / 2 UTF-16 unit。
+    // 关键：insertPaste('X') 后立即断言 text/cursor，捕获 surrogate 被拆又恢复的假阳性。
+    const store = createInputStore();
+    store.getState().insertPaste('𝄞');      // text='𝄞', cursor=1, range {0,1}
+    store.getState().insertPaste('X');      // 立即断言
+    expect(store.getState().text).toBe('𝄞X'); // 若坐标错（UTF-16）：text 可能乱码
+    expect(store.getState().cursor).toBe(2);   // 若坐标错：cursor=3（surrogate 计 2）
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 1 }, { start: 1, end: 2 }]);
+  });
+});
+
+describe('clear / setText / submit（清空 pasteRanges）', () => {
+  it('clear：清空 text 同时清空 pasteRanges', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');  // 建 range {0,3}
+    expect(store.getState().pasteRanges).toHaveLength(1);
+    store.getState().clear();
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('setText：替换文本同时清空 pasteRanges', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');
+    store.getState().setText('/plan');  // 补全/rewind 回填路径
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('submit：提交同时清空 pasteRanges', () => {
+    const store = createInputStore({ onSubmit: () => {} });
+    store.getState().insertPaste('abc');
+    store.getState().submit();
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+});
+
+describe('backspace（整段删契约 + 普通删）', () => {
+  it('短 paste 直显：cursor 在末尾一次 Backspace 删整段', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('shortpastedtext');
+    store.getState().backspace();
+    expect(store.getState().text).toBe('');
+    expect(store.getState().cursor).toBe(0);
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('多行占位符：cursor 在末尾一次 Backspace 删整个占位符串', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('[Pasted text #1 +3 lines]');
+    store.getState().backspace();
+    expect(store.getState().text).toBe('');
+  });
+
+  it('手敲字符：Backspace 仍逐字符删（回归保护）', () => {
+    const store = createInputStore();
+    store.getState().insert('a');
+    store.getState().insert('b');
+    store.getState().insert('c');
+    store.getState().backspace();
+    expect(store.getState().text).toBe('ab');
+    store.getState().backspace();
+    expect(store.getState().text).toBe('a');
+    store.getState().backspace();
+    expect(store.getState().text).toBe('');
+  });
+
+  it('paste 后手敲：先删手敲字符，再删整段 paste', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('PASTED');
+    store.getState().insert('x');
+    store.getState().backspace();   // 删 x
+    expect(store.getState().text).toBe('PASTED');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 6 }]);
+    store.getState().backspace();   // 整段删
+    expect(store.getState().text).toBe('');
+  });
+
+  it('连续 paste：Backspace 一次删最近一个', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');   // range {0,3}
+    store.getState().insertPaste('BBB');   // range {3,6}
+    store.getState().backspace();          // hit {3,6}（end=6==cursor=6）
+    expect(store.getState().text).toBe('AAA');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+    store.getState().backspace();          // hit {0,3}
+    expect(store.getState().text).toBe('');
+  });
+
+  it('range 在被删 range 前方：不变（删后方 range，前方保留）', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');   // {0,3}
+    store.getState().insertPaste('BBB');   // {3,6}
+    store.getState().moveCursorTo(6);      // 命中 {3,6}.end=6（insertPaste 后 cursor 已在 6）
+    store.getState().backspace();          // 删 BBB，{0,3} 在被删区间 [3,6) 前方（r.end=3 <= ds=3）→ 不变
+    expect(store.getState().text).toBe('AAA');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+    store.getState().backspace();          // 命中 {0,3}.end=3
+    expect(store.getState().text).toBe('');
+  });
+
+  it('range 在被删 range 后方：左移 deletedLen（保留并平移）', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');   // {0,3}
+    store.getState().insertPaste('BBB');   // {3,6}
+    store.getState().moveCursorTo(3);      // 命中 {0,3}.end=3
+    store.getState().backspace();          // 删 AAA，{3,6} 应左移 3 → {0,3}，cursor=0
+    expect(store.getState().text).toBe('BBB');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+    // 验证左移后的 range 仍能整段删（光标需回到 BBB 末尾）
+    store.getState().moveCursorToEnd();    // cursor=3，命中新 {0,3}.end=3
+    store.getState().backspace();
+    expect(store.getState().text).toBe('');
+  });
+
+  it('光标在 range 内部 Backspace：range 失效，逐字符删', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('PASTED'); // range {0,6}, cursor=6
+    store.getState().moveCursorTo(4);       // 进内部 PAST|ED
+    store.getState().backspace();           // 删 'T'，触及 {0,6} → 失效
+    expect(store.getState().text).toBe('PASED');
+    expect(store.getState().pasteRanges).toEqual([]);
+    store.getState().moveCursorToEnd();     // cursor=5
+    store.getState().backspace();           // 不再整段删（range 已失效）
+    expect(store.getState().text).toBe('PASE');
+  });
+
+  it('单纯移动光标不失效：进入内部再退回 end 仍能整段删', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('PASTED');
+    store.getState().moveCursorTo(3);       // 进内部
+    store.getState().moveCursorToEnd();     // 退回 end=6
+    store.getState().backspace();           // 仍整段删
+    expect(store.getState().text).toBe('');
+  });
+
+  it('紧贴 end 手敲后退回 end 仍能整段删', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('PASTED'); // range {0,6}
+    store.getState().insert('x');           // 紧贴 end，range 不变
+    store.getState().backspace();           // 删 x（普通，6!=7）
+    expect(store.getState().text).toBe('PASTED');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 6 }]);
+    store.getState().backspace();           // 命中 end=6，整段删
+    expect(store.getState().text).toBe('');
+  });
+
+  it('前方插入导致 range 右移（正 delta，端到端）', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');    // range {0,3}
+    store.getState().moveCursorTo(0);
+    store.getState().insert('x');           // 前方插入 → range 右移 → {1,4}
+    expect(store.getState().text).toBe('xAAA');
+    expect(store.getState().pasteRanges).toEqual([{ start: 1, end: 4 }]);
+    store.getState().moveCursorToEnd();     // cursor=4，命中 {1,4}.end
+    store.getState().backspace();           // 整段删 AAA
+    expect(store.getState().text).toBe('x');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('非 BMP 坐标闭合：两次 backspace 分别整段删 X 与 𝄞', () => {
+    // 𝄞 = U+1D11E，1 code point / 2 UTF-16 unit。承接 Task 1 的 insertPaste 立即断言。
+    const store = createInputStore();
+    store.getState().insertPaste('𝄞');      // range {0,1}
+    store.getState().insertPaste('X');      // range {1,2}, cursor=2
+    expect(store.getState().text).toBe('𝄞X');
+    store.getState().backspace();           // 命中 {1,2}.end=2，删 X
+    expect(store.getState().text).toBe('𝄞');
+    expect(store.getState().cursor).toBe(1);
+    store.getState().backspace();           // 命中 {0,1}.end=1，删 𝄞
+    expect(store.getState().text).toBe('');
+  });
+});
+
+describe('deleteForward（range 同步）', () => {
+  it('deleteForward 触及 range 内部：range 失效', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('ABC');   // range {0,3}
+    store.getState().moveCursorTo(1);      // 进内部
+    store.getState().deleteForward();      // 删 B（位置 1），触及 {0,3} → 失效
+    expect(store.getState().text).toBe('AC');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('deleteForward 在 range 后方（删 range.end 之后字符）：不破坏 range', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('AAA');   // range {0,3}
+    store.getState().insert('x');          // text='AAAx', cursor=4
+    store.getState().moveCursorTo(3);      // cursor=3，删位置 3 处的 'x'
+    // editStart=3 == r.end=3 → reconcile 规则2（后方）不变；'x' 不在 range 内
+    store.getState().deleteForward();
+    expect(store.getState().text).toBe('AAA');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+  });
+
+  it('deleteForward 在 range 前方：range 右移', () => {
+    const store = createInputStore();
+    store.getState().clear();
+    store.getState().insert('a');          // text='a', cursor=1
+    store.getState().insertPaste('AAA');   // range {1,4}
+    store.getState().moveCursorTo(0);      // 前方
+    store.getState().deleteForward();      // 删 'a'（位置 0），editEnd=1 <= r.start=1 → 右移 -1 → {0,3}
+    expect(store.getState().text).toBe('AAA');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+  });
+});
+
+describe('deleteToLineStart（code-point 坐标 + range 同步，保持现有 Ctrl+U 语义）', () => {
+  it('删光标到行首，触及 range → 失效', () => {
+    const store = createInputStore();
+    store.getState().insertPaste('hello'); // range {0,5}
+    store.getState().moveCursorTo(3);      // hel|lo，进 range 内部
+    store.getState().deleteToLineStart();  // 删 [0,3)，触及 range → 失效
+    expect(store.getState().text).toBe('lo');
+    expect(store.getState().pasteRanges).toEqual([]);
+  });
+
+  it('range 在被删区间前方：不变（最后一行场景）', () => {
+    // 'XYZ\nabc'，cursor=7（第二行末尾），lineStart=4，删 [4,7)
+    const store = createInputStore();
+    store.getState().insertPaste('XYZ');   // range {0,3}
+    store.getState().insertNewline();      // text='XYZ\n', cursor=4, range 规则2 不变
+    store.getState().insert('abc');        // text='XYZ\nabc', cursor=7
+    store.getState().moveCursorTo(7);
+    store.getState().deleteToLineStart();  // 删 [4,7) → text='XYZ\n'
+    // range {0,3} r.end=3 <= ds=4 → 不变
+    expect(store.getState().text).toBe('XYZ\n');
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: 3 }]);
+  });
+
+  it('非首行中间行：保持现有 Ctrl+U 语义（删 [lastNl, lineEnd+1)，上一行与下一行相连）', () => {
+    // 'abc\ndef\nghi'，cursor=4（第二行行首 d 之前），lineStart=4==cursor → 走"行首删整行"分支
+    // lastNl=3, 下一 \n 在 index 7 → lineEnd=7 → delEnd=8
+    // 删除区间 [3, 8) = '\ndef\n'，结果 'abcghi'（保持当前实现语义）
+    const store = createInputStore();
+    store.getState().insert('abc\ndef\nghi');
+    store.getState().moveCursorTo(4);
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('abcghi'); // 锁定现有行为
+    expect(store.getState().cursor).toBe(3);
+  });
+
+  it('非首行最后一行行首删整行：删到末尾，deletedLen=4 不越界', () => {
+    // 'XYZ\ndef'，cursor=4（第二行行首），lastNl=3，无下一 \n → delEnd=chars.length=7
+    // 删 [3,7) = '\ndef'，结果 'XYZ'，deletedLen=4（delEnd-lastNl = 7-3）
+    const store = createInputStore();
+    store.getState().insert('XYZ\ndef');
+    store.getState().moveCursorTo(4);
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('XYZ');
+    expect(store.getState().cursor).toBe(3);
+  });
+
+  it('非首行中间行：后方 paste range 按真实 deletedLen 平移', () => {
+    // 构造：'A\nBC\nXYZ'，cursor 在第二行 BC 行首删整行，验证第三行 paste range 平移
+    const store = createInputStore();
+    store.getState().insert('A\nBC\n');    // text='A\nBC\n', cursor=5
+    store.getState().insertPaste('XYZ');   // range {5,8}
+    store.getState().moveCursorTo(2);      // 第二行行首（BC 的 B 之前，index 2）
+    // lastNl=1（第一个 \n），下一 \n 在 index 4 → lineEnd=4 → delEnd=5
+    // 删 [1,5) = '\nBC\n'，deletedLen=4；range {5,8} 后方 → 左移 4 → {1,4}
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('AXYZ');
+    expect(store.getState().pasteRanges).toEqual([{ start: 1, end: 4 }]); // 左移 4，不是 5
+  });
+
+  it('非首行最后一行（无下一 \\n）：被删区间触及后方 paste range → 失效', () => {
+    // 此场景 paste 紧贴被删行后方（无 \n 分隔），删整行会连 paste 一起触及 → range 失效。
+    // 验证 delEnd=chars.length 不越界、触及判定正确。
+    const store = createInputStore();
+    store.getState().insert('A\nBC');       // text='A\nBC', cursor=4
+    store.getState().insertPaste('XYZ');    // 紧贴后方插，range {4,7}，text='A\nBCXYZ'
+    store.getState().moveCursorTo(2);       // 第二行 BC 行首（index 2）
+    // cursor=2, lastNl=1, lineStart=2==cursor → 行首删整行分支
+    // 无下一 \n → lineEnd=chars.length=7 → delEnd=7
+    // 删 [1,7) = '\nBCXYZ'，deletedLen=6；range {4,7} 触及（editStart=1 < end=7 且 editEnd=7 > start=4）→ 丢弃
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('A');
+    expect(store.getState().pasteRanges).toEqual([]); // range 被删区间触及，失效
+  });
+
+  it('首行行首 + 存在下一 \\n：删 [0, delEnd) 吃掉首行+换行', () => {
+    // 'abc\ndef'，cursor=0，首行行首分支，下一 \n 在 index 3
+    // lineEnd=3，delEnd=4，删 [0,4) = 'abc\n'，结果 'def'
+    const store = createInputStore();
+    store.getState().insert('abc\ndef');
+    store.getState().moveCursorTo(0);
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('def');
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('首行行首 + 无下一 \\n：整段就是一行，全删', () => {
+    const store = createInputStore();
+    store.getState().insert('hello');
+    store.getState().moveCursorToStart();
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('');
+    expect(store.getState().cursor).toBe(0);
+  });
+
+  it('非 BMP：lineStart/lineEnd 按 code point 偏移，坐标闭合', () => {
+    // '𝄞ab\ncd'，cursor=4（第二行行首 c 之前）
+    // 𝄞 占 1 code point；'𝄞ab\ncd' 的 code points: 𝄞(0) a(1) b(2) \n(3) c(4) d(5)
+    // cursor=4，lastNl=3，无下一 \n → lineEnd=6 → delEnd=6
+    // 删 [3,6) = '\ncd'，结果 '𝄞ab'
+    const store = createInputStore();
+    store.getState().insert('𝄞ab\ncd');
+    store.getState().moveCursorTo(4);
+    store.getState().deleteToLineStart();
+    expect(store.getState().text).toBe('𝄞ab');
+    expect(store.getState().cursor).toBe(3);
+  });
+});
