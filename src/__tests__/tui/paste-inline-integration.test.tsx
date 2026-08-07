@@ -41,9 +41,8 @@ describe('inline 模式 bracketed paste → 占位符生成', () => {
     expect(text).toContain('+4 lines]');
     // 原始内容不应出现（被占位符替换）
     expect(text).not.toContain('hello\nworld');
-    // insertPaste 应创建 pasteRange
-    expect(store.getState().pasteRanges.length).toBe(1);
-    expect(store.getState().pasteRanges[0].end).toBe(store.getState().cursor);
+    // insertPaste 应创建 pasteRange，覆盖完整占位符文本
+    expect(store.getState().pasteRanges).toEqual([{ start: 0, end: [...text].length }]);
   });
 
   it('普通按键输入不受 usePaste 影响（仍走 useInput）', () => {
