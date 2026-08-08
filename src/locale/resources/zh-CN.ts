@@ -83,6 +83,7 @@ export const zhCN = {
   },
   overlay: {
     placeholder: '覆盖层',
+    // Deliberately English to match pre-i18n behavior (Task 10 reviewer Minor #1); see exit-plan-mode-routing.test.tsx assertions on 'Submit'.
     submit: 'Submit',
     submitAnswers: '提交答案',
     cancel: '取消',
