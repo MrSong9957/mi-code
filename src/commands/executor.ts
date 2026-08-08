@@ -6,6 +6,8 @@ import type { PermissionMode } from '../permission/types.js';
 import type { SkillRegistry } from '../skills/registry.js';
 import type { SkillNegotiator } from '../skills/negotiator.js';
 import type { ThemeStore } from '../tui/state/theme-store.js';
+import { buildHelpMessage } from './suggestion-data.js';
+import { isLanguage, SUPPORTED_LANGUAGES, type LanguageStore, type Translator } from '../locale/types.js';
 
 /** 命令执行结果 */
 export interface CommandResult {
@@ -20,6 +22,8 @@ export interface CommandContext {
   negotiator?: SkillNegotiator;
   userId?: string;
   themeStore?: ThemeStore;
+  languageStore?: LanguageStore;
+  translator?: Translator;
   /**
    * Task 8：统一 mode transition port。提供后，handleModeSwitch 经此回调切换模式
    * （由 index.ts 注入，内部调 transitionPermissionMode）。未提供时走 LEGACY 路径。
@@ -36,7 +40,9 @@ export function executeCommand(cmd: Command, configOrContext: ConfigStore | Comm
   // executeCommand(cmd, configStore, ctx?) — 旧行为（config 命令）
   // executeCommand(cmd, { skillRegistry/themeStore, ... }) — 新行为（技能/theme 命令）
   const isContext = ('skillRegistry' in configOrContext && configOrContext.skillRegistry !== undefined)
-    || ('themeStore' in configOrContext);
+    || ('themeStore' in configOrContext)
+    || ('languageStore' in configOrContext)
+    || ('translator' in configOrContext);
 
   if (isContext) {
     return executeContextCommand(cmd, configOrContext as CommandContext);
@@ -52,6 +58,8 @@ export function executeCommand(cmd: Command, configOrContext: ConfigStore | Comm
       return handleProvider(cmd, config);
     case 'model':
       return handleModel(cmd, config);
+    case 'language':
+      return handleLanguage(cmd, config, ctx);
     case 'compact':
       return { message: 'Compaction triggered. Use the agent to run a task and it will auto-compact when needed.' };
     case 'build':
@@ -60,8 +68,10 @@ export function executeCommand(cmd: Command, configOrContext: ConfigStore | Comm
       return handleModeSwitch('plan', config, ctx);
     case 'auto':
       return handleModeSwitch('auto', config, ctx);
+    case 'theme':
+      return ctx ? handleTheme(cmd, ctx) : { message: `Unknown command: /${cmd.name}. Type /help for available commands.` };
     case 'help':
-      return handleHelp();
+      return handleHelp(ctx?.translator);
     default:
       return { message: `Unknown command: /${cmd.name}. Type /help for available commands.` };
   }
@@ -266,6 +276,53 @@ function handleModel(cmd: Command, config: ConfigStore): CommandResult {
   return { message: `Model set to: ${model} (for ${provider})` };
 }
 
+function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** /language — show current language or switch UI language */
+export function handleLanguage(cmd: Command, config: ConfigStore, ctx?: CommandContext): CommandResult {
+  const languageStore = ctx?.languageStore;
+  const translator = ctx?.translator;
+  if (!languageStore || !translator) {
+    return { message: 'No language runtime available.' };
+  }
+
+  const supported = SUPPORTED_LANGUAGES.join(', ');
+  if (cmd.args.length === 0) {
+    const current = languageStore.getState().language;
+    return {
+      message: translator.t('commands.language.current', { language: current, supported }),
+    };
+  }
+
+  const language = cmd.args[0];
+  if (!isLanguage(language)) {
+    return {
+      message: translator.t('commands.language.unsupported', {
+        language: language ?? '',
+        supported,
+      }),
+    };
+  }
+
+  try {
+    config.setLanguage(language);
+  } catch (error) {
+    return {
+      message: translator.t('commands.language.persistError', {
+        language,
+        error: formatUnknownError(error),
+      }),
+    };
+  }
+
+  languageStore.getState().setLanguage(language);
+  return {
+    message: translator.t('commands.language.updated', { language }),
+  };
+}
+
 /**
  * /build /plan /auto — 切换权限模式（即时生效 + 持久化）
  *
@@ -287,7 +344,11 @@ function handleModeSwitch(mode: PermissionMode, config: ConfigStore, ctx?: Comma
 }
 
 /** /help — 显示帮助 */
-function handleHelp(): CommandResult {
+function handleHelp(translator?: Translator): CommandResult {
+  if (translator) {
+    return { message: buildHelpMessage(translator) };
+  }
+
   return {
     message: `Available commands:
   /config              Show current configuration
@@ -302,6 +363,7 @@ function handleHelp(): CommandResult {
   /image <path> [text] Attach an image file (PNG/JPEG/GIF/WebP, max 3.75MB)
   /image [text]        Attach image from clipboard (Win: screenshot first, then /image)
   /theme <dark|light>  Switch theme
+  /language [lang]     Show current language or switch UI language
   /skill list           List available skills
   /skill off <name>     Block a skill
   /skill retry <name>  Un-skip a skill

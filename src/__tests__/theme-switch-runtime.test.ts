@@ -7,6 +7,9 @@ import { describe, it, expect } from 'vitest';
 import { createThemeStore } from '../tui/state/theme-store.js';
 import { executeCommand } from '../commands/executor.js';
 import type { Command } from '../commands/parser.js';
+import type { ConfigStore } from '../config/store.js';
+import { createLanguageStore } from '../locale/language-store.js';
+import { createTranslator } from '../locale/translator.js';
 
 describe('运行时主题切换', () => {
   it('/theme light 切换 store 为 light', () => {
@@ -14,6 +17,38 @@ describe('运行时主题切换', () => {
     const cmd: Command = { name: 'theme', args: ['light'] };
     const result = executeCommand(cmd, { themeStore: store });
     expect(store.getState().themeName).toBe('light');
+    expect(result.message).toContain('light');
+  });
+
+  it('/theme still uses the supplied themeStore when language runtime fields are present', () => {
+    const themeStore = createThemeStore('dark');
+    const languageStore = createLanguageStore('zh-CN');
+    const cmd: Command = { name: 'theme', args: ['light'] };
+
+    const result = executeCommand(cmd, {
+      themeStore,
+      languageStore,
+      translator: createTranslator(languageStore),
+    });
+
+    expect(themeStore.getState().themeName).toBe('light');
+    expect(languageStore.getState().language).toBe('zh-CN');
+    expect(result.message).toContain('light');
+  });
+
+  it('/theme still uses the third-argument command context used by index dispatch', () => {
+    const themeStore = createThemeStore('dark');
+    const languageStore = createLanguageStore('zh-CN');
+    const cmd: Command = { name: 'theme', args: ['light'] };
+
+    const result = executeCommand(cmd, {} as ConfigStore, {
+      themeStore,
+      languageStore,
+      translator: createTranslator(languageStore),
+    });
+
+    expect(themeStore.getState().themeName).toBe('light');
+    expect(languageStore.getState().language).toBe('zh-CN');
     expect(result.message).toContain('light');
   });
 

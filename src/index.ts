@@ -756,6 +756,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       const result = executeCommand(cmd, configStore, {
         permissionChecker,
         themeStore: tuiHandle?.themeStore,
+        languageStore,
+        translator,
         // Task 8：slash /build /plan /auto 经统一 transition port
         onModeTransition: (mode) => {
           transitionPermissionMode(sessionState, mode, 'userSettings', {

@@ -2,7 +2,29 @@
 // COMMAND_SUGGESTIONS 数据完整性测试
 
 import { describe, it, expect } from 'vitest';
-import { COMMAND_SUGGESTIONS, COMMAND_NAMES, type CommandGroup } from '../../commands/suggestion-data.js';
+import {
+  buildHelpMessage,
+  COMMAND_SUGGESTIONS,
+  COMMAND_NAMES,
+  getCommandSuggestions,
+  type CommandGroup,
+  type SuggestionItem,
+} from '../../commands/suggestion-data.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
+import type { Language } from '../../locale/types.js';
+
+function translatorFor(language: Language) {
+  return createTranslator(createLanguageStore(language));
+}
+
+function suggestionByName(items: readonly SuggestionItem[], name: string): SuggestionItem {
+  const item = items.find(s => s.name === name);
+  if (!item) {
+    throw new Error(`missing suggestion: ${name}`);
+  }
+  return item;
+}
 
 describe('COMMAND_SUGGESTIONS', () => {
   it('每项有 name + description + group', () => {
@@ -73,5 +95,41 @@ describe('COMMAND_NAMES(向后兼容)', () => {
     expect(COMMAND_NAMES).toContain('help');
     expect(COMMAND_NAMES).toContain('theme');
     expect(COMMAND_NAMES).toContain('image');
+  });
+});
+
+describe('localized command suggestion data', () => {
+  it('localizes descriptions and group labels without changing names or arg hints', () => {
+    const english = getCommandSuggestions(translatorFor('en-US'));
+    const chinese = getCommandSuggestions(translatorFor('zh-CN'));
+
+    expect(english.map(s => s.name)).toEqual(COMMAND_SUGGESTIONS.map(s => s.name));
+    expect(chinese.map(s => s.name)).toEqual(COMMAND_SUGGESTIONS.map(s => s.name));
+    expect(english.map(s => s.argHint)).toEqual(COMMAND_SUGGESTIONS.map(s => s.argHint));
+    expect(chinese.map(s => s.argHint)).toEqual(COMMAND_SUGGESTIONS.map(s => s.argHint));
+
+    expect(suggestionByName(english, 'theme')).toMatchObject({
+      description: 'Switch theme',
+      group: 'Config',
+      groupLabel: 'Config',
+      argHint: '<dark|light>',
+    });
+    expect(suggestionByName(chinese, 'theme')).toMatchObject({
+      description: '切换主题',
+      group: 'Config',
+      groupLabel: '配置',
+      argHint: '<dark|light>',
+    });
+  });
+
+  it('localizes help text while preserving slash command names and arg hints', () => {
+    const english = buildHelpMessage(translatorFor('en-US'));
+    const chinese = buildHelpMessage(translatorFor('zh-CN'));
+
+    expect(english).toContain('Available commands:');
+    expect(english).toContain('/language [lang]  Show current language or switch UI language');
+    expect(chinese).toContain('可用命令：');
+    expect(chinese).toContain('/language [lang]  查看当前语言或切换界面语言');
+    expect(chinese).toContain('/theme <dark|light>  切换主题');
   });
 });
