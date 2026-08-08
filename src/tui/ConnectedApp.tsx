@@ -233,7 +233,7 @@ export function ConnectedApp({
       if (ask.inputMode) ask.insertOther(text);
       return;
     }
-    inputStore.getState().insert(storePastedContent(text));
+    inputStore.getState().insertPaste(storePastedContent(text));
   });
 
   function maybeStartAutoScroll(focusRow: number): void {
