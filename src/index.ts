@@ -836,6 +836,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     skillsDescription,
     reminder ? `\n${reminder}` : '',
     planModeInstruction,
+    // Task 8 i18n:每回合注入响应语言偏好,随运行时语言切换刷新;fork 子代理经 lastSystemPrompt 继承。
     getResponseLanguagePreference(translator),
   ].join('\n');
 
