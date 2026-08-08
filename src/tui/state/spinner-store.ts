@@ -1,6 +1,6 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import { sampleVerb, type SpinnerVerbConfig } from './spinner-verbs.js';
-import type { Translator } from '../../locale/types.js';
+import type { LanguageStore, Translator } from '../../locale/types.js';
 
 /** Claude Code 的 6 帧往返序列；time 的单位始终是毫秒。 */
 export const SPINNER_FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✽', '✻', '✶', '✳', '✢', '·'] as const;
@@ -238,7 +238,7 @@ export type SpinnerStore = StoreApi<SpinnerState>;
 export function createSpinnerStore(
   verbConfig?: SpinnerVerbConfig,
   initialContext: SpinnerContextSnapshot = EMPTY_SPINNER_CONTEXT,
-  translator?: Translator,
+  languageStore?: LanguageStore,
 ): SpinnerStore {
   return createStore<SpinnerState>((set, get) => ({
     active: false, time: 0, mode: 'responding', verb: '', label: '',
@@ -251,12 +251,15 @@ export function createSpinnerStore(
 
     start: (mode) => {
       const now = Date.now();
+      // 在 start 时读取当前语言（turn 级稳定值），传给 sampleVerb 选择内置词库；
+      // languageStore 缺省时回退到英文（向后兼容旧 fixture）。
+      const language = languageStore?.getState().language;
       set({ active: true, time: 0, mode, label: '',
         thinkStartTime: mode === 'thinking' ? 0 : null,
         thinkingSummary: null,
         // verb 是 turn 级值：只在 start 时抽样一次，后续 mode 切换不重新抽样。
-        // 传入 translator 让内置词库按当前语言抽取；configured/custom 动词原样返回。
-        verb: sampleVerb(verbConfig, translator),
+        // 内置词库按当前 language 抽取；configured/custom 动词原样返回。
+        verb: sampleVerb(verbConfig, language),
         stalled: false, stalledIntensity: 0, hasActiveTools: false, lastTokenAt: now,
         responseLength: 0, displayedTokens: 0, teammateTokens: 0,
         loadingStartTime: now, totalPausedMs: 0, pauseStartTime: null });

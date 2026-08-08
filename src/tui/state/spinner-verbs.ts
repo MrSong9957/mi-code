@@ -3,12 +3,16 @@
 // SpinnerVerb 是一个 turn 级别的稳定值：启动时抽样一次，直到本轮结束都不变。
 // 配置支持 append（默认）与 replace 两种模式，调用方只拿到副本，避免运行时污染词库。
 //
-// i18n：当传入 translator 时，内置回退词库按当前语言读取；未传 translator 时回退到英文
-// SPINNER_VERBS（向后兼容旧测试与不需要本地化的调用点）。
+// i18n：内置词库按 Language 选择。
+//   - en-US：直接复用本文件的 SPINNER_VERBS 常量（单一数据源，避免与 en-US.ts 数组双写）。
+//   - zh-CN：读取 zhCN.spinner.builtinVerbs。
+//   - 未传 language：英文 SPINNER_VERBS（向后兼容旧测试与不需要本地化的调用点）。
+//
+// 不再通过探测 translator 字符串推断语言——Language 本身就是干净的真实来源，
+// 且不会因 spinner.thinking 文案被改写而错选词库。
 
 import type { SpinnerVerbConfig as StoredSpinnerVerbConfig } from '../../config/schema.js';
-import type { Translator } from '../../locale/types.js';
-import { enUS } from '../../locale/resources/en-US.js';
+import type { Language } from '../../locale/types.js';
 import { zhCN } from '../../locale/resources/zh-CN.js';
 
 /** Claude Code 风格的 Spinner 动词配置。运行时字段允许省略以保持调用简洁。 */
@@ -80,31 +84,31 @@ function isSpinnerVerb(value: string): boolean {
 }
 
 /**
- * 通过 translator 探测当前语言并返回对应内置动词词库的副本。
+ * 按 Language 返回对应内置动词词库的副本。
  *
- * 由于 Translator.t 只处理字符串 leaf（对数组 key 返回 ?missing translation），
- * 这里借用一个稳定的本地化探针（spinner.thinking 的 zh/en 文案不同）来推断
- * 当前语言，再直接从对应资源数组读取。translator 缺省时回退到英文 SPINNER_VERBS。
+ * - language 缺省：英文 SPINNER_VERBS（向后兼容旧调用点）。
+ * - 'en-US'：直接返回 SPINNER_VERBS 副本（单一数据源；en-US.ts 中的数组仅作
+ *   资源结构对齐/独立可读，运行时不作为英文词库来源）。
+ * - 'zh-CN'：返回 zhCN.spinner.builtinVerbs 副本。
  */
-function builtinVerbsFor(translator?: Translator): string[] {
-  if (!translator) return [...SPINNER_VERBS];
-  const probe = translator.t('spinner.thinking');
-  if (probe === '思考中') return [...zhCN.spinner.builtinVerbs];
-  // 'thinking'（en）或任何未知值都回退到英文资源数组。
-  return [...enUS.spinner.builtinVerbs];
+function builtinVerbsFor(language: Language | undefined): string[] {
+  if (language === 'en-US') return [...SPINNER_VERBS];
+  if (language === 'zh-CN') return [...zhCN.spinner.builtinVerbs];
+  // undefined 或任何未知值：英文回退（向后兼容）。
+  return [...SPINNER_VERBS];
 }
 
 /**
  * 获取当前词库副本，支持用户追加或替换内置词库。
  *
- * 当 translator 缺省时，内置词库使用英文 SPINNER_VERBS（向后兼容）。
+ * 当 language 缺省时，内置词库使用英文 SPINNER_VERBS（向后兼容）。
  */
 export function getSpinnerVerbs(
   config?: SpinnerVerbConfig,
-  translator?: Translator,
+  language?: Language,
 ): string[] {
   const configured = (config?.verbs ?? []).filter(isSpinnerVerb);
-  const builtins = builtinVerbsFor(translator);
+  const builtins = builtinVerbsFor(language);
   const verbs = config?.mode === 'replace'
     ? configured
     : [...builtins, ...configured];
@@ -117,11 +121,11 @@ export function getSpinnerVerbs(
  *
  * - replace 模式 + 配置 verbs：直接从配置词库抽样（用户数据，不翻译）。
  * - append 模式 + 配置 verbs：从 [内置 + 配置] 合并词库抽样。
- * - 无配置或配置为空：从内置词库抽样（按 translator 语言，缺省英文）。
+ * - 无配置或配置为空：从内置词库抽样（按 language，缺省英文）。
  *
  * 注意：configured/custom 动词一律原样返回（它们是用户数据）。
  */
-export function sampleVerb(config?: SpinnerVerbConfig, translator?: Translator): string {
-  const verbs = getSpinnerVerbs(config, translator);
+export function sampleVerb(config?: SpinnerVerbConfig, language?: Language): string {
+  const verbs = getSpinnerVerbs(config, language);
   return verbs[Math.floor(Math.random() * verbs.length)] ?? 'Thinking';
 }

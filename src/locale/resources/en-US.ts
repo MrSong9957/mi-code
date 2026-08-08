@@ -58,6 +58,11 @@ export const enUS: CanonicalResources = {
     thinking: 'thinking',
     thinkingWithEffort: 'thinking {effort}',
     thoughtFor: 'thought for {duration}',
+    // NOTE: builtinVerbs 仅为资源结构对齐（CanonicalResources 形状要求 zh-CN 与 en-US
+    // 都存在此字段）和资源文件独立可读而保留。运行时英文词库的唯一数据源是
+    // src/tui/state/spinner-verbs.ts 的 SPINNER_VERBS 常量，spinner-verbs.ts 不再
+    // 从本数组读取（避免循环依赖）。修改英文词库请改 SPINNER_VERBS，并同步更新此数组
+    // 以保持文档一致。
     builtinVerbs: [
       'Thinking', 'Pondering', 'Reflecting', 'Contemplating', 'Reasoning',
       'Analyzing', 'Considering', 'Deliberating', 'Musing', 'Ruminating',
