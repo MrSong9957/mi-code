@@ -109,6 +109,9 @@ export const zhCN = {
     selectModel: '选择模型',
     modelSwitched: '已切换到模型：{label}（{value}）',
     noApiKey: '[错误] {provider} provider 缺少 API Key。请使用 /login {provider} <key> 配置。',
+    rewindNotice: '── 上一条消息已撤回 ──',
+    overlayTitleThinking: '思考',
+    overlayTitleToolResult: '工具结果',
   },
   spinner: {
     placeholder: '处理中',

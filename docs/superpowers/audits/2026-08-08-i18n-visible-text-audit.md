@@ -260,12 +260,12 @@ cli.ts:58 是设计上不可 locale 化的启动错误（语言未定）。无 l
 | index.ts:571 | `'/' + sel + ' '` | raw technical-or-user content | 命令前缀构造 |
 | index.ts:579 | `['build','plan','auto']` | raw technical-or-user content | 模式枚举数组 |
 | index.ts:584 | `'session'`（transition source） | raw technical-or-user content | 内部 source 枚举 |
-| index.ts:601 | `expandable.kind === 'thinking' ? 'Thinking' : 'Tool result'` | locale-required | Ctrl+O 展开覆盖层的标题，user-visible，硬编码英文（Task 10 defer 项） |
+| index.ts:601 | `expandable.kind === 'thinking' ? 'Thinking' : 'Tool result'` | ✅ resolved (Task 10 corrective) | Ctrl+O 展开覆盖层的标题，已 locale 化为 `status.overlayTitleThinking` / `status.overlayTitleToolResult` |
 | index.ts:642/650/677 | `'user'` / `'assistant'`（role 比较） | raw technical-or-user content | 内部 role 枚举 |
 | index.ts:711 | `'exit'` | raw technical-or-user content | 命令名 |
-| index.ts:735-736 | `'default'`（userId） / `` `Skill "${blockReq.skillName}" blocked.` `` | locale-required (后者) | userId 是内部键；blocked 消息 user-visible（Task 10 defer 项） |
+| index.ts:735-736 | `'default'`（userId） / `` `Skill "${blockReq.skillName}" blocked.` `` | ✅ resolved (Task 10 corrective, 后者) | userId 是内部键；blocked 消息已 locale 化为 `commands.skill.blocked`（复用，带 `{name}` 参数） |
 | index.ts:744 | `'image'`（cmd.name） | raw technical-or-user content | 命令名 |
-| index.ts:747 | `` `✗ ${imgResult.error}` `` | locale-required (prefix only) | `✗` 前缀是错误标记 + 动态 error 文本；Task 10 defer 项指 `✗` 前缀。动态 error 内容是 raw（用户/系统产生）。整体可考虑 locale 化前缀，但 `✗` 本身是 glyph |
+| index.ts:747 | `` `✗ ${imgResult.error}` `` | raw (reclassified, Task 10 corrective) | `✗` 是视觉符号/icon（非自然语言），`${imgResult.error}` 是动态错误体（spec：动态错误文本不翻译）。无固定自然语言散文，整体归 raw。见末尾"重分类"节 |
 | index.ts:753 | `'model'`（cmd.name） | raw technical-or-user content | 命令名 |
 | index.ts:765 | `['skill','trigger','y','n','edit']` | raw technical-or-user content | 命令名数组 |
 | index.ts:766 | `'default'`（userId） | raw technical-or-user content | 内部 userId |
@@ -293,16 +293,16 @@ cli.ts:58 是设计上不可 locale 化的启动错误（语言未定）。无 l
 | index.ts:1225/1230/1240 | `'user'` / `'assistant'` / `'text'`（role/type） | raw technical-or-user content | 内部枚举 |
 | index.ts:1259-1261 | `'SIGINT'` / `'SIGTERM'` / `'exit'` | raw technical-or-user content | 进程信号名 |
 | index.ts:1264 | `{ name: 'SessionStart', payload: {} }` | raw technical-or-user content | hook 事件名；`r.message` 是 hook 输出（raw 用户/hook 内容） |
-| index.ts:1271 | `` `[scheduled:${n.scheduleId}] ${n.prompt}` `` | locale-required (prefix only) | `[scheduled:...]` 前缀是技术标记；`n.prompt` 是用户定义的调度提示（raw 用户内容）。Task 10 defer 项指前缀。整体归 raw 亦可——保守标 locale-required 提示前缀可考虑 locale，但 `[scheduled:id]` 是技术标记 |
+| index.ts:1271 | `` `[scheduled:${n.scheduleId}] ${n.prompt}` `` | raw (reclassified, Task 10 corrective) | `[scheduled:<id>]` 是结构化/系统标签前缀（无自然语言），`${n.prompt}` 是动态用户自定义 prompt（spec：用户输入不翻译）。无固定可翻译散文，整体归 raw。见末尾"重分类"节 |
 
-index.ts 的 locale-required 残留（Task 10 显式 defer）：
-- line 601：`'Thinking'` / `'Tool result'`（Ctrl+O 标题）
-- line 696：`'── 上一条消息已撤回 ──'`（撤回标记，硬编码中文）
-- line 736：`` `Skill "${blockReq.skillName}" blocked.` ``（skill 拦截反馈）
-- line 747：`` `✗ ${imgResult.error}` ``（图片错误前缀，标记 + 动态）
-- line 1271：`` `[scheduled:${n.scheduleId}] ${n.prompt}` ``（调度前缀，标记 + 动态用户内容）
+index.ts 的 locale-required 残留（Task 10 显式 defer）—— **Task 10 corrective 后全部 resolved**：
+- ~~line 601：`'Thinking'` / `'Tool result'`（Ctrl+O 标题）~~ → ✅ resolved：`translator.t('status.overlayTitleThinking')` / `translator.t('status.overlayTitleToolResult')`
+- ~~line 696：`'── 上一条消息已撤回 ──'`（撤回标记，硬编码中文）~~ → ✅ resolved：`translator.t('status.rewindNotice')`
+- ~~line 736：`` `Skill "${blockReq.skillName}" blocked.` ``（skill 拦截反馈）~~ → ✅ resolved：`translator.t('commands.skill.blocked', { name: blockReq.skillName })`（复用现有 key）
+- ~~line 747：`` `✗ ${imgResult.error}` ``（图片错误前缀，标记 + 动态）~~ → ✅ reclassified as `raw`
+- ~~line 1271：`` `[scheduled:${n.scheduleId}] ${n.prompt}` ``（调度前缀，标记 + 动态用户内容）~~ → ✅ reclassified as `raw`
 
-注：line 696 的撤回标记是整个 bounded list 中**唯一**的硬编码中文 user-visible 字符串。
+注：line 696 的撤回标记原是整个 bounded list 中**唯一**的硬编码中文 user-visible 字符串——现已 locale 化。
 
 ### 17. `src/prompts/response-language-preference.ts`
 
@@ -333,16 +333,27 @@ en-US 资源，`CanonicalResources` 类型强制结构对齐。
 
 ## locale-required 残留汇总（action items）
 
-| file:line | current text | recommended key | 建议处理 task |
+| file:line | current text | recommended key | 状态 |
 |---|---|---|---|
-| index.ts:601 | `'Thinking'` / `'Tool result'`（Ctrl+O 标题） | `overlay.title.thinking` / `overlay.title.toolResult`（新） | 后续 i18n polish task |
-| index.ts:696 | `'── 上一条消息已撤回 ──'`（撤回标记） | `cli.rewindMarker`（新） | 后续 i18n polish task |
-| index.ts:736 | `` `Skill "${skillName}" blocked.` `` | `commands.skillBlocked`（新，与 executor.ts:134/160 复用） | 后续 executor locale 化 task |
-| index.ts:747 | `` `✗ ${imgResult.error}` ``（前缀） | `errors.imagePrefix`（新，glyph `✗` 可保留） | 后续 i18n polish task |
-| index.ts:1271 | `` `[scheduled:${id}] ${prompt}` ``（前缀） | `cli.scheduledPrefix`（新） | 后续 i18n polish task |
+| index.ts:601 | `'Thinking'` / `'Tool result'`（Ctrl+O 标题） | `status.overlayTitleThinking` / `status.overlayTitleToolResult` | ✅ **resolved**（Task 10 corrective）—— 已改走 `translator.t('status.overlayTitleThinking')` / `translator.t('status.overlayTitleToolResult')`。注意：与 `spinner.thinking`（spinner 状态文本）不同，使用独立 key。 |
+| index.ts:696 | `'── 上一条消息已撤回 ──'`（撤回标记） | `status.rewindNotice` | ✅ **resolved**（Task 10 corrective）—— 已改走 `translator.t('status.rewindNotice')`。 |
+| index.ts:736 | `` `Skill "${skillName}" blocked.` `` | `commands.skill.blocked`（复用，Task 4 corrective 已加 `{name}` 参数） | ✅ **resolved**（Task 10 corrective）—— 已改走 `translator.t('commands.skill.blocked', { name: blockReq.skillName })`。**未新增 key**，复用 Task 4 corrective 的现有 key。 |
+| index.ts:747 | `` `✗ ${imgResult.error}` `` | （无） | ✅ **resolved**（Task 10 corrective）—— **reclassified as `raw`**（见下方"重分类"节）。 |
+| index.ts:1271 | `` `[scheduled:${id}] ${prompt}` `` | （无） | ✅ **resolved**（Task 10 corrective）—— **reclassified as `raw`**（见下方"重分类"节）。 |
 | block-pipeline.ts:155 | `'Thinking…'`（临时行） | `spinner.thinking`（已有，可直接复用）或新 `overlay.thinkingPlaceholder` | 后续 i18n polish task |
 | block-pipeline.ts:372 | `'  (No thinking content received)'` | `thinking.noContent`（新） | 后续 i18n polish task |
 | executor.ts（多处，约 25+ 条） | `/config /login /provider /model /skill /trigger /theme /compact` 等命令反馈 | 需新增 `commands.*` 子树（`commands.compact.triggered` / `commands.unknown` / `commands.noSkillRegistry` / `commands.skillBlocked` / `commands.config.*` / `commands.login.saved` / `commands.provider.*` / `commands.model.*` / `commands.theme.switched` / `commands.mode.set` 等） | 后续 executor locale 化 task（独立） |
+
+### 重分类（reclassifications）
+
+Task 10 corrective 期间，对原审计标为 `locale-required` 的 2 处重新判定为 `raw`，依据如下：
+
+| file:line | original category | reclassified | evidence |
+|---|---|---|---|
+| index.ts:747 | locale-required (prefix only) | **`raw`** | `` `✗ ${imgResult.error}` `` —— `✗` 是视觉符号/icon（非自然语言），`${imgResult.error}` 是动态错误体（spec：动态错误文本不翻译）。**无固定自然语言散文**需要 locale 化。无需新增 resource key。 |
+| index.ts:1271 | locale-required (prefix only) | **`raw`** | `` `[scheduled:${n.scheduleId}] ${n.prompt}` `` —— `[scheduled:<id>]` 是结构化/系统标签前缀（无自然语言），`${n.prompt}` 是动态用户自定义 prompt 内容（spec：用户输入不翻译）。**无固定可翻译散文**。spec §3.1"调度提示"指 notification 是 user-visible，但此渲染无完整可翻译句子。无需新增 resource key。 |
+
+判定准则：locale 化针对"固定自然语言散文"。当一行仅由 **(a) 视觉符号/系统标签 + (b) 动态内容** 组成、无固定自然语言成分时，归 `raw`。
 
 低优先（保守可归 raw）：
 - subagent-presentation.ts:111/155 `'Agent'`（label 兜底）—— 异常兜底词，可在上述 task 顺带 locale 化。

@@ -598,7 +598,7 @@ function handleToggleOverlay(handle: BootstrapHandle | null): void {
   }
   const expandable = handle.pipeline.getLastExpandableFullLines();
   if (!expandable) return; // 无可展开内容，静默忽略
-  const title = expandable.kind === 'thinking' ? 'Thinking' : 'Tool result';
+  const title = expandable.kind === 'thinking' ? translator.t('status.overlayTitleThinking') : translator.t('status.overlayTitleToolResult');
   overlay.open(title, expandable.lines);
 }
 
@@ -693,7 +693,7 @@ async function handleRewindLastTurn(): Promise<void> {
   // inline 模式下终端无法擦除已输出到 scrollback 的行——messagesStore 已正确删除,
   // 但屏幕上原消息物理残留。打印简短标记让用户知道撤回已生效,把"作废的旧消息"
   // 与"新对话"在视觉上隔开。(alt-screen 模式下 Ink diff 引擎会自动擦除,此标记冗余)
-  printLine('── 上一条消息已撤回 ──');
+  printLine(translator.t('status.rewindNotice'));
 }
 
 async function handleUserSubmit(rawText: string): Promise<void> {
@@ -733,7 +733,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const blockReq = parseBlockPrefix(userInput);
   if (blockReq) {
     skillNegotiator.block(blockReq.skillName, 'default');
-    printLine(`Skill "${blockReq.skillName}" blocked.`);
+    printLine(translator.t('commands.skill.blocked', { name: blockReq.skillName }));
     return;
   }
 

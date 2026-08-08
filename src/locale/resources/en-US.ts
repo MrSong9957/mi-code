@@ -111,6 +111,9 @@ export const enUS: CanonicalResources = {
     selectModel: 'Select model',
     modelSwitched: 'Model switched to: {label} ({value})',
     noApiKey: '[Error] No API Key for {provider} provider. Use /login {provider} <key> to configure.',
+    rewindNotice: '── Last message rewound ──',
+    overlayTitleThinking: 'Thinking',
+    overlayTitleToolResult: 'Tool result',
   },
   spinner: {
     placeholder: 'Working',
