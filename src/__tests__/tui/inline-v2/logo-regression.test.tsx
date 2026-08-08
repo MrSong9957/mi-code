@@ -34,6 +34,10 @@ import { createSelectionStore } from '../../../tui/state/selection-store.js';
 import { createClearScreenStore } from '../../../tui/state/clear-screen-store.js';
 import { EMPTY_SPINNER_CONTEXT } from '../../../tui/state/spinner-store.js';
 import { useTerminalSize } from '../../../tui/hooks/useTerminalSize.js';
+import { LocaleProvider } from '../../../locale/context.js';
+import { createLanguageStore } from '../../../locale/language-store.js';
+
+const languageStore = createLanguageStore('en-US');
 
 /**
  * updateStreaming 的语义等价:直接改 streaming-assistant 活动项的 text。
@@ -80,7 +84,9 @@ describe('<InlineAppV2> LOGO 不变量', () => {
   it('空消息时 logo 在最顶', () => {
     const stores = makeStores();
     const { lastFrame } = render(
-      <InlineAppV2 messages={[]} status={STATUS} logo={LOGO} stores={stores} cols={80} rows={24} />,
+      <LocaleProvider store={languageStore}>
+        <InlineAppV2 messages={[]} status={STATUS} logo={LOGO} stores={stores} cols={80} rows={24} />
+      </LocaleProvider>,
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('MiCode');
@@ -96,10 +102,12 @@ describe('<InlineAppV2> LOGO 不变量', () => {
       text: 'hello',
     });
     const { lastFrame } = render(
-      <InlineAppV2
-        messages={stores.messagesStore.getState().messages}
-        status={STATUS} logo={LOGO} stores={stores} cols={80} rows={24}
-      />,
+      <LocaleProvider store={languageStore}>
+        <InlineAppV2
+          messages={stores.messagesStore.getState().messages}
+          status={STATUS} logo={LOGO} stores={stores} cols={80} rows={24}
+        />
+      </LocaleProvider>,
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('MiCode');
@@ -118,10 +126,12 @@ describe('<InlineAppV2> LOGO 不变量', () => {
       });
     }
     const { lastFrame } = render(
-      <InlineAppV2
-        messages={stores.messagesStore.getState().messages}
-        status={STATUS} logo={LOGO} stores={stores} cols={80} rows={24}
-      />,
+      <LocaleProvider store={languageStore}>
+        <InlineAppV2
+          messages={stores.messagesStore.getState().messages}
+          status={STATUS} logo={LOGO} stores={stores} cols={80} rows={24}
+        />
+      </LocaleProvider>,
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('MiCode');
@@ -135,10 +145,12 @@ describe('<InlineAppV2> LOGO 不变量', () => {
     stores.messagesStore.getState().startAssistant('partial\n');
     stores.spinnerStore.getState().start('responding');
     const { lastFrame } = render(
-      <InlineAppV2
-        messages={stores.messagesStore.getState().messages}
-        status={STATUS} logo={LOGO} stores={stores} cols={80} rows={24}
-      />,
+      <LocaleProvider store={languageStore}>
+        <InlineAppV2
+          messages={stores.messagesStore.getState().messages}
+          status={STATUS} logo={LOGO} stores={stores} cols={80} rows={24}
+        />
+      </LocaleProvider>,
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('MiCode');
@@ -150,10 +162,12 @@ describe('<InlineAppV2> LOGO 不变量', () => {
     const stores = makeStores();
     stores.selectStore.getState().open('Pick', [{ value: 'a', label: 'A' }]);
     const { lastFrame } = render(
-      <InlineAppV2
-        messages={stores.messagesStore.getState().messages}
-        status={STATUS} logo={LOGO} stores={stores} cols={80} rows={24}
-      />,
+      <LocaleProvider store={languageStore}>
+        <InlineAppV2
+          messages={stores.messagesStore.getState().messages}
+          status={STATUS} logo={LOGO} stores={stores} cols={80} rows={24}
+        />
+      </LocaleProvider>,
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('MiCode');
@@ -186,8 +200,10 @@ function makeFullStores() {
 function renderConnected(stores: ReturnType<typeof makeFullStores>) {
   return render(
     React.createElement(RenderModeProvider, { initialMode: 'inline', children:
-      React.createElement(ThemeStoreProvider, { store: createThemeStore('dark') },
-        React.createElement(ConnectedApp, { ...stores, onExit: () => {} }),
+      React.createElement(LocaleProvider, { store: languageStore },
+        React.createElement(ThemeStoreProvider, { store: createThemeStore('dark') },
+          React.createElement(ConnectedApp, { ...stores, onExit: () => {} }),
+        ),
       ),
     }),
   );

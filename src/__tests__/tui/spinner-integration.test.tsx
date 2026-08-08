@@ -9,8 +9,19 @@ import { render } from 'ink-testing-library';
 import React from 'react';
 import { Spinner } from '../../tui/components/Spinner.js';
 import { createSpinnerStore } from '../../tui/state/spinner-store.js';
+import { LocaleProvider } from '../../locale/context.js';
+import { createLanguageStore } from '../../locale/language-store.js';
 
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+const languageStore = createLanguageStore('en-US');
+
+/** Spinner.tsx 内部调用 useLocale()，渲染时必须挂在 LocaleProvider 下。 */
+function spinnerElement(store: ReturnType<typeof createSpinnerStore>): React.ReactElement {
+  return React.createElement(LocaleProvider, { store: languageStore },
+    React.createElement(Spinner, { store }),
+  );
+}
 
 describe('Spinner integration', () => {
   beforeEach(() => { vi.useFakeTimers(); });
@@ -21,9 +32,9 @@ describe('Spinner integration', () => {
 
     // Phase 1: responding with shimmer + 省略号 + always-on metrics
     store.getState().start('responding');
-    const { lastFrame, rerender } = render(React.createElement(Spinner, { store }));
+    const { lastFrame, rerender } = render(spinnerElement(store));
     vi.advanceTimersByTime(1000);
-    rerender(React.createElement(Spinner, { store }));
+    rerender(spinnerElement(store));
     const genFrame = stripAnsi(lastFrame() ?? '');
     // Shimmer symbols present
     expect(genFrame).toMatch(/[·✢✳✶✻✽]/);
@@ -36,13 +47,13 @@ describe('Spinner integration', () => {
     // Phase 2: switch to thinking via setMode
     store.getState().setMode('thinking');
     vi.advanceTimersByTime(4000);  // past 3s delay
-    rerender(React.createElement(Spinner, { store }));
+    rerender(spinnerElement(store));
     const thinkFrame = stripAnsi(lastFrame() ?? '');
     expect(thinkFrame).toContain('(thinking)');
 
     // Phase 3: stop
     store.getState().stop();
-    rerender(React.createElement(Spinner, { store }));
+    rerender(spinnerElement(store));
     expect(lastFrame()).toBe('');
   });
 });

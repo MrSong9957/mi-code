@@ -7,9 +7,24 @@ import React from 'react';
 import { Spinner } from '../../tui/components/Spinner.js';
 import { createSpinnerStore } from '../../tui/state/spinner-store.js';
 import { SPINNER_VERBS } from '../../tui/state/spinner-verbs.js';
+import { LocaleProvider } from '../../locale/context.js';
+import { createLanguageStore } from '../../locale/language-store.js';
 
 // 新符号序列（Claude Code 风格）
 const SYMBOL_RE = /[·✢✳✶✻✽]/;
+
+const languageStore = createLanguageStore('en-US');
+
+/** Spinner.tsx 内部调用 useLocale()，渲染时必须挂在 LocaleProvider 下。 */
+function spinnerElement(store: ReturnType<typeof createSpinnerStore>): React.ReactElement {
+  return React.createElement(LocaleProvider, { store: languageStore },
+    React.createElement(Spinner, { store }),
+  );
+}
+
+function renderSpinner(store: ReturnType<typeof createSpinnerStore>) {
+  return render(spinnerElement(store));
+}
 
 describe('Spinner 组件', () => {
   beforeEach(() => { vi.useFakeTimers(); });
@@ -17,7 +32,7 @@ describe('Spinner 组件', () => {
 
   it('inactive：渲染空（无 spinner 符号）', () => {
     const store = createSpinnerStore();
-    const { lastFrame } = render(React.createElement(Spinner, { store }));
+    const { lastFrame } = renderSpinner(store);
     const frame = lastFrame() ?? '';
     expect(frame).not.toMatch(SYMBOL_RE);
   });
@@ -25,7 +40,7 @@ describe('Spinner 组件', () => {
   it('active：渲染符号 + verb', () => {
     const store = createSpinnerStore();
     store.getState().start('thinking');
-    const { lastFrame } = render(React.createElement(Spinner, { store }));
+    const { lastFrame } = renderSpinner(store);
     const frame = lastFrame() ?? '';
     // 显示的是随机 verb（在词库内）
     const verbFound = SPINNER_VERBS.some(v => frame.includes(v));
@@ -36,7 +51,7 @@ describe('Spinner 组件', () => {
   it('pure rendering does not own an interval', () => {
     const store = createSpinnerStore();
     store.getState().start('responding');
-    const { unmount } = render(React.createElement(Spinner, { store }));
+    const { unmount } = renderSpinner(store);
     // 推进 150ms = 3 个 tick（50ms）
     vi.advanceTimersByTime(150);
     // time 应已推进（store 层已测；这里只确保不抛错、不崩）
@@ -56,7 +71,7 @@ describe('Spinner 组件', () => {
       nextTaskText: 'Next: verify',
     });
     store.getState().start('responding');
-    const rendered = render(React.createElement(Spinner, { store }));
+    const rendered = renderSpinner(store);
     const normal = rendered.lastFrame() ?? '';
     expect(normal).toContain('[ ] Ship');
     expect(normal).toContain('custom tip');
@@ -67,7 +82,7 @@ describe('Spinner 组件', () => {
     expect(normal.indexOf('Budget: 10m')).toBeLessThan(normal.indexOf('Next: verify'));
 
     store.getState().setContext({ ...store.getState().context, variant: 'brief' });
-    rendered.rerender(React.createElement(Spinner, { store }));
+    rendered.rerender(spinnerElement(store));
     const brief = rendered.lastFrame() ?? '';
     expect(brief).not.toContain('[ ] Ship');
     expect(brief).not.toContain('custom tip');
@@ -78,9 +93,9 @@ describe('Spinner 组件', () => {
   it('stop 后不再渲染符号', () => {
     const store = createSpinnerStore();
     store.getState().start('responding');
-    const { lastFrame, rerender } = render(React.createElement(Spinner, { store }));
+    const { lastFrame, rerender } = renderSpinner(store);
     store.getState().stop();
-    rerender(React.createElement(Spinner, { store }));
+    rerender(spinnerElement(store));
     const frame = lastFrame() ?? '';
     expect(frame).not.toMatch(SYMBOL_RE);
   });
@@ -90,7 +105,7 @@ describe('Spinner 组件', () => {
     store.getState().start('responding');
     store.getState().setMode('tool-use');
     store.getState().setLabel('Running bash');
-    const { lastFrame } = render(React.createElement(Spinner, { store }));
+    const { lastFrame } = renderSpinner(store);
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Running bash');
   });
@@ -99,7 +114,7 @@ describe('Spinner 组件', () => {
     const store = createSpinnerStore();
     store.getState().start('responding');
     store.getState().setVerbose(true);
-    const { lastFrame } = render(React.createElement(Spinner, { store }));
+    const { lastFrame } = renderSpinner(store);
     expect(lastFrame()).toContain('1s');
   });
 
@@ -110,7 +125,7 @@ describe('Spinner 组件', () => {
       ...store.getState().context,
       teammates: [{ name: 'alice', role: 'coder', status: 'working' }],
     });
-    const { lastFrame } = render(React.createElement(Spinner, { store }));
+    const { lastFrame } = renderSpinner(store);
     expect(lastFrame()).toContain('1s');
   });
 
@@ -121,7 +136,7 @@ describe('Spinner 组件', () => {
     store.getState().onToken(800);
     store.getState().setTeammateTokens(30);
     store.getState().tick();
-    const { lastFrame } = render(React.createElement(Spinner, { store }));
+    const { lastFrame } = renderSpinner(store);
     expect(lastFrame()).toContain('↑ 80');
   });
 
@@ -130,13 +145,13 @@ describe('Spinner 组件', () => {
     const store = createSpinnerStore();
     store.getState().setThinkingEffort('hard');
     store.getState().start('thinking');
-    const { lastFrame, rerender } = render(React.createElement(Spinner, { store }));
+    const { lastFrame, rerender } = renderSpinner(store);
     expect(lastFrame()).toContain('(thinking hard)');
 
     vi.setSystemTime(1_500);
     store.getState().tick();
     store.getState().setMode('responding');
-    rerender(React.createElement(Spinner, { store }));
+    rerender(spinnerElement(store));
     expect(lastFrame()).toContain('(thought for 2s)');
   });
 });

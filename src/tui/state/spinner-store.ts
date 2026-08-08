@@ -1,5 +1,6 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import { sampleVerb, type SpinnerVerbConfig } from './spinner-verbs.js';
+import type { Translator } from '../../locale/types.js';
 
 /** Claude Code 的 6 帧往返序列；time 的单位始终是毫秒。 */
 export const SPINNER_FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✽', '✻', '✶', '✳', '✢', '·'] as const;
@@ -103,13 +104,27 @@ export function formatSpinnerDuration(durationMs: number): string {
   return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 }
 
-export function thinkingStatusText(effort: string | null): string {
+/**
+ * thinking 状态括号文本。
+ *
+ * - effort 为空 → translator.t('spinner.thinking')（zh '思考中' / en 'thinking'）。
+ * - effort 非空 → translator.t('spinner.thinkingWithEffort', { effort })，effort 原样透传。
+ */
+export function thinkingStatusText(effort: string | null, translator: Translator): string {
   const normalizedEffort = effort?.trim();
-  return normalizedEffort ? `thinking ${normalizedEffort}` : 'thinking';
+  return normalizedEffort
+    ? translator.t('spinner.thinkingWithEffort', { effort: normalizedEffort })
+    : translator.t('spinner.thinking');
 }
 
-export function thoughtStatusText(durationMs: number): string {
-  return `thought for ${formatSpinnerDuration(durationMs)}`;
+/**
+ * thinking 摘要括号文本：translator.t('spinner.thoughtFor', { duration })。
+ *
+ * duration 是 formatSpinnerDuration 的原始输出（如 '5s' / '2m 3s'），原样透传，
+ * 不翻译其 's'/'m' 单位。
+ */
+export function thoughtStatusText(durationMs: number, translator: Translator): string {
+  return translator.t('spinner.thoughtFor', { duration: formatSpinnerDuration(durationMs) });
 }
 
 /** 由毫秒级统一时钟派生 thinking 灰色呼吸颜色。 */
@@ -223,6 +238,7 @@ export type SpinnerStore = StoreApi<SpinnerState>;
 export function createSpinnerStore(
   verbConfig?: SpinnerVerbConfig,
   initialContext: SpinnerContextSnapshot = EMPTY_SPINNER_CONTEXT,
+  translator?: Translator,
 ): SpinnerStore {
   return createStore<SpinnerState>((set, get) => ({
     active: false, time: 0, mode: 'responding', verb: '', label: '',
@@ -239,7 +255,8 @@ export function createSpinnerStore(
         thinkStartTime: mode === 'thinking' ? 0 : null,
         thinkingSummary: null,
         // verb 是 turn 级值：只在 start 时抽样一次，后续 mode 切换不重新抽样。
-        verb: sampleVerb(verbConfig),
+        // 传入 translator 让内置词库按当前语言抽取；configured/custom 动词原样返回。
+        verb: sampleVerb(verbConfig, translator),
         stalled: false, stalledIntensity: 0, hasActiveTools: false, lastTokenAt: now,
         responseLength: 0, displayedTokens: 0, teammateTokens: 0,
         loadingStartTime: now, totalPausedMs: 0, pauseStartTime: null });

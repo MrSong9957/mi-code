@@ -139,7 +139,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const inputStore = createInputStore({ onSubmit: opts.onSubmit });
   const statusStore = createStatusStore(opts.status);
   const logoStore = createLogoStore(opts.logo);
-  const spinnerStore = createSpinnerStore(opts.spinnerVerbs, opts.spinnerContext);
+  const spinnerStore = createSpinnerStore(opts.spinnerVerbs, opts.spinnerContext, opts.translator);
   spinnerStore.getState().setVerbose(opts.spinnerVerbose ?? false);
   spinnerStore.getState().setThinkingEffort(opts.spinnerThinkingEffort ?? null);
   const completionStore = createCompletionStore();

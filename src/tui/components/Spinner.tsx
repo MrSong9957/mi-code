@@ -14,6 +14,7 @@ import type {
 } from '../state/spinner-view.js';
 import { selectSpinnerView } from '../state/spinner-view.js';
 import { useTheme } from '../state/theme-context.js';
+import { useLocale } from '../../locale/context.js';
 import {
   computeGlimmerIndex,
   measureShimmerMessage,
@@ -35,6 +36,8 @@ export function SpinnerAnimationRow({ animation }: {
   animation: SpinnerAnimationView;
   }): React.ReactElement {
   const theme = useTheme();
+  const { t } = useLocale();
+  const translator = { t };
   const displayText = animation.label || animation.verb;
   const messageWidth = measureShimmerMessage(displayText);
   const glimmerIndex = computeGlimmerIndex(animation.time, messageWidth, {
@@ -49,9 +52,9 @@ export function SpinnerAnimationRow({ animation }: {
   const isThinking = animation.mode === 'thinking' && animation.thinkStartTime !== null;
   const isThinkingSummary = animation.thinkingSummaryDurationMs !== null;
   const thinkingText = isThinking
-    ? thinkingStatusText(animation.thinkingEffort)
+    ? thinkingStatusText(animation.thinkingEffort, translator)
     : isThinkingSummary
-      ? thoughtStatusText(animation.thinkingSummaryDurationMs!)
+      ? thoughtStatusText(animation.thinkingSummaryDurationMs!, translator)
       : null;
   const metrics = formatSpinnerMetrics(
     animation.time,

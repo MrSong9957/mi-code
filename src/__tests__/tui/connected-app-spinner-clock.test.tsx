@@ -25,6 +25,10 @@ import {
 } from '../../tui/state/spinner-store.js';
 import { createStatusStore } from '../../tui/state/status-store.js';
 import { createClearScreenStore } from '../../tui/state/clear-screen-store.js';
+import { LocaleProvider } from '../../locale/context.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+
+const languageStore = createLanguageStore('en-US');
 
 function renderConnected(mode: RenderMode) {
   const spinnerStore = createSpinnerStore();
@@ -33,21 +37,23 @@ function renderConnected(mode: RenderMode) {
 
   const view = render(
     <RenderModeProvider initialMode={mode}>
-      <ConnectedApp
-        messagesStore={createMessagesStore()}
-        inputStore={createInputStore()}
-        statusStore={createStatusStore({
-          mode: 'chat', model: 'test', dir: '/tmp', branch: 'main',
-        })}
-        logoStore={createLogoStore({ version: '0.0.0', dir: '/tmp' })}
-        spinnerStore={spinnerStore}
-        completionStore={createCompletionStore()}
-        selectStore={createSelectStore()}
-        overlayStore={createOverlayStore()}
-        askQuestionStore={createAskQuestionStore()}
-        clearScreenStore={createClearScreenStore()}
-        onExit={() => {}}
-      />
+      <LocaleProvider store={languageStore}>
+        <ConnectedApp
+          messagesStore={createMessagesStore()}
+          inputStore={createInputStore()}
+          statusStore={createStatusStore({
+            mode: 'chat', model: 'test', dir: '/tmp', branch: 'main',
+          })}
+          logoStore={createLogoStore({ version: '0.0.0', dir: '/tmp' })}
+          spinnerStore={spinnerStore}
+          completionStore={createCompletionStore()}
+          selectStore={createSelectStore()}
+          overlayStore={createOverlayStore()}
+          askQuestionStore={createAskQuestionStore()}
+          clearScreenStore={createClearScreenStore()}
+          onExit={() => {}}
+        />
+      </LocaleProvider>
     </RenderModeProvider>,
   );
 

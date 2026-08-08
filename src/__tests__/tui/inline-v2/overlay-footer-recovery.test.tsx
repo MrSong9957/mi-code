@@ -26,6 +26,10 @@ import { createOverlayStore } from '../../../tui/state/overlay-store.js';
 import { createAskQuestionStore } from '../../../tui/state/ask-question-store.js';
 import { EMPTY_SPINNER_CONTEXT } from '../../../tui/state/spinner-store.js';
 import { createMockStdout } from './helpers/mock-stdout.js';
+import { LocaleProvider } from '../../../locale/context.js';
+import { createLanguageStore } from '../../../locale/language-store.js';
+
+const languageStore = createLanguageStore('en-US');
 
 const LOGO = { version: '1.0.0', dir: '/tmp/proj' };
 const STATUS = { mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 };
@@ -58,14 +62,16 @@ function makeWrapper(stores: ReturnType<typeof makeStores>) {
     }, []);
     const msgs = stores.messagesStore.getState().messages;
     return (
-      <InlineAppV2
-        messages={msgs}
-        status={STATUS}
-        logo={LOGO}
-        stores={stores}
-        cols={80}
-        rows={24}
-      />
+      <LocaleProvider store={languageStore}>
+        <InlineAppV2
+          messages={msgs}
+          status={STATUS}
+          logo={LOGO}
+          stores={stores}
+          cols={80}
+          rows={24}
+        />
+      </LocaleProvider>
     );
   }
   return Wrapper;

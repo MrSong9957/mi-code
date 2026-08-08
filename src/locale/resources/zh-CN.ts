@@ -53,6 +53,17 @@ export const zhCN = {
   },
   spinner: {
     placeholder: '处理中',
+    thinking: '思考中',
+    thinkingWithEffort: '思考中 {effort}',
+    thoughtFor: '思考了 {duration}',
+    builtinVerbs: [
+      '思考', '分析', '推理', '构建', '组织', '编写',
+      '调试', '审查', '探索', '搜索', '读取', '解析',
+      '计算', '验证', '测试', '规划', '设计', '重构',
+      '优化', '编译', '部署', '查询', '匹配', '汇总',
+      '生成', '转换', '追踪', '监听', '协调', '整理',
+      '校对', '打磨',
+    ],
   },
   overlay: {
     placeholder: '覆盖层',

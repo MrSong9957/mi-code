@@ -24,6 +24,11 @@ import {
 } from '../../tui/state/spinner-store.js';
 import { TURN_COMPLETION_VERBS } from '../../tui/state/turn-duration-message.js';
 import { SPINNER_VERBS } from '../../tui/state/spinner-verbs.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
+import type { Translator } from '../../locale/types.js';
+
+const enTranslator: Translator = createTranslator(createLanguageStore('en-US'));
 
 describe('spinner-store', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); });
@@ -187,7 +192,7 @@ describe('spinner-store', () => {
     s.getState().tick();
     s.getState().setMode('thinking');
     expect(s.getState().thinkStartTime).toBe(100);
-    expect(thinkingStatusText(s.getState().thinkingEffort)).toBe('thinking hard');
+    expect(thinkingStatusText(s.getState().thinkingEffort, enTranslator)).toBe('thinking hard');
 
     vi.setSystemTime(1_100);
     s.getState().tick();

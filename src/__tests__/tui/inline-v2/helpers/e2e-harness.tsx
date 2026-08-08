@@ -39,6 +39,8 @@ import { createOverlayStore } from '../../../../tui/state/overlay-store.js';
 import { createAskQuestionStore } from '../../../../tui/state/ask-question-store.js';
 import { createClearScreenStore } from '../../../../tui/state/clear-screen-store.js';
 import { EMPTY_SPINNER_CONTEXT } from '../../../../tui/state/spinner-store.js';
+import { LocaleProvider } from '../../../../locale/context.js';
+import { createLanguageStore } from '../../../../locale/language-store.js';
 
 export interface E2EHarnessOptions {
   /** 初始 status 数据 */
@@ -112,27 +114,30 @@ export function createE2EHarness(opts: E2EHarnessOptions = {}): E2EHarness {
   const askQuestionStore = createAskQuestionStore();
   const clearScreenStore = createClearScreenStore();
   const themeStore = createThemeStore('dark');
+  const languageStore = createLanguageStore('en-US');
 
   const instance = render(
     React.createElement(RenderModeProvider, { initialMode: 'inline', children:
-      React.createElement(ThemeStoreProvider, { store: themeStore },
-        React.createElement(ConnectedApp, {
-          messagesStore,
-          inputStore,
-          statusStore,
-          logoStore,
-          spinnerStore,
-          completionStore,
-          selectStore,
-          overlayStore,
-          askQuestionStore,
-          clearScreenStore,
-          onExit: opts.onExit ?? (() => {}),
-          onTab: opts.onTab,
-          onToggleOverlay: opts.onToggleOverlay,
-          onAbortStream: opts.onAbortStream,
-          onRewindLastTurn: opts.onRewindLastTurn,
-        }),
+      React.createElement(LocaleProvider, { store: languageStore },
+        React.createElement(ThemeStoreProvider, { store: themeStore },
+          React.createElement(ConnectedApp, {
+            messagesStore,
+            inputStore,
+            statusStore,
+            logoStore,
+            spinnerStore,
+            completionStore,
+            selectStore,
+            overlayStore,
+            askQuestionStore,
+            clearScreenStore,
+            onExit: opts.onExit ?? (() => {}),
+            onTab: opts.onTab,
+            onToggleOverlay: opts.onToggleOverlay,
+            onAbortStream: opts.onAbortStream,
+            onRewindLastTurn: opts.onRewindLastTurn,
+          }),
+        ),
       ),
     }),
   );
