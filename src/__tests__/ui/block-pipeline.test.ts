@@ -138,7 +138,7 @@ describe('BlockPipeline emit 路由', () => {
   });
 
   // 2. thinking_start(幂等)
-  it('thinking_start → startThinking("Thinking…");重复 start 幂等(只一次)', () => {
+  it('thinking_start → startThinking(thinking.tempLabel,zh 默认 "思考中…");重复 start 幂等(只一次)', () => {
     const { recorder, pipeline } = setup();
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_start' }); // 重复,幂等
@@ -146,7 +146,8 @@ describe('BlockPipeline emit 路由', () => {
 
     const starts = recorder.of('startThinking');
     expect(starts).toHaveLength(1);
-    expect(starts[0]!.text).toBe('Thinking…');
+    // zh-CN 默认本地化
+    expect(starts[0]!.text).toBe('思考中…');
   });
 
   // 3. thinking_delta(只累积,不触发调用)
@@ -466,14 +467,15 @@ describe('BlockPipeline getLastExpandableFullLines(可折叠块注册)', () => {
     expect(exp!.lines.some(l => l.content.includes('完整思考内容'))).toBe(true);
   });
 
-  it('thinking 无 delta → expandable fullLines 显示 "(No thinking content received)" 占位', () => {
+  it('thinking 无 delta → expandable fullLines 显示 "（无思考内容）" 占位(zh 本地化,保留前导 2 空格)', () => {
     const { pipeline } = setup();
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
 
     const exp = pipeline.getLastExpandableFullLines();
     expect(exp).not.toBeNull();
-    expect(exp!.lines.some(l => l.content.includes('No thinking content received'))).toBe(true);
+    // zh-CN 本地化;前导 2 空格保留(与 has-content 分支的 `  ${l}` 缩进对齐)
+    expect(exp!.lines.some(l => l.content === '  （无思考内容）')).toBe(true);
   });
 
   it('长 tool_result(>500 字符)注册可折叠块 → getLastExpandableFullLines 返回 kind:"tool_result"', () => {

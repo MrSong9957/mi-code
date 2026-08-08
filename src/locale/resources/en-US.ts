@@ -280,9 +280,17 @@ export const enUS: CanonicalResources = {
         minutesSeconds: '{minutes}m {seconds}s',
       },
     },
+    // Label fallback when neither description nor prompt yields a meaningful line.
+    agentFallback: 'Agent',
   },
   thinking: {
     summary: 'Thought for {seconds}s',
+    // Temporary placeholder line for thinking_start (spinner).
+    tempLabel: 'Thinking…',
+    // Empty-thinking-buffer placeholder; the leading 2 spaces are intentional and
+    // must match the has-content branch's `  ${l}` to keep a consistent visual
+    // indent above INDENT.nested.
+    noContent: '  (No thinking content received)',
   },
   agent: {
     responseLanguagePreference: 'Always respond in English.',

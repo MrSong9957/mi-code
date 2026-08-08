@@ -152,7 +152,7 @@ export class BlockPipeline {
         if (this.thinkingPhase === 'active') break;
         this.thinkingPhase = 'active';
         this.thinkingBuffer = '';
-        this.renderer.startThinking('Thinking…');
+        this.renderer.startThinking(this.translator.t('thinking.tempLabel'));
         break;
       }
 
@@ -369,7 +369,8 @@ export class BlockPipeline {
       }));
     }
     return [{
-      content: '  (No thinking content received)',
+      // 资源值已含前导 2 空格(与 has-content 分支的 `  ${l}` 缩进对齐),这里不再加。
+      content: this.translator.t('thinking.noContent'),
       style: BLOCK_STYLES.dim,
       indent: INDENT.nested,
       raw: true,

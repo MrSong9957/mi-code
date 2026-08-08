@@ -132,3 +132,46 @@ describe('BlockPipeline locale store switching', () => {
     expect(JSON.stringify(renderer.asks)).not.toContain('raw ask tool feedback');
   });
 });
+
+describe('BlockPipeline thinking label locale switching', () => {
+  it('thinking_start 临时标签随 store 语言切换:zh "思考中…" → en "Thinking…"', () => {
+    const languageStore = createLanguageStore('zh-CN');
+    const renderer = createRecordingRenderer();
+    const pipeline = new BlockPipeline(renderer, createTranslator(languageStore));
+
+    pipeline.emit({ kind: 'thinking_start' });
+    pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
+
+    languageStore.getState().setLanguage('en-US');
+
+    pipeline.emit({ kind: 'thinking_start' });
+    pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
+
+    const starts = (renderer.startThinking as ReturnType<typeof vi>).mock.calls.map(
+      (c: unknown[]) => c[0] as string,
+    );
+    expect(starts).toEqual(['思考中…', 'Thinking…']);
+  });
+
+  it('thinking 无 delta → noContent 占位随 store 语言切换,保留前导 2 空格', () => {
+    const languageStore = createLanguageStore('zh-CN');
+    const renderer = createRecordingRenderer();
+    const pipeline = new BlockPipeline(renderer, createTranslator(languageStore));
+
+    pipeline.emit({ kind: 'thinking_start' });
+    pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
+
+    let exp = pipeline.getLastExpandableFullLines();
+    expect(exp).not.toBeNull();
+    expect(exp!.lines.some(l => l.content === '  （无思考内容）')).toBe(true);
+
+    languageStore.getState().setLanguage('en-US');
+
+    pipeline.emit({ kind: 'thinking_start' });
+    pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
+
+    exp = pipeline.getLastExpandableFullLines();
+    expect(exp).not.toBeNull();
+    expect(exp!.lines.some(l => l.content === '  (No thinking content received)')).toBe(true);
+  });
+});

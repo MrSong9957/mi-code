@@ -111,6 +111,20 @@ describe('buildSubagentCompletionPresentation (AUTO-0025-transient Task 3)', () 
     )?.line).toBe('● Agent "Agent" incomplete · 2s');
   });
 
+  it('label 回退随语言本地化:zh "代理" / en "Agent"(completion builder,description 与 prompt 均无意义)', () => {
+    // zh-CN 回退 "代理"
+    expect(buildSubagentCompletionPresentation(
+      { prompt: '\n!!!\n{"task":"x"}' },
+      '[Subagent status=completed]\npartial', 1_000, translatorFor('zh-CN'),
+    )?.line).toBe('● Agent "代理" 已完成 · 1 秒');
+
+    // en-US 回退 "Agent"
+    expect(buildSubagentCompletionPresentation(
+      { prompt: '\n!!!\n{"task":"x"}' },
+      '[Subagent status=completed]\npartial', 1_000, translatorFor('en-US'),
+    )?.line).toBe('● Agent "Agent" finished · 1s');
+  });
+
   it('duration 负数/NaN 按 0 处理,显示至少 1s', () => {
     expect(buildSubagentCompletionPresentation(
       { prompt: 'x' }, '[Subagent status=completed]\ny', -500, translatorFor('en-US'),
@@ -211,5 +225,55 @@ describe('buildSubagentExecutionPresentation locale', () => {
       line: '● Agent "Review branch" finished · 1s',
       fullOutput: 'raw summary output',
     });
+  });
+
+  it('execution builder label 回退随语言本地化:zh "代理" / en "Agent"(description 与 prompt 均无意义)', () => {
+    const completion: SubagentExecutionResult = {
+      kind: 'completion',
+      report: {
+        protocol_version: '1',
+        subject: { kind: 'subagent', id: 's1' },
+        outcome: 'completed',
+        termination_reason: 'end_turn',
+        execution_mode: 'foreground',
+        verification: {
+          required_level: 'V0',
+          achieved_level: 'V0',
+          status: 'skipped',
+          evidence_refs: [],
+          failure_kind: null,
+        },
+        deliverables: [],
+        summary: '',
+        remaining_uncertainty: [],
+      },
+    };
+    const dispatch: SubagentExecutionResult = {
+      kind: 'dispatch',
+      receipt: {
+        protocol_version: '1',
+        execution_mode: 'background',
+        task_id: 'task-bg',
+        accepted: true,
+      },
+    };
+    const noMeaningful = { prompt: '\n!!!\n{"task":"x"}' };
+
+    // completion builder:zh "代理"
+    expect(buildSubagentExecutionPresentation(
+      noMeaningful, completion, 1_000, translatorFor('zh-CN'),
+    ).line).toBe('● Agent "代理" 已完成 · 1 秒');
+    // completion builder:en "Agent"
+    expect(buildSubagentExecutionPresentation(
+      noMeaningful, completion, 1_000, translatorFor('en-US'),
+    ).line).toBe('● Agent "Agent" finished · 1s');
+    // dispatch builder:zh "代理"
+    expect(buildSubagentExecutionPresentation(
+      noMeaningful, dispatch, 1_000, translatorFor('zh-CN'),
+    ).line).toBe('● Agent "代理" 已派发 · 1 秒');
+    // dispatch builder:en "Agent"
+    expect(buildSubagentExecutionPresentation(
+      noMeaningful, dispatch, 1_000, translatorFor('en-US'),
+    ).line).toBe('● Agent "Agent" dispatched · 1s');
   });
 });

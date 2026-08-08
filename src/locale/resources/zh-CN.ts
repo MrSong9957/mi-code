@@ -232,9 +232,16 @@ export const zhCN = {
         minutesSeconds: '{minutes} 分 {seconds} 秒',
       },
     },
+    // description 与 prompt 均无意义时的 label 回退。
+    agentFallback: '代理',
   },
   thinking: {
     summary: '思考了 {seconds} 秒',
+    // thinking_start 的临时行标签(spinner 占位)。
+    tempLabel: '思考中…',
+    // thinking 无 delta 时的占位;前导 2 空格刻意保留(与 buildThinkingFullLines 的
+    // has-content 分支 `  ${l}` 缩进对齐,INDENT.nested 之上再加一级视觉缩进)。
+    noContent: '  （无思考内容）',
   },
   agent: {
     responseLanguagePreference: '请始终用中文回复。',

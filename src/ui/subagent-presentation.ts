@@ -104,11 +104,11 @@ export function buildSubagentCompletionPresentation(
   const [, status, body] = match;
   const fullOutput = body ?? '';
 
-  // label 优先级:description > prompt 有意义行 > "Agent"
+  // label 优先级:description > prompt 有意义行 > agentFallback(本地化)
   const description = typeof input.description === 'string' ? input.description.trim() : '';
   const label = description
     || meaningfulLine(input.prompt)
-    || 'Agent';
+    || translator.t('subagent.agentFallback');
 
   const line = `● Agent "${label}" ${statusWord(status! as EnvelopeStatus, translator)} · ${formatDurationFromMs(durationMs, translator)}`;
   return { line, fullOutput };
@@ -148,11 +148,11 @@ export function buildSubagentExecutionPresentation(
   durationMs: number,
   translator: Translator,
 ): SubagentCompletionPresentation {
-  // label 优先级:description > prompt 有意义行 > "Agent"
+  // label 优先级:description > prompt 有意义行 > agentFallback(本地化)
   const description = typeof input.description === 'string' ? input.description.trim() : '';
   const label = description
     || meaningfulLine(input.prompt)
-    || 'Agent';
+    || translator.t('subagent.agentFallback');
 
   const dur = formatDurationFromMs(durationMs, translator);
 
