@@ -186,9 +186,9 @@ cli.ts:58 是设计上不可 locale 化的启动错误（语言未定）。无 l
 | file:line | literal | category | rationale |
 |---|---|---|---|
 | subagent-presentation.ts:29 | `ENVELOPE` regex `'/^\[Subagent status=.../'` | raw technical-or-user content | regex |
-| subagent-presentation.ts:111 | `'Agent'`（label fallback） | ✅ **resolved**（Task 7 corrective） | 已改走 `translator.t('subagent.agentFallback')`。zh `'代理'` / en `'Agent'`。 |
+| subagent-presentation.ts:111 | `'Agent'`（label fallback） | ✅ **resolved**（Task 7 corrective，commit `4639f76`） | 已改走 `translator.t('subagent.agentFallback')`。zh `'代理'` / en `'Agent'`。 |
 | subagent-presentation.ts:113 | `` `● Agent "${label}" ${statusWord} · ${formatDurationFromMs}` `` | raw technical-or-user content | `●` glyph + `Agent`（见上）+ 动态 label + 已 locale 化的 statusWord + `·` 分隔符 + 已 locale 化的 duration |
-| subagent-presentation.ts:155 | `'Agent'`（label fallback，RC-4 路径） | ✅ **resolved**（Task 7 corrective） | 同 line 111，已改走 `translator.t('subagent.agentFallback')`。 |
+| subagent-presentation.ts:155 | `'Agent'`（label fallback，RC-4 路径） | ✅ **resolved**（Task 7 corrective，commit `4639f76`） | 同 line 111，已改走 `translator.t('subagent.agentFallback')`。 |
 | subagent-presentation.ts:161/168 | `● Agent ... · ...` | raw technical-or-user content | 同 line 113 |
 | 各 `translator.t(...)` 调用 | (已 locale 化) | |
 
@@ -199,10 +199,10 @@ cli.ts:58 是设计上不可 locale 化的启动错误（语言未定）。无 l
 | file:line | literal | category | rationale |
 |---|---|---|---|
 | block-pipeline.ts:74 | `'● '`（ASSISTANT_FORMAT.firstLinePrefix） | raw technical-or-user content | 块前缀 glyph |
-| block-pipeline.ts:155 | `'Thinking…'`（startThinking 临时行） | ✅ **resolved**（Task 7 corrective） | 已改走 `this.translator.t('thinking.tempLabel')`。zh `'思考中…'` / en `'Thinking…'`。 |
+| block-pipeline.ts:155 | `'Thinking…'`（startThinking 临时行） | ✅ **resolved**（Task 7 corrective，commit `4639f76`） | 已改走 `this.translator.t('thinking.tempLabel')`。zh `'思考中…'` / en `'Thinking…'`。 |
 | block-pipeline.ts:283 | `'⎿  '` / `'   '` | raw technical-or-user content | 折叠前缀 glyph |
 | block-pipeline.ts:339 | `'[tool presentation failed]'`（console.error） | raw technical-or-user content | DEBUG 模式日志，非 user-visible（仅 process.env.DEBUG 时输出到 stderr） |
-| block-pipeline.ts:372 | `'  (No thinking content received)'` | ✅ **resolved**（Task 7 corrective） | 已改走 `this.translator.t('thinking.noContent')`。前导 2 空格保留在资源值中（与 `buildThinkingFullLines` 的 has-content 分支 `  ${l}` 缩进对齐，刻意双缩进）。zh `'  （无思考内容）'` / en `'  (No thinking content received)'`。 |
+| block-pipeline.ts:372 | `'  (No thinking content received)'` | ✅ **resolved**（Task 7 corrective，commit `4639f76`） | 已改走 `this.translator.t('thinking.noContent')`。前导 2 空格保留在资源值中（与 `buildThinkingFullLines` 的 has-content 分支 `  ${l}` 缩进对齐，刻意双缩进）。zh `'  （无思考内容）'` / en `'  (No thinking content received)'`。 |
 | block-pipeline.ts:169 | `this.translator.t('thinking.summary', ...)` | (已 locale 化) | |
 
 locale-required 残留：**0**（line 155、372 已在 Task 7 corrective 中全部 locale 化）。
@@ -340,8 +340,8 @@ en-US 资源，`CanonicalResources` 类型强制结构对齐。
 | index.ts:736 | `` `Skill "${skillName}" blocked.` `` | `commands.skill.blocked`（复用，Task 4 corrective 已加 `{name}` 参数） | ✅ **resolved**（Task 10 corrective）—— 已改走 `translator.t('commands.skill.blocked', { name: blockReq.skillName })`。**未新增 key**，复用 Task 4 corrective 的现有 key。 |
 | index.ts:747 | `` `✗ ${imgResult.error}` `` | （无） | ✅ **resolved**（Task 10 corrective）—— **reclassified as `raw`**（见下方"重分类"节）。 |
 | index.ts:1271 | `` `[scheduled:${id}] ${prompt}` `` | （无） | ✅ **resolved**（Task 10 corrective）—— **reclassified as `raw`**（见下方"重分类"节）。 |
-| block-pipeline.ts:155 | `'Thinking…'`（临时行） | `thinking.tempLabel`（新） | ✅ **resolved**（Task 7 corrective）—— 已改走 `this.translator.t('thinking.tempLabel')`。zh `'思考中…'` / en `'Thinking…'`。 |
-| block-pipeline.ts:372 | `'  (No thinking content received)'` | `thinking.noContent`（新） | ✅ **resolved**（Task 7 corrective）—— 已改走 `this.translator.t('thinking.noContent')`。前导 2 空格保留在资源值中。zh `'  （无思考内容）'` / en `'  (No thinking content received)'`。 |
+| block-pipeline.ts:155 | `'Thinking…'`（临时行） | `thinking.tempLabel`（新） | ✅ **resolved**（Task 7 corrective，commit `4639f76`）—— 已改走 `this.translator.t('thinking.tempLabel')`。zh `'思考中…'` / en `'Thinking…'`。 |
+| block-pipeline.ts:372 | `'  (No thinking content received)'` | `thinking.noContent`（新） | ✅ **resolved**（Task 7 corrective，commit `4639f76`）—— 已改走 `this.translator.t('thinking.noContent')`。前导 2 空格保留在资源值中。zh `'  （无思考内容）'` / en `'  (No thinking content received)'`。 |
 | executor.ts（多处，约 25+ 条） | `/config /login /provider /model /skill /trigger /theme /compact` 等命令反馈 | 需新增 `commands.*` 子树（`commands.compact.triggered` / `commands.unknown` / `commands.noSkillRegistry` / `commands.skillBlocked` / `commands.config.*` / `commands.login.saved` / `commands.provider.*` / `commands.model.*` / `commands.theme.switched` / `commands.mode.set` 等） | 后续 executor locale 化 task（独立） |
 
 ### 重分类（reclassifications）
@@ -356,7 +356,7 @@ Task 10 corrective 期间，对原审计标为 `locale-required` 的 2 处重新
 判定准则：locale 化针对"固定自然语言散文"。当一行仅由 **(a) 视觉符号/系统标签 + (b) 动态内容** 组成、无固定自然语言成分时，归 `raw`。
 
 低优先（保守可归 raw）—— 已全部 locale 化：
-- subagent-presentation.ts:111/155 `'Agent'`（label 兜底）—— ✅ **resolved**（Task 7 corrective）—— 已改走 `translator.t('subagent.agentFallback')`。zh `'代理'` / en `'Agent'`。
+- subagent-presentation.ts:111/155 `'Agent'`（label 兜底）—— ✅ **resolved**（Task 7 corrective，commit `4639f76`）—— 已改走 `translator.t('subagent.agentFallback')`。zh `'代理'` / en `'Agent'`。
 
 ---
 
