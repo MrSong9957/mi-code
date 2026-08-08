@@ -68,6 +68,7 @@ import { HistoryManager } from './history.js';
 import { splitSubmitTracks, commitNewTurn } from './tui/input/submit-transformer.js';
 import { createLanguageStore, createTranslator, type LanguageStore, type Translator } from './locale/index.js';
 import { resolveStartupLanguageSelection } from './locale/startup-language.js';
+import { getResponseLanguagePreference } from './prompts/response-language-preference.js';
 
 const VERSION = "1.0.0";
 
@@ -835,6 +836,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     skillsDescription,
     reminder ? `\n${reminder}` : '',
     planModeInstruction,
+    getResponseLanguagePreference(translator),
   ].join('\n');
 
   // 记录最近一轮的 system prompt，供 fork 子代理继承
