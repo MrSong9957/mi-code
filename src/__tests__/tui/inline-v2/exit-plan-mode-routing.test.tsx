@@ -26,6 +26,8 @@ import { createOverlayStore } from '../../../tui/state/overlay-store.js';
 import { createAskQuestionStore } from '../../../tui/state/ask-question-store.js';
 import { createSelectionStore } from '../../../tui/state/selection-store.js';
 import type { AskQuestionRequest } from '../../../agent/ask-user-types.js';
+import { LocaleProvider } from '../../../locale/context.js';
+import { createLanguageStore } from '../../../locale/language-store.js';
 
 // createStores：构造 InlineAppV2 所需的全部 store。
 // （inline-app-v2.test.tsx 的同名 helper 是模块私有，这里内联一份权威实现。）
@@ -110,12 +112,25 @@ const baseProps = {
   rows: 24,
 };
 
+// AskQuestionOverlayV2 通过 useLocale() 消费 locale，InlineAppV2 渲染 overlay 时
+// 必须挂在 LocaleProvider 下（与 bootstrap.tsx 装配一致）。
+const languageStore = createLanguageStore('en-US');
+function renderInlineApp(stores: InlineAppV2Stores) {
+  return render(
+    React.createElement(
+      LocaleProvider,
+      { store: languageStore },
+      React.createElement(InlineAppV2, { ...baseProps, stores }),
+    ),
+  );
+}
+
 describe('<InlineAppV2> plan-approval 路由分发', () => {
   it('plan-approval 路由到 ExitPlanModeOverlayV2（含"准备开始编码？"，不含"Submit"）', () => {
     const stores = createStores();
     stores.askQuestionStore.getState().open('plan-1', planApprovalRequest, () => {});
 
-    const { lastFrame } = render(<InlineAppV2 {...baseProps} stores={stores} />);
+    const { lastFrame } = renderInlineApp(stores);
     const frame = lastFrame() ?? '';
 
     // ExitPlanModeOverlayV2 的标题
@@ -128,7 +143,7 @@ describe('<InlineAppV2> plan-approval 路由分发', () => {
     const stores = createStores();
     stores.askQuestionStore.getState().open('question-1', plainRequest, () => {});
 
-    const { lastFrame } = render(<InlineAppV2 {...baseProps} stores={stores} />);
+    const { lastFrame } = renderInlineApp(stores);
     const frame = lastFrame() ?? '';
 
     // AskQuestionOverlayV2 的 tabs 含 Submit
@@ -141,7 +156,7 @@ describe('<InlineAppV2> plan-approval 路由分发', () => {
     const stores = createStores();
     stores.askQuestionStore.getState().open('unknown-1', unknownKindRequest, () => {});
 
-    const { lastFrame } = render(<InlineAppV2 {...baseProps} stores={stores} />);
+    const { lastFrame } = renderInlineApp(stores);
     const frame = lastFrame() ?? '';
 
     // 回退到通用问卷
@@ -153,7 +168,7 @@ describe('<InlineAppV2> plan-approval 路由分发', () => {
     const stores = createStores();
     // askQuestionStore 未 open，visible=false
 
-    const { lastFrame } = render(<InlineAppV2 {...baseProps} stores={stores} />);
+    const { lastFrame } = renderInlineApp(stores);
     const frame = lastFrame() ?? '';
 
     // 两个 overlay 都不应渲染

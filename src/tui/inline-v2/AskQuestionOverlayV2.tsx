@@ -17,6 +17,7 @@ import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { displayWidth, foldLine } from '../inline/text-layout.js';
 import { useTheme } from '../state/theme-context.js';
+import { useLocale } from '../../locale/context.js';
 import { computeTabLayout } from './ask-question-layout.js';
 import type { AskQuestionStore } from '../state/ask-question-store.js';
 
@@ -51,6 +52,7 @@ export const AskQuestionOverlayV2 = React.memo(function AskQuestionOverlayV2({
   cols,
 }: AskQuestionOverlayV2Props): React.ReactElement | null {
   const theme = useTheme();
+  const { t } = useLocale();
   const state = useStore(store, useShallow((value) => ({
     visible: value.visible,
     request: value.request,
@@ -88,11 +90,11 @@ export const AskQuestionOverlayV2 = React.memo(function AskQuestionOverlayV2({
     return (
       <Box flexDirection="column" borderStyle="round" borderColor={theme.suggestion} paddingX={1}>
         <Text>{tabsLine}</Text>
-        <Text color={theme.suggestion} bold>{truncateLine('Submit', contentWidth)}</Text>
-        {unanswered && <Text color={theme.warning}>{truncateLine('请先完成所有问题再提交', contentWidth)}</Text>}
-        <Text color={state.focusIndex === 0 ? theme.suggestion : undefined}>{truncateLine(`${state.focusIndex === 0 ? '❯ ' : '  '}提交答案`, contentWidth)}</Text>
-        <Text color={state.focusIndex === 1 ? theme.suggestion : undefined}>{truncateLine(`${state.focusIndex === 1 ? '❯ ' : '  '}取消`, contentWidth)}</Text>
-        <Text color={theme.textMuted}>{truncateLine('Enter 提交 · Esc 取消本次访谈', contentWidth)}</Text>
+        <Text color={theme.suggestion} bold>{truncateLine(t('overlay.submit'), contentWidth)}</Text>
+        {unanswered && <Text color={theme.warning}>{truncateLine(t('overlay.unansweredWarning'), contentWidth)}</Text>}
+        <Text color={state.focusIndex === 0 ? theme.suggestion : undefined}>{truncateLine(`${state.focusIndex === 0 ? '❯ ' : '  '}${t('overlay.submitAnswers')}`, contentWidth)}</Text>
+        <Text color={state.focusIndex === 1 ? theme.suggestion : undefined}>{truncateLine(`${state.focusIndex === 1 ? '❯ ' : '  '}${t('overlay.cancel')}`, contentWidth)}</Text>
+        <Text color={theme.textMuted}>{truncateLine(t('overlay.submitHint'), contentWidth)}</Text>
       </Box>
     );
   }
@@ -125,7 +127,7 @@ export const AskQuestionOverlayV2 = React.memo(function AskQuestionOverlayV2({
 
   // ── Other 行 ──
   const otherIndex = question.options.length;
-  const otherLabel = state.request.otherLabel ?? '其他';
+  const otherLabel = state.request.otherLabel ?? t('overlay.otherDefault');
   const otherFocused = state.focusIndex === otherIndex;
   if (state.inputMode) {
     const cursor = Math.min(state.otherCursor, state.otherDraft.length);
@@ -143,17 +145,17 @@ export const AskQuestionOverlayV2 = React.memo(function AskQuestionOverlayV2({
     );
   }
 
-  // ── Chat 行(系统行为入口,固定中文)──
+  // ── Chat 行(系统行为入口)──
   const chatFocused = state.focusIndex === otherIndex + 1;
   optionRows.push(
     <Text key="chat" color={chatFocused ? theme.suggestion : theme.textMuted}>
-      {truncateLine(`${chatFocused ? '❯ ' : '  '}与 Agent 讨论此问题`, contentWidth)}
+      {truncateLine(`${chatFocused ? '❯ ' : '  '}${t('overlay.chatAction')}`, contentWidth)}
     </Text>
   );
 
   const help = state.inputMode
-    ? 'Enter 保存 · Esc 取消本次访谈'
-    : '↑↓ 导航 · Enter 选择 · Esc 取消本次访谈';
+    ? t('overlay.inputModeHint')
+    : t('overlay.navigationHint');
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={theme.suggestion} paddingX={1}>

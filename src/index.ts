@@ -755,10 +755,10 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       const model = currentModel();
       const providerConfig = configStore.getProvider(provider);
       const options = getModelsForProvider(provider, model, providerConfig?.models);
-      tuiHandle?.selectStore.getState().open('Select model', options, (opt) => {
+      tuiHandle?.selectStore.getState().open(translator.t('status.selectModel'), options, (opt) => {
         configStore.setModel(provider, opt.value);
         tuiHandle?.statusStore.getState().setModel(opt.value);
-        printLine(`Model switched to: ${opt.label} (${opt.value})`);
+        printLine(translator.t('status.modelSwitched', { label: opt.label, value: opt.value }));
       });
       return;
     }
@@ -851,7 +851,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const model = currentModel();
   const apiKey = configStore.getApiKey(provider);
   if (!apiKey) {
-    tuiHandle?.printStyled(`[Error] No API Key for ${provider} provider. Use /login ${provider} <key> to configure.`, 'error');
+    tuiHandle?.printStyled(translator.t('status.noApiKey', { provider }), 'error');
     isProcessing = false;
     return;
   }
@@ -907,7 +907,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       return;
     }
     // 不可恢复错误：显示给用户
-    tuiHandle?.printStyled(`[Error] ${d.message}`, 'error');
+    tuiHandle?.printStyled(`${translator.t('errors.errorPrefix')}${d.message}`, 'error');
   });
   const allToolDefs = Array.from(toolRegistry.tools.values()).map(t => t.definition);
   const tools = currentMode === 'plan'
@@ -938,7 +938,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   let gotAnyResponse = false; // 是否收到过任何 assistant 内容(用于空响应检测)
   refreshSpinnerContext();
   tuiHandle?.startSpinner('requesting');
-  tuiHandle?.setSpinnerLabel('Connecting');
+  tuiHandle?.setSpinnerLabel(translator.t('status.connecting'));
   spinnerStarted = true;
   try {
     // Task 14 A83/A85：authority gate——根据 permissionAuthority 构造 turn-local runtime。
@@ -1081,8 +1081,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       const hasImage = Array.isArray(userMessageForAgent) && userMessageForAgent.some(b => b.type === 'image');
       tuiHandle?.printStyled(
         hasImage
-          ? '[Warning] API 返回空响应。该模型可能不支持图片输入(vision)。请换用支持 vision 的模型。'
-          : '[Warning] API 返回空响应,没有生成任何内容。',
+          ? translator.t('errors.emptyResponseVision')
+          : translator.t('errors.emptyResponse'),
         'error',
       );
     }
@@ -1096,7 +1096,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       terminalError = formatErrorForDisplay(err);
       // formatErrorForDisplay 只取 message（不含堆栈），超长截断——
       // 避免把整个 Error.stack 刷屏到终端（之前的 [system] [Error] Error [ERR_UNHANDLED_ERROR]... 问题）
-      tuiHandle?.printStyled(`[Error] ${terminalError}`, 'error');
+      tuiHandle?.printStyled(`${translator.t('errors.errorPrefix')}${terminalError}`, 'error');
     }
   } finally {
     // 统一收尾口:把本回合 finalized 后的消息 awaited 落盘 + emit 四字段状态块。
@@ -1128,7 +1128,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
         messages: baseMessages,
         turnStartIndex,
         toolFacts,
-        error: `最终回复落盘失败：${formatErrorForDisplay(persistError)}`,
+        error: translator.t('errors.persistenceFailed', { error: formatErrorForDisplay(persistError) }),
         aborted,
       });
       sessionMessages = persistenceFailure.messages;
@@ -1158,14 +1158,14 @@ async function handleUserSubmit(rawText: string): Promise<void> {
 if (cliOpts.list) {
   sessionStore.list().then(sessions => {
     if (sessions.length === 0) {
-      console.log('No sessions found.');
+      console.log(translator.t('cli.noSessions'));
     } else {
-      console.log('Sessions (most recent first):');
+      console.log(translator.t('cli.sessionsHeader'));
       for (const s of sessions) {
         const preview = s.firstUserInput.slice(0, 40);
-        console.log(`  ${s.id}  ${preview}  (${s.messageCount} msgs)`);
+        console.log(`  ${s.id}  ${preview}  ${translator.t('cli.sessionCount', { count: s.messageCount })}`);
       }
-      console.log('\nResume with: micode --resume <id>  or  micode --continue');
+      console.log(translator.t('cli.resumeHintFooter'));
     }
     process.exit(0);
   });
@@ -1186,7 +1186,7 @@ if (cliOpts.list) {
       const awaiting = pendings.filter(p => p.status === 'awaiting_user');
       if (awaiting.length > 0) {
         // 仅打印一次提示(resume 后用户可见),不重放、不阻塞 resume。
-        printLine(`── ${awaiting.length} pending permission decision(s) from prior session expired (action snapshot no longer re-validatable) ──`);
+        printLine(translator.t('cli.pendingPermissionExpired', { count: awaiting.length }));
       }
     });
   }
@@ -1220,7 +1220,7 @@ if (cliOpts.list) {
 
   // resume 时回显历史消息到消息区（让用户看到之前的对话）
   if (sessionMessages.length > 0) {
-    printLine(`── resumed ${sessionMessages.length} messages ──`);
+    printLine(translator.t('cli.resumedMessages', { count: sessionMessages.length }));
     for (const m of sessionMessages) {
       if (m.role === 'user') {
         const text = formatUserContentForResume(m.content);
@@ -1254,7 +1254,7 @@ if (cliOpts.list) {
     backgroundManager.killAll();
     tuiHandle?.stopSpinner();
     tuiHandle?.cleanup();
-    writeResumeHint(process.stdout, sessionState.currentId);
+    writeResumeHint(process.stdout, sessionState.currentId, translator);
   }
   process.on('SIGINT', () => { cleanupOnExit(); process.exit(0); });
   process.on('SIGTERM', () => { cleanupOnExit(); process.exit(0); });

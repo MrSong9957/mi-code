@@ -3,6 +3,8 @@ import { render } from 'ink-testing-library';
 import React from 'react';
 import { AskQuestionOverlayV2 } from '../../../tui/inline-v2/AskQuestionOverlayV2.js';
 import { createAskQuestionStore } from '../../../tui/state/ask-question-store.js';
+import { LocaleProvider } from '../../../locale/context.js';
+import { createLanguageStore } from '../../../locale/language-store.js';
 
 const request = {
   questions: [
@@ -30,10 +32,23 @@ function openStore() {
   return store;
 }
 
+// overlay 现在通过 useLocale() 消费 locale，渲染必须挂在 LocaleProvider 下。
+// 默认 zh-CN（与原固定中文文案一致）。
+const languageStore = createLanguageStore('zh-CN');
+function renderOverlay(store: ReturnType<typeof createAskQuestionStore>, cols: number) {
+  return render(
+    React.createElement(
+      LocaleProvider,
+      { store: languageStore },
+      React.createElement(AskQuestionOverlayV2, { store, cols }),
+    ),
+  );
+}
+
 describe('<AskQuestionOverlayV2>', () => {
   it('renders the current question, options, and chat affordance', () => {
     const store = openStore();
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('One');
@@ -48,7 +63,7 @@ describe('<AskQuestionOverlayV2>', () => {
   it('renders completion tabs and a Submit tab', () => {
     const store = openStore();
     store.setState({ selected: { Q1: ['A'] } });
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('✓');
@@ -59,7 +74,7 @@ describe('<AskQuestionOverlayV2>', () => {
   it('renders multi-select checkboxes', () => {
     const store = openStore();
     store.setState({ selected: { Q1: ['A'] } });
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('[x] A');
@@ -70,7 +85,7 @@ describe('<AskQuestionOverlayV2>', () => {
     // A1 验收标准:overlay 必须用 borderStyle="round"。
     // 断言左边框 ╭(ink-testing 下右边框 ╮ 首次渲染缺失是已知问题,只断言左上角)。
     const store = openStore();
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('╭');   // 左上角圆角 = borderStyle="round" 已生效
@@ -81,7 +96,7 @@ describe('<AskQuestionOverlayV2>', () => {
     // Q2 是单选(multiSelect: false),应显示 radio 而非 checkbox
     const store = openStore();
     store.setState({ pageIndex: 1, selected: { Q2: ['C'] } });
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('◉ C');    // 选中 = 实心圆
@@ -93,7 +108,7 @@ describe('<AskQuestionOverlayV2>', () => {
   it('renders unselected single-select as ◯', () => {
     const store = openStore();
     store.setState({ pageIndex: 1 });  // Q2 单选,未选任何项
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('◯ C');    // 未选 = 空心圆
@@ -107,7 +122,7 @@ describe('<AskQuestionOverlayV2>', () => {
       otherDraft: 'because',
       otherCursor: 3,
     });
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('提出修改意见');
@@ -117,7 +132,7 @@ describe('<AskQuestionOverlayV2>', () => {
   it('warns when the Submit page has unanswered questions', () => {
     const store = openStore();
     store.setState({ pageIndex: request.questions.length });
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
 
     expect(lastFrame()).toContain('请先完成所有问题再提交');
   });
@@ -126,7 +141,7 @@ describe('<AskQuestionOverlayV2>', () => {
     const store = openStore();
     store.getState().nextPage();
     store.getState().nextPage();
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
 
     expect(lastFrame()).toContain('❯ 提交答案');
     expect(lastFrame()).toContain('  取消');
@@ -140,7 +155,7 @@ describe('<AskQuestionOverlayV2>', () => {
   it('renders contextual help for Other input mode', () => {
     const store = openStore();
     store.setState({ inputMode: true });
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
 
     expect(lastFrame()).toContain('Enter 保存');
   });
@@ -152,7 +167,7 @@ describe('<AskQuestionOverlayV2>', () => {
     // 超长 Other 草稿不应作为一整行完整出现。
     const store = openStore();
     store.setState({ inputMode: true, otherDraft: 'a very long response that must be shortened', otherCursor: 10 });
-    const { lastFrame } = render(<AskQuestionOverlayV2 store={store} cols={32} />);
+    const { lastFrame } = renderOverlay(store, 32);
     // eslint-disable-next-line no-control-regex
     const ansi = /\x1b\[[0-9;]*m/g;
     const clean = (lastFrame() ?? '').replace(ansi, '');

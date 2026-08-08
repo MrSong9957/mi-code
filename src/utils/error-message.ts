@@ -5,7 +5,10 @@
 // 本函数统一裁成一条干净、不泄露机密、长度可控的诊断文本，
 // 供 UI 展示、错误事件投递、子代理回执等所有"错误文本边界"复用。
 
+import type { Translator } from '../locale/types.js';
+
 const DEFAULT_MAX_LENGTH = 300;
+const DEFAULT_UNSERIALIZABLE = '[Unserializable error object]';
 
 /**
  * 敏感字段名（大小写不敏感，支持 snake/kebab/camel 三种命名）。
@@ -37,7 +40,7 @@ function redactSensitiveText(message: string): string {
  * - 检测到循环引用 → '[Circular]'
  * - JSON.stringify 失败（如 BigInt）或返回 undefined → 抛错由上层兜底
  */
-function serializeObject(value: object): string {
+function serializeObject(value: object, unserializableMarker: string): string {
   const seen = new WeakSet<object>();
   const serialized = JSON.stringify(value, (key, nested) => {
     if (key && SENSITIVE_FIELD.test(key)) return '[REDACTED]';
@@ -47,7 +50,7 @@ function serializeObject(value: object): string {
     }
     return nested;
   });
-  return serialized ?? '[Unserializable error object]';
+  return serialized ?? unserializableMarker;
 }
 
 /**
@@ -55,17 +58,23 @@ function serializeObject(value: object): string {
  *
  * - Error 实例 → .message（不含堆栈）；.message 为空时退化为 .name
  * - 字符串 → 原样
- * - 普通对象 → JSON 序列化（脱敏 + 循环引用保护）；序列化失败 → '[Unserializable error object]'
+ * - 普通对象 → JSON 序列化（脱敏 + 循环引用保护）；序列化失败 → unserializable marker
  * - 其它（number / boolean / null / undefined）→ String(value)
  * - 超过 maxLength 字符 → 截断 + '…'
  *
  * @param error 任意 thrown value
  * @param maxLength 最大字符数（默认 300）；非法值回退到默认
+ * @param translator 可选；传入时序列化失败 marker 走 i18n（errors.unserializable），
+ *                  省略时保持英文 '[Unserializable error object]'（向后兼容）
  */
 export function formatUnknownError(
   error: unknown,
   maxLength: number = DEFAULT_MAX_LENGTH,
+  translator?: Translator,
 ): string {
+  const unserializableMarker = translator
+    ? translator.t('errors.unserializable')
+    : DEFAULT_UNSERIALIZABLE;
   let message: string;
   if (error instanceof Error) {
     message = error.message || error.name;
@@ -73,9 +82,9 @@ export function formatUnknownError(
     message = error;
   } else if (typeof error === 'object' && error !== null) {
     try {
-      message = serializeObject(error);
+      message = serializeObject(error, unserializableMarker);
     } catch {
-      message = '[Unserializable error object]';
+      message = unserializableMarker;
     }
   } else {
     message = String(error);

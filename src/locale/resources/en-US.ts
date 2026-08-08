@@ -40,9 +40,21 @@ export const enUS: CanonicalResources = {
   },
   cli: {
     placeholder: 'CLI',
+    noSessions: 'No sessions found.',
+    sessionsHeader: 'Sessions (most recent first):',
+    resumeHintFooter: '\nResume with: micode --resume <id>  or  micode --continue',
+    resumedMessages: '── resumed {count} messages ──',
+    pendingPermissionExpired: '── {count} pending permission decision(s) from prior session expired (action snapshot no longer re-validatable) ──',
+    resumeHintLabel: 'Resume this session with:',
+    sessionCount: '({count} msgs)',
   },
   errors: {
     placeholder: 'Error',
+    unserializable: '[Unserializable error object]',
+    errorPrefix: '[Error] ',
+    emptyResponse: '[Warning] API returned an empty response, no content was generated.',
+    emptyResponseVision: '[Warning] API returned an empty response. This model may not support image input (vision). Please switch to a vision-capable model.',
+    persistenceFailed: 'Failed to persist the final response: {error}',
   },
   confirmation: {
     greetByName: 'Hello, {name}!',
@@ -52,6 +64,10 @@ export const enUS: CanonicalResources = {
   },
   status: {
     fallbackDemo: '',
+    connecting: 'Connecting',
+    selectModel: 'Select model',
+    modelSwitched: 'Model switched to: {label} ({value})',
+    noApiKey: '[Error] No API Key for {provider} provider. Use /login {provider} <key> to configure.',
   },
   spinner: {
     placeholder: 'Working',
@@ -116,6 +132,15 @@ export const enUS: CanonicalResources = {
   },
   overlay: {
     placeholder: 'Overlay',
+    submit: 'Submit',
+    submitAnswers: 'Submit answers',
+    cancel: 'Cancel',
+    unansweredWarning: 'Please answer all questions before submitting',
+    otherDefault: 'Other',
+    chatAction: 'Discuss this question with the Agent',
+    submitHint: 'Enter to submit · Esc to cancel',
+    inputModeHint: 'Enter to save · Esc to cancel',
+    navigationHint: '↑↓ to navigate · Enter to select · Esc to cancel',
   },
   permission: {
     placeholder: 'Permission',

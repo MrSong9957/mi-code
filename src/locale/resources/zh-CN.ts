@@ -38,9 +38,21 @@ export const zhCN = {
   },
   cli: {
     placeholder: '命令行',
+    noSessions: '未找到会话。',
+    sessionsHeader: '会话（最近优先）：',
+    resumeHintFooter: '\n使用以下命令恢复：micode --resume <id>  或  micode --continue',
+    resumedMessages: '── 已恢复 {count} 条消息 ──',
+    pendingPermissionExpired: '── 来自上一会话的 {count} 个待处理权限决策已过期（操作快照无法重新验证）──',
+    resumeHintLabel: '使用以下命令恢复本次会话：',
+    sessionCount: '（{count} 条消息）',
   },
   errors: {
     placeholder: '错误',
+    unserializable: '[无法序列化的错误对象]',
+    errorPrefix: '[错误] ',
+    emptyResponse: '[警告] API 返回空响应，没有生成任何内容。',
+    emptyResponseVision: '[警告] API 返回空响应。该模型可能不支持图片输入（vision）。请换用支持 vision 的模型。',
+    persistenceFailed: '最终回复落盘失败：{error}',
   },
   confirmation: {
     greetByName: '你好，{name}！',
@@ -50,6 +62,10 @@ export const zhCN = {
   },
   status: {
     fallbackDemo: '使用中文回退',
+    connecting: '连接中',
+    selectModel: '选择模型',
+    modelSwitched: '已切换到模型：{label}（{value}）',
+    noApiKey: '[错误] {provider} provider 缺少 API Key。请使用 /login {provider} <key> 配置。',
   },
   spinner: {
     placeholder: '处理中',
@@ -67,6 +83,15 @@ export const zhCN = {
   },
   overlay: {
     placeholder: '覆盖层',
+    submit: 'Submit',
+    submitAnswers: '提交答案',
+    cancel: '取消',
+    unansweredWarning: '请先完成所有问题再提交',
+    otherDefault: '其他',
+    chatAction: '与 Agent 讨论此问题',
+    submitHint: 'Enter 提交 · Esc 取消本次访谈',
+    inputModeHint: 'Enter 保存 · Esc 取消本次访谈',
+    navigationHint: '↑↓ 导航 · Enter 选择 · Esc 取消本次访谈',
   },
   permission: {
     placeholder: '权限',
