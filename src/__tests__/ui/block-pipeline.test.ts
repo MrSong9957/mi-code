@@ -179,7 +179,7 @@ describe('BlockPipeline emit 路由', () => {
     expect(finishes[0]!.summary).toMatchObject({
       kind: 'system',
       subkind: 'thinking-summary',
-      text: 'Thought for 5s',
+      text: '思考了 5 秒',
       durationMs: 5000,
       groupBoundary: 'transparent',
     });
@@ -331,7 +331,7 @@ describe('BlockPipeline emit 路由', () => {
     expect(p.status).toBe('success');
     // summary 来自 buildSubagentCompletionPresentation(line)
     expect(p.summary).toContain('Agent "查找实现"');
-    expect(p.summary).toContain('finished');
+    expect(p.summary).toContain('已完成');
   });
 
   it('spawn_agent malformed(无 envelope)→ 走通用降级,无 compact-completion layout', () => {

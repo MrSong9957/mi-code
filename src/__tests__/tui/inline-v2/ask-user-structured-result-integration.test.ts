@@ -81,7 +81,7 @@ describe('ask_user_question structured result e2e (semantic)', () => {
 
     const block = renderer.askBlocks[0]!;
     expect(block.kind).toBe('ask');
-    expect(block.summary).toBe('Answered 2 questions');
+    expect(block.summary).toBe('已回答 2 个问题');
     expect(block.items).toEqual(['Auth → OAuth', 'Lib → A, B']);
     expect(block.outcome).toEqual({ kind: 'submitted', answers: { 'Which auth method?': 'OAuth', 'Which library?': 'A, B' } });
 
@@ -114,8 +114,8 @@ describe('ask_user_question structured result e2e (semantic)', () => {
     });
 
     expect(renderer.askBlocks).toHaveLength(1);
-    expect(renderer.askBlocks[0]!.summary).toBe('Declined to answer');
-    expect(renderer.askBlocks[0]!.items).toEqual(['User declined to answer questions']);
+    expect(renderer.askBlocks[0]!.summary).toBe('已拒绝回答');
+    expect(renderer.askBlocks[0]!.items).toEqual(['用户拒绝回答问题']);
   });
 
   it('API 通道零污染:output(API 字符串)不进 AskBlock', () => {
@@ -137,7 +137,7 @@ describe('ask_user_question structured result e2e (semantic)', () => {
     });
 
     const block = renderer.askBlocks[0]!;
-    expect(block.summary).toBe('Answered 1 question');
+    expect(block.summary).toBe('已回答 1 个问题');
     expect(block.items).toEqual(['Cfg → A']);
     expect(JSON.stringify(block)).not.toContain(apiString);
     expect(JSON.stringify(block)).not.toContain('You can now continue');

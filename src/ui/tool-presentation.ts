@@ -305,7 +305,7 @@ function buildSpawnAgentPresentation(
     return { ...base, summary: noOutputSummary('spawn_agent', translator), details: [] };
   }
 
-  const sub = buildSubagentCompletionPresentation(toolInput, output, durationMs);
+  const sub = buildSubagentCompletionPresentation(toolInput, output, durationMs, translator);
   if (sub) {
     return {
       ...base,

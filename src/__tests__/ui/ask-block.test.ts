@@ -4,6 +4,10 @@ import type {
   AskQuestionOutcome,
   StructuredAskResult,
 } from '../../agent/ask-user-types.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
+
+const translator = createTranslator(createLanguageStore('en-US'));
 
 function askResult(outcome: AskQuestionOutcome): StructuredAskResult {
   return {
@@ -28,7 +32,7 @@ describe('buildAskBlock', () => {
     expect(buildAskBlock('q1', askResult({
       kind: 'submitted',
       answers: { 'Which auth?': 'OAuth' },
-    }))).toEqual({
+    }), translator)).toEqual({
       id: 'q1',
       kind: 'ask',
       summary: 'Answered 1 question',
@@ -41,7 +45,7 @@ describe('buildAskBlock', () => {
   });
 
   it('preserves cancelled presentation semantics', () => {
-    expect(buildAskBlock('q2', askResult({ kind: 'cancelled' }))).toMatchObject({
+    expect(buildAskBlock('q2', askResult({ kind: 'cancelled' }), translator)).toMatchObject({
       id: 'q2',
       kind: 'ask',
       summary: 'Declined to answer',
@@ -53,7 +57,7 @@ describe('buildAskBlock', () => {
     expect(buildAskBlock('q3', askResult({
       kind: 'chat',
       feedback: 'Use the simpler path',
-    }))).toMatchObject({
+    }), translator)).toMatchObject({
       id: 'q3',
       kind: 'ask',
       summary: 'Feedback: Use the simpler path',
@@ -62,8 +66,8 @@ describe('buildAskBlock', () => {
   });
 
   it('returns null for unsupported or malformed input', () => {
-    expect(buildAskBlock('q4', { version: 2 })).toBeNull();
-    expect(buildAskBlock('q5', { version: 1 })).toBeNull();
-    expect(buildAskBlock('q6', null)).toBeNull();
+    expect(buildAskBlock('q4', { version: 2 }, translator)).toBeNull();
+    expect(buildAskBlock('q5', { version: 1 }, translator)).toBeNull();
+    expect(buildAskBlock('q6', null, translator)).toBeNull();
   });
 });

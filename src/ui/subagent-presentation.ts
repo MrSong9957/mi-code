@@ -15,6 +15,7 @@
 
 import type { SubagentExecutionResult } from '../agent/subagent.js';
 import type { CompletionOutcome } from '../agent/contracts/completion-report.js';
+import type { Translator } from '../locale/types.js';
 
 /** 子代理完成展示结果。 */
 export interface SubagentCompletionPresentation {
@@ -30,6 +31,21 @@ const ENVELOPE = /^\[Subagent status=(completed|incomplete|unverified)(?: reason
 /** 判断字符串是否含至少一个 Unicode 字母或数字(用于"有意义行"判定)。 */
 const HAS_UNICODE_WORD = /[\p{L}\p{N}]/u;
 
+type EnvelopeStatus = 'completed' | 'incomplete' | 'unverified';
+
+const ENVELOPE_STATUS_KEYS = {
+  completed: 'subagent.presentation.status.finished',
+  incomplete: 'subagent.presentation.status.incomplete',
+  unverified: 'subagent.presentation.status.unverified',
+} as const;
+
+const OUTCOME_STATUS_KEYS = {
+  completed: 'subagent.presentation.status.finished',
+  partial: 'subagent.presentation.status.partial',
+  failed: 'subagent.presentation.status.failed',
+  cancelled: 'subagent.presentation.status.cancelled',
+} as const;
+
 /**
  * 从 prompt/description 提取有意义的单行标签。
  * 跳过空行、纯符号行、JSON 开头的行;返回首个含字母/数字的行;无则 null。
@@ -44,21 +60,29 @@ function meaningfulLine(value: unknown): string | null {
   return null;
 }
 
-/** 状态词映射:completed→finished(更口语),其余保持原状。 */
-function statusWord(status: string): string {
-  return status === 'completed' ? 'finished' : status;
+/** 状态词映射:completed→finished(更口语),再经当前 Translator 本地化。 */
+function statusWord(status: EnvelopeStatus, translator: Translator): string {
+  return translator.t(ENVELOPE_STATUS_KEYS[status]);
 }
 
 /**
  * 格式化时长:ms → Ns 或 Nm Ms,至少 1s。无效/负数按 0。
  */
-function formatDurationFromMs(durationMs: number): string {
+function formatDurationFromMs(durationMs: number, translator: Translator): string {
   const safe = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
   const totalSec = Math.max(1, Math.round(safe / 1000));
-  if (totalSec < 60) return `${totalSec}s`;
+  if (totalSec < 60) {
+    return translator.t('subagent.presentation.duration.seconds', { count: totalSec });
+  }
   const m = Math.floor(totalSec / 60);
   const rest = totalSec % 60;
-  return rest === 0 ? `${m}m` : `${m}m ${rest}s`;
+  if (rest === 0) {
+    return translator.t('subagent.presentation.duration.minutes', { count: m });
+  }
+  return translator.t('subagent.presentation.duration.minutesSeconds', {
+    minutes: m,
+    seconds: rest,
+  });
 }
 
 /**
@@ -73,6 +97,7 @@ export function buildSubagentCompletionPresentation(
   input: Record<string, unknown>,
   output: string,
   durationMs: number,
+  translator: Translator,
 ): SubagentCompletionPresentation | null {
   const match = output.match(ENVELOPE);
   if (!match) return null;
@@ -85,7 +110,7 @@ export function buildSubagentCompletionPresentation(
     || meaningfulLine(input.prompt)
     || 'Agent';
 
-  const line = `● Agent "${label}" ${statusWord(status!)} · ${formatDurationFromMs(durationMs)}`;
+  const line = `● Agent "${label}" ${statusWord(status! as EnvelopeStatus, translator)} · ${formatDurationFromMs(durationMs, translator)}`;
   return { line, fullOutput };
 }
 
@@ -101,8 +126,8 @@ export function buildSubagentCompletionPresentation(
  * outcome → 展示词映射(对齐 legacy statusWord 的口语化习惯)。
  * completed→finished,其余保持原状。
  */
-function outcomeWord(outcome: CompletionOutcome): string {
-  return outcome === 'completed' ? 'finished' : outcome;
+function outcomeWord(outcome: CompletionOutcome, translator: Translator): string {
+  return translator.t(OUTCOME_STATUS_KEYS[outcome]);
 }
 
 /**
@@ -121,6 +146,7 @@ export function buildSubagentExecutionPresentation(
   input: Record<string, unknown>,
   result: SubagentExecutionResult,
   durationMs: number,
+  translator: Translator,
 ): SubagentCompletionPresentation {
   // label 优先级:description > prompt 有意义行 > "Agent"
   const description = typeof input.description === 'string' ? input.description.trim() : '';
@@ -128,18 +154,18 @@ export function buildSubagentExecutionPresentation(
     || meaningfulLine(input.prompt)
     || 'Agent';
 
-  const dur = formatDurationFromMs(durationMs);
+  const dur = formatDurationFromMs(durationMs, translator);
 
   if (result.kind === 'dispatch') {
     return {
-      line: `● Agent "${label}" dispatched · ${dur}`,
+      line: `● Agent "${label}" ${translator.t('subagent.presentation.status.dispatched')} · ${dur}`,
       fullOutput: '',
     };
   }
   // kind === 'completion'
   const { report } = result;
   return {
-    line: `● Agent "${label}" ${outcomeWord(report.outcome)} · ${dur}`,
+    line: `● Agent "${label}" ${outcomeWord(report.outcome, translator)} · ${dur}`,
     fullOutput: report.summary,
   };
 }

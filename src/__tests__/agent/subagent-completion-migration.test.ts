@@ -17,6 +17,10 @@ import {
 import { formatSubagentExecutionResult } from '../../agent/tools/spawn-agent-tool.js';
 import { buildSubagentExecutionPresentation } from '../../ui/subagent-presentation.js';
 import type { DeliverableReport } from '../../agent/contracts/completion-report.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
+
+const translator = createTranslator(createLanguageStore('en-US'));
 
 // ---- 测试 fixtures ----------------------------------------------------------
 
@@ -462,6 +466,7 @@ describe('buildSubagentExecutionPresentation', () => {
       { prompt: 'task' },
       result,
       5_000,
+      translator,
     );
     expect(presentation).not.toBeNull();
     expect(presentation?.line).toContain('finished'); // completed → finished
@@ -482,6 +487,7 @@ describe('buildSubagentExecutionPresentation', () => {
       { prompt: 'task' },
       result,
       1_000,
+      translator,
     );
     expect(presentation).not.toBeNull();
     expect(presentation?.line).toContain('dispatched');
@@ -502,6 +508,7 @@ describe('buildSubagentExecutionPresentation', () => {
       { prompt: 'task' },
       result,
       1_000,
+      translator,
     );
     expect(presentation?.line).toContain('partial');
   });
@@ -521,6 +528,7 @@ describe('buildSubagentExecutionPresentation', () => {
       { prompt: 'task' },
       result,
       1_000,
+      translator,
     );
     expect(presentation?.line).toContain('cancelled');
   });

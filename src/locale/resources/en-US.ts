@@ -122,9 +122,38 @@ export const enUS: CanonicalResources = {
   },
   ask: {
     placeholder: 'Ask',
+    presentation: {
+      answered: {
+        one: 'Answered {count} question',
+        other: 'Answered {count} questions',
+      },
+      declinedSummary: 'Declined to answer',
+      declinedLine: 'User declined to answer questions',
+      feedbackSummary: 'Feedback: {feedback}',
+      noAnswer: '(no answer)',
+    },
   },
   subagent: {
     placeholder: 'Subagent',
+    presentation: {
+      status: {
+        finished: 'finished',
+        incomplete: 'incomplete',
+        unverified: 'unverified',
+        dispatched: 'dispatched',
+        partial: 'partial',
+        failed: 'failed',
+        cancelled: 'cancelled',
+      },
+      duration: {
+        seconds: '{count}s',
+        minutes: '{count}m',
+        minutesSeconds: '{minutes}m {seconds}s',
+      },
+    },
+  },
+  thinking: {
+    summary: 'Thought for {seconds}s',
   },
   agent: {
     responseLanguagePreference: 'Always respond in English.',

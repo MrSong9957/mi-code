@@ -120,9 +120,38 @@ export const zhCN = {
   },
   ask: {
     placeholder: '提问',
+    presentation: {
+      answered: {
+        one: '已回答 {count} 个问题',
+        other: '已回答 {count} 个问题',
+      },
+      declinedSummary: '已拒绝回答',
+      declinedLine: '用户拒绝回答问题',
+      feedbackSummary: '反馈：{feedback}',
+      noAnswer: '（未回答）',
+    },
   },
   subagent: {
     placeholder: '子代理',
+    presentation: {
+      status: {
+        finished: '已完成',
+        incomplete: '未完成',
+        unverified: '未验证',
+        dispatched: '已派发',
+        partial: '部分完成',
+        failed: '失败',
+        cancelled: '已取消',
+      },
+      duration: {
+        seconds: '{count} 秒',
+        minutes: '{count} 分',
+        minutesSeconds: '{minutes} 分 {seconds} 秒',
+      },
+    },
+  },
+  thinking: {
+    summary: '思考了 {seconds} 秒',
   },
   agent: {
     responseLanguagePreference: '请始终用中文回复。',

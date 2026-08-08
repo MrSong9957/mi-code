@@ -166,7 +166,9 @@ export class BlockPipeline {
       case 'thinking_end': {
         // active 态才产生摘要;idle 时(end 无 start)完全无害,只确保回到 idle。
         if (this.thinkingPhase === 'active') {
-          const summaryText = `Thought for ${block.durationSec}s`;
+          const summaryText = this.translator.t('thinking.summary', {
+            seconds: block.durationSec,
+          });
           // 注册可折叠块:summary=摘要行,full=完整思考文本或 placeholder。
           const id = `thinking-${++this.idCounter}`;
           const fullLines = this.buildThinkingFullLines();
@@ -256,7 +258,7 @@ export class BlockPipeline {
         // 不走通用 tool presentation;用 buildAskBlock 构造 AskBlock,通过 finishAsk 投递。
         // 缺失/畸形 structuredOutcome → null,fall through 到通用 tool presentation。
         if (item.name === 'ask_user_question' && block.structuredOutcome) {
-          const askBlock = buildAskBlock(toolUseId, block.structuredOutcome);
+          const askBlock = buildAskBlock(toolUseId, block.structuredOutcome, this.translator);
           if (askBlock && this.renderer.finishAsk) {
             this.renderer.finishAsk(toolUseId, askBlock);
             this.toolBuffer.splice(idx, 1);

@@ -8,6 +8,7 @@
 // 所以从 request.questions 反查 question→header 映射做配对。
 
 import type { StructuredAskResult } from '../agent/ask-user-types.js';
+import type { Translator } from '../locale/types.js';
 import type { AskBlock } from '../tui/transcript-types.js';
 
 /** ask_user_question 展示模型(仿 SubagentCompletionPresentation)。 */
@@ -18,13 +19,25 @@ export interface AskUserPresentation {
   lines: string[];
 }
 
+const ANSWERED_SUMMARY_KEYS = {
+  one: 'ask.presentation.answered.one',
+  other: 'ask.presentation.answered.other',
+} as const;
+
+function pluralKey(count: number): 'one' | 'other' {
+  return count === 1 ? 'one' : 'other';
+}
+
 /**
  * 把 StructuredAskResult 转成展示模型。
  *
  * @param result 结构化问卷结果(来自 askOutcomeStore,经 streaming-query 透传)
  * @returns 展示模型,或 null(不识别的 version,调用方回退 rawOutput 通用展示)
  */
-export function buildAskUserPresentation(result: StructuredAskResult): AskUserPresentation | null {
+export function buildAskUserPresentation(
+  result: StructuredAskResult,
+  translator: Translator,
+): AskUserPresentation | null {
   // version 守卫:不识别的版本回退 null,让调用方走通用 rawOutput 路径(向后兼容)
   if (result.version !== 1) return null;
 
@@ -32,14 +45,14 @@ export function buildAskUserPresentation(result: StructuredAskResult): AskUserPr
 
   if (outcome.kind === 'cancelled') {
     return {
-      summary: 'Declined to answer',
-      lines: ['User declined to answer questions'],
+      summary: translator.t('ask.presentation.declinedSummary'),
+      lines: [translator.t('ask.presentation.declinedLine')],
     };
   }
 
   if (outcome.kind === 'chat') {
     return {
-      summary: `Feedback: ${outcome.feedback}`,
+      summary: translator.t('ask.presentation.feedbackSummary', { feedback: outcome.feedback }),
       lines: [outcome.feedback],
     };
   }
@@ -48,10 +61,12 @@ export function buildAskUserPresentation(result: StructuredAskResult): AskUserPr
   // 顺序遵循 request.questions(模型定义的顺序),保证展示稳定。
   const entries = request.questions.map(q => ({
     header: q.header,
-    answer: outcome.answers[q.question] ?? '(no answer)',
+    answer: outcome.answers[q.question] ?? translator.t('ask.presentation.noAnswer'),
   }));
 
-  const summary = `Answered ${entries.length} question${entries.length === 1 ? '' : 's'}`;
+  const summary = translator.t(ANSWERED_SUMMARY_KEYS[pluralKey(entries.length)], {
+    count: entries.length,
+  });
   const lines = entries.map(e => `${e.header} → ${e.answer}`);
 
   return { summary, lines };
@@ -68,14 +83,14 @@ export function buildAskUserPresentation(result: StructuredAskResult): AskUserPr
  * @param result 任意值(通常是 StructuredAskResult)
  * @returns AskBlock 或 null(null → 调用方走通用 tool fallback)
  */
-export function buildAskBlock(id: string, result: unknown): AskBlock | null {
+export function buildAskBlock(id: string, result: unknown, translator: Translator): AskBlock | null {
   if (result === null || typeof result !== 'object') return null;
   const r = result as { version?: unknown; request?: unknown; outcome?: unknown };
   if (r.version !== 1 || !r.request || !r.outcome) return null;
 
   let presentation: AskUserPresentation | null = null;
   try {
-    presentation = buildAskUserPresentation(r as StructuredAskResult);
+    presentation = buildAskUserPresentation(r as StructuredAskResult, translator);
   } catch {
     return null;
   }
