@@ -1,38 +1,36 @@
-// §7.1 mapDialogResult pure-function unit tests. Depends ONLY on Task 2.
-import { describe, test, expect } from 'vitest';
-import {
-  mapDialogResult,
-  ALLOW_ALWAYS_LABEL,
-  ALLOW_ONCE_LABEL,
-  ALLOW_EXACT_LABEL,
-} from '../../permission/permission-answer-mapping.js';
+import { describe, expect, test } from 'vitest';
+import { mapDialogResult } from '../../permission/permission-answer-mapping.js';
 import type { AskQuestionOutcome } from '../../agent/ask-user-types.js';
 
-describe('[auto-dialog] mapDialogResult unit', () => {
-  test('submitted Allow once -> approved_once', () => {
-    const o: AskQuestionOutcome = { kind: 'submitted', answers: { q: ALLOW_ONCE_LABEL } };
-    expect(mapDialogResult(o)).toEqual({ kind: 'approved_once' });
+function submitted(label: string, value?: string): AskQuestionOutcome {
+  return value === undefined
+    ? { kind: 'submitted', answers: { q0: label } }
+    : { kind: 'submitted', answers: { q0: label }, answerValues: { q0: value } };
+}
+
+describe('mapDialogResult', () => {
+  test.each([
+    ['permission.allowOnce', { kind: 'approved_once' }],
+    ['permission.allowExactSession', { kind: 'approved_session' }],
+    ['permission.allowAlways', { kind: 'approved_always' }],
+    ['permission.reject', { kind: 'rejected' }],
+  ] as const)('maps stable value %s without consulting the display label', (value, expected) => {
+    expect(mapDialogResult(submitted('任意翻译标签', value))).toEqual(expected);
   });
-  test('submitted Allow session -> approved_session', () => {
-    const o: AskQuestionOutcome = { kind: 'submitted', answers: { q: ALLOW_EXACT_LABEL } };
-    expect(mapDialogResult(o)).toEqual({ kind: 'approved_session' });
+
+  test.each<AskQuestionOutcome>([
+    submitted('Allow once'),
+    submitted('允许一次', 'permission.unknown'),
+    submitted('允许一次', ''),
+    { kind: 'submitted', answers: {} },
+    { kind: 'submitted', answers: {}, answerValues: { q0: 'permission.allowOnce' } },
+    { kind: 'submitted', answers: { q0: '允许一次' }, answerValues: {} },
+    { kind: 'chat', feedback: 'later' },
+  ])('rejects missing, unknown, empty and chat outcomes', (outcome) => {
+    expect(mapDialogResult(outcome)).toEqual({ kind: 'rejected' });
   });
-  test('submitted Always allow -> approved_always', () => {
-    const o: AskQuestionOutcome = { kind: 'submitted', answers: { q: ALLOW_ALWAYS_LABEL } };
-    expect(mapDialogResult(o)).toEqual({ kind: 'approved_always' });
-  });
-  test('submitted Reject -> rejected', () => {
-    const o: AskQuestionOutcome = { kind: 'submitted', answers: { q: 'Reject' } };
-    expect(mapDialogResult(o)).toEqual({ kind: 'rejected' });
-  });
-  test('submitted unknown/empty -> rejected', () => {
-    expect(mapDialogResult({ kind: 'submitted', answers: {} })).toEqual({ kind: 'rejected' });
-    expect(mapDialogResult({ kind: 'submitted', answers: { q: 'whatever' } })).toEqual({ kind: 'rejected' });
-  });
-  test('cancelled -> escape', () => {
+
+  test('maps cancellation to escape', () => {
     expect(mapDialogResult({ kind: 'cancelled' })).toEqual({ kind: 'escape' });
-  });
-  test('chat -> rejected', () => {
-    expect(mapDialogResult({ kind: 'chat', feedback: 'later' })).toEqual({ kind: 'rejected' });
   });
 });

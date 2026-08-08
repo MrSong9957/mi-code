@@ -61,6 +61,26 @@ export const enUS: CanonicalResources = {
   },
   permission: {
     placeholder: 'Permission',
+    header: 'Permission',
+    question: 'Allow this action?\n\nTool: {tool}\nReason: {reason}',
+    options: {
+      allowOnce: {
+        label: 'Allow once',
+        description: 'Run this action exactly once. Not remembered.',
+      },
+      allowExactSession: {
+        label: 'Allow this exact action for this session',
+        description: 'Run now and remember this exact action for this session.',
+      },
+      allowAlways: {
+        label: 'Always allow',
+        description: 'Run now and persist this permission; hard-deny rules are still re-checked.',
+      },
+      reject: {
+        label: 'Reject',
+        description: 'Do not run this action.',
+      },
+    },
   },
   tool: {
     placeholder: 'Tool',

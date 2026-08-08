@@ -1,17 +1,18 @@
-// §7.2 adapter behavior. Depends ONLY on Task 4 (auto-permission-dialog.ts).
-import { describe, test, expect } from 'vitest';
+import { describe, expect, test } from 'vitest';
+import { createLanguageStore, createTranslator, type Language } from '../../locale/index.js';
 import { createAutoPermissionDialogProvider } from '../../permission/auto-permission-dialog.js';
-import {
-  ALLOW_ONCE_LABEL,
-  ALLOW_EXACT_LABEL,
-  ALLOW_ALWAYS_LABEL,
-} from '../../permission/permission-answer-mapping.js';
 import type { AskQuestionOutcome, AskQuestionRequest } from '../../agent/ask-user-types.js';
 import type { DialogResult } from '../../permission/interactive-ask.js';
 
 class ScriptedAskManager {
+  lastRequest: AskQuestionRequest | null = null;
+
   constructor(private readonly outcome: AskQuestionOutcome) {}
-  async ask(_request: AskQuestionRequest): Promise<AskQuestionOutcome> { return this.outcome; }
+
+  async ask(request: AskQuestionRequest): Promise<AskQuestionOutcome> {
+    this.lastRequest = request;
+    return this.outcome;
+  }
 }
 
 const askInput = {
@@ -21,28 +22,71 @@ const askInput = {
   origin: 'main' as const,
 };
 
-describe('[auto-dialog] adapter behavior (§7.2)', () => {
-  test('A1: cancelled -> adapter returns DialogResult.escape', async () => {
-    const mgr = new ScriptedAskManager({ kind: 'cancelled' });
-    const dialog = createAutoPermissionDialogProvider(mgr as never);
-    expect(await dialog(askInput as never)).toEqual({ kind: 'escape' });
+function createDialog(outcome: AskQuestionOutcome, language: Language = 'zh-CN') {
+  const manager = new ScriptedAskManager(outcome);
+  const translator = createTranslator(createLanguageStore(language));
+  return {
+    manager,
+    dialog: createAutoPermissionDialogProvider(manager as never, translator),
+  };
+}
+
+describe('createAutoPermissionDialogProvider', () => {
+  test.each([
+    ['permission.allowOnce', { kind: 'approved_once' }],
+    ['permission.allowExactSession', { kind: 'approved_session' }],
+    ['permission.allowAlways', { kind: 'approved_always' }],
+    ['permission.reject', { kind: 'rejected' }],
+  ] as const)('returns the decision mapped from stable value %s', async (value, expected) => {
+    const { dialog } = createDialog({
+      kind: 'submitted',
+      answers: { q0: '本地化标签' },
+      answerValues: { q0: value },
+    });
+
+    expect(await dialog(askInput as never)).toEqual(expected satisfies DialogResult);
   });
-  test('A2: submitted labels -> corresponding DialogResult', async () => {
-    const cases: Array<[string, DialogResult]> = [
-      [ALLOW_ONCE_LABEL, { kind: 'approved_once' }],
-      [ALLOW_EXACT_LABEL, { kind: 'approved_session' }],
-      [ALLOW_ALWAYS_LABEL, { kind: 'approved_always' }],
-      ['Reject', { kind: 'rejected' }],
-    ];
-    for (const [label, expected] of cases) {
-      const mgr = new ScriptedAskManager({ kind: 'submitted', answers: { q: label } });
-      const dialog = createAutoPermissionDialogProvider(mgr as never);
-      expect(await dialog(askInput as never)).toEqual(expected);
-    }
+
+  test('preserves cancelled and chat safety behavior', async () => {
+    expect(await createDialog({ kind: 'cancelled' }).dialog(askInput as never))
+      .toEqual({ kind: 'escape' });
+    expect(await createDialog({ kind: 'chat', feedback: 'later' }).dialog(askInput as never))
+      .toEqual({ kind: 'rejected' });
   });
-  test('A3: chat -> rejected', async () => {
-    const mgr = new ScriptedAskManager({ kind: 'chat', feedback: 'later' });
-    const dialog = createAutoPermissionDialogProvider(mgr as never);
-    expect(await dialog(askInput as never)).toEqual({ kind: 'rejected' });
+
+  test.each([
+    {
+      language: 'zh-CN' as const,
+      question: '允许执行此操作吗？\n\n工具：run_bash\n原因：r',
+      header: '权限',
+      options: [
+        { label: '允许一次', description: '仅执行这一次，不记住此选择。', value: 'permission.allowOnce' },
+        { label: '本会话允许此精确操作', description: '立即执行，并在本会话中记住这个精确操作。', value: 'permission.allowExactSession' },
+        { label: '始终允许', description: '立即执行并持久允许；仍会重新检查硬拒绝规则。', value: 'permission.allowAlways' },
+        { label: '拒绝', description: '不执行此操作。', value: 'permission.reject' },
+      ],
+    },
+    {
+      language: 'en-US' as const,
+      question: 'Allow this action?\n\nTool: run_bash\nReason: r',
+      header: 'Permission',
+      options: [
+        { label: 'Allow once', description: 'Run this action exactly once. Not remembered.', value: 'permission.allowOnce' },
+        { label: 'Allow this exact action for this session', description: 'Run now and remember this exact action for this session.', value: 'permission.allowExactSession' },
+        { label: 'Always allow', description: 'Run now and persist this permission; hard-deny rules are still re-checked.', value: 'permission.allowAlways' },
+        { label: 'Reject', description: 'Do not run this action.', value: 'permission.reject' },
+      ],
+    },
+  ])('builds a $language request from typed translations and stable values', async ({ language, question, header, options }) => {
+    const { manager, dialog } = createDialog({ kind: 'cancelled' }, language);
+
+    await dialog(askInput as never);
+
+    expect(manager.lastRequest?.questions[0]).toEqual({
+      question,
+      header,
+      options,
+      multiSelect: false,
+    });
   });
 });

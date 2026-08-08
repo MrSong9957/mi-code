@@ -14,6 +14,14 @@ describe('serializeAskQuestionOutcome', () => {
     })).toBe('User has answered your questions: "Q\\"1"="A\\n1". You can now continue with the user\'s answers in mind.');
   });
 
+  it('serializes display labels without exposing internal stable values', () => {
+    expect(serializeAskQuestionOutcome({
+      kind: 'submitted',
+      answers: { '允许执行吗？': '允许一次' },
+      answerValues: { '允许执行吗？': 'permission.allowOnce' },
+    })).toBe('User has answered your questions: "允许执行吗？"="允许一次". You can now continue with the user\'s answers in mind.');
+  });
+
   it('serializes cancellation exactly', () => {
     expect(serializeAskQuestionOutcome({ kind: 'cancelled' }))
       .toBe('User declined to answer questions');

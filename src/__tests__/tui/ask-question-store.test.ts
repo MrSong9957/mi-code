@@ -25,7 +25,8 @@ function openStore(value = request) {
 function expectReset(store: ReturnType<typeof createAskQuestionStore>) {
   expect(store.getState()).toMatchObject({
     visible: false, requestId: null, request: null, pageIndex: 0, focusIndex: 0,
-    inputMode: false, otherDraft: '', otherCursor: 0, selected: {}, others: {},
+    inputMode: false, otherDraft: '', otherCursor: 0,
+    selected: {}, selectedValues: {}, others: {},
   });
 }
 
@@ -53,11 +54,43 @@ describe('AskQuestionStore', () => {
     expectReset(store);
   });
 
+  it.each([
+    { focusMoves: 0, label: '显示标签', value: 'permission.allowOnce' },
+    { focusMoves: 1, label: '拒绝', value: 'permission.reject' },
+  ])('submits display label $label and its selected stable value', ({ focusMoves, label, value }) => {
+    const valued: AskQuestionRequest = {
+      questions: [{
+        question: 'Q1',
+        header: 'One',
+        multiSelect: false,
+        options: [
+          { label: '显示标签', description: 'first', value: 'permission.allowOnce' },
+          { label: '拒绝', description: 'second', value: 'permission.reject' },
+        ],
+      }],
+    };
+    const { store, onOutcome } = openStore(valued);
+    for (let move = 0; move < focusMoves; move += 1) store.getState().moveFocusNext();
+
+    store.getState().activateFocused();
+
+    expect(onOutcome).toHaveBeenCalledWith('req-1', {
+      kind: 'submitted',
+      answers: { Q1: label },
+      answerValues: { Q1: value },
+    });
+    expectReset(store);
+  });
+
   it('keeps multi-select questions open while toggling choices', () => {
     const multi: AskQuestionRequest = { questions: [request.questions[1]!] };
     const { store } = openStore(multi);
     store.getState().activateFocused();
-    expect(store.getState()).toMatchObject({ pageIndex: 0, selected: { Q2: ['C'] } });
+    expect(store.getState()).toMatchObject({
+      pageIndex: 0,
+      selected: { Q2: ['C'] },
+      selectedValues: {},
+    });
   });
 
   it('moves forward and backward through question and submit tabs', () => {

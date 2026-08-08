@@ -5,11 +5,18 @@ import { SECURITY_PROTOCOL_VERSION, type UserDecision } from './decisions.js';
 import type { DialogResult } from './interactive-ask.js';
 import type { AskQuestionOutcome } from '../agent/ask-user-types.js';
 
-/** 两个放行选项的文案常量(单一真相源)。
- * mapPermissionAnswerToUserDecision 精确匹配;index.ts 构造 Permission options 也用这两个常量,
- * 不再重复硬编码 label,保证 UI 显示与 answer 映射永远一致。 */
-export const ALLOW_ONCE_LABEL = 'Allow once';
-export const ALLOW_EXACT_LABEL = 'Allow this exact action for this session';
+export const PERMISSION_ANSWER_VALUES = {
+  allowOnce: 'permission.allowOnce',
+  allowExactSession: 'permission.allowExactSession',
+  allowAlways: 'permission.allowAlways',
+  reject: 'permission.reject',
+} as const;
+
+function firstSubmittedAnswerValue(outcome: AskQuestionOutcome): string | undefined {
+  if (outcome.kind !== 'submitted') return undefined;
+  if (!Object.values(outcome.answers)[0]) return undefined;
+  return Object.values(outcome.answerValues ?? {})[0];
+}
 
 export function mapPermissionAnswerToUserDecision(
   decisionId: string,
@@ -21,30 +28,15 @@ export function mapPermissionAnswerToUserDecision(
     decided_at: new Date().toISOString(),
   };
 
-  // 非 submitted(cancelled / chat)→ rejected
-  if (outcome.kind !== 'submitted') {
-    return { ...base, response: 'rejected' };
-  }
-
-  // submitted:取第一个 answer(单选问卷)。无值 → rejected
-  const answer = Object.values(outcome.answers)[0];
-  if (answer === undefined) {
-    return { ...base, response: 'rejected' };
-  }
-
-  // 精确匹配两个放行选项;其余一律 rejected
-  if (answer === ALLOW_ONCE_LABEL) {
+  const answerValue = firstSubmittedAnswerValue(outcome);
+  if (answerValue === PERMISSION_ANSWER_VALUES.allowOnce) {
     return { ...base, response: 'approved_once', remember: false };
   }
-  if (answer === ALLOW_EXACT_LABEL) {
+  if (answerValue === PERMISSION_ANSWER_VALUES.allowExactSession) {
     return { ...base, response: 'approved_once', remember: true };
   }
-  // Reject / unknown → rejected(绝不 approved_once)
   return { ...base, response: 'rejected' };
 }
-
-/** auto permission dialog 第三个放行选项文案（always-allow，持久化）。 */
-export const ALLOW_ALWAYS_LABEL = 'Always allow';
 
 /**
  * auto permission dialog 问卷 outcome → DialogResult（spec §5.2 adapter 边界）。
@@ -54,9 +46,9 @@ export function mapDialogResult(outcome: AskQuestionOutcome): DialogResult {
   if (outcome.kind !== 'submitted') {
     return outcome.kind === 'cancelled' ? { kind: 'escape' } : { kind: 'rejected' };
   }
-  const answer = Object.values(outcome.answers)[0];
-  if (answer === ALLOW_ONCE_LABEL) return { kind: 'approved_once' };
-  if (answer === ALLOW_EXACT_LABEL) return { kind: 'approved_session' };
-  if (answer === ALLOW_ALWAYS_LABEL) return { kind: 'approved_always' };
+  const answerValue = firstSubmittedAnswerValue(outcome);
+  if (answerValue === PERMISSION_ANSWER_VALUES.allowOnce) return { kind: 'approved_once' };
+  if (answerValue === PERMISSION_ANSWER_VALUES.allowExactSession) return { kind: 'approved_session' };
+  if (answerValue === PERMISSION_ANSWER_VALUES.allowAlways) return { kind: 'approved_always' };
   return { kind: 'rejected' };
 }

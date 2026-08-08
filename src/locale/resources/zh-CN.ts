@@ -59,6 +59,26 @@ export const zhCN = {
   },
   permission: {
     placeholder: '权限',
+    header: '权限',
+    question: '允许执行此操作吗？\n\n工具：{tool}\n原因：{reason}',
+    options: {
+      allowOnce: {
+        label: '允许一次',
+        description: '仅执行这一次，不记住此选择。',
+      },
+      allowExactSession: {
+        label: '本会话允许此精确操作',
+        description: '立即执行，并在本会话中记住这个精确操作。',
+      },
+      allowAlways: {
+        label: '始终允许',
+        description: '立即执行并持久允许；仍会重新检查硬拒绝规则。',
+      },
+      reject: {
+        label: '拒绝',
+        description: '不执行此操作。',
+      },
+    },
   },
   tool: {
     placeholder: '工具',

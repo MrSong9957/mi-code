@@ -170,7 +170,7 @@ import type { AskQuestionRequest, AskQuestionOutcome } from './agent/ask-user-ty
 import { SessionAllowlist } from './permission/session-allowlist.js';
 import { SessionState } from './permission/session-state.js';
 import { transitionPermissionMode } from './permission/mode-transition.js';
-import { mapPermissionAnswerToUserDecision, ALLOW_ONCE_LABEL, ALLOW_EXACT_LABEL } from './permission/permission-answer-mapping.js';
+import { mapPermissionAnswerToUserDecision, PERMISSION_ANSWER_VALUES } from './permission/permission-answer-mapping.js';
 import { createAutoPermissionDialogProvider } from './permission/auto-permission-dialog.js';
 import { renderAttachmentsForPrompt } from './agent/prompt/auto-attachments.js';
 import { resolveAuthority } from './permission/cutover.js';
@@ -367,9 +367,9 @@ toolRegistry.register(askTool.definition, askTool.executor);
 // 关键:permission ask 用与 ask_user_question tool **不同的 schema**(BRC-6 要求不能伪装成
 // tool result)。这里把 SecurityDecision 转成一个三选一问卷
 // (Allow once / Allow this exact action for this session / Reject),
-// answer → UserDecision 经纯函数 mapPermissionAnswerToUserDecision 精确映射:
+// answerValues → UserDecision 经纯函数 mapPermissionAnswerToUserDecision 精确映射:
 // 仅两个放行选项 → approved_once(remember 分别 false/true);Reject/unknown/empty/非submitted → rejected。
-// options 的 label 直接复用 ALLOW_ONCE_LABEL / ALLOW_EXACT_LABEL 常量,与映射同源。
+// options 的内部 value 使用稳定 ID；本地化 label 只负责展示。
 //
 // adapterSessionIdReader:延迟读取当前 sessionId(因为 sessionState.currentId 会随
 // rotate/rewind/resume 变化,gate 构造时还不知道 resume 后的值)。
@@ -378,25 +378,37 @@ function getDecisionChannel(): UserDecisionChannel {
   return {
     async request(decision: SecurityDecision): Promise<UserDecision> {
       // 把 SecurityDecision 转成问卷。这是**独立的 permission ask
-      // schema**,不伪装成 tool result。label 复用常量,保证 UI 显示与 answer 映射同源。
+      // schema**,不伪装成 tool result。稳定 value 与本地化 label 相互独立。
       const request: AskQuestionRequest = {
         questions: [{
-          question:
-            `Allow this action once?\n\n` +
-            `Tool: ${decision.action.subject_id}\n` +
-            `Reason: ${decision.human_reason}`,
-          header: 'Permission',
+          question: translator.t('permission.question', {
+            tool: decision.action.subject_id,
+            reason: decision.human_reason,
+          }),
+          header: translator.t('permission.header'),
           options: [
-            { label: ALLOW_ONCE_LABEL, description: 'Run this action exactly once. It will not be remembered.' },
-            { label: ALLOW_EXACT_LABEL, description: 'Run now and remember this exact command for the rest of this session.' },
-            { label: 'Reject', description: 'Do not run this action.' },
+            {
+              label: translator.t('permission.options.allowOnce.label'),
+              description: translator.t('permission.options.allowOnce.description'),
+              value: PERMISSION_ANSWER_VALUES.allowOnce,
+            },
+            {
+              label: translator.t('permission.options.allowExactSession.label'),
+              description: translator.t('permission.options.allowExactSession.description'),
+              value: PERMISSION_ANSWER_VALUES.allowExactSession,
+            },
+            {
+              label: translator.t('permission.options.reject.label'),
+              description: translator.t('permission.options.reject.description'),
+              value: PERMISSION_ANSWER_VALUES.reject,
+            },
           ],
           multiSelect: false,
         }],
       };
       // UI 抛错 → 视为通道故障(由 gate 转成 denied,绝不放行)
       const outcome: AskQuestionOutcome = await askManager.ask(request);
-      // answer → UserDecision 经纯函数精确映射:Reject/unknown/empty/非submitted 绝不放行。
+      // answerValues → UserDecision 经纯函数精确映射:Reject/unknown/empty/非submitted 绝不放行。
       return mapPermissionAnswerToUserDecision(decision.decision_id, outcome);
     },
   };
@@ -951,7 +963,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       sessionState,
       hooks: [],
       // Task 7 production wiring（spec §5）：auto-mode main-origin unresolved ask 经 dialog 竞速。
-      dialogProvider: createAutoPermissionDialogProvider(askManager),
+      dialogProvider: createAutoPermissionDialogProvider(askManager, translator),
       dialogDelayMs: 2000,
       onSessionAllow: (toolName, inp) => sessionAllowlist.add(toolName, inp),
       onPersistRule: (update) => configStore.persistPermissionUpdate({

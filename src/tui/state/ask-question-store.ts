@@ -15,6 +15,7 @@ export interface AskQuestionState {
   otherDraft: string;
   otherCursor: number;
   selected: Record<string, string[]>;
+  selectedValues: Record<string, string[]>;
   others: Record<string, string>;
   open: (id: string, request: AskQuestionRequest, cb: AskQuestionOutcomeCallback) => void;
   close: (id?: string) => void;
@@ -43,7 +44,7 @@ Start by asking them what they would like to clarify.`;
 
 function emptyState(): Pick<AskQuestionState,
   'visible' | 'requestId' | 'request' | 'pageIndex' | 'focusIndex' | 'inputMode' |
-  'otherDraft' | 'otherCursor' | 'selected' | 'others'
+  'otherDraft' | 'otherCursor' | 'selected' | 'selectedValues' | 'others'
 > {
   return {
     visible: false,
@@ -55,6 +56,7 @@ function emptyState(): Pick<AskQuestionState,
     otherDraft: '',
     otherCursor: 0,
     selected: {},
+    selectedValues: {},
     others: {},
   };
 }
@@ -71,6 +73,20 @@ function answersFor(state: Pick<AskQuestionState, 'request' | 'selected' | 'othe
     if (selected.length > 0) answers[question.question] = selected.join(', ');
   }
   return answers;
+}
+
+function answerValuesFor(
+  state: Pick<AskQuestionState, 'request' | 'selectedValues' | 'others'>,
+): Record<string, string> {
+  const answerValues: Record<string, string> = {};
+  for (const question of state.request?.questions ?? []) {
+    if (state.others[question.question]?.trim()) continue;
+    const selectedValues = state.selectedValues[question.question] ?? [];
+    if (selectedValues.length > 0) {
+      answerValues[question.question] = selectedValues.join(', ');
+    }
+  }
+  return answerValues;
 }
 
 function chatFeedback(state: Pick<AskQuestionState, 'request' | 'selected' | 'others'>): string {
@@ -120,6 +136,7 @@ export function createAskQuestionStore(): AskQuestionStore {
           otherDraft: '',
           otherCursor: 0,
           selected: {},
+          selectedValues: {},
           others: {},
         });
       },
@@ -157,9 +174,16 @@ export function createAskQuestionStore(): AskQuestionStore {
           return;
         }
         if (state.focusIndex < question.options.length) {
-          const label = question.options[state.focusIndex]!.label;
+          const option = question.options[state.focusIndex]!;
+          const label = option.label;
           if (!question.multiSelect) {
-            set({ selected: { ...state.selected, [question.question]: [label] } });
+            const selectedValues = { ...state.selectedValues };
+            if (option.value === undefined) delete selectedValues[question.question];
+            else selectedValues[question.question] = [option.value];
+            set({
+              selected: { ...state.selected, [question.question]: [label] },
+              selectedValues,
+            });
             if (state.request.questions.length === 1) {
               get().submit();
               return;
@@ -171,7 +195,17 @@ export function createAskQuestionStore(): AskQuestionStore {
           const selected = previous.includes(label)
             ? previous.filter((value) => value !== label)
             : [...previous, label];
-          set({ selected: { ...state.selected, [question.question]: selected } });
+          const values = selected.flatMap((selectedLabel) => {
+            const value = question.options.find(({ label: optionLabel }) => optionLabel === selectedLabel)?.value;
+            return value === undefined ? [] : [value];
+          });
+          const selectedValues = { ...state.selectedValues };
+          if (values.length === 0) delete selectedValues[question.question];
+          else selectedValues[question.question] = values;
+          set({
+            selected: { ...state.selected, [question.question]: selected },
+            selectedValues,
+          });
           return;
         }
         if (state.focusIndex === question.options.length) {
@@ -209,7 +243,11 @@ export function createAskQuestionStore(): AskQuestionStore {
       submit: () => {
         const state = get();
         if (!state.visible || !state.request) return;
-        settle({ kind: 'submitted', answers: answersFor(state) });
+        const answers = answersFor(state);
+        const answerValues = answerValuesFor(state);
+        settle(Object.keys(answerValues).length > 0
+          ? { kind: 'submitted', answers, answerValues }
+          : { kind: 'submitted', answers });
       },
       cancel: () => {
         if (!get().visible) return;

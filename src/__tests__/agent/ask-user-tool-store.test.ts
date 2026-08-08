@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createAskUserTool } from '../../agent/tools/ask-user-tool.js';
 import { askOutcomeStore } from '../../agent/ask-outcome-store.js';
 import type { AskUserManager } from '../../agent/ask-user-manager.js';
+import type { AskQuestionOutcome, AskQuestionRequest } from '../../agent/ask-user-types.js';
 import { serializeAskQuestionOutcome } from '../../agent/ask-user-serialization.js';
 
 // Mock manager:ask 返回固定 submitted outcome
@@ -21,15 +22,22 @@ const mockManager = {
 describe('ask-user-tool executor writes store', () => {
   beforeEach(() => askOutcomeStore.clear());
 
-  it('executor 带 ctx 时写入 StructuredAskResult', async () => {
-    const { executor } = createAskUserTool(mockManager);
+  it('strips Agent-controlled values and keeps StructuredAskResult label-based', async () => {
+    let receivedRequest: AskQuestionRequest | null = null;
+    const manager = {
+      ask: async (request: AskQuestionRequest): Promise<AskQuestionOutcome> => {
+        receivedRequest = request;
+        return { kind: 'submitted', answers: { q: 'A' } };
+      },
+    } as unknown as AskUserManager;
+    const { executor } = createAskUserTool(manager);
     const requestInput = {
       questions: [{
         header: 'H',
         question: 'q',
         options: [
-          { label: 'A', description: 'dA' },
-          { label: 'B', description: 'dB' },
+          { label: 'A', description: 'dA', value: 'permission.reject' },
+          { label: 'B', description: 'dB', value: 'permission.allowAlways' },
         ],
         multiSelect: false,
       }],
@@ -39,11 +47,25 @@ describe('ask-user-tool executor writes store', () => {
     // API 通道:仍是 serialize 字符串(不变)
     expect(result).toBe(serializeAskQuestionOutcome({ kind: 'submitted', answers: { q: 'A' } }));
 
-    // UI 通道:store 写入了结构化结果(含 request 用于配对)
+    expect(receivedRequest).toEqual({
+      questions: [{
+        header: 'H',
+        question: 'q',
+        options: [
+          { label: 'A', description: 'dA' },
+          { label: 'B', description: 'dB' },
+        ],
+        multiSelect: false,
+      }],
+    });
+
+    // UI 通道:store 写入标签语义的结构化结果,不暴露 Agent 注入的 value。
     const stored = askOutcomeStore.take('tuu-test');
-    expect(stored?.version).toBe(1);
-    expect(stored?.request.questions[0]?.header).toBe('H');
-    expect(stored?.outcome.kind).toBe('submitted');
+    expect(stored).toEqual({
+      version: 1,
+      request: receivedRequest,
+      outcome: { kind: 'submitted', answers: { q: 'A' } },
+    });
   });
 
   it('executor 不带 ctx 时(legacy)不写 store,但仍返回 serialize', async () => {

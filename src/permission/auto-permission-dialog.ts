@@ -14,13 +14,9 @@
 
 import type { AskUserManager } from '../agent/ask-user-manager.js';
 import type { AskQuestionRequest } from '../agent/ask-user-types.js';
+import type { Translator } from '../locale/index.js';
 import type { InteractiveAskInput, DialogResult } from './interactive-ask.js';
-import {
-  mapDialogResult,
-  ALLOW_ONCE_LABEL,
-  ALLOW_EXACT_LABEL,
-  ALLOW_ALWAYS_LABEL,
-} from './permission-answer-mapping.js';
+import { mapDialogResult, PERMISSION_ANSWER_VALUES } from './permission-answer-mapping.js';
 
 /**
  * 构造 auto permission dialog provider（spec §5.1）。
@@ -30,20 +26,37 @@ import {
  */
 export function createAutoPermissionDialogProvider(
   askMgr: AskUserManager,
+  translator: Translator,
 ): (input: InteractiveAskInput) => Promise<DialogResult> {
   return async (input: InteractiveAskInput): Promise<DialogResult> => {
     const request: AskQuestionRequest = {
       questions: [{
-        question:
-          `Allow this action?\n\n` +
-          `Tool: ${input.toolName}\n` +
-          `Reason: ${input.decision.human_reason ?? ''}`,
-        header: 'Permission (auto)',
+        question: translator.t('permission.question', {
+          tool: input.toolName,
+          reason: input.decision.human_reason ?? '',
+        }),
+        header: translator.t('permission.header'),
         options: [
-          { label: ALLOW_ONCE_LABEL, description: 'Run this action exactly once. Not remembered.' },
-          { label: ALLOW_EXACT_LABEL, description: 'Run now and remember this exact command for this session.' },
-          { label: ALLOW_ALWAYS_LABEL, description: 'Run now and always allow (persisted to config; re-checked against hard deny).' },
-          { label: 'Reject', description: 'Do not run this action.' },
+          {
+            label: translator.t('permission.options.allowOnce.label'),
+            description: translator.t('permission.options.allowOnce.description'),
+            value: PERMISSION_ANSWER_VALUES.allowOnce,
+          },
+          {
+            label: translator.t('permission.options.allowExactSession.label'),
+            description: translator.t('permission.options.allowExactSession.description'),
+            value: PERMISSION_ANSWER_VALUES.allowExactSession,
+          },
+          {
+            label: translator.t('permission.options.allowAlways.label'),
+            description: translator.t('permission.options.allowAlways.description'),
+            value: PERMISSION_ANSWER_VALUES.allowAlways,
+          },
+          {
+            label: translator.t('permission.options.reject.label'),
+            description: translator.t('permission.options.reject.description'),
+            value: PERMISSION_ANSWER_VALUES.reject,
+          },
         ],
         multiSelect: false,
       }],

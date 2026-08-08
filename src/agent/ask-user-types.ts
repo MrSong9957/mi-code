@@ -1,6 +1,7 @@
 export interface AskQuestionOption {
   label: string;
   description: string;
+  value?: string;
 }
 
 export interface AskQuestion {
@@ -23,7 +24,11 @@ export interface AskQuestionRequest {
 }
 
 export type AskQuestionOutcome =
-  | { kind: 'submitted'; answers: Record<string, string> }
+  | {
+      kind: 'submitted';
+      answers: Record<string, string>;
+      answerValues?: Record<string, string>;
+    }
   | { kind: 'cancelled' }
   | { kind: 'chat'; feedback: string };
 
