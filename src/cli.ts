@@ -9,6 +9,7 @@
 
 import { parseArgs } from 'node:util';
 import type { ThemeName } from './config/schema.js';
+import { isLanguage, SUPPORTED_LANGUAGES, type Language } from './locale/types.js';
 
 export interface CliOptions {
   /** --resume <id>：恢复指定 id 的会话 */
@@ -19,6 +20,10 @@ export interface CliOptions {
   list?: boolean;
   /** --theme <dark|light>：指定主题（覆盖配置文件） */
   theme?: ThemeName;
+  /** --language <zh-CN|en-US>：指定本次启动语言（不持久化） */
+  language?: Language;
+  /** 显式传入不支持的 --language 值时返回错误。 */
+  languageError?: string;
 }
 
 /** 解析 process.argv，返回 CLI 选项。
@@ -33,6 +38,7 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliOptions
         continue: { type: 'boolean', short: 'c' },
         list: { type: 'boolean', short: 'l' },
         theme: { type: 'string', short: 't' },
+        language: { type: 'string' },
       },
       allowNegative: true,
       strict: false,  // 未知参数不报错
@@ -44,6 +50,13 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliOptions
     if (typeof values.theme === 'string') {
       const t = values.theme.toLowerCase();
       if (t === 'dark' || t === 'light') opts.theme = t;
+    }
+    if (typeof values.language === 'string') {
+      if (isLanguage(values.language)) {
+        opts.language = values.language;
+      } else {
+        opts.languageError = `Unsupported language: ${values.language}. Supported values: ${SUPPORTED_LANGUAGES.join(', ')}.`;
+      }
     }
     return opts;
   } catch {

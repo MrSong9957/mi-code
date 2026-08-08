@@ -8,6 +8,7 @@ import type { CapabilityOverrideRecord } from './capability-override.js';
 import type { PermissionRule } from '../permission/types.js';
 import type { PermissionUpdate } from '../permission/permission-updates.js';
 import type { SessionState } from '../permission/session-state.js';
+import { isLanguage, type Language } from '../locale/types.js';
 
 export class ConfigStore {
   private config: MiCodeConfig;
@@ -89,6 +90,9 @@ export class ConfigStore {
             mode,
             verbs: saved.spinnerVerbs.verbs.filter((v): v is string => typeof v === 'string'),
           };
+        }
+        if (isLanguage(saved.language)) {
+          config.language = saved.language;
         }
         // plan 目录（向后兼容：旧文件无此字段时保留默认 undefined → ~/.micode/plans/）
         if (typeof saved.plansDirectory === 'string') {
@@ -225,6 +229,17 @@ export class ConfigStore {
     this.save();
   }
 
+  /** 获取持久化语言；未配置或配置无效时返回 undefined。 */
+  getLanguage(): Language | undefined {
+    return this.config.language;
+  }
+
+  /** 设置语言（持久化）。 */
+  setLanguage(language: Language): void {
+    this.config.language = language;
+    this.save();
+  }
+
   /** 获取 Spinner 动词配置副本，供渲染层在 turn 启动时抽样。 */
   getSpinnerVerbsConfig(): SpinnerVerbConfig {
     return { mode: this.config.spinnerVerbs.mode, verbs: [...this.config.spinnerVerbs.verbs] };
@@ -350,6 +365,11 @@ export class ConfigStore {
       spinnerVerbs: this.config.spinnerVerbs,
     };
     // 可选字段：undefined 表示删除（清除配置），非 undefined 表示设置
+    if (this.config.language !== undefined) {
+      merged.language = this.config.language;
+    } else {
+      delete merged.language;
+    }
     if (this.config.plansDirectory !== undefined) {
       merged.plansDirectory = this.config.plansDirectory;
     } else {

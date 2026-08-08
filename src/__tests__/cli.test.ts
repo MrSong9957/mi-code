@@ -41,4 +41,29 @@ describe('parseCliArgs', () => {
   it('混合参数正常解析', () => {
     expect(parseCliArgs(['--resume', 'sid', '--unknown', 'x'])).toEqual({ resume: 'sid' });
   });
+  it('--language en-US -> language field', () => {
+    expect(parseCliArgs(['--language', 'en-US'])).toEqual({ language: 'en-US' });
+  });
+
+  it('--language zh-CN -> language field', () => {
+    expect(parseCliArgs(['--language', 'zh-CN'])).toEqual({ language: 'zh-CN' });
+  });
+
+  it('--language fr-FR -> languageError field', () => {
+    expect(parseCliArgs(['--language', 'fr-FR'])).toEqual({
+      languageError: 'Unsupported language: fr-FR. Supported values: zh-CN, en-US.',
+    });
+  });
+
+  it('--language en-us does not accept case-insensitive values', () => {
+    expect(parseCliArgs(['--language', 'en-us'])).toEqual({
+      languageError: 'Unsupported language: en-us. Supported values: zh-CN, en-US.',
+    });
+  });
+
+  it('without --language returns neither language field', () => {
+    const options = parseCliArgs(['--theme', 'dark']);
+    expect(options.language).toBeUndefined();
+    expect(options.languageError).toBeUndefined();
+  });
 });

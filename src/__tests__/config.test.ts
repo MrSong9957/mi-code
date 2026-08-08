@@ -1,6 +1,6 @@
 // 配置模块测试
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ConfigStore } from '../config/store.js';
@@ -62,6 +62,35 @@ describe('ConfigStore', () => {
       mode: 'replace',
       verbs: ['Customizing'],
     });
+  });
+
+  it('should return undefined when language is absent', () => {
+    const store = new ConfigStore(tempDir);
+    expect(store.getLanguage()).toBeUndefined();
+  });
+
+  it('should load a valid persisted language', () => {
+    const configDir = join(tempDir, '.micode-language');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({
+      language: 'en-US',
+    }));
+
+    const store = new ConfigStore(configDir);
+    expect(store.getLanguage()).toBe('en-US');
+  });
+
+  it('should treat an invalid persisted language as unconfigured without rewriting bytes', () => {
+    const configDir = join(tempDir, '.micode-invalid-language');
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, 'config.json');
+    const original = '{\n  "language": "fr-FR",\n  "futureFeature": {\n    "enabled": true\n  }\n}\n';
+    writeFileSync(configPath, original, 'utf8');
+
+    const store = new ConfigStore(configDir);
+
+    expect(store.getLanguage()).toBeUndefined();
+    expect(readFileSync(configPath, 'utf8')).toBe(original);
   });
 
   it('should set and get API key', () => {
@@ -201,6 +230,22 @@ describe('ConfigStore', () => {
 
     const store = new ConfigStore(configDir);
     expect(store.getPlansDirectory()).toBe('/from/file/plans');
+  });
+
+  it('setLanguage should persist en-US while preserving unknown fields', () => {
+    const configDir = join(tempDir, '.micode-language-save');
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, 'config.json');
+    writeFileSync(configPath, JSON.stringify({
+      futureFeature: { enabled: 'maybe' },
+    }), 'utf8');
+
+    const store = new ConfigStore(configDir);
+    store.setLanguage('en-US');
+
+    const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+    expect(raw.futureFeature).toEqual({ enabled: 'maybe' });
+    expect(raw.language).toBe('en-US');
   });
 });
 

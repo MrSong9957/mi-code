@@ -1,5 +1,7 @@
 // 配置 Schema 定义
 
+import type { Language } from '../locale/types.js';
+
 /** 单个 Provider 配置 */
 export interface ProviderConfig {
   apiKey: string;
@@ -97,6 +99,7 @@ export interface MiCodeConfig {
   permissions: PermissionConfig;
   theme: ThemeName;
   spinnerVerbs: SpinnerVerbConfig;
+  language?: Language;
   /** plan 文件落盘目录（绝对路径或相对 cwd 的路径）。未配置时用 ~/.micode/plans/ */
   plansDirectory?: string;
   /**
@@ -120,6 +123,7 @@ export const DEFAULT_CONFIG: MiCodeConfig = {
     mode: 'append',
     verbs: [],
   },
+  language: undefined,
   plansDirectory: undefined,
 };
 
