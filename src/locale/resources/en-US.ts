@@ -82,6 +82,41 @@ export const enUS: CanonicalResources = {
       },
     },
   },
+  toolPresentation: {
+    group: {
+      glob: {
+        one: 'Searched {count} pattern',
+        other: 'Searched {count} patterns',
+      },
+      read: {
+        one: 'Read {count} item',
+        other: 'Read {count} items',
+      },
+      default: {
+        one: 'Ran {count} operation',
+        other: 'Ran {count} operations',
+      },
+    },
+    status: {
+      failed: '{subject} → failed: {error}',
+      noMatches: '{subject} → no matches',
+      noOutput: '{subject} → no output',
+    },
+    count: {
+      files: {
+        one: '{count} file',
+        other: '{count} files',
+      },
+    },
+    grep: {
+      matches: {
+        one: '{pattern} in {scope} → {count} match',
+        other: '{pattern} in {scope} → {count} matches',
+      },
+      noMatches: '{pattern} in {scope} → no matches',
+      failed: '{pattern} in {scope} → failed: {error}',
+    },
+  },
   tool: {
     placeholder: 'Tool',
   },

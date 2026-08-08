@@ -328,13 +328,19 @@ export class BlockPipeline {
     durationMs?: number,
   ): ToolPresentation {
     try {
-      return buildToolPresentation({ toolUseId, toolName: name, input, output, durationMs });
+      return buildToolPresentation(
+        { toolUseId, toolName: name, input, output, durationMs },
+        this.translator,
+      );
     } catch (err) {
       if (process.env.DEBUG) {
         console.error('[tool presentation failed]', { toolUseId, err });
       }
       // generic fallback:不分组,安全单行。
-      return buildToolPresentation({ toolUseId, toolName: 'unknown', input: {}, output });
+      return buildToolPresentation(
+        { toolUseId, toolName: 'unknown', input: {}, output },
+        this.translator,
+      );
     }
   }
 

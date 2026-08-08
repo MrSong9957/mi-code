@@ -18,6 +18,7 @@
 
 import React from 'react';
 import { Box, Text } from 'ink';
+import { useLocale } from '../../locale/context.js';
 import type { ToolBlock, ToolPresentation } from '../transcript-types.js';
 import {
   orderToolPresentations,
@@ -31,7 +32,8 @@ export interface ToolBlockLineProps {
 }
 
 export function ToolBlockLine({ block, cols }: ToolBlockLineProps): React.ReactElement {
-  const title = buildToolGroupTitle(block.toolName, block.presentations.length);
+  const { t } = useLocale();
+  const title = buildToolGroupTitle(block.toolName, block.presentations.length, { t });
   const ordered = orderToolPresentations(block.presentations);
   const thinkingSummary = summarizeThinking(block.thinking);
 

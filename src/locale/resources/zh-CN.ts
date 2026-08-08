@@ -80,6 +80,41 @@ export const zhCN = {
       },
     },
   },
+  toolPresentation: {
+    group: {
+      glob: {
+        one: '搜索了 {count} 个模式',
+        other: '搜索了 {count} 个模式',
+      },
+      read: {
+        one: '读取了 {count} 项',
+        other: '读取了 {count} 项',
+      },
+      default: {
+        one: '运行了 {count} 个操作',
+        other: '运行了 {count} 个操作',
+      },
+    },
+    status: {
+      failed: '{subject} → 失败：{error}',
+      noMatches: '{subject} → 无匹配',
+      noOutput: '{subject} → 无输出',
+    },
+    count: {
+      files: {
+        one: '{count} 个文件',
+        other: '{count} 个文件',
+      },
+    },
+    grep: {
+      matches: {
+        one: '{pattern} 在 {scope} 中 → {count} 个匹配',
+        other: '{pattern} 在 {scope} 中 → {count} 个匹配',
+      },
+      noMatches: '{pattern} 在 {scope} 中 → 无匹配',
+      failed: '{pattern} 在 {scope} 中 → 失败：{error}',
+    },
+  },
   tool: {
     placeholder: '工具',
   },
