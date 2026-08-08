@@ -11,7 +11,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import stripAnsi from 'strip-ansi';
-import { InlineAppV2, type InlineAppV2Stores } from '../../../tui/inline-v2/InlineAppV2.js';
+import { LocaleProvider } from '../../../locale/context.js';
+import { createLanguageStore } from '../../../locale/language-store.js';
+import { createTranslator } from '../../../locale/translator.js';
+import type { LanguageStore, Translator } from '../../../locale/types.js';
+import { InlineAppV2 as InlineAppV2Base, type InlineAppV2Stores } from '../../../tui/inline-v2/InlineAppV2.js';
 import { PendingToolMessage } from '../../../tui/inline-v2/PendingToolMessage.js';
 import { PendingThinkingMessage } from '../../../tui/inline-v2/PendingThinkingMessage.js';
 import { createMessagesStore } from '../../../tui/state/messages-store.js';
@@ -28,7 +32,13 @@ import { displayWidth } from '../../../tui/inline/text-layout.js';
 import { buildToolPresentation } from '../../../ui/tool-presentation.js';
 import type { MessagesStore } from '../../../tui/state/messages-store.js';
 
-function createStores(): InlineAppV2Stores {
+type TestInlineAppV2Stores = InlineAppV2Stores & {
+  languageStore: LanguageStore;
+  translator: Translator;
+};
+
+function createStores(): TestInlineAppV2Stores {
+  const languageStore = createLanguageStore('en-US');
   return {
     messagesStore: createMessagesStore(),
     inputStore: createInputStore({ onSubmit: () => {} }),
@@ -39,7 +49,18 @@ function createStores(): InlineAppV2Stores {
     selectionStore: createSelectionStore(),
     overlayStore: createOverlayStore(),
     askQuestionStore: createAskQuestionStore(),
+    languageStore,
+    translator: createTranslator(languageStore),
   };
+}
+
+function InlineAppV2(props: React.ComponentProps<typeof InlineAppV2Base>): React.ReactElement {
+  const stores = props.stores as TestInlineAppV2Stores;
+  return (
+    <LocaleProvider store={stores.languageStore}>
+      <InlineAppV2Base {...props} />
+    </LocaleProvider>
+  );
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -88,6 +109,7 @@ function updateStreamingAssistantText(store: MessagesStore, newText: string): vo
  * `description` 成为展示 label;`status` 默认 completed→finished;`durationMs` 默认 5s。
  */
 function buildSpawnAgentPresentation(opts: {
+  translator?: Translator;
   toolUseId: string;
   description: string;
   body?: string;
@@ -101,7 +123,7 @@ function buildSpawnAgentPresentation(opts: {
     input: { description: opts.description },
     output: `[Subagent status=${status}]\n${opts.body ?? ''}`,
     durationMs: opts.durationMs ?? 5000,
-  });
+  }, opts.translator ?? createTranslator(createLanguageStore('en-US')));
 }
 
 describe('<InlineAppV2>', () => {

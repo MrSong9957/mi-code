@@ -5,10 +5,14 @@
 // 不再断言 FormattedLine 字符串行,而是断言 TimelineItem 的 kind/status/text。
 
 import { describe, it, expect, vi } from 'vitest';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { buildToolPresentation } from '../../ui/tool-presentation.js';
 import { selectCommittedTranscript } from '../../tui/state/transcript-reducer.js';
 import type { ToolPresentation } from '../../tui/transcript-types.js';
+
+const enTranslator = createTranslator(createLanguageStore('en-US'));
 
 describe('messages-store (semantic timeline)', () => {
   it('初始:空时间线', () => {
@@ -26,7 +30,7 @@ describe('messages-store (semantic timeline)', () => {
     const presentation = buildToolPresentation({
       toolUseId: 'g1', toolName: 'glob',
       input: { pattern: '*.ts' }, output: 'src/a.ts',
-    });
+    }, enTranslator);
     store.getState().resolveTool('g1', presentation);
     store.getState().closeOpenToolGroup();
 

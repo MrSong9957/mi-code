@@ -8,6 +8,9 @@ import { describe, it, expect } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import stripAnsi from 'strip-ansi';
+import { LocaleProvider } from '../../../locale/context.js';
+import { createLanguageStore } from '../../../locale/language-store.js';
+import type { Language } from '../../../locale/types.js';
 import { ToolBlockLine } from '../../../tui/inline-v2/ToolBlockLine.js';
 import type { ToolBlock, ToolPresentation } from '../../../tui/transcript-types.js';
 
@@ -58,6 +61,15 @@ function errorGlobPresentation(
   };
 }
 
+function renderToolBlockLine(block: ToolBlock, language: Language = 'en-US'): string {
+  const store = createLanguageStore(language);
+  return stripAnsi(render(
+    <LocaleProvider store={store}>
+      <ToolBlockLine block={block} cols={100} />
+    </LocaleProvider>,
+  ).lastFrame() ?? '');
+}
+
 describe('ToolBlockLine', () => {
   it('renders one summary block for adjacent glob calls', () => {
     const block: ToolBlock = {
@@ -72,8 +84,7 @@ describe('ToolBlockLine', () => {
       ],
       thinking: [{ durationMs: 1_000 }, { durationMs: 2_000 }],
     };
-    const { lastFrame } = render(<ToolBlockLine block={block} cols={100} />);
-    expect(stripAnsi(lastFrame() ?? '')).toBe([
+    expect(renderToolBlockLine(block)).toBe([
       '● Searched 4 patterns',
       '  ⎿ src/**/*.test.ts → 11 files',
       '  ⎿ src/render/**/*.test.ts → 2 files',
@@ -95,8 +106,7 @@ describe('ToolBlockLine', () => {
       ],
       thinking: [],
     };
-    const { lastFrame } = render(<ToolBlockLine block={block} cols={100} />);
-    const frame = stripAnsi(lastFrame() ?? '');
+    const frame = renderToolBlockLine(block);
     const lines = frame.split('\n');
     // title
     expect(lines[0]).toBe('● Searched 3 patterns');
@@ -114,13 +124,12 @@ describe('ToolBlockLine', () => {
       presentations: [globPresentation('g1', '*.ts', 1)],
       thinking: [{ durationMs: 1_000 }],
     };
-    const { lastFrame } = render(<ToolBlockLine block={block} cols={100} />);
-    const frame = stripAnsi(lastFrame() ?? '');
+    const frame = renderToolBlockLine(block);
     expect(frame).not.toContain('Thought');
     expect(frame.split('\n')).toHaveLength(2); // title + 1 summary
   });
 
-  it('renders read group title', () => {
+  it('renders read group title through LocaleProvider', () => {
     const block: ToolBlock = {
       id: 'tg4',
       kind: 'tool',
@@ -131,8 +140,25 @@ describe('ToolBlockLine', () => {
       ],
       thinking: [],
     };
-    const { lastFrame } = render(<ToolBlockLine block={block} cols={100} />);
-    const frame = stripAnsi(lastFrame() ?? '');
+    const frame = renderToolBlockLine(block);
     expect(frame.split('\n')[0]).toBe('● Read 2 items');
+  });
+
+  it('localizes fixed group labels in zh-CN while preserving raw summaries', () => {
+    const block: ToolBlock = {
+      id: 'tg5',
+      kind: 'tool',
+      toolName: 'glob',
+      presentations: [
+        globPresentation('g1', 'src/**/*.ts', 3),
+        emptyGlobPresentation('g2', 'src/**/*.spec.ts'),
+      ],
+      thinking: [],
+    };
+
+    const frame = renderToolBlockLine(block, 'zh-CN');
+    expect(frame).toContain('● 搜索了 2 个模式');
+    expect(frame).toContain('⎿ src/**/*.ts → 3 files');
+    expect(frame).toContain('⎿ src/**/*.spec.ts → no matches');
   });
 });
