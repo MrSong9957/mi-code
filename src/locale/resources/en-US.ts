@@ -188,6 +188,19 @@ export const enUS: CanonicalResources = {
     inputModeHint: 'Enter to save · Esc to cancel',
     navigationHint: '↑↓ to navigate · Enter to select · Esc to cancel',
   },
+  planApproval: {
+    placeholder: 'Plan approval',
+    // Fallback when state.request.otherLabel is null (only this fixed string is
+    // localized; an Agent-provided otherLabel stays RAW / untranslated).
+    otherDefault: 'Suggest changes',
+    chatAction: 'Discuss this plan with the Agent',
+    inputModeHint: 'Enter to save feedback · Esc to cancel',
+    navigationHint: '↑↓ to navigate · Enter to select · Esc to cancel',
+    title: 'Ready to start coding?',
+    intro: 'Here is the plan proposed by the Agent:',
+    noPlanBody: 'Plan body not found',
+    prompt: 'The Agent has completed the plan. Continue with execution?',
+  },
   permission: {
     placeholder: 'Permission',
     header: 'Permission',
@@ -282,6 +295,10 @@ export const enUS: CanonicalResources = {
     },
     // Label fallback when neither description nor prompt yields a meaningful line.
     agentFallback: 'Agent',
+    // Status-line category label (prefix word in `● <label> "<label>" <status> · <dur>`).
+    // Distinct from agentFallback (the noun used as label fallback): this is the
+    // category word opening the status line, paired with the `●` glyph.
+    statusLineLabel: 'Agent',
   },
   thinking: {
     summary: 'Thought for {seconds}s',

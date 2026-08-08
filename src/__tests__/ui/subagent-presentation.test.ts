@@ -77,7 +77,7 @@ describe('buildSubagentCompletionPresentation (AUTO-0025-transient Task 3)', () 
     );
 
     expect(result).toEqual({
-      line: '● Agent "Deploy Agent / 部署代理" 已完成 · 2 分 27 秒',
+      line: '● 子代理 "Deploy Agent / 部署代理" 已完成 · 2 分 27 秒',
       fullOutput: 'raw child output / 原始输出',
     });
   });
@@ -116,7 +116,7 @@ describe('buildSubagentCompletionPresentation (AUTO-0025-transient Task 3)', () 
     expect(buildSubagentCompletionPresentation(
       { prompt: '\n!!!\n{"task":"x"}' },
       '[Subagent status=completed]\npartial', 1_000, translatorFor('zh-CN'),
-    )?.line).toBe('● Agent "代理" 已完成 · 1 秒');
+    )?.line).toBe('● 子代理 "代理" 已完成 · 1 秒');
 
     // en-US 回退 "Agent"
     expect(buildSubagentCompletionPresentation(
@@ -187,7 +187,7 @@ describe('buildSubagentExecutionPresentation locale', () => {
     );
 
     expect(presentation).toEqual({
-      line: '● Agent "Background Agent Label" 已派发 · 1 分 30 秒',
+      line: '● 子代理 "Background Agent Label" 已派发 · 1 分 30 秒',
       fullOutput: '',
     });
   });
@@ -262,7 +262,7 @@ describe('buildSubagentExecutionPresentation locale', () => {
     // completion builder:zh "代理"
     expect(buildSubagentExecutionPresentation(
       noMeaningful, completion, 1_000, translatorFor('zh-CN'),
-    ).line).toBe('● Agent "代理" 已完成 · 1 秒');
+    ).line).toBe('● 子代理 "代理" 已完成 · 1 秒');
     // completion builder:en "Agent"
     expect(buildSubagentExecutionPresentation(
       noMeaningful, completion, 1_000, translatorFor('en-US'),
@@ -270,10 +270,82 @@ describe('buildSubagentExecutionPresentation locale', () => {
     // dispatch builder:zh "代理"
     expect(buildSubagentExecutionPresentation(
       noMeaningful, dispatch, 1_000, translatorFor('zh-CN'),
-    ).line).toBe('● Agent "代理" 已派发 · 1 秒');
+    ).line).toBe('● 子代理 "代理" 已派发 · 1 秒');
     // dispatch builder:en "Agent"
     expect(buildSubagentExecutionPresentation(
       noMeaningful, dispatch, 1_000, translatorFor('en-US'),
     ).line).toBe('● Agent "Agent" dispatched · 1s');
+  });
+
+  it('status-line 类别标签随语言本地化:zh "子代理" / en "Agent"(不再硬编码 Agent)', () => {
+    // 用一个明确的 description 作为 label,隔离 status-line 前缀词的断言。
+    // status line 模板:`● <statusLineLabel> "<label>" <status> · <duration>`
+    // zh:`● 子代理 "..." 已完成 · ...`  en:`● Agent "..." finished · ...`
+
+    // ── completion builder (legacy, regex 解析) ──
+    expect(buildSubagentCompletionPresentation(
+      { description: '明确标签' },
+      '[Subagent status=completed]\n正文',
+      5_000,
+      translatorFor('zh-CN'),
+    )?.line).toBe('● 子代理 "明确标签" 已完成 · 5 秒');
+    expect(buildSubagentCompletionPresentation(
+      { description: '明确标签' },
+      '[Subagent status=completed]\n正文',
+      5_000,
+      translatorFor('en-US'),
+    )?.line).toBe('● Agent "明确标签" finished · 5s');
+
+    // ── execution builder, completion 分支 ──
+    const completion: SubagentExecutionResult = {
+      kind: 'completion',
+      report: {
+        protocol_version: '1',
+        subject: { kind: 'subagent', id: 's1' },
+        outcome: 'completed',
+        termination_reason: 'end_turn',
+        execution_mode: 'foreground',
+        verification: {
+          required_level: 'V0',
+          achieved_level: 'V0',
+          status: 'skipped',
+          evidence_refs: [],
+          failure_kind: null,
+        },
+        deliverables: [],
+        summary: '',
+        remaining_uncertainty: [],
+      },
+    };
+    expect(buildSubagentExecutionPresentation(
+      { description: '明确标签' }, completion, 5_000, translatorFor('zh-CN'),
+    ).line).toBe('● 子代理 "明确标签" 已完成 · 5 秒');
+    expect(buildSubagentExecutionPresentation(
+      { description: '明确标签' }, completion, 5_000, translatorFor('en-US'),
+    ).line).toBe('● Agent "明确标签" finished · 5s');
+
+    // ── execution builder, dispatch 分支 ──
+    const dispatch: SubagentExecutionResult = {
+      kind: 'dispatch',
+      receipt: {
+        protocol_version: '1',
+        execution_mode: 'background',
+        task_id: 'task-bg',
+        accepted: true,
+      },
+    };
+    expect(buildSubagentExecutionPresentation(
+      { description: '明确标签' }, dispatch, 5_000, translatorFor('zh-CN'),
+    ).line).toBe('● 子代理 "明确标签" 已派发 · 5 秒');
+    expect(buildSubagentExecutionPresentation(
+      { description: '明确标签' }, dispatch, 5_000, translatorFor('en-US'),
+    ).line).toBe('● Agent "明确标签" dispatched · 5s');
+
+    // 关键:zh 状态行不再硬编码 'Agent'(出现 '子代理' 而非紧邻 ● 的 'Agent')
+    const zhLine = buildSubagentExecutionPresentation(
+      { description: '明确标签' }, completion, 5_000, translatorFor('zh-CN'),
+    ).line;
+    expect(zhLine.startsWith('● Agent ')).toBe(false);
+    expect(zhLine.startsWith('● 子代理 ')).toBe(true);
   });
 });

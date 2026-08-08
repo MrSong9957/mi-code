@@ -17,6 +17,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { displayWidth, foldLine } from '../inline/text-layout.js';
 import { renderMarkdown } from '../markdown/render-markdown.js';
 import { useTheme } from '../state/theme-context.js';
+import { useLocale } from '../../locale/context.js';
 import type { AskQuestionStore } from '../state/ask-question-store.js';
 
 export interface ExitPlanModeOverlayV2Props {
@@ -65,6 +66,7 @@ export const ExitPlanModeOverlayV2 = React.memo(function ExitPlanModeOverlayV2({
   cols,
 }: ExitPlanModeOverlayV2Props): React.ReactElement | null {
   const theme = useTheme();
+  const { t } = useLocale();
   const state = useStore(store, useShallow((value) => ({
     visible: value.visible,
     request: value.request,
@@ -89,7 +91,7 @@ export const ExitPlanModeOverlayV2 = React.memo(function ExitPlanModeOverlayV2({
   const options = question?.options ?? [];
   const otherIndex = options.length;
   const chatIndex = otherIndex + 1;
-  const otherLabel = state.request.otherLabel ?? '提出修改意见';
+  const otherLabel = state.request.otherLabel ?? t('planApproval.otherDefault');
 
   const hasPlanBody = presentation?.kind === 'plan-approval'
     && presentation.content.trim() !== '';
@@ -140,27 +142,27 @@ export const ExitPlanModeOverlayV2 = React.memo(function ExitPlanModeOverlayV2({
     const isChatFocused = state.focusIndex === chatIndex;
     rows.push({
       key: 'chat',
-      text: truncateLine(`${isChatFocused ? '❯ ' : '  '}与 Agent 讨论此计划`, contentWidth),
+      text: truncateLine(`${isChatFocused ? '❯ ' : '  '}${t('planApproval.chatAction')}`, contentWidth),
       color: isChatFocused ? theme.suggestion : theme.textMuted,
     });
   }
 
   const help = state.inputMode
-    ? 'Enter 保存修改意见 · Esc 取消'
-    : '↑↓ 导航 · Enter 选择 · Esc 取消';
+    ? t('planApproval.inputModeHint')
+    : t('planApproval.navigationHint');
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={theme.planMode} paddingX={1}>
-      <Text color={theme.planMode} bold>{truncateLine('准备开始编码？', contentWidth)}</Text>
-      {foldLine('以下是 Agent 拟定的计划：', contentWidth).map((line, i) => (
+      <Text color={theme.planMode} bold>{truncateLine(t('planApproval.title'), contentWidth)}</Text>
+      {foldLine(t('planApproval.intro'), contentWidth).map((line, i) => (
         <Text key={`intro-${i}`}>{line}</Text>
       ))}
       <Text color={theme.borderMuted}>{divider}</Text>
       {hasPlanBody
         ? renderPlanBody(presentation!.content)
-        : <Text color={theme.textMuted}>未找到计划正文</Text>}
+        : <Text color={theme.textMuted}>{t('planApproval.noPlanBody')}</Text>}
       <Text color={theme.borderMuted}>{divider}</Text>
-      {foldLine('Agent 已完成计划，是否继续执行？', contentWidth).map((line, i) => (
+      {foldLine(t('planApproval.prompt'), contentWidth).map((line, i) => (
         <Text key={`prompt-${i}`} color={theme.textMuted}>{line}</Text>
       ))}
       {rows.map((row) => row.color

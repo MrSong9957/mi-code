@@ -112,10 +112,12 @@ const baseProps = {
   rows: 24,
 };
 
-// AskQuestionOverlayV2 通过 useLocale() 消费 locale，InlineAppV2 渲染 overlay 时
-// 必须挂在 LocaleProvider 下（与 bootstrap.tsx 装配一致）。
-const languageStore = createLanguageStore('en-US');
-function renderInlineApp(stores: InlineAppV2Stores) {
+// AskQuestionOverlayV2 / ExitPlanModeOverlayV2 均通过 useLocale() 消费 locale，
+// InlineAppV2 渲染 overlay 时必须挂在 LocaleProvider 下（与 bootstrap.tsx 装配一致）。
+// 默认 en-US store（与历史行为一致）。
+const enLanguageStore = createLanguageStore('en-US');
+const zhLanguageStore = createLanguageStore('zh-CN');
+function renderInlineApp(stores: InlineAppV2Stores, languageStore: ReturnType<typeof createLanguageStore> = enLanguageStore) {
   return render(
     React.createElement(
       LocaleProvider,
@@ -126,20 +128,36 @@ function renderInlineApp(stores: InlineAppV2Stores) {
 }
 
 describe('<InlineAppV2> plan-approval 路由分发', () => {
-  it('plan-approval 路由到 ExitPlanModeOverlayV2（含"准备开始编码？"，不含"Submit"）', () => {
+  it('plan-approval 路由到 ExitPlanModeOverlayV2（en-US：含 "Ready to start coding?"，不含 "Submit"）', () => {
     const stores = createStores();
     stores.askQuestionStore.getState().open('plan-1', planApprovalRequest, () => {});
 
     const { lastFrame } = renderInlineApp(stores);
     const frame = lastFrame() ?? '';
 
-    // ExitPlanModeOverlayV2 的标题
-    expect(frame).toContain('准备开始编码？');
+    // ExitPlanModeOverlayV2 的标题（en-US 本地化值）
+    expect(frame).toContain('Ready to start coding?');
     // AskQuestionOverlayV2 的 tabs 标志不应出现
     expect(frame).not.toContain('Submit');
   });
 
-  it('无 presentation 的普通问卷仍用 AskQuestionOverlayV2（含"Submit"，不含"准备开始编码？"）', () => {
+  it('plan-approval 标题随语言切换：zh-CN "准备开始编码？" / en-US "Ready to start coding?"', () => {
+    // 同一 plan-approval request 在两种语言下渲染不同的本地化标题，
+    // 验证 ExitPlanModeOverlayV2 的 planApproval.title 正确接线。
+    const zhStores = createStores();
+    zhStores.askQuestionStore.getState().open('plan-zh', planApprovalRequest, () => {});
+    const zhFrame = renderInlineApp(zhStores, zhLanguageStore).lastFrame() ?? '';
+    expect(zhFrame).toContain('准备开始编码？');
+    expect(zhFrame).not.toContain('Ready to start coding?');
+
+    const enStores = createStores();
+    enStores.askQuestionStore.getState().open('plan-en', planApprovalRequest, () => {});
+    const enFrame = renderInlineApp(enStores, enLanguageStore).lastFrame() ?? '';
+    expect(enFrame).toContain('Ready to start coding?');
+    expect(enFrame).not.toContain('准备开始编码？');
+  });
+
+  it('无 presentation 的普通问卷仍用 AskQuestionOverlayV2（含"Submit"，不含 plan-approval 标题）', () => {
     const stores = createStores();
     stores.askQuestionStore.getState().open('question-1', plainRequest, () => {});
 
@@ -148,7 +166,9 @@ describe('<InlineAppV2> plan-approval 路由分发', () => {
 
     // AskQuestionOverlayV2 的 tabs 含 Submit
     expect(frame).toContain('Submit');
-    // ExitPlanModeOverlayV2 的标题不应出现
+    // ExitPlanModeOverlayV2 的标题不应出现（en-US 本地化值）
+    expect(frame).not.toContain('Ready to start coding?');
+    // zh 本地化值也不应出现（en-US frame）
     expect(frame).not.toContain('准备开始编码？');
   });
 
@@ -161,10 +181,11 @@ describe('<InlineAppV2> plan-approval 路由分发', () => {
 
     // 回退到通用问卷
     expect(frame).toContain('Submit');
+    expect(frame).not.toContain('Ready to start coding?');
     expect(frame).not.toContain('准备开始编码？');
   });
 
-  it('问卷不可见时不渲染任何 overlay（不含"准备开始编码？"，不含"Submit" tabs）', () => {
+  it('问卷不可见时不渲染任何 overlay（不含 plan-approval 标题，不含"Submit" tabs）', () => {
     const stores = createStores();
     // askQuestionStore 未 open，visible=false
 
@@ -172,6 +193,7 @@ describe('<InlineAppV2> plan-approval 路由分发', () => {
     const frame = lastFrame() ?? '';
 
     // 两个 overlay 都不应渲染
+    expect(frame).not.toContain('Ready to start coding?');
     expect(frame).not.toContain('准备开始编码？');
     expect(frame).not.toContain('Submit');
   });

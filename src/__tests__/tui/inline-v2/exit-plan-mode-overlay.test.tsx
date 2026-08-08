@@ -8,6 +8,8 @@ import { render } from 'ink-testing-library';
 import React from 'react';
 import { ExitPlanModeOverlayV2 } from '../../../tui/inline-v2/ExitPlanModeOverlayV2.js';
 import { createAskQuestionStore } from '../../../tui/state/ask-question-store.js';
+import { LocaleProvider } from '../../../locale/context.js';
+import { createLanguageStore } from '../../../locale/language-store.js';
 import type { AskQuestionRequest } from '../../../agent/ask-user-types.js';
 
 const planRequest: AskQuestionRequest = {
@@ -37,10 +39,23 @@ function openStore() {
   return store;
 }
 
+// 本组件通过 useLocale() 消费 locale（Task 10 corrective：8 个固定文案本地化），
+// 必须挂在 LocaleProvider 下。本测试默认 zh-CN（与历史断言的中文文案一致）。
+const zhLanguageStore = createLanguageStore('zh-CN');
+function renderOverlay(store: ReturnType<typeof createAskQuestionStore>, cols: number) {
+  return render(
+    React.createElement(
+      LocaleProvider,
+      { store: zhLanguageStore },
+      React.createElement(ExitPlanModeOverlayV2, { store, cols }),
+    ),
+  );
+}
+
 describe('<ExitPlanModeOverlayV2>', () => {
   it('renders the Chinese title and guidance text', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('准备开始编码？');
@@ -50,7 +65,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('renders the plan Markdown body', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('测试计划');
@@ -61,7 +76,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('renders the three approval options and their descriptions', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('确认执行，清空上下文并使用自动模式');
@@ -74,7 +89,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('does not render the generic question tabs', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).not.toContain('Submit');
@@ -84,7 +99,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('does not repeat the internal header/question text', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).not.toContain('Claude 已拟定执行方案');
@@ -92,7 +107,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('does not render checkbox markers (neither brackets nor the empty box)', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).not.toContain('[x]');
@@ -102,7 +117,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('renders a native round border (verticals and corners)', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('│');
@@ -111,7 +126,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('renders the custom Other label', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('提出修改意见');
@@ -119,7 +134,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('renders the Chat affordance in Chinese', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('与 Agent 讨论此计划');
@@ -127,7 +142,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('renders the help text', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('↑↓ 导航 · Enter 选择 · Esc 取消');
@@ -135,7 +150,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('marks the first option as focused by default', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('❯ 确认执行，清空上下文');
@@ -144,7 +159,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
   it('renders the Other input cursor and the input-mode help', () => {
     const store = openStore();
     store.setState({ inputMode: true, otherDraft: '改一下', otherCursor: 1 });
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('提出修改意见：改|一下');
@@ -159,7 +174,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
         presentation: { kind: 'plan-approval', content: '   ', filePath: '/tmp/plan.md' },
       },
     });
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('未找到计划正文');
@@ -169,7 +184,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('wraps long option text to the content width on a narrow terminal', () => {
     const store = openStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={20} />);
+    const { lastFrame } = renderOverlay(store, 20);
     const frame = lastFrame() ?? '';
 
     // 原生 borderStyle="round" 在 ink-testing-library 下按 stdout.columns(固定 100)
@@ -184,7 +199,7 @@ describe('<ExitPlanModeOverlayV2>', () => {
 
   it('returns null when not visible', () => {
     const store = createAskQuestionStore();
-    const { lastFrame } = render(<ExitPlanModeOverlayV2 store={store} cols={80} />);
+    const { lastFrame } = renderOverlay(store, 80);
     expect(lastFrame()).toBe('');
   });
 });

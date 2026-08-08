@@ -110,7 +110,7 @@ export function buildSubagentCompletionPresentation(
     || meaningfulLine(input.prompt)
     || translator.t('subagent.agentFallback');
 
-  const line = `● Agent "${label}" ${statusWord(status! as EnvelopeStatus, translator)} · ${formatDurationFromMs(durationMs, translator)}`;
+  const line = `● ${translator.t('subagent.statusLineLabel')} "${label}" ${statusWord(status! as EnvelopeStatus, translator)} · ${formatDurationFromMs(durationMs, translator)}`;
   return { line, fullOutput };
 }
 
@@ -158,14 +158,14 @@ export function buildSubagentExecutionPresentation(
 
   if (result.kind === 'dispatch') {
     return {
-      line: `● Agent "${label}" ${translator.t('subagent.presentation.status.dispatched')} · ${dur}`,
+      line: `● ${translator.t('subagent.statusLineLabel')} "${label}" ${translator.t('subagent.presentation.status.dispatched')} · ${dur}`,
       fullOutput: '',
     };
   }
   // kind === 'completion'
   const { report } = result;
   return {
-    line: `● Agent "${label}" ${outcomeWord(report.outcome, translator)} · ${dur}`,
+    line: `● ${translator.t('subagent.statusLineLabel')} "${label}" ${outcomeWord(report.outcome, translator)} · ${dur}`,
     fullOutput: report.summary,
   };
 }

@@ -10,6 +10,7 @@
 ## 分类汇总
 
 - `locale-required` 残留：**8 处**（详见末尾汇总表，均为 Task 10 显式 defer 的项，外加 1 个 block-pipeline 的 thinking 占位符）
+  - **Task 10 corrective 更新**：原 deferred 的 ExitPlanModeOverlayV2（8 处硬编码中文，其中 1 处 `未找到计划正文` 原审计漏列）+ subagent-presentation 状态行 `Agent`（3 处，原归 raw，corrective 重新判定为 locale-required 并解决）现 **全部 resolved**。bounded list 内剩余 locale-required 残留仅 executor.ts 批量项（独立 task）。
 - `raw` 分类：约 60+ 处（命令名 / 参数语法 / provider / model id / tool 名 / 路径 / regex / ANSI / 技术标记 / agent-facing system prompt / 用户输入 / hook 输出 / 启动错误等）
 - 资源缺口：无新增 key 缺口（8 处 `locale-required` 残留需要新 key，但概念均已在设计文档 §3.1 列入"首版 locale 化"范围，只是 Task 10 未实现）
 
@@ -187,12 +188,12 @@ cli.ts:58 是设计上不可 locale 化的启动错误（语言未定）。无 l
 |---|---|---|---|
 | subagent-presentation.ts:29 | `ENVELOPE` regex `'/^\[Subagent status=.../'` | raw technical-or-user content | regex |
 | subagent-presentation.ts:111 | `'Agent'`（label fallback） | ✅ **resolved**（Task 7 corrective，commit `4639f76`） | 已改走 `translator.t('subagent.agentFallback')`。zh `'代理'` / en `'Agent'`。 |
-| subagent-presentation.ts:113 | `` `● Agent "${label}" ${statusWord} · ${formatDurationFromMs}` `` | raw technical-or-user content | `●` glyph + `Agent`（见上）+ 动态 label + 已 locale 化的 statusWord + `·` 分隔符 + 已 locale 化的 duration |
+| subagent-presentation.ts:113 | `` `● Agent "${label}" ${statusWord} · ${formatDurationFromMs}` `` | ✅ **resolved**（Task 10 corrective） | 状态行类别标签 `Agent` 已改走 `translator.t('subagent.statusLineLabel')`。zh `'子代理'` / en `'Agent'`。与 line 111 的 label fallback（`agentFallback`）解耦：statusLineLabel 是状态行起始类别词，agentFallback 是 label 兜底名词。 |
 | subagent-presentation.ts:155 | `'Agent'`（label fallback，RC-4 路径） | ✅ **resolved**（Task 7 corrective，commit `4639f76`） | 同 line 111，已改走 `translator.t('subagent.agentFallback')`。 |
-| subagent-presentation.ts:161/168 | `● Agent ... · ...` | raw technical-or-user content | 同 line 113 |
+| subagent-presentation.ts:161/168 | `● Agent ... · ...` | ✅ **resolved**（Task 10 corrective） | 同 line 113，状态行类别标签已改走 `translator.t('subagent.statusLineLabel')`。 |
 | 各 `translator.t(...)` 调用 | (已 locale 化) | |
 
-注：`'Agent'` 兜底词（line 111/155）已在 Task 7 corrective 中 locale 化（`subagent.agentFallback`：zh `'代理'` / en `'Agent'`）。
+注：`'Agent'` 兜底词（line 111/155）已在 Task 7 corrective 中 locale 化（`subagent.agentFallback`：zh `'代理'` / en `'Agent'`）。状态行起始类别词 `Agent`（line 113/161/168）原归 `raw`，但实际造成 zh/en 混用（zh label 兜底渲染 `代理`，状态行渲染 `Agent`），Task 10 corrective 重新判定为 `locale-required` 并新增独立 key `subagent.statusLineLabel`（zh `'子代理'` / en `'Agent'`）解决该不一致。
 
 ### 12. `src/ui/block-pipeline.ts`
 
@@ -357,6 +358,7 @@ Task 10 corrective 期间，对原审计标为 `locale-required` 的 2 处重新
 
 低优先（保守可归 raw）—— 已全部 locale 化：
 - subagent-presentation.ts:111/155 `'Agent'`（label 兜底）—— ✅ **resolved**（Task 7 corrective，commit `4639f76`）—— 已改走 `translator.t('subagent.agentFallback')`。zh `'代理'` / en `'Agent'`。
+- subagent-presentation.ts:113/161/168 `'Agent'`（状态行类别标签）—— ✅ **resolved**（Task 10 corrective）—— 原归 `raw`，但造成 zh/en 混用（zh label 兜底 `代理`，状态行 `Agent`）。重新判定为 `locale-required`，新增独立 key `subagent.statusLineLabel`（zh `'子代理'` / en `'Agent'`），与 label 兜底的 `agentFallback`（名词 `代理`）解耦。
 
 ---
 
@@ -433,21 +435,24 @@ $ npm run typecheck
 
 ## Deferred / Out-of-scope
 
-### ExitPlanModeOverlayV2（不在 bounded list）
+### ExitPlanModeOverlayV2（不在 bounded list）—— ✅ Task 10 corrective 全部 resolved
 
-`src/tui/inline-v2/ExitPlanModeOverlayV2.tsx` 不在本 Task 的 19 文件 bounded list 内，但在 Task 10 期间观察到其含**多处硬编码中文** user-visible 文本：
+`src/tui/inline-v2/ExitPlanModeOverlayV2.tsx` 不在本 Task 的 19 文件 bounded list 内，但在 Task 10 期间观察到其含**多处硬编码中文** user-visible 文本。Task 10 corrective 已将全部 8 处本地化（新增 `planApproval.*` 资源子树 + `useLocale()` 接线）：
 
-| line | literal |
-|---|---|
-| 92 | `'提出修改意见'`（otherLabel） |
-| 143 | `'与 Agent 讨论此计划'`（chat action） |
-| 149 | `'Enter 保存修改意见 · Esc 取消'`（hint） |
-| 150 | `'↑↓ 导航 · Enter 选择 · Esc 取消'`（hint） |
-| 154 | `'准备开始编码？'`（标题） |
-| 155 | `'以下是 Agent 拟定的计划：'`（正文） |
-| 163 | `'Agent 已完成计划，是否继续执行？'`（正文） |
+| line | literal | 状态 |
+|---|---|---|
+| 92 | `'提出修改意见'`（otherLabel fallback） | ✅ **resolved**（Task 10 corrective）—— `planApproval.otherDefault`。zh `'提出修改意见'` / en `'Suggest changes'`。注：Agent 提供的 `state.request.otherLabel` 保持 RAW 不翻译，仅此 fallback 本地化。 |
+| 143 | `'与 Agent 讨论此计划'`（chat action） | ✅ **resolved**（Task 10 corrective）—— `planApproval.chatAction`。zh `'与 Agent 讨论此计划'` / en `'Discuss this plan with the Agent'`。 |
+| 149 | `'Enter 保存修改意见 · Esc 取消'`（hint） | ✅ **resolved**（Task 10 corrective）—— `planApproval.inputModeHint`。 |
+| 150 | `'↑↓ 导航 · Enter 选择 · Esc 取消'`（hint） | ✅ **resolved**（Task 10 corrective）—— `planApproval.navigationHint`。 |
+| 154 | `'准备开始编码？'`（标题） | ✅ **resolved**（Task 10 corrective）—— `planApproval.title`。zh `'准备开始编码？'` / en `'Ready to start coding?'`。 |
+| 155 | `'以下是 Agent 拟定的计划：'`（intro） | ✅ **resolved**（Task 10 corrective）—— `planApproval.intro`。 |
+| 161 | `'未找到计划正文'`（plan body fallback） | ✅ **resolved**（Task 10 corrective）—— `planApproval.noPlanBody`。**注：原审计漏列此项**（仅列了 7 处），corrective 实施时发现并一并本地化。 |
+| 163 | `'Agent 已完成计划，是否继续执行？'`（prompt） | ✅ **resolved**（Task 10 corrective）—— `planApproval.prompt`。 |
 
-这些是明确的 `locale-required` 残留，应在后续 i18n task 集中处理（需新增 `planApproval.*` 资源子树）。本审计仅在 deferred 节记录，不展开逐行分类（不在 bounded list）。
+**保持 RAW（不翻译，spec §3.2 明确）：** `option.label`、`option.description`、计划正文 Markdown `presentation.content`（Agent 生成）、`state.otherDraft`、Agent 提供的 `otherLabel`。dividers（`┄`）/focus markers（`❯`）/`│` borders 保持原样。
+
+资源结构：新增 `planApproval` 命名空间（8 个固定文案 key + 1 个 `placeholder` 结构标记），zh-CN 与 en-US 结构完全对齐（`resource-shape.test.ts` 通过）。测试覆盖：新增 `exit-plan-mode-overlay-locale.test.tsx`（4 测试，断言 8 文案 zh↔en 切换 + RAW 动态内容保持）；更新 `exit-plan-mode-overlay.test.tsx`（挂 `LocaleProvider`）+ `exit-plan-mode-routing.test.tsx`（en-US 标题断言 + 新增 zh/en 双语覆盖测试）。
 
 ### Task 10 reviewer 备注处理
 

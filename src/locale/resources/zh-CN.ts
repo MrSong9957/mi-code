@@ -140,6 +140,19 @@ export const zhCN = {
     inputModeHint: 'Enter 保存 · Esc 取消本次访谈',
     navigationHint: '↑↓ 导航 · Enter 选择 · Esc 取消本次访谈',
   },
+  planApproval: {
+    placeholder: '计划审批',
+    // state.request.otherLabel 为 null 时的 fallback（仅此固定文案本地化；
+    // Agent 提供的 otherLabel 保持 RAW 不翻译）。
+    otherDefault: '提出修改意见',
+    chatAction: '与 Agent 讨论此计划',
+    inputModeHint: 'Enter 保存修改意见 · Esc 取消',
+    navigationHint: '↑↓ 导航 · Enter 选择 · Esc 取消',
+    title: '准备开始编码？',
+    intro: '以下是 Agent 拟定的计划：',
+    noPlanBody: '未找到计划正文',
+    prompt: 'Agent 已完成计划，是否继续执行？',
+  },
   permission: {
     placeholder: '权限',
     header: '权限',
@@ -234,6 +247,10 @@ export const zhCN = {
     },
     // description 与 prompt 均无意义时的 label 回退。
     agentFallback: '代理',
+    // 状态行类别标签（`● <label> "<label>" <status> · <dur>` 的前缀词）。
+    // 与 agentFallback（名词 `代理`，作 label 兜底）区分：这里用 `子代理` 作为
+    // 状态行起始的类别词，与「●」glyph 组合构成"子代理事件"语义。
+    statusLineLabel: '子代理',
   },
   thinking: {
     summary: '思考了 {seconds} 秒',
