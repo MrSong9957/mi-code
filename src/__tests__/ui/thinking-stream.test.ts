@@ -67,7 +67,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
     expect(renderer.calls.filter(c => c.startsWith('startThinking'))).toHaveLength(1);
 
     pipeline.emit({ kind: 'thinking_end', durationSec: 2, filesRead: 0 });
-    expect(renderer.calls.some(c => c.includes('Thought for 2s'))).toBe(true);
+    expect(renderer.calls.some(c => c.includes('思考了 2 秒'))).toBe(true);
     expect(renderer.calls.some(c => c === 'eraseThinking')).toBe(true);
   });
 
@@ -80,8 +80,8 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
     const expandable = pipeline.getLastExpandableFullLines();
     expect(expandable).not.toBeNull();
     const fullText = expandable!.lines.map(l => l.content).join('\n');
-    expect(fullText).toContain('No thinking content received');
-    expect(fullText).not.toContain('Thought for');
+    expect(fullText).toContain('无思考内容');
+    expect(fullText).not.toContain('思考了');
   });
 
   // ── 边界 2: start → delta(非空) → end ──
@@ -99,7 +99,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
     expect(renderer.calls.filter(c => c.startsWith('startThinking'))).toHaveLength(0);
 
     pipeline.emit({ kind: 'thinking_end', durationSec: 3, filesRead: 0 });
-    expect(renderer.calls.some(c => c.includes('Thought for 3s'))).toBe(true);
+    expect(renderer.calls.some(c => c.includes('思考了 3 秒'))).toBe(true);
     const expandable = pipeline.getLastExpandableFullLines();
     expect(expandable!.lines.map(l => l.content).join('\n')).toContain('真实推理内容');
   });
@@ -115,7 +115,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
     const expandable = pipeline.getLastExpandableFullLines();
     expect(expandable).not.toBeNull();
-    expect(expandable!.lines.map(l => l.content).join('\n')).toContain('No thinking content received');
+    expect(expandable!.lines.map(l => l.content).join('\n')).toContain('无思考内容');
   });
 
   // ── 边界 4: 重复 start ── 幂等 ──
@@ -129,7 +129,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
     expect(renderer.calls.filter(c => c.startsWith('startThinking'))).toHaveLength(1);
 
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
-    expect(renderer.calls.filter(c => c.includes('Thought for')).length).toBe(1);
+    expect(renderer.calls.filter(c => c.includes('思考了')).length).toBe(1);
   });
 
   // ── 边界 5: start → delta(A) → start → delta(B) → end ── buffer 保留 ──
@@ -158,7 +158,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
     const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
-    expect(renderer.calls.some(c => c.includes('Thought for'))).toBe(false);
+    expect(renderer.calls.some(c => c.includes('思考了'))).toBe(false);
     expect(renderer.calls.some(c => c === 'eraseThinking')).toBe(false);
     expect(pipeline.getLastExpandableFullLines()).toBeNull();
   });
@@ -177,7 +177,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
     const expandable = pipeline.getLastExpandableFullLines();
     const fullText = expandable!.lines.map(l => l.content).join('\n');
     expect(fullText).not.toContain('orphan content');
-    expect(fullText).toContain('No thinking content received');
+    expect(fullText).toContain('无思考内容');
   });
 
   // ── 边界 8: end → end ── 均无害 ──
@@ -188,7 +188,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
-    expect(renderer.calls.some(c => c.includes('Thought for'))).toBe(false);
+    expect(renderer.calls.some(c => c.includes('思考了'))).toBe(false);
   });
 
   // ── 边界 9: start → end → end ── 只一次摘要 ──
@@ -202,7 +202,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
     renderer.calls.length = 0;
     pipeline.emit({ kind: 'thinking_end', durationSec: 2, filesRead: 0 });
 
-    expect(renderer.calls.some(c => c.includes('Thought for'))).toBe(false);
+    expect(renderer.calls.some(c => c.includes('思考了'))).toBe(false);
     expect(renderer.calls.some(c => c === 'eraseThinking')).toBe(false);
   });
 
@@ -216,7 +216,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
     pipeline.clear();
     renderer.calls.length = 0;
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
-    expect(renderer.calls.some(c => c.includes('Thought for'))).toBe(false);
+    expect(renderer.calls.some(c => c.includes('思考了'))).toBe(false);
   });
 
   // ── 边界 11: start → clearTurnState ── 擦除临时行 ──
@@ -230,7 +230,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
     expect(renderer.calls.some(c => c === 'eraseThinking')).toBe(true);
     renderer.calls.length = 0;
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
-    expect(renderer.calls.some(c => c.includes('Thought for'))).toBe(false);
+    expect(renderer.calls.some(c => c.includes('思考了'))).toBe(false);
   });
 
   // ── 边界 12: start → end → start → end ── 两个独立摘要 ──
@@ -247,7 +247,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
     pipeline.emit({ kind: 'thinking_delta', content: '第二个' });
     pipeline.emit({ kind: 'thinking_end', durationSec: 2, filesRead: 0 });
 
-    expect(renderer.calls.filter(c => c.includes('Thought for')).length).toBe(2);
+    expect(renderer.calls.filter(c => c.includes('思考了')).length).toBe(2);
     expect(renderer.calls.filter(c => c.startsWith('startThinking'))).toHaveLength(2);
     const expandable = pipeline.getLastExpandableFullLines();
     const fullText = expandable!.lines.map(l => l.content).join('\n');
@@ -268,7 +268,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
     const finishCall = renderer.calls.find(c => c.startsWith('finishThinking'));
     expect(finishCall).toBeDefined();
-    expect(finishCall).toContain('Thought for 3s');
+    expect(finishCall).toContain('思考了 3 秒');
     // 不经过 appendStreamingMarkdown(那是 assistant 专属)
     expect(renderer.calls.some(c => c.startsWith('appendStreamingMarkdown'))).toBe(false);
   });

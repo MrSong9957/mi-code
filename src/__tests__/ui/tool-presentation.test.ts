@@ -117,7 +117,7 @@ describe('buildToolPresentation', () => {
 
     expect(result).toMatchObject({
       layout: 'compact-completion',
-      summary: 'Agent "探索项目" 已完成 · 5 秒',
+      summary: '子代理 "探索项目" 已完成 · 5 秒',
     });
   });
 

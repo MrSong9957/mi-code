@@ -331,7 +331,7 @@ describe('BlockPipeline emit 路由', () => {
     expect(p.toolName).toBe('spawn_agent');
     expect(p.status).toBe('success');
     // summary 来自 buildSubagentCompletionPresentation(line)
-    expect(p.summary).toContain('Agent "查找实现"');
+    expect(p.summary).toContain('子代理 "查找实现"');
     expect(p.summary).toContain('已完成');
   });
 
