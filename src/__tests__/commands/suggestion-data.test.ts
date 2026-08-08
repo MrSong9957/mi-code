@@ -128,6 +128,10 @@ describe('localized command suggestion data', () => {
 
     expect(english).toContain('Available commands:');
     expect(english).toContain('/language [lang]  Show current language or switch UI language');
+    expect(english).toContain('/image <path> [text]');
+    expect(english).toContain('/image [text]');
+    expect(chinese).toContain('/image <path> [text]');
+    expect(chinese).toContain('/image [text]');
     expect(chinese).toContain('可用命令：');
     expect(chinese).toContain('/language [lang]  查看当前语言或切换界面语言');
     expect(chinese).toContain('/theme <dark|light>  切换主题');

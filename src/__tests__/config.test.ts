@@ -80,6 +80,20 @@ describe('ConfigStore', () => {
     expect(store.getLanguage()).toBe('en-US');
   });
 
+  it('should leave in-memory language unchanged when language persistence fails', () => {
+    const configDir = join(tempDir, '.micode-language-save-failure');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({
+      language: 'zh-CN',
+    }));
+    mkdirSync(join(configDir, 'config.json.tmp'));
+    const store = new ConfigStore(configDir);
+
+    expect(() => store.setLanguage('en-US')).toThrow();
+
+    expect(store.getLanguage()).toBe('zh-CN');
+  });
+
   it('should treat an invalid persisted language as unconfigured without rewriting bytes', () => {
     const configDir = join(tempDir, '.micode-invalid-language');
     mkdirSync(configDir, { recursive: true });

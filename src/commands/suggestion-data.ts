@@ -105,6 +105,9 @@ export function buildHelpMessage(translator: Translator): string {
 
     const args = suggestion.argHint ? ` ${suggestion.argHint}` : '';
     lines.push(`  /${suggestion.name}${args}  ${suggestion.description}`);
+    if (suggestion.name === 'image') {
+      lines.push(`  /image [text]  ${suggestion.description}`);
+    }
   }
 
   return lines.join('\n');

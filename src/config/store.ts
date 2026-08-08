@@ -236,8 +236,14 @@ export class ConfigStore {
 
   /** 设置语言（持久化）。 */
   setLanguage(language: Language): void {
+    const previousLanguage = this.config.language;
     this.config.language = language;
-    this.save();
+    try {
+      this.save();
+    } catch (error) {
+      this.config.language = previousLanguage;
+      throw error;
+    }
   }
 
   /** 获取 Spinner 动词配置副本，供渲染层在 turn 启动时抽样。 */
