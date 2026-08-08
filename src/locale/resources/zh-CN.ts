@@ -34,6 +34,49 @@ export const zhCN = {
       updated: '语言已切换为 {language}。',
       unsupported: '不支持的语言：{language}。支持：{supported}。',
       persistError: '保存语言 {language} 失败：{error}',
+      noRuntime: '无可用语言运行时。',
+    },
+    compact: {
+      triggered: '已触发压缩。让 Agent 执行任务，它会在需要时自动压缩。',
+    },
+    unknown: '未知命令：/{name}。输入 /help 查看可用命令。',
+    skill: {
+      unknown: '未知技能命令：/{name}',
+      noRegistry: '无可用技能注册表。',
+      noNegotiator: '无可用的技能协商器。',
+      blocked: '技能 "{name}" 已屏蔽。',
+      retryEnabled: '技能 "{name}" 重试已启用。',
+      noSystem: '无可用技能系统。',
+      notFound: '未找到技能 "{name}"。',
+    },
+    confirmation: {
+      noPending: '没有待处理的确认。',
+      // 前导空格刻意保留：作为反馈文本的后缀，与前面的确认文本拼接。
+      feedbackSuffix: ' 反馈：{feedback}',
+    },
+    config: {
+      currentHeader: '当前配置：',
+      noProviders: '尚未配置任何提供商。使用 /login <provider> 添加一个。',
+      defaultProviderSet: '默认提供商已设置为：{value}',
+      plansDirectorySet: 'plansDirectory 已设置为：{value}',
+      unknownKey: '未知的配置项：{key}',
+    },
+    login: {
+      saved: '已为 {provider} 保存 API Key。使用 /provider {provider} 激活。',
+    },
+    provider: {
+      current: '当前提供商：{provider}',
+      switched: '已切换到提供商：{provider}',
+    },
+    model: {
+      current: '当前模型：{model}',
+      set: '模型已设置为：{model}（{provider}）',
+    },
+    mode: {
+      set: '权限模式已切换为：{mode}',
+    },
+    theme: {
+      switched: '已切换到主题 {theme}',
     },
   },
   cli: {

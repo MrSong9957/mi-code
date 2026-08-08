@@ -36,6 +36,49 @@ export const enUS: CanonicalResources = {
       updated: 'Language switched to {language}.',
       unsupported: 'Unsupported language: {language}. Supported: {supported}.',
       persistError: 'Failed to save language {language}: {error}',
+      noRuntime: 'No language runtime available.',
+    },
+    compact: {
+      triggered: 'Compaction triggered. Use the agent to run a task and it will auto-compact when needed.',
+    },
+    unknown: 'Unknown command: /{name}. Type /help for available commands.',
+    skill: {
+      unknown: 'Unknown skill command: /{name}',
+      noRegistry: 'No skill registry available.',
+      noNegotiator: 'No negotiator available.',
+      blocked: 'Skill "{name}" blocked.',
+      retryEnabled: 'Skill "{name}" retry enabled.',
+      noSystem: 'No skill system available.',
+      notFound: 'Skill "{name}" not found.',
+    },
+    confirmation: {
+      noPending: 'No pending confirmation.',
+      // Leading space is intentional: feedback suffix appended to confirmation text.
+      feedbackSuffix: ' Feedback: {feedback}',
+    },
+    config: {
+      currentHeader: 'Current configuration:',
+      noProviders: '  No providers configured. Use /login <provider> to add one.',
+      defaultProviderSet: 'Default provider set to: {value}',
+      plansDirectorySet: 'plansDirectory set to: {value}',
+      unknownKey: 'Unknown config key: {key}',
+    },
+    login: {
+      saved: 'API Key saved for {provider}. Use /provider {provider} to activate.',
+    },
+    provider: {
+      current: 'Current provider: {provider}',
+      switched: 'Switched to provider: {provider}',
+    },
+    model: {
+      current: 'Current model: {model}',
+      set: 'Model set to: {model} (for {provider})',
+    },
+    mode: {
+      set: 'Permission mode set to: {mode}',
+    },
+    theme: {
+      switched: 'Theme switched to {theme}',
     },
   },
   cli: {

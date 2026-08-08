@@ -51,17 +51,21 @@ export function executeCommand(cmd: Command, configOrContext: ConfigStore | Comm
   const config = configOrContext as ConfigStore;
   switch (cmd.name) {
     case 'config':
-      return handleConfig(cmd, config);
+      return handleConfig(cmd, config, ctx?.translator);
     case 'login':
-      return handleLogin(cmd, config);
+      return handleLogin(cmd, config, ctx?.translator);
     case 'provider':
-      return handleProvider(cmd, config);
+      return handleProvider(cmd, config, ctx?.translator);
     case 'model':
-      return handleModel(cmd, config);
+      return handleModel(cmd, config, ctx?.translator);
     case 'language':
       return handleLanguage(cmd, config, ctx);
     case 'compact':
-      return { message: 'Compaction triggered. Use the agent to run a task and it will auto-compact when needed.' };
+      return {
+        message:
+          ctx?.translator?.t('commands.compact.triggered')
+          ?? 'Compaction triggered. Use the agent to run a task and it will auto-compact when needed.',
+      };
     case 'build':
       return handleModeSwitch('build', config, ctx);
     case 'plan':
@@ -69,12 +73,17 @@ export function executeCommand(cmd: Command, configOrContext: ConfigStore | Comm
     case 'auto':
       return handleModeSwitch('auto', config, ctx);
     case 'theme':
-      return ctx ? handleTheme(cmd, ctx) : { message: `Unknown command: /${cmd.name}. Type /help for available commands.` };
+      return ctx ? handleTheme(cmd, ctx) : { message: unknownCommandMessage(cmd.name, undefined) };
     case 'help':
       return handleHelp(ctx?.translator);
     default:
-      return { message: `Unknown command: /${cmd.name}. Type /help for available commands.` };
+      return { message: unknownCommandMessage(cmd.name, ctx?.translator) };
   }
+}
+
+/** 未知命令反馈：优先本地化，缺省保留英文回退。 */
+function unknownCommandMessage(name: string, translator?: Translator): string {
+  return translator?.t('commands.unknown', { name }) ?? `Unknown command: /${name}. Type /help for available commands.`;
 }
 
 /** 执行 context 命令（技能/theme） */
@@ -89,7 +98,7 @@ function executeContextCommand(cmd: Command, ctx: CommandContext): CommandResult
     case 'theme':
       return handleTheme(cmd, ctx);
     default:
-      return { message: `Unknown command: /${cmd.name}. Type /help for available commands.` };
+      return { message: unknownCommandMessage(cmd.name, ctx?.translator) };
   }
 }
 
@@ -99,22 +108,32 @@ function executeSkillCommand(cmd: Command, ctx: CommandContext): CommandResult {
 
   switch (cmd.name) {
     case 'skill':
-      return handleSkill(cmd, skillRegistry, negotiator, userId);
+      return handleSkill(cmd, skillRegistry, negotiator, userId, ctx?.translator);
     case 'trigger':
-      return handleTrigger(cmd, skillRegistry, negotiator, userId);
+      return handleTrigger(cmd, skillRegistry, negotiator, userId, ctx?.translator);
     case 'y':
-      return handleConfirm(negotiator, userId);
+      return handleConfirm(negotiator, userId, ctx?.translator);
     case 'n':
-      return handleSkip(negotiator, userId);
+      return handleSkip(negotiator, userId, ctx?.translator);
     case 'edit':
-      return handleEdit(cmd, negotiator, userId);
+      return handleEdit(cmd, negotiator, userId, ctx?.translator);
     default:
-      return { message: `Unknown skill command: /${cmd.name}` };
+      return {
+        message:
+          ctx?.translator?.t('commands.skill.unknown', { name: cmd.name })
+          ?? `Unknown skill command: /${cmd.name}`,
+      };
   }
 }
 
 /** /skill — 技能管理 */
-function handleSkill(cmd: Command, registry?: SkillRegistry, negotiator?: SkillNegotiator, userId?: string): CommandResult {
+function handleSkill(
+  cmd: Command,
+  registry?: SkillRegistry,
+  negotiator?: SkillNegotiator,
+  userId?: string,
+  translator?: Translator,
+): CommandResult {
   if (cmd.args.length === 0) {
     return { message: 'Usage: /skill list | /skill off <name> | /skill retry <name>' };
   }
@@ -123,22 +142,25 @@ function handleSkill(cmd: Command, registry?: SkillRegistry, negotiator?: SkillN
 
   switch (sub) {
     case 'list': {
-      if (!registry) return { message: 'No skill registry available.' };
+      if (!registry) return { message: translator?.t('commands.skill.noRegistry') ?? 'No skill registry available.' };
       return { message: registry.describeAvailable() };
     }
     case 'off': {
       const skillName = cmd.args[1];
       if (!skillName) return { message: 'Usage: /skill off <name>' };
-      if (!negotiator) return { message: 'No negotiator available.' };
+      if (!negotiator) return { message: translator?.t('commands.skill.noNegotiator') ?? 'No negotiator available.' };
       negotiator.block(skillName, userId!);
-      return { message: `Skill "${skillName}" blocked.` };
+      return { message: translator?.t('commands.skill.blocked', { name: skillName }) ?? `Skill "${skillName}" blocked.` };
     }
     case 'retry': {
       const skillName = cmd.args[1];
       if (!skillName) return { message: 'Usage: /skill retry <name>' };
-      if (!negotiator) return { message: 'No negotiator available.' };
+      if (!negotiator) return { message: translator?.t('commands.skill.noNegotiator') ?? 'No negotiator available.' };
       negotiator.unskip(skillName, userId!);
-      return { message: `Skill "${skillName}" retry enabled.` };
+      return {
+        message: translator?.t('commands.skill.retryEnabled', { name: skillName })
+          ?? `Skill "${skillName}" retry enabled.`,
+      };
     }
     default:
       return { message: 'Usage: /skill list | /skill off <name> | /skill retry <name>' };
@@ -146,7 +168,13 @@ function handleSkill(cmd: Command, registry?: SkillRegistry, negotiator?: SkillN
 }
 
 /** /trigger — 触发或拦截技能 */
-function handleTrigger(cmd: Command, registry?: SkillRegistry, negotiator?: SkillNegotiator, userId?: string): CommandResult {
+function handleTrigger(
+  cmd: Command,
+  registry?: SkillRegistry,
+  negotiator?: SkillNegotiator,
+  userId?: string,
+  translator?: Translator,
+): CommandResult {
   if (cmd.args.length === 0) {
     return { message: 'Usage: /trigger <name> | /trigger off <name>' };
   }
@@ -155,58 +183,61 @@ function handleTrigger(cmd: Command, registry?: SkillRegistry, negotiator?: Skil
   if (cmd.args[0] === 'off') {
     const skillName = cmd.args[1];
     if (!skillName) return { message: 'Usage: /trigger off <name>' };
-    if (!negotiator) return { message: 'No negotiator available.' };
+    if (!negotiator) return { message: translator?.t('commands.skill.noNegotiator') ?? 'No negotiator available.' };
     negotiator.block(skillName, userId!);
-    return { message: `Skill "${skillName}" blocked.` };
+    return { message: translator?.t('commands.skill.blocked', { name: skillName }) ?? `Skill "${skillName}" blocked.` };
   }
 
   // /trigger <name> — 通过协商器加载
   const skillName = cmd.args[0]!;
   if (!registry || !negotiator) {
-    return { message: 'No skill system available.' };
+    return { message: translator?.t('commands.skill.noSystem') ?? 'No skill system available.' };
   }
 
   const doc = registry.get(skillName);
-  if (!doc) return { message: `Skill "${skillName}" not found.` };
+  if (!doc) return { message: translator?.t('commands.skill.notFound', { name: skillName }) ?? `Skill "${skillName}" not found.` };
 
   const result = negotiator.negotiate(doc, userId!);
   return { message: result.text };
 }
 
 /** /y — 确认加载技能 */
-function handleConfirm(negotiator?: SkillNegotiator, userId?: string): CommandResult {
-  if (!negotiator) return { message: 'No pending confirmation.' };
+function handleConfirm(negotiator?: SkillNegotiator, userId?: string, translator?: Translator): CommandResult {
+  if (!negotiator) return { message: translator?.t('commands.confirmation.noPending') ?? 'No pending confirmation.' };
   const pending = negotiator.getPendingConfirmation(userId ?? 'default');
-  if (!pending) return { message: 'No pending confirmation.' };
+  if (!pending) return { message: translator?.t('commands.confirmation.noPending') ?? 'No pending confirmation.' };
   const result = negotiator.confirm(pending, '/y', userId!);
   return { message: result.text };
 }
 
 /** /n — 跳过技能 */
-function handleSkip(negotiator?: SkillNegotiator, userId?: string): CommandResult {
-  if (!negotiator) return { message: 'No pending confirmation.' };
+function handleSkip(negotiator?: SkillNegotiator, userId?: string, translator?: Translator): CommandResult {
+  if (!negotiator) return { message: translator?.t('commands.confirmation.noPending') ?? 'No pending confirmation.' };
   const pending = negotiator.getPendingConfirmation(userId ?? 'default');
-  if (!pending) return { message: 'No pending confirmation.' };
+  if (!pending) return { message: translator?.t('commands.confirmation.noPending') ?? 'No pending confirmation.' };
   const result = negotiator.confirm(pending, '/n', userId!);
   return { message: result.text };
 }
 
 /** /edit — 编辑技能反馈 */
-function handleEdit(cmd: Command, negotiator?: SkillNegotiator, userId?: string): CommandResult {
-  if (!negotiator) return { message: 'No pending confirmation.' };
+function handleEdit(cmd: Command, negotiator?: SkillNegotiator, userId?: string, translator?: Translator): CommandResult {
+  if (!negotiator) return { message: translator?.t('commands.confirmation.noPending') ?? 'No pending confirmation.' };
   const pending = negotiator.getPendingConfirmation(userId ?? 'default');
-  if (!pending) return { message: 'No pending confirmation.' };
+  if (!pending) return { message: translator?.t('commands.confirmation.noPending') ?? 'No pending confirmation.' };
   const feedback = cmd.args.join(' ');
   const result = negotiator.confirm(pending, `/edit ${feedback}`, userId!);
-  return { message: result.text + (result.feedback ? ` Feedback: ${result.feedback}` : '') };
+  const suffix = result.feedback
+    ? translator?.t('commands.confirmation.feedbackSuffix', { feedback }) ?? ` Feedback: ${result.feedback}`
+    : '';
+  return { message: result.text + suffix };
 }
 
 /** /config — 显示或设置配置 */
-function handleConfig(cmd: Command, config: ConfigStore): CommandResult {
+function handleConfig(cmd: Command, config: ConfigStore, translator?: Translator): CommandResult {
   if (cmd.args.length === 0) {
     // 显示当前配置
     const masked = config.getMasked();
-    const lines = ['Current configuration:', ''];
+    const lines = [translator?.t('commands.config.currentHeader') ?? 'Current configuration:', ''];
     for (const [name, provider] of Object.entries(masked.providers)) {
       const isDefault = name === masked.defaultProvider ? ' (default)' : '';
       lines.push(`  ${name}${isDefault}:`);
@@ -214,7 +245,7 @@ function handleConfig(cmd: Command, config: ConfigStore): CommandResult {
       lines.push(`    model: ${provider.model}`);
     }
     if (Object.keys(masked.providers).length === 0) {
-      lines.push('  No providers configured. Use /login <provider> to add one.');
+      lines.push(translator?.t('commands.config.noProviders') ?? '  No providers configured. Use /login <provider> to add one.');
     }
     return { message: lines.join('\n') };
   }
@@ -225,21 +256,25 @@ function handleConfig(cmd: Command, config: ConfigStore): CommandResult {
     // 简单的 key-value 设置
     if (key === 'defaultProvider') {
       config.setDefaultProvider(value);
-      return { message: `Default provider set to: ${value}` };
+      return { message: translator?.t('commands.config.defaultProviderSet', { value }) ?? `Default provider set to: ${value}` };
     }
     if (key === 'plansDirectory') {
       const cleared = value === 'default' || value === '';
+      const displayValue = cleared ? '(default ~/.micode/plans/)' : value;
       config.setPlansDirectory(cleared ? undefined : value);
-      return { message: `plansDirectory set to: ${cleared ? '(default ~/.micode/plans/)' : value}` };
+      return {
+        message: translator?.t('commands.config.plansDirectorySet', { value: displayValue })
+          ?? `plansDirectory set to: ${displayValue}`,
+      };
     }
-    return { message: `Unknown config key: ${key}` };
+    return { message: translator?.t('commands.config.unknownKey', { key }) ?? `Unknown config key: ${key}` };
   }
 
   return { message: 'Usage: /config or /config set <key> <value>' };
 }
 
 /** /login — 设置 API Key */
-function handleLogin(cmd: Command, config: ConfigStore): CommandResult {
+function handleLogin(cmd: Command, config: ConfigStore, translator?: Translator): CommandResult {
   if (cmd.args.length < 2) {
     return { message: 'Usage: /login <provider> <api-key>\nSupported: anthropic, openai, google' };
   }
@@ -248,32 +283,38 @@ function handleLogin(cmd: Command, config: ConfigStore): CommandResult {
   const apiKey = cmd.args[1]!;
 
   config.setApiKey(provider, apiKey);
-  return { message: `API Key saved for ${provider}. Use /provider ${provider} to activate.` };
+  return {
+    message: translator?.t('commands.login.saved', { provider })
+      ?? `API Key saved for ${provider}. Use /provider ${provider} to activate.`,
+  };
 }
 
 /** /provider — 切换当前 Provider */
-function handleProvider(cmd: Command, config: ConfigStore): CommandResult {
+function handleProvider(cmd: Command, config: ConfigStore, translator?: Translator): CommandResult {
   if (cmd.args.length === 0) {
     const current = config.getDefaultProvider();
-    return { message: `Current provider: ${current}` };
+    return { message: translator?.t('commands.provider.current', { provider: current }) ?? `Current provider: ${current}` };
   }
 
   const provider = cmd.args[0]!;
   config.setDefaultProvider(provider);
-  return { message: `Switched to provider: ${provider}` };
+  return { message: translator?.t('commands.provider.switched', { provider }) ?? `Switched to provider: ${provider}` };
 }
 
 /** /model — 切换当前模型 */
-function handleModel(cmd: Command, config: ConfigStore): CommandResult {
+function handleModel(cmd: Command, config: ConfigStore, translator?: Translator): CommandResult {
   if (cmd.args.length === 0) {
     const current = config.getModel();
-    return { message: `Current model: ${current}` };
+    return { message: translator?.t('commands.model.current', { model: current }) ?? `Current model: ${current}` };
   }
 
   const model = cmd.args[0]!;
   const provider = config.getDefaultProvider();
   config.setModel(provider, model);
-  return { message: `Model set to: ${model} (for ${provider})` };
+  return {
+    message: translator?.t('commands.model.set', { model, provider })
+      ?? `Model set to: ${model} (for ${provider})`,
+  };
 }
 
 function formatUnknownError(error: unknown): string {
@@ -284,6 +325,8 @@ function formatUnknownError(error: unknown): string {
 export function handleLanguage(cmd: Command, config: ConfigStore, ctx?: CommandContext): CommandResult {
   const languageStore = ctx?.languageStore;
   const translator = ctx?.translator;
+  // 当 translator 缺失时无法本地化（此时也无 languageStore）——保留英文 fallback。
+  // `commands.language.noRuntime` 资源 key 已存在（结构完整），但此分支无法消费它。
   if (!languageStore || !translator) {
     return { message: 'No language runtime available.' };
   }
@@ -335,12 +378,12 @@ function handleModeSwitch(mode: PermissionMode, config: ConfigStore, ctx?: Comma
   // Task 8：统一 mode transition port（slash /auto /build /plan 经此入口）
   if (ctx?.onModeTransition) {
     ctx.onModeTransition(mode);
-    return { message: `Permission mode set to: ${mode}` };
+    return { message: ctx?.translator?.t('commands.mode.set', { mode }) ?? `Permission mode set to: ${mode}` };
   }
   // LEGACY：直接 checker.setMode + config 持久化（向后兼容）
   ctx?.permissionChecker?.setMode(mode);
   config.setPermissionMode(mode);
-  return { message: `Permission mode set to: ${mode}` };
+  return { message: ctx?.translator?.t('commands.mode.set', { mode }) ?? `Permission mode set to: ${mode}` };
 }
 
 /** /help — 显示帮助 */
@@ -349,6 +392,9 @@ function handleHelp(translator?: Translator): CommandResult {
     return { message: buildHelpMessage(translator) };
   }
 
+  // Intentional English-only last-resort fallback: 运行时 index.ts 总会注入 translator，
+  // 此分支仅在无 translator 调用时生效（向后兼容，dead-at-runtime）。按 Task 4 矫正范围
+  // 约束，不本地化此 fallback。
   return {
     message: `Available commands:
   /config              Show current configuration
@@ -383,5 +429,8 @@ function handleTheme(cmd: Command, ctx: CommandContext): CommandResult {
     return { message: 'Usage: /theme <dark|light>' };
   }
   ctx.themeStore?.getState().setTheme(themeName);
-  return { message: `Theme switched to ${themeName}` };
+  return {
+    message: ctx?.translator?.t('commands.theme.switched', { theme: themeName })
+      ?? `Theme switched to ${themeName}`,
+  };
 }
