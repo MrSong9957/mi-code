@@ -5,6 +5,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { BlockPipeline } from '../../ui/block-pipeline.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
 import { PipelineToStoreAdapter } from '../../tui/state/pipeline-adapter.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { renderFinalizedLine } from './text-layout.js';
@@ -13,7 +15,7 @@ import { renderFinalizedLine } from './text-layout.js';
 function setupFullConversation() {
   const store = createMessagesStore();
   const adapter = new PipelineToStoreAdapter(store);
-  const pipeline = new BlockPipeline(adapter);
+  const pipeline = new BlockPipeline(adapter, createTranslator(createLanguageStore('zh-CN')));
   pipeline.emit({ kind: 'user_input', text: '你是谁？' });
   pipeline.emit({ kind: 'thinking_start' });
   pipeline.emit({ kind: 'thinking_delta', content: '思考' });

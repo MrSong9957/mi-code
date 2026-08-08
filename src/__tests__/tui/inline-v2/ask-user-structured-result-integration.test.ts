@@ -6,6 +6,8 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BlockPipeline, type PipelineRenderer } from '../../../ui/block-pipeline.js';
+import { createLanguageStore } from '../../../locale/language-store.js';
+import { createTranslator } from '../../../locale/translator.js';
 import type { ToolPresentation, AskBlock } from '../../../tui/transcript-types.js';
 import type { ThinkingSummaryBlock, BoundaryBlock } from '../../../tui/state/transcript-reducer.js';
 import { askOutcomeStore } from '../../../agent/ask-outcome-store.js';
@@ -41,12 +43,16 @@ function createRecordingRenderer(): PipelineRenderer & {
   return Object.assign(renderer, { askBlocks, toolPresentations });
 }
 
+function createPipeline(renderer: PipelineRenderer): BlockPipeline {
+  return new BlockPipeline(renderer, createTranslator(createLanguageStore('zh-CN')));
+}
+
 describe('ask_user_question structured result e2e (semantic)', () => {
   beforeEach(() => askOutcomeStore.clear());
 
   it('submitted 完整链路 → finishAsk(AskBlock),非 finishToolCall', () => {
     const renderer = createRecordingRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({
       kind: 'tool_call', name: 'ask_user_question', toolUseId: 'tuu-e2e-1',
@@ -92,7 +98,7 @@ describe('ask_user_question structured result e2e (semantic)', () => {
 
   it('cancelled outcome → AskBlock with Declined summary', () => {
     const renderer = createRecordingRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
     pipeline.emit({
       kind: 'tool_call', name: 'ask_user_question', toolUseId: 'tuu-e2e-2',
       input: { questions: [] },
@@ -114,7 +120,7 @@ describe('ask_user_question structured result e2e (semantic)', () => {
 
   it('API 通道零污染:output(API 字符串)不进 AskBlock', () => {
     const renderer = createRecordingRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
     pipeline.emit({
       kind: 'tool_call', name: 'ask_user_question', toolUseId: 'tuu-e2e-3',
       input: { questions: [] },

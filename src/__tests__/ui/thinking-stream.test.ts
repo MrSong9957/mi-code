@@ -9,6 +9,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { BlockPipeline, type PipelineRenderer } from '../../ui/block-pipeline.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
 import type { ToolPresentation } from '../../tui/transcript-types.js';
 import type { ThinkingSummaryBlock, BoundaryBlock } from '../../tui/state/transcript-reducer.js';
 
@@ -50,12 +52,16 @@ function createMockRenderer(): PipelineRenderer & { calls: string[] } {
   return Object.assign(renderer, { calls });
 }
 
+function createPipeline(renderer: PipelineRenderer): BlockPipeline {
+  return new BlockPipeline(renderer, createTranslator(createLanguageStore('zh-CN')));
+}
+
 describe('BlockPipeline thinking 状态机 (semantic)', () => {
   // ── 边界 1: start → end(无 delta)── 生产回归 ──
 
   it('start → end:显示闪烁行,生成摘要,擦除临时行', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_start' });
     expect(renderer.calls.filter(c => c.startsWith('startThinking'))).toHaveLength(1);
@@ -67,7 +73,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('start→end 无 delta 的 Ctrl+O 详情显示 placeholder', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
 
@@ -82,7 +88,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('start→delta(非空)→end:闪烁行 + 摘要 + Ctrl+O 含真实内容', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_start' });
     expect(renderer.calls.filter(c => c.startsWith('startThinking'))).toHaveLength(1);
@@ -102,7 +108,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('纯白 delta → placeholder', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_delta', content: '  \n\t' });
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
@@ -116,7 +122,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('start→start→end:第二次 start 无副作用', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_start' });
@@ -130,7 +136,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('start→delta(A)→start→delta(B)→end:buffer 保留 A+B', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_delta', content: 'A' });
@@ -149,7 +155,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('end without start:完全无害', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
     expect(renderer.calls.some(c => c.includes('Thought for'))).toBe(false);
@@ -161,7 +167,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('ignores thinking_delta while idle', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_delta', content: 'orphan content' });
     expect(renderer.calls.some(c => c.startsWith('startThinking'))).toBe(false);
@@ -178,7 +184,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('end→end:均无害', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
     pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
@@ -189,7 +195,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('start→end→end:只生成一次摘要', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_end', durationSec: 2, filesRead: 0 });
@@ -204,7 +210,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('start→clear:回 idle,后续 end 不产摘要', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.clear();
@@ -217,7 +223,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('start→clearTurnState:擦除临时行,回 idle', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.clearTurnState();
@@ -231,7 +237,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('start→end→start→end:两个独立摘要,buffer 不串联', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_delta', content: '第一个' });
@@ -253,7 +259,7 @@ describe('BlockPipeline thinking 状态机 (semantic)', () => {
 
   it('thinking_end 摘要通过 finishThinking 投递(非 assistant)', () => {
     const renderer = createMockRenderer();
-    const pipeline = new BlockPipeline(renderer);
+    const pipeline = createPipeline(renderer);
 
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_delta', content: 'x' });

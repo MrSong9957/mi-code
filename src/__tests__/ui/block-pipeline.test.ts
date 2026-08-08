@@ -9,6 +9,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { BlockPipeline, type PipelineRenderer } from '../../ui/block-pipeline.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
 import type { ToolPresentation, AskBlock } from '../../tui/transcript-types.js';
 import type {
   BoundaryBlock,
@@ -115,7 +117,7 @@ class RecordingRenderer implements PipelineRenderer {
 /** 每个测试都创建新的 pipeline + recorder。 */
 function setup() {
   const recorder = new RecordingRenderer();
-  const pipeline = new BlockPipeline(recorder);
+  const pipeline = new BlockPipeline(recorder, createTranslator(createLanguageStore('zh-CN')));
   return { recorder, pipeline };
 }
 

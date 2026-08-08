@@ -66,6 +66,8 @@ import { createWritePlanTool, createExitPlanModeTool, createReadPlanTool } from 
 import { setWorkdir, getWorkdir } from './agent/tools/path-sandbox.js';
 import { HistoryManager } from './history.js';
 import { splitSubmitTracks, commitNewTurn } from './tui/input/submit-transformer.js';
+import { createLanguageStore, createTranslator, type LanguageStore, type Translator } from './locale/index.js';
+import { resolveStartupLanguageSelection } from './locale/startup-language.js';
 
 const VERSION = "1.0.0";
 
@@ -178,6 +180,18 @@ import { randomUUID } from 'crypto';
 import type { Message } from './agent/types.js';
 const cliOpts = parseCliArgs();
 const sessionStore = new SessionStore();
+const startupLanguageSelection = resolveStartupLanguageSelection(
+  cliOpts.language,
+  cliOpts.languageError,
+  configStore.getLanguage(),
+);
+if ('error' in startupLanguageSelection) {
+  console.error(startupLanguageSelection.error);
+  process.exit(startupLanguageSelection.exitCode);
+}
+const startupLanguage = startupLanguageSelection.language;
+const languageStore: LanguageStore = createLanguageStore(startupLanguage);
+const translator: Translator = createTranslator(languageStore);
 // Session 级状态:sessionAllowlist + sessionState(唯一 session mutation boundary)。
 // sessionState 封装 sessionId:外部只读 currentId,切换只经 transitionTo(内部 clear allowlist)。
 // 结构上消除"调用方直接赋值 sessionId 而忘记 clear"的双写风险。
@@ -293,7 +307,7 @@ let pipeline = new BlockPipeline({
   appendTranscriptBlock: () => {},
   flushNow: () => {},
   clearMessages: () => {},
-});
+}, translator);
 
 /** 把一行文本作为"系统消息"固化进消息区（延迟绑定到 bootstrap 后的 messagesStore）。 */
 function printLine(text: string): void {
@@ -1164,6 +1178,8 @@ if (cliOpts.list) {
   // bootstrap 内部进 alt screen（useAltScreen），render 挂载 ConnectedApp。
   // LOGO 区只显示 version + dir；mode/model/branch/contextPct 在 StatusBar 显示。
   tuiHandle = bootstrap({
+    languageStore,
+    translator,
     logo: { version: VERSION, dir: SHORT_DIR },
     status: {
       mode: configStore.getPermissionMode(),

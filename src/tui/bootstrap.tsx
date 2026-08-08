@@ -45,8 +45,12 @@ import type { ThemeName } from '../utils/theme.js';
 import { createThemeStore } from './state/theme-store.js';
 import type { ThemeStore } from './state/theme-store.js';
 import { ThemeStoreProvider } from './state/theme-context.js';
+import { LocaleProvider } from '../locale/context.js';
+import type { LanguageStore, Translator } from '../locale/types.js';
 
 export interface BootstrapOptions {
+  languageStore: LanguageStore;
+  translator: Translator;
   /** LOGO 区数据（version/dir） */
   logo: TuiLogoData;
   /** 状态栏初始数据（mode/model/dir/branch） */
@@ -144,7 +148,7 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
   const askQuestionStore = createAskQuestionStore();
   const clearScreenStore = createClearScreenStore();
   const adapter = new PipelineToStoreAdapter(messagesStore);
-  const pipeline = new BlockPipeline(adapter);
+  const pipeline = new BlockPipeline(adapter, opts.translator);
 
   // printLine：系统消息进 store（替代旧 layout.send('system')）
   const printLine = (text: string): void => {
@@ -201,12 +205,14 @@ export function bootstrap(opts: BootstrapOptions): BootstrapHandle {
 
   let inkInstance: InkInstance | null = render(
     React.createElement(RenderModeProvider, { initialMode: renderMode, children:
-      React.createElement(ThemeStoreProvider, { store: themeStore },
-        React.createElement(ConnectedApp, {
-          messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, askQuestionStore, clearScreenStore,
-          onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
-          onAbortStream: opts.onAbortStream, onRewindLastTurn: opts.onRewindLastTurn,
-        }),
+      React.createElement(LocaleProvider, { store: opts.languageStore },
+        React.createElement(ThemeStoreProvider, { store: themeStore },
+          React.createElement(ConnectedApp, {
+            messagesStore, inputStore, statusStore, logoStore, spinnerStore, completionStore, selectStore, overlayStore, askQuestionStore, clearScreenStore,
+            onExit: opts.onExit, onTab: opts.onTab, onToggleOverlay: opts.onToggleOverlay,
+            onAbortStream: opts.onAbortStream, onRewindLastTurn: opts.onRewindLastTurn,
+          }),
+        ),
       ),
     }),
     renderOptions,

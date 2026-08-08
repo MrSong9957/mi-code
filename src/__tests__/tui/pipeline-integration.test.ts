@@ -12,6 +12,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { BlockPipeline } from '../../ui/block-pipeline.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { PipelineToStoreAdapter } from '../../tui/state/pipeline-adapter.js';
 import type { PendingTool, ToolBlock } from '../../tui/transcript-types.js';
@@ -203,7 +205,7 @@ describe('tool lifecycle visibility', () => {
 function setup(): { pipeline: BlockPipeline; store: ReturnType<typeof createMessagesStore> } {
   const store = createMessagesStore();
   const adapter = new PipelineToStoreAdapter(store);
-  const pipeline = new BlockPipeline(adapter);
+  const pipeline = new BlockPipeline(adapter, createTranslator(createLanguageStore('zh-CN')));
   return { pipeline, store };
 }
 

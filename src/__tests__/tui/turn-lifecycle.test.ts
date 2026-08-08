@@ -7,6 +7,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { BlockPipeline } from '../../ui/block-pipeline.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
 import { stopSpinnerAndAppendCompletion } from '../../tui/bootstrap.js';
 import { PipelineToStoreAdapter } from '../../tui/state/pipeline-adapter.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
@@ -19,6 +21,13 @@ import {
   startTurnThinking,
   type TurnLifecycle,
 } from '../../tui/turn-lifecycle.js';
+
+function createTestPipeline(messagesStore: ReturnType<typeof createMessagesStore>): BlockPipeline {
+  return new BlockPipeline(
+    new PipelineToStoreAdapter(messagesStore),
+    createTranslator(createLanguageStore('zh-CN')),
+  );
+}
 
 function makeLifecycle(
   pipeline: BlockPipeline,
@@ -92,7 +101,7 @@ describe('turn lifecycle 集成', () => {
     try {
       const messagesStore = createMessagesStore();
       const spinnerStore = createSpinnerStore();
-      const pipeline = new BlockPipeline(new PipelineToStoreAdapter(messagesStore));
+      const pipeline = createTestPipeline(messagesStore);
       const { lifecycle, events } = makeLifecycle(pipeline, spinnerStore, messagesStore);
 
       spinnerStore.getState().start('thinking');
@@ -141,7 +150,7 @@ describe('turn lifecycle 集成', () => {
     vi.setSystemTime(0);
     try {
       const messagesStore = createMessagesStore();
-      const pipeline = new BlockPipeline(new PipelineToStoreAdapter(messagesStore));
+      const pipeline = createTestPipeline(messagesStore);
       const spinnerStore = createSpinnerStore();
       const { lifecycle } = makeLifecycle(pipeline, spinnerStore, messagesStore);
 

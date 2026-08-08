@@ -9,6 +9,13 @@
 // 注意:bootstrap 真实 render Ink 到 process.stdout,每个测试用完必须 cleanup。
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { createLanguageStore } from '../../../locale/language-store.js';
+import { createTranslator } from '../../../locale/translator.js';
+
+function createLocaleOptions() {
+  const languageStore = createLanguageStore('zh-CN');
+  return { languageStore, translator: createTranslator(languageStore) };
+}
 
 describe('bootstrap inline/alt-screen 模式', () => {
   let writeSpy: ReturnType<typeof vi.spyOn>;
@@ -28,6 +35,7 @@ describe('bootstrap inline/alt-screen 模式', () => {
   it('inline 模式启动不崩(Ink reconciler + <Static>)', async () => {
     const { bootstrap } = await import('../../../tui/bootstrap.js');
     const handle = bootstrap({
+      ...createLocaleOptions(),
       logo: { version: '0', dir: '/tmp' },
       status: { mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main' },
       onSubmit: () => {},
@@ -43,6 +51,7 @@ describe('bootstrap inline/alt-screen 模式', () => {
   it('alt-screen 模式启动不崩', async () => {
     const { bootstrap } = await import('../../../tui/bootstrap.js');
     const handle = bootstrap({
+      ...createLocaleOptions(),
       logo: { version: '0', dir: '/tmp' },
       status: { mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main' },
       onSubmit: () => {},
@@ -57,6 +66,7 @@ describe('bootstrap inline/alt-screen 模式', () => {
     process.env.MICODE_INLINE_V2 = '0';
     const { bootstrap } = await import('../../../tui/bootstrap.js');
     const handle = bootstrap({
+      ...createLocaleOptions(),
       logo: { version: '0', dir: '/tmp' },
       status: { mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main' },
       onSubmit: () => {},

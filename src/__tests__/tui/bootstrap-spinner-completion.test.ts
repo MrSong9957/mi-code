@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BlockPipeline } from '../../ui/block-pipeline.js';
+import { createLanguageStore } from '../../locale/language-store.js';
+import { createTranslator } from '../../locale/translator.js';
 import { stopSpinnerAndAppendCompletion } from '../../tui/bootstrap.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { PipelineToStoreAdapter } from '../../tui/state/pipeline-adapter.js';
@@ -43,7 +45,10 @@ describe('bootstrap spinner completion message', () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
     try {
       const messagesStore = createMessagesStore();
-      const pipeline = new BlockPipeline(new PipelineToStoreAdapter(messagesStore));
+      const pipeline = new BlockPipeline(
+        new PipelineToStoreAdapter(messagesStore),
+        createTranslator(createLanguageStore('zh-CN')),
+      );
       const spinnerStore = createSpinnerStore();
 
       spinnerStore.getState().start('thinking');

@@ -19,6 +19,7 @@ import { INDENT, BLOCK_STYLES } from './block-format.js';
 import { ExpandableBlockStore } from './expandable-store.js';
 import { buildAskBlock } from './ask-user-presentation.js';
 import { buildToolPresentation } from './tool-presentation.js';
+import type { Translator } from '../locale/types.js';
 import type {
   AskBlock,
   ToolPresentation,
@@ -110,6 +111,7 @@ type ThinkingPhase = 'idle' | 'active';
 
 export class BlockPipeline {
   private renderer: PipelineRenderer;
+  private translator: Translator;
   private hasContent = false;
   private thinkingPhase: ThinkingPhase = 'idle';
   /**
@@ -125,8 +127,9 @@ export class BlockPipeline {
   /** 块 id 计数器(生成唯一 id) */
   private idCounter = 0;
 
-  constructor(renderer: PipelineRenderer) {
+  constructor(renderer: PipelineRenderer, translator: Translator) {
     this.renderer = renderer;
+    this.translator = translator;
   }
 
   /**
