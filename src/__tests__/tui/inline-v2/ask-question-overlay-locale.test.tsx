@@ -65,6 +65,10 @@ describe('<AskQuestionOverlayV2> 本地化', () => {
     expect(frameZh).toContain('Plan Header');
     expect(frameEn).toContain('Plan Header');
 
+    // Submit tab 是固定控件，随 locale 切换；question/header 仍保持 RAW。
+    expect(frameZh).toContain('✓ 提交');
+    expect(frameEn).toContain('✓ Submit');
+
     // 中文：Other 默认、Chat、导航提示
     expect(frameZh).toContain('其他');
     expect(frameZh).toContain('与 Agent 讨论此问题');
@@ -107,7 +111,7 @@ describe('<AskQuestionOverlayV2> 本地化', () => {
     const frameEn = renderWith(overlayEn, enStore);
 
     // 中文
-    expect(frameZh).toContain('Submit');
+    expect(frameZh).toContain('提交');
     // 注：截断前缀 '❯ '/'  '，最终中文字串 '提交答案' / '取消' 仍在
     expect(frameZh).toContain('提交答案');
     expect(frameZh).toContain('取消');

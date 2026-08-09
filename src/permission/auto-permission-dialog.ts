@@ -17,6 +17,7 @@ import type { AskQuestionRequest } from '../agent/ask-user-types.js';
 import type { Translator } from '../locale/index.js';
 import type { InteractiveAskInput, DialogResult } from './interactive-ask.js';
 import { mapDialogResult, PERMISSION_ANSWER_VALUES } from './permission-answer-mapping.js';
+import { presentPermissionReason } from './permission-reason-presentation.js';
 
 /**
  * 构造 auto permission dialog provider（spec §5.1）。
@@ -31,10 +32,14 @@ export function createAutoPermissionDialogProvider(
   return async (input: InteractiveAskInput): Promise<DialogResult> => {
     const request: AskQuestionRequest = {
       questions: [{
-        question: translator.t('permission.question', {
-          tool: input.toolName,
-          reason: input.decision.human_reason ?? '',
-        }),
+          question: translator.t('permission.question', {
+            tool: input.toolName,
+            reason: presentPermissionReason(
+              translator,
+              input.decision.reason_code,
+              input.decision.human_reason ?? '',
+            ),
+          }),
         header: translator.t('permission.header'),
         options: [
           {

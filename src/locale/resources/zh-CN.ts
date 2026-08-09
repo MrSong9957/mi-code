@@ -112,6 +112,25 @@ export const zhCN = {
     rewindNotice: '── 上一条消息已撤回 ──',
     overlayTitleThinking: '思考',
     overlayTitleToolResult: '工具结果',
+    turnFinal: {
+    currentStatus: '当前状态',
+    obtainedResult: '已获得结果',
+    blockedAt: '失败或受阻位置',
+    nextStep: '下一步',
+    separator: '：',
+      success: '成功',
+      partial: '部分完成',
+      failure: '失败',
+      none: '无',
+      taskComplete: '任务完成',
+      partialToolResultsObtained: '部分工具结果已获得',
+      partialResultsObtained: '部分结果已获得',
+      partialStepsIncomplete: '部分步骤未完成',
+      subagentIncomplete: '子代理未完成：{reason}',
+      retryFailedStep: '重试失败步骤或补充缺失信息',
+      noUsefulOutput: '无有效输出',
+      retryOrAdjust: '重试或调整方案',
+    },
   },
   spinner: {
     placeholder: '处理中',
@@ -129,8 +148,7 @@ export const zhCN = {
   },
   overlay: {
     placeholder: '覆盖层',
-    // Deliberately English to match pre-i18n behavior (Task 10 reviewer Minor #1); see exit-plan-mode-routing.test.tsx assertions on 'Submit'.
-    submit: 'Submit',
+    submit: '提交',
     submitAnswers: '提交答案',
     cancel: '取消',
     unansweredWarning: '请先完成所有问题再提交',
@@ -157,6 +175,9 @@ export const zhCN = {
     placeholder: '权限',
     header: '权限',
     question: '允许执行此操作吗？\n\n工具：{tool}\n原因：{reason}',
+    reasons: {
+      commandUnresolvableVar: 'Bash 命令包含无法解析的变量，需要审核',
+    },
     options: {
       allowOnce: {
         label: '允许一次',

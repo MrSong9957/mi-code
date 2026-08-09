@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
-  finalizeTurnForUser,
+  finalizeTurnForUser as finalizeTurnForUserWithTranslator,
   commitFinalizedTurn,
   type TurnToolFact,
 } from '../agent/turn-final-feedback.js';
 import type { Message, ContentBlock } from '../agent/types.js';
+import { createLanguageStore, createTranslator, type Translator } from '../locale/index.js';
+
+const zhTranslator = createTranslator(createLanguageStore('zh-CN'));
+
+function finalizeTurnForUser(input: Parameters<typeof finalizeTurnForUserWithTranslator>[0], translator: Translator = zhTranslator) {
+  return finalizeTurnForUserWithTranslator(input, translator);
+}
 
 function assistant(text: string): Message {
   return { role: 'assistant', content: [{ type: 'text', text }] };
@@ -109,6 +116,54 @@ describe('finalizeTurnForUser 分类', () => {
     expect(result.feedbackText).toBe('');
     // messages 不变(未追加状态块)
     expect(result.messages).toEqual([assistant('这是明确的总结回复')]);
+  });
+});
+
+describe('finalizeTurnForUser 本地化', () => {
+  it.each([
+    {
+      language: 'zh-CN' as const,
+      expected: [
+        '当前状态：失败',
+        '已获得结果：无',
+        '失败或受阻位置：The user rejected this action.',
+        '下一步：重试或调整方案',
+      ],
+    },
+    {
+      language: 'en-US' as const,
+      expected: [
+        'Current status: Failed',
+        'Result obtained: None',
+        'Failure or blocked at: The user rejected this action.',
+        'Next step: Retry or adjust the approach.',
+      ],
+    },
+  ])('localizes fixed failure feedback for $language while preserving the raw rejection', ({ language, expected }) => {
+    const result = finalizeTurnForUser({
+      messages: [],
+      turnStartIndex: 0,
+      toolFacts: [tool('run_bash', 'The user rejected this action.', 'failure')],
+      aborted: false,
+    }, createTranslator(createLanguageStore(language)));
+
+    expect(result.requiresFeedback).toBe(true);
+    for (const line of expected) expect(result.feedbackText).toContain(line);
+  });
+
+  it.each([
+    ['zh-CN' as const, '当前状态：失败'],
+    ['en-US' as const, 'Current status: Failed'],
+  ])('does not append a second status block already rendered in %s', (language, existingStatus) => {
+    const messages = [assistant(existingStatus)];
+    const result = finalizeTurnForUser({
+      messages,
+      turnStartIndex: 0,
+      toolFacts: [tool('run_bash', 'The user rejected this action.', 'failure')],
+      aborted: false,
+    }, createTranslator(createLanguageStore(language)));
+
+    expect(result.messages).toEqual(messages);
   });
 });
 

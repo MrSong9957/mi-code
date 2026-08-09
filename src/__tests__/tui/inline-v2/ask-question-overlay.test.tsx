@@ -68,7 +68,7 @@ describe('<AskQuestionOverlayV2>', () => {
 
     expect(frame).toContain('✓');
     expect(frame).toContain('○');
-    expect(frame).toContain('Submit');
+    expect(frame).toContain('提交');
   });
 
   it('renders multi-select checkboxes', () => {

@@ -79,6 +79,7 @@ export const AskQuestionOverlayV2 = React.memo(function AskQuestionOverlayV2({
     pageIndex: state.pageIndex,
     answered: answeredFlags,
     cols,
+    submitText: t('overlay.submit'),
   });
   const tabsLine = truncateLine(tabs.map((t) => t.label).join(' '), contentWidth);
 

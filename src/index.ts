@@ -173,6 +173,7 @@ import { SessionState } from './permission/session-state.js';
 import { transitionPermissionMode } from './permission/mode-transition.js';
 import { mapPermissionAnswerToUserDecision, PERMISSION_ANSWER_VALUES } from './permission/permission-answer-mapping.js';
 import { createAutoPermissionDialogProvider } from './permission/auto-permission-dialog.js';
+import { presentPermissionReason } from './permission/permission-reason-presentation.js';
 import { renderAttachmentsForPrompt } from './agent/prompt/auto-attachments.js';
 import { resolveAuthority } from './permission/cutover.js';
 import { createConfiguredExecutionRuntimeForTurn } from './permission/authority-gate.js';
@@ -384,7 +385,7 @@ function getDecisionChannel(): UserDecisionChannel {
         questions: [{
           question: translator.t('permission.question', {
             tool: decision.action.subject_id,
-            reason: decision.human_reason,
+            reason: presentPermissionReason(translator, decision.reason_code, decision.human_reason),
           }),
           header: translator.t('permission.header'),
           options: [
@@ -1109,7 +1110,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       toolFacts,
       error: terminalError,
       aborted,
-    });
+    }, translator);
 
     // 持久化失败用窄错误边界兜住:落盘本身失败时,用未 finalized 的 baseMessages
     // 重新构造一个"失败"块 emit 给用户(绝不假装成功)。此异常路径无法承诺落盘
@@ -1130,7 +1131,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
         toolFacts,
         error: translator.t('errors.persistenceFailed', { error: formatErrorForDisplay(persistError) }),
         aborted,
-      });
+      }, translator);
       sessionMessages = persistenceFailure.messages;
       pipeline.emit({ kind: 'assistant_text', text: persistenceFailure.feedbackText, isFinal: true });
     }

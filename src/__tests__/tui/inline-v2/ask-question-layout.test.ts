@@ -8,11 +8,25 @@ describe('computeTabLayout', () => {
   ];
 
   it('宽终端全部显示 + Submit 可见', () => {
-    const tabs = computeTabLayout(questions, { pageIndex: 0, answered: [true, false], cols: 80 });
+    const tabs = computeTabLayout(questions, { pageIndex: 0, answered: [true, false], cols: 80, submitText: 'Submit' });
     expect(tabs.every(t => t.truncated === false)).toBe(true);
     expect(tabs.some(t => t.label.includes('Submit'))).toBe(true);
     const totalWidth = tabs.reduce((sum, t) => sum + t.width, 0);
     expect(totalWidth).toBeLessThanOrEqual(80);
+  });
+
+  it('uses the caller-provided Chinese Submit label without overflowing a narrow terminal', () => {
+    const tabs = computeTabLayout(questions, {
+      pageIndex: 0,
+      answered: [false, false],
+      cols: 14,
+      submitText: '提交',
+    });
+
+    const submitTab = tabs[tabs.length - 1]!;
+    expect(submitTab.label).toContain('提交');
+    expect(submitTab.width).toBeLessThanOrEqual(14);
+    expect(tabs.reduce((sum, tab) => sum + tab.width, 0)).toBeLessThanOrEqual(14);
   });
 
   it('窄终端:当前页优先分配,其他截断带 …', () => {
@@ -22,7 +36,7 @@ describe('computeTabLayout', () => {
       { header: 'Runtime', question: 'q3', options: [], multiSelect: false },
       { header: 'Deploy', question: 'q4', options: [], multiSelect: false },
     ];
-    const tabs = computeTabLayout(qs, { pageIndex: 1, answered: [true, false, false, false], cols: 40 });
+    const tabs = computeTabLayout(qs, { pageIndex: 1, answered: [true, false, false, false], cols: 40, submitText: 'Submit' });
     expect(tabs.some(t => t.label.includes('Submit'))).toBe(true);
     const currentTab = tabs[1]!;
     expect(currentTab.active).toBe(true);
@@ -35,7 +49,7 @@ describe('computeTabLayout', () => {
       { header: 'Auth', question: 'q1', options: [], multiSelect: false },
       { header: 'Library', question: 'q2', options: [], multiSelect: false },
     ];
-    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false, false], cols: 16 });
+    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false, false], cols: 16, submitText: 'Submit' });
     expect(tabs[1]!.label).toBe('');
     expect(tabs.some(t => t.label.includes('Submit'))).toBe(true);
     const totalWidth = tabs.reduce((sum, t) => sum + t.width, 0);
@@ -49,7 +63,7 @@ describe('computeTabLayout', () => {
       { header: 'Auth', question: 'q1', options: [], multiSelect: false },
       { header: 'Library', question: 'q2', options: [], multiSelect: false },
     ];
-    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false, false], cols: 20 });
+    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false, false], cols: 20, submitText: 'Submit' });
     expect(tabs[1]!.label).toBe('');          // 非当前页降级清空
     expect(tabs[0]!.active).toBe(true);
     const submitTab = tabs[tabs.length - 1]!;
@@ -66,7 +80,7 @@ describe('computeTabLayout', () => {
       { header: 'Auth', question: 'q1', options: [], multiSelect: false },
       { header: 'Library', question: 'q2', options: [], multiSelect: false },
     ];
-    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false, false], cols: 24 });
+    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false, false], cols: 24, submitText: 'Submit' });
     expect(tabs[0]!.label).toContain('Auth');  // 当前页显示
     expect(tabs[1]!.label).not.toBe('');        // 非当前页也显示(非降级)
     const totalWidth = tabs.reduce((sum, t) => sum + t.width, 0);
@@ -77,7 +91,7 @@ describe('computeTabLayout', () => {
     const qs = [
       { header: 'Auth', question: 'q1', options: [], multiSelect: false },
     ];
-    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false], cols: 12 });
+    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false], cols: 12, submitText: 'Submit' });
     expect(tabs[0]!.label).toBe('Aut');
     const submitTab = tabs[tabs.length - 1]!;
     expect(submitTab.truncated).toBe(true);
@@ -89,7 +103,7 @@ describe('computeTabLayout', () => {
     const qs = [
       { header: '认证配置', question: 'q1', options: [], multiSelect: false },
     ];
-    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false], cols: 14 });
+    const tabs = computeTabLayout(qs, { pageIndex: 0, answered: [false], cols: 14, submitText: 'Submit' });
     expect(tabs[0]!.width).toBeLessThanOrEqual(3);
     const totalWidth = tabs.reduce((sum, t) => sum + t.width, 0);
     expect(totalWidth).toBeLessThanOrEqual(14);

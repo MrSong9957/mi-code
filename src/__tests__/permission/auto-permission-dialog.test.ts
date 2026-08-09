@@ -55,6 +55,39 @@ describe('createAutoPermissionDialogProvider', () => {
   });
 
   test.each([
+    ['zh-CN' as const, 'Bash 命令包含无法解析的变量，需要审核'],
+    ['en-US' as const, 'Bash command has unresolvable variable, needs review'],
+  ])('localizes the unresolvable-variable reason for %s', async (language, expectedReason) => {
+    const { manager, dialog } = createDialog({ kind: 'cancelled' }, language);
+
+    await dialog({
+      ...askInput,
+      decision: {
+        ...askInput.decision,
+        reason_code: 'permission.command_unresolvable_var',
+        human_reason: 'Bash command has unresolvable variable, needs review',
+      },
+    } as never);
+
+    expect(manager.lastRequest?.questions[0]?.question).toContain(expectedReason);
+  });
+
+  test('keeps an unknown reason code as its raw human reason', async () => {
+    const { manager, dialog } = createDialog({ kind: 'cancelled' }, 'zh-CN');
+
+    await dialog({
+      ...askInput,
+      decision: {
+        ...askInput.decision,
+        reason_code: 'permission.unknown',
+        human_reason: 'Unrecognized policy diagnostic',
+      },
+    } as never);
+
+    expect(manager.lastRequest?.questions[0]?.question).toContain('Unrecognized policy diagnostic');
+  });
+
+  test.each([
     {
       language: 'zh-CN' as const,
       question: '允许执行此操作吗？\n\n工具：run_bash\n原因：r',

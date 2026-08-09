@@ -21,9 +21,9 @@ export interface ComputeTabLayoutOptions {
   /** 每个 question 是否已答(与 questions 等长) */
   answered: boolean[];
   cols: number;
+  submitText: string;
 }
 
-const SUBMIT_TEXT = ' ✓ Submit ';
 const MIN_TAB_WIDTH = 6;
 
 /**
@@ -53,7 +53,8 @@ export function computeTabLayout(
   opts: ComputeTabLayoutOptions,
 ): TabSlice[] {
   const { pageIndex, answered, cols } = opts;
-  const submitWidth = displayWidth(SUBMIT_TEXT);
+  const submitText = ` ✓ ${opts.submitText} `;
+  const submitWidth = displayWidth(submitText);
 
   // 极窄降级阈值:当可用宽度装不下"每个 tab 至少 MIN_TAB_WIDTH"时,降级。
   // 原阈值 cols <= submitWidth + MIN_TAB_WIDTH 只考虑单个 tab,但多 tab 场景下
@@ -76,7 +77,7 @@ export function computeTabLayout(
     // Submit 截断:当前页占完后,剩余预算给 Submit;放不下则截断,极端情况只留 ✓
     const currentPageWidth = tabs[pageIndex]?.width ?? 0;
     const submitBudget = Math.max(1, cols - currentPageWidth);  // 至少留 1 列
-    const { text: submitLabel, truncated: submitTrunc } = truncateByDisplayWidth(SUBMIT_TEXT, submitBudget);
+    const { text: submitLabel, truncated: submitTrunc } = truncateByDisplayWidth(submitText, submitBudget);
     const finalLabel = submitLabel || '✓';  // 极端兜底:至少 ✓
     tabs.push({ label: finalLabel, active: false, width: displayWidth(finalLabel), truncated: submitTrunc || finalLabel === '✓' });
     return tabs;
@@ -95,7 +96,7 @@ export function computeTabLayout(
       width: ideals[i]!,
       truncated: false,
     }));
-    tabs.push({ label: SUBMIT_TEXT, active: false, width: submitWidth, truncated: false });
+    tabs.push({ label: submitText, active: false, width: submitWidth, truncated: false });
     return tabs;
   }
 
@@ -117,6 +118,6 @@ export function computeTabLayout(
     const label = `${prefix}${header}…`;
     return { label, active: i === pageIndex, width: displayWidth(label), truncated: true };
   });
-  tabs.push({ label: SUBMIT_TEXT, active: false, width: submitWidth, truncated: false });
+  tabs.push({ label: submitText, active: false, width: submitWidth, truncated: false });
   return tabs;
 }

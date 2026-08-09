@@ -114,6 +114,25 @@ export const enUS: CanonicalResources = {
     rewindNotice: '── Last message rewound ──',
     overlayTitleThinking: 'Thinking',
     overlayTitleToolResult: 'Tool result',
+    turnFinal: {
+    currentStatus: 'Current status',
+    obtainedResult: 'Result obtained',
+    blockedAt: 'Failure or blocked at',
+    nextStep: 'Next step',
+    separator: ': ',
+      success: 'Succeeded',
+      partial: 'Partially completed',
+      failure: 'Failed',
+      none: 'None',
+      taskComplete: 'Task completed',
+      partialToolResultsObtained: 'Some tool results were obtained',
+      partialResultsObtained: 'Some results were obtained',
+      partialStepsIncomplete: 'Some steps were not completed',
+      subagentIncomplete: 'Subagent incomplete: {reason}',
+      retryFailedStep: 'Retry the failed step or provide missing information',
+      noUsefulOutput: 'No useful output',
+      retryOrAdjust: 'Retry or adjust the approach.',
+    },
   },
   spinner: {
     placeholder: 'Working',
@@ -205,6 +224,9 @@ export const enUS: CanonicalResources = {
     placeholder: 'Permission',
     header: 'Permission',
     question: 'Allow this action?\n\nTool: {tool}\nReason: {reason}',
+    reasons: {
+      commandUnresolvableVar: 'Bash command has unresolvable variable, needs review',
+    },
     options: {
       allowOnce: {
         label: 'Allow once',

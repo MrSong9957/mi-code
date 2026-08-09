@@ -1,6 +1,7 @@
 // 每个非后台用户回合的终态反馈契约：纯函数分类 + 构造四字段状态块。
 import type { Message } from './types.js';
 import type { ToolExecutionResult } from './tool-execution.js';
+import type { Translator } from '../locale/types.js';
 
 /** 用户回合的终态分类 */
 export type UserTurnStatus = '成功' | '部分完成' | '失败';
@@ -105,13 +106,12 @@ function getTerminalAssistantText(slice: readonly Message[]): string {
 }
 
 /** 判断某条 assistant 消息是否已含“当前状态：”状态块（按行锚定） */
-function hasStatusBlock(message: Message): boolean {
-  if (typeof message.content === 'string') {
-    return /^当前状态：/m.test(message.content);
-  }
-  return message.content.some(
-    (block) => block.type === 'text' && /^当前状态：/m.test(block.text),
-  );
+function hasStatusBlock(message: Message, translator: Translator): boolean {
+  const prefix = `${translator.t('status.turnFinal.currentStatus')}${translator.t('status.turnFinal.separator')}`;
+  const textBlocks = typeof message.content === 'string'
+    ? [message.content]
+    : message.content.filter((block): block is { type: 'text'; text: string } => block.type === 'text').map(block => block.text);
+  return textBlocks.some(text => text.split(/\r?\n/).some(line => line.startsWith(prefix)));
 }
 
 /** 按规则顺序分类父回合结果 */
@@ -175,6 +175,7 @@ function buildFeedbackFields(
   status: UserTurnStatus,
   input: TurnFinalizationInput,
   slice: readonly Message[],
+  translator: Translator,
 ): { obtainedResult: string; blockedAt: string; nextStep: string } {
   const { error, toolFacts } = input;
   const terminalText = getTerminalAssistantText(slice);
@@ -196,9 +197,9 @@ function buildFeedbackFields(
   switch (status) {
     case '成功': {
       return {
-        obtainedResult: terminalText.trim() || subagentBody.trim() || '任务完成',
-        blockedAt: '无',
-        nextStep: '无',
+        obtainedResult: terminalText.trim() || subagentBody.trim() || translator.t('status.turnFinal.taskComplete'),
+        blockedAt: translator.t('status.turnFinal.none'),
+        nextStep: translator.t('status.turnFinal.none'),
       };
     }
     case '部分完成': {
@@ -206,23 +207,25 @@ function buildFeedbackFields(
         terminalText.trim() ||
         subagentBody.trim() ||
         (toolFacts.some((fact) => fact.executionStatus === 'success')
-          ? '部分工具结果已获得'
-          : '部分结果已获得');
+          ? translator.t('status.turnFinal.partialToolResultsObtained')
+          : translator.t('status.turnFinal.partialResultsObtained'));
       const blocked =
         error ??
         (failingFact?.output ??
-          (subagentReason ? `子代理未完成：${subagentReason}` : '部分步骤未完成'));
+          (subagentReason
+            ? translator.t('status.turnFinal.subagentIncomplete', { reason: subagentReason })
+            : translator.t('status.turnFinal.partialStepsIncomplete')));
       return {
         obtainedResult: obtained,
         blockedAt: blocked,
-        nextStep: '重试失败步骤或补充缺失信息',
+        nextStep: translator.t('status.turnFinal.retryFailedStep'),
       };
     }
     case '失败': {
       return {
-        obtainedResult: '无',
-        blockedAt: error ?? failingFact?.output ?? '无有效输出',
-        nextStep: '重试或调整方案',
+        obtainedResult: translator.t('status.turnFinal.none'),
+        blockedAt: error ?? failingFact?.output ?? translator.t('status.turnFinal.noUsefulOutput'),
+        nextStep: translator.t('status.turnFinal.retryOrAdjust'),
       };
     }
   }
@@ -232,12 +235,19 @@ function buildFeedbackFields(
 function buildFeedbackText(
   status: UserTurnStatus,
   fields: { obtainedResult: string; blockedAt: string; nextStep: string },
+  translator: Translator,
 ): string {
+  const statusText = status === '成功'
+    ? translator.t('status.turnFinal.success')
+    : status === '部分完成'
+      ? translator.t('status.turnFinal.partial')
+      : translator.t('status.turnFinal.failure');
+  const separator = translator.t('status.turnFinal.separator');
   return [
-    `当前状态：${status}`,
-    `已获得结果：${fields.obtainedResult}`,
-    `失败或受阻位置：${fields.blockedAt}`,
-    `下一步：${fields.nextStep}`,
+    `${translator.t('status.turnFinal.currentStatus')}${separator}${statusText}`,
+    `${translator.t('status.turnFinal.obtainedResult')}${separator}${fields.obtainedResult}`,
+    `${translator.t('status.turnFinal.blockedAt')}${separator}${fields.blockedAt}`,
+    `${translator.t('status.turnFinal.nextStep')}${separator}${fields.nextStep}`,
   ].join('\n');
 }
 
@@ -246,13 +256,14 @@ function appendFeedback(
   messages: readonly Message[],
   turnStartIndex: number,
   feedbackText: string,
+  translator: Translator,
 ): Message[] {
   const slice = messages.slice(turnStartIndex);
 
   // 幂等：当前回合最后一条 assistant 消息已含状态块 → 原样返回
   for (let i = slice.length - 1; i >= 0; i -= 1) {
     if (slice[i].role === 'assistant') {
-      if (hasStatusBlock(slice[i])) return [...messages];
+      if (hasStatusBlock(slice[i], translator)) return [...messages];
       break;
     }
   }
@@ -312,6 +323,7 @@ function appendFeedback(
  */
 export function finalizeTurnForUser(
   input: TurnFinalizationInput,
+  translator: Translator,
 ): TurnFinalizationResult {
   const status = classifyTurn(input);
   const slice = input.messages.slice(input.turnStartIndex);
@@ -330,9 +342,9 @@ export function finalizeTurnForUser(
     };
   }
 
-  const fields = buildFeedbackFields(status, input, slice);
-  const feedbackText = buildFeedbackText(status, fields);
-  const messages = appendFeedback(input.messages, input.turnStartIndex, feedbackText);
+  const fields = buildFeedbackFields(status, input, slice, translator);
+  const feedbackText = buildFeedbackText(status, fields, translator);
+  const messages = appendFeedback(input.messages, input.turnStartIndex, feedbackText, translator);
   return { status, feedbackText, messages, requiresFeedback: true };
 }
 
