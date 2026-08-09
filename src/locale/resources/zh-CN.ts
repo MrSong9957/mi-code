@@ -170,6 +170,18 @@ export const zhCN = {
     intro: '以下是 Agent 拟定的计划：',
     noPlanBody: '未找到计划正文',
     prompt: 'Agent 已完成计划，是否继续执行？',
+    // exit_plan_mode 工具构造的固定审批问卷（程序固定 UI，非模型内容）。
+    // question/label/description/otherLabel 随 locale 翻译；决策映射只读稳定 value。
+    tool: {
+      question: 'Claude 已拟定执行方案，是否继续？',
+      otherLabel: '提出修改意见',
+      autoClearLabel: '确认执行，清空上下文并使用自动模式',
+      autoClearDescription: '重置对话（已占用 {usage}%），Agent 自动执行所有修改',
+      autoKeepLabel: '确认执行，使用自动模式',
+      autoKeepDescription: '保留当前上下文，Agent 自动执行所有修改',
+      buildKeepLabel: '确认执行，手动审核修改',
+      buildKeepDescription: '保留当前上下文，每步修改需你确认',
+    },
   },
   permission: {
     placeholder: '权限',

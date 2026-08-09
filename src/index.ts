@@ -502,7 +502,7 @@ permissionChecker.setPlanDir(planStore.getPlansDir());
 // 注册 write_plan_file 与 exit_plan_mode 工具（依赖 planStore + askManager）
 const writePlanTool = createWritePlanTool(planStore, () => currentPlanContext);
 toolRegistry.register(writePlanTool.definition, writePlanTool.executor);
-const exitPlanTool = createExitPlanModeTool(askManager, planStore, {
+const exitPlanTool = createExitPlanModeTool(askManager, planStore, translator, {
   getUsagePercent: () => Math.round((tuiHandle?.statusStore.getState().contextPct ?? 0) * 100),
   getPlanContext: () => currentPlanContext,
   onApprove: (mode, clearContext) => applyPlanApproval(mode, clearContext, {

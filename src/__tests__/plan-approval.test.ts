@@ -10,8 +10,10 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { PermissionChecker } from '../permission/checker.js';
 import { PlanStore } from '../plan/plan-store.js';
-import { createWritePlanTool, createExitPlanModeTool, createReadPlanTool } from '../agent/tools/plan-tools.js';
+import { createWritePlanTool, createExitPlanModeTool, createReadPlanTool, PLAN_APPROVAL_OPTION_VALUES } from '../agent/tools/plan-tools.js';
 import { AskUserManager } from '../agent/ask-user-manager.js';
+import { createLanguageStore } from '../locale/language-store.js';
+import { createTranslator } from '../locale/translator.js';
 import type { AskQuestionOutcome, AskQuestionOutcomeCallback, AskQuestionRequest } from '../agent/ask-user-types.js';
 
 let tempDir: string;
@@ -279,6 +281,7 @@ describe('exit_plan_mode 工具', () => {
   const AUTO_CLEAR = '确认执行，清空上下文并使用自动模式';
   const AUTO_KEEP = '确认执行，使用自动模式';
   const BUILD_KEEP = '确认执行，手动审核修改';
+  const translator = createTranslator(createLanguageStore('zh-CN'));
 
   function makeManager() {
     const ui = {
@@ -295,7 +298,7 @@ describe('exit_plan_mode 工具', () => {
     store.write(context, 'plan body');
     const { manager, ui } = makeManager();
     const onApprove = vi.fn<(mode: 'auto' | 'build', clearContext: boolean) => void>();
-    const tool = createExitPlanModeTool(manager, store, {
+    const tool = createExitPlanModeTool(manager, store, translator, {
       getUsagePercent: () => usagePercent,
       onApprove,
       getPlanContext: () => context,
@@ -314,7 +317,7 @@ describe('exit_plan_mode 工具', () => {
   it('definition 字段正确', () => {
     const store = new PlanStore(join(tempDir, 'micode'));
     const { manager } = makeManager();
-    const { definition } = createExitPlanModeTool(manager, store, {
+    const { definition } = createExitPlanModeTool(manager, store, translator, {
       getUsagePercent: () => 0,
       onApprove: () => {},
       getPlanContext: () => ({ sessionId: 'sess-1', turnId: 'turn-1' }),
@@ -325,7 +328,7 @@ describe('exit_plan_mode 工具', () => {
   it('无 plan 时返回 Error', async () => {
     const store = new PlanStore(join(tempDir, 'micode'));
     const { manager, ui } = makeManager();
-    const { executor } = createExitPlanModeTool(manager, store, {
+    const { executor } = createExitPlanModeTool(manager, store, translator, {
       getUsagePercent: () => 0,
       onApprove: () => {},
       getPlanContext: () => ({ sessionId: 'sess-1', turnId: 'turn-1' }),
@@ -352,14 +355,17 @@ describe('exit_plan_mode 工具', () => {
       {
         label: AUTO_CLEAR,
         description: '重置对话（已占用 22%），Agent 自动执行所有修改',
+        value: PLAN_APPROVAL_OPTION_VALUES.autoClear,
       },
       {
         label: AUTO_KEEP,
         description: '保留当前上下文，Agent 自动执行所有修改',
+        value: PLAN_APPROVAL_OPTION_VALUES.autoKeep,
       },
       {
         label: BUILD_KEEP,
         description: '保留当前上下文，每步修改需你确认',
+        value: PLAN_APPROVAL_OPTION_VALUES.buildKeep,
       },
     ]);
     expect(request.otherLabel).toBe('提出修改意见');
@@ -378,16 +384,17 @@ describe('exit_plan_mode 工具', () => {
   });
 
   it.each([
-    { label: AUTO_CLEAR, mode: 'auto' as const, clearContext: true },
-    { label: AUTO_KEEP, mode: 'auto' as const, clearContext: false },
-    { label: BUILD_KEEP, mode: 'build' as const, clearContext: false },
-  ])('approves $label before resolving and maps it to $mode/$clearContext', async ({ label, mode, clearContext }) => {
+    { label: AUTO_CLEAR, value: PLAN_APPROVAL_OPTION_VALUES.autoClear, mode: 'auto' as const, clearContext: true },
+    { label: AUTO_KEEP, value: PLAN_APPROVAL_OPTION_VALUES.autoKeep, mode: 'auto' as const, clearContext: false },
+    { label: BUILD_KEEP, value: PLAN_APPROVAL_OPTION_VALUES.buildKeep, mode: 'build' as const, clearContext: false },
+  ])('approves $label before resolving and maps it to $mode/$clearContext', async ({ label, value, mode, clearContext }) => {
     const events: string[] = [];
     const { store, context, ui, onApprove, tool } = createReadyTool();
     onApprove.mockImplementation(() => { events.push('approved'); });
     const outcome: AskQuestionOutcome = {
       kind: 'submitted',
       answers: { [QUESTION]: label },
+      answerValues: { [QUESTION]: value },
     };
 
     const resultPromise = tool.executor({}).then((result) => {
@@ -434,6 +441,7 @@ describe('exit_plan_mode 工具', () => {
 });
 
 describe('current turn plan isolation', () => {
+  const translator = createTranslator(createLanguageStore('zh-CN'));
   it('does not open approval for an old plan when the current turn has not written one', async () => {
     const store = new PlanStore(join(tempDir, 'micode'));
     const oldContext = { sessionId: 'old-session', turnId: 'old-turn' };
@@ -451,7 +459,7 @@ describe('current turn plan isolation', () => {
       onApprove: () => {},
       getPlanContext: () => currentContext,
     };
-    const { executor } = createExitPlanModeTool(manager, store, deps);
+    const { executor } = createExitPlanModeTool(manager, store, translator, deps);
     const execution = executor({});
     const call = ui.open.mock.calls[0];
     if (call) {
@@ -477,7 +485,7 @@ describe('current turn plan isolation', () => {
       open: vi.fn<(id: string, request: AskQuestionRequest, done: AskQuestionOutcomeCallback) => void>(),
       close: vi.fn<(id: string) => void>(),
     };
-    const tool = createExitPlanModeTool(new AskUserManager(ui), store, {
+    const tool = createExitPlanModeTool(new AskUserManager(ui), store, translator, {
       getUsagePercent: () => 0,
       onApprove: () => {},
       getPlanContext: () => currentContext,
@@ -499,7 +507,7 @@ describe('current turn plan isolation', () => {
       open: vi.fn<(id: string, request: AskQuestionRequest, done: AskQuestionOutcomeCallback) => void>(),
       close: vi.fn<(id: string) => void>(),
     };
-    const tool = createExitPlanModeTool(new AskUserManager(ui), store, {
+    const tool = createExitPlanModeTool(new AskUserManager(ui), store, translator, {
       getUsagePercent: () => 0,
       getPlanContext: () => context,
       onApprove: () => { context = { sessionId: 'rotated', turnId: 'next-turn' }; },
@@ -509,6 +517,7 @@ describe('current turn plan isolation', () => {
     ui.open.mock.calls[0]![2](ui.open.mock.calls[0]![0], {
       kind: 'submitted',
       answers: { 'Claude 已拟定执行方案，是否继续？': '确认执行，使用自动模式' },
+      answerValues: { 'Claude 已拟定执行方案，是否继续？': PLAN_APPROVAL_OPTION_VALUES.autoKeep },
     });
     await pending;
     expect(store.recoverLatestForSession(writtenContext.sessionId)!.content).toContain('status: approved');

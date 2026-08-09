@@ -8,6 +8,7 @@ import type { ToolDefinition, ToolExecutor } from '../types.js';
 import type { PlanContext, PlanStore } from '../../plan/plan-store.js';
 import type { AskUserManager } from '../ask-user-manager.js';
 import type { AskQuestionRequest } from '../ask-user-types.js';
+import type { Translator } from '../../locale/types.js';
 import { serializeAskQuestionOutcome } from '../ask-user-serialization.js';
 import { stripPlanFrontmatter } from '../../plan/plan-presentation.js';
 
@@ -93,14 +94,22 @@ export interface ExitPlanModeDeps {
   getPlanContext: () => PlanContext | null;
 }
 
-const PLAN_APPROVAL_QUESTION = 'Claude 已拟定执行方案，是否继续？';
-const AUTO_CLEAR_LABEL = '确认执行，清空上下文并使用自动模式';
-const AUTO_KEEP_LABEL = '确认执行，使用自动模式';
-const BUILD_KEEP_LABEL = '确认执行，手动审核修改';
+/**
+ * 稳定 value ID：exit_plan_mode 三个审批选项的不可翻译标识。
+ *
+ * 决策映射只读 answerValues 中的 value，不读可翻译的 label 文本——
+ * 这样切换 locale 后审批分支仍能正确命中（i18n 安全不变量，见 permission 模式）。
+ */
+export const PLAN_APPROVAL_OPTION_VALUES = {
+  autoClear: 'planApproval.option.autoClear',
+  autoKeep: 'planApproval.option.autoKeep',
+  buildKeep: 'planApproval.option.buildKeep',
+} as const;
 
 export function createExitPlanModeTool(
   askManager: AskUserManager,
   planStore: PlanStore,
+  translator: Translator,
   deps: ExitPlanModeDeps,
 ): { definition: ToolDefinition; executor: ToolExecutor } {
   return {
@@ -124,27 +133,32 @@ export function createExitPlanModeTool(
       }
       const approvalContext = context!;
 
+      const question = translator.t('planApproval.tool.question');
+      const usagePercent = deps.getUsagePercent();
       const request: AskQuestionRequest = {
         questions: [{
-          question: PLAN_APPROVAL_QUESTION,
+          question,
           header: 'Plan',
           options: [
             {
-              label: AUTO_CLEAR_LABEL,
-              description: `重置对话（已占用 ${deps.getUsagePercent()}%），Agent 自动执行所有修改`,
+              label: translator.t('planApproval.tool.autoClearLabel'),
+              description: translator.t('planApproval.tool.autoClearDescription', { usage: usagePercent }),
+              value: PLAN_APPROVAL_OPTION_VALUES.autoClear,
             },
             {
-              label: AUTO_KEEP_LABEL,
-              description: '保留当前上下文，Agent 自动执行所有修改',
+              label: translator.t('planApproval.tool.autoKeepLabel'),
+              description: translator.t('planApproval.tool.autoKeepDescription'),
+              value: PLAN_APPROVAL_OPTION_VALUES.autoKeep,
             },
             {
-              label: BUILD_KEEP_LABEL,
-              description: '保留当前上下文，每步修改需你确认',
+              label: translator.t('planApproval.tool.buildKeepLabel'),
+              description: translator.t('planApproval.tool.buildKeepDescription'),
+              value: PLAN_APPROVAL_OPTION_VALUES.buildKeep,
             },
           ],
           multiSelect: false,
         }],
-        otherLabel: '提出修改意见',
+        otherLabel: translator.t('planApproval.tool.otherLabel'),
         presentation: {
           kind: 'plan-approval',
           content: stripPlanFrontmatter(plan.content),
@@ -154,14 +168,14 @@ export function createExitPlanModeTool(
       const outcome = await askManager.ask(request);
 
       if (outcome.kind === 'submitted') {
-        const answer = outcome.answers[PLAN_APPROVAL_QUESTION];
-        if (answer === AUTO_CLEAR_LABEL) {
+        const answerValue = outcome.answerValues?.[question];
+        if (answerValue === PLAN_APPROVAL_OPTION_VALUES.autoClear) {
           deps.onApprove('auto', true);
           planStore.setStatus(approvalContext, 'approved');
-        } else if (answer === AUTO_KEEP_LABEL) {
+        } else if (answerValue === PLAN_APPROVAL_OPTION_VALUES.autoKeep) {
           deps.onApprove('auto', false);
           planStore.setStatus(approvalContext, 'approved');
-        } else if (answer === BUILD_KEEP_LABEL) {
+        } else if (answerValue === PLAN_APPROVAL_OPTION_VALUES.buildKeep) {
           deps.onApprove('build', false);
           planStore.setStatus(approvalContext, 'approved');
         }

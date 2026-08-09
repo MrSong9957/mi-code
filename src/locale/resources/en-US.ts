@@ -219,6 +219,18 @@ export const enUS: CanonicalResources = {
     intro: 'Here is the plan proposed by the Agent:',
     noPlanBody: 'Plan body not found',
     prompt: 'The Agent has completed the plan. Continue with execution?',
+    // exit_plan_mode tool fixed approval questionnaire (program UI, not model content).
+    // question/label/description/otherLabel follow locale; decision mapping reads stable value only.
+    tool: {
+      question: 'Claude has drafted an execution plan. Continue?',
+      otherLabel: 'Suggest changes',
+      autoClearLabel: 'Confirm, clear context and use auto mode',
+      autoClearDescription: 'Reset the conversation ({usage}% used), Agent executes all changes automatically',
+      autoKeepLabel: 'Confirm, use auto mode',
+      autoKeepDescription: 'Keep current context, Agent executes all changes automatically',
+      buildKeepLabel: 'Confirm, manually review changes',
+      buildKeepDescription: 'Keep current context, each change needs your confirmation',
+    },
   },
   permission: {
     placeholder: 'Permission',
