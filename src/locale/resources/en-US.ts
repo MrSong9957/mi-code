@@ -310,6 +310,7 @@ export const enUS: CanonicalResources = {
     noContent: '  (No thinking content received)',
   },
   agent: {
-    responseLanguagePreference: 'Always respond in English.',
+    responseLanguagePreference:
+      'Use English by default for natural-language responses. If the user explicitly requests another response language, follow that request. If project rules require another response language, follow those rules.',
   },
 };

@@ -6,6 +6,24 @@ import { zhCN } from '../../locale/resources/zh-CN.js';
 import { getResponseLanguagePreference } from '../../prompts/response-language-preference.js';
 
 describe('getResponseLanguagePreference', () => {
+  it.each([
+    [
+      'zh-CN',
+      '默认使用中文回复自然语言内容；用户明确要求其他回复语言时，以用户要求为准；项目规则另有要求时，以项目规则为准。',
+    ],
+    [
+      'en-US',
+      'Use English by default for natural-language responses. If the user explicitly requests another response language, follow that request. If project rules require another response language, follow those rules.',
+    ],
+  ] as const)(
+    'provides a default response-language preference for %s',
+    (language, expectedPreference) => {
+      const translator = createTranslator(createLanguageStore(language));
+
+      expect(getResponseLanguagePreference(translator)).toBe(expectedPreference);
+    },
+  );
+
   it('uses one shared translator and store across runtime language switches', () => {
     const languageStore = createLanguageStore('zh-CN');
     const translator = createTranslator(languageStore);

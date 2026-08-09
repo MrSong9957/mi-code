@@ -82,7 +82,7 @@ describe('i18n runtime integration (cross-layer wiring)', () => {
     );
 
     // 前置:zh 框架(LanguageStore 初始 'zh-CN' 反映到 React)
-    expect(lastFrame()).toContain('请始终用中文回复。');
+    expect(lastFrame()).toContain('默认使用中文回复自然语言内容；');
 
     // 走真实命令路径:config.setLanguage('en-US') 成功后才 languageStore.setLanguage('en-US')
     let result: CommandResult = { message: '' };
@@ -91,11 +91,15 @@ describe('i18n runtime integration (cross-layer wiring)', () => {
     });
 
     // (1) React 框架已更新为英文 —— 证明 LanguageStore → React 接线
-    expect(lastFrame()).toContain('Always respond in English.');
+    expect(lastFrame()).toContain(
+      'Use English by default for natural-language responses.',
+    );
     // (2) 命令结果消息为英文 —— 证明 translator 在 setLanguage 后反映新语言的成功反馈
     expect(result.message).toBe('Language switched to en-US.');
     // (3) 下一轮 prompt 调用使用新 locale —— 证明 getResponseLanguagePreference 反映新语言
-    expect(getResponseLanguagePreference(translator)).toBe('Always respond in English.');
+    expect(getResponseLanguagePreference(translator)).toBe(
+      'Use English by default for natural-language responses. If the user explicitly requests another response language, follow that request. If project rules require another response language, follow those rules.',
+    );
     // (4) 持久化已发生 —— 证明跨层到 ConfigStore 磁盘
     expect(configStore.getLanguage()).toBe('en-US');
   });
@@ -142,7 +146,7 @@ describe('i18n runtime integration (cross-layer wiring)', () => {
         React.createElement(ResponseLanguagePreferenceLabel),
       ),
     );
-    expect(lastFrame()).toContain('请始终用中文回复。');
+    expect(lastFrame()).toContain('默认使用中文回复自然语言内容；');
 
     let result: CommandResult = { message: '' };
     act(() => {
@@ -154,10 +158,14 @@ describe('i18n runtime integration (cross-layer wiring)', () => {
     //    注意:资源里是全角冒号'：',这是本地化文案的一部分。
     expect(result.message).toBe('保存语言 en-US 失败：disk full');
     // (2) React 框架仍是中文 —— LanguageStore 未被 mutate
-    expect(lastFrame()).toContain('请始终用中文回复。');
-    expect(lastFrame()).not.toContain('Always respond in English.');
+    expect(lastFrame()).toContain('默认使用中文回复自然语言内容；');
+    expect(lastFrame()).not.toContain(
+      'Use English by default for natural-language responses.',
+    );
     // (3) getResponseLanguagePreference 仍是中文偏好 —— translator 未变
-    expect(getResponseLanguagePreference(translator)).toBe('请始终用中文回复。');
+    expect(getResponseLanguagePreference(translator)).toBe(
+      '默认使用中文回复自然语言内容；用户明确要求其他回复语言时，以用户要求为准；项目规则另有要求时，以项目规则为准。',
+    );
     // (4) languageStore.getState().language 仍是 'zh-CN'
     expect(languageStore.getState().language).toBe('zh-CN');
     // 排序证据:config.setLanguage 被调一次,但 LanguageStore 的 setLanguage 因早退从未触达
@@ -176,15 +184,21 @@ describe('i18n runtime integration (cross-layer wiring)', () => {
 
     // 切换前快照进行中的 prompt(immutable string)
     const firstPrompt = getResponseLanguagePreference(translator);
-    expect(firstPrompt).toBe('请始终用中文回复。');
+    expect(firstPrompt).toBe(
+      '默认使用中文回复自然语言内容；用户明确要求其他回复语言时，以用户要求为准；项目规则另有要求时，以项目规则为准。',
+    );
 
     languageStore.getState().setLanguage('en-US');
 
     // 进行中的 prompt 快照保持不变 —— 证明它没有被追溯重新本地化
-    expect(firstPrompt).toBe('请始终用中文回复。');
+    expect(firstPrompt).toBe(
+      '默认使用中文回复自然语言内容；用户明确要求其他回复语言时，以用户要求为准；项目规则另有要求时，以项目规则为准。',
+    );
 
     // 下一次 prompt 调用使用新 resource
     const secondPrompt = getResponseLanguagePreference(translator);
-    expect(secondPrompt).toBe('Always respond in English.');
+    expect(secondPrompt).toBe(
+      'Use English by default for natural-language responses. If the user explicitly requests another response language, follow that request. If project rules require another response language, follow those rules.',
+    );
   });
 });

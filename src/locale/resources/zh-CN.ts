@@ -261,6 +261,7 @@ export const zhCN = {
     noContent: '  （无思考内容）',
   },
   agent: {
-    responseLanguagePreference: '请始终用中文回复。',
+    responseLanguagePreference:
+      '默认使用中文回复自然语言内容；用户明确要求其他回复语言时，以用户要求为准；项目规则另有要求时，以项目规则为准。',
   },
 };
