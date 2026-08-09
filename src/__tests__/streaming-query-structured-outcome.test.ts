@@ -297,7 +297,7 @@ describe('AskQuestion terminal assistant prose', () => {
     registry.register(askTool.definition, askTool.executor);
     registry.register(idleTool.definition, idleTool.executor);
 
-    const events = await collectMessages(streamingQuery(client, registry, 'hi', {
+    await collectMessages(streamingQuery(client, registry, 'hi', {
       systemPrompt: 'sys',
       tools: [askTool.definition, idleTool.definition],
       signal: new AbortController().signal,
