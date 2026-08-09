@@ -11,6 +11,7 @@ import { streamingQuery, type StreamMessage } from '../agent/streaming-query.js'
 import { ToolRegistry } from '../agent/tool-registry.js';
 import { askOutcomeStore } from '../agent/ask-outcome-store.js';
 import { createAskUserTool } from '../agent/tools/ask-user-tool.js';
+import { createIdleTool } from '../agent/tools/idle-tool.js';
 import { StreamEventBus } from '../agent/stream-event-bus.js';
 import { serializeAskQuestionOutcome } from '../agent/ask-user-serialization.js';
 import type {
@@ -30,6 +31,8 @@ type ScriptBlock = ContentBlock;
 
 class ScriptedStreamClient implements StreamingLLMClient {
   private callCount = 0;
+  readonly toolsByCall: ToolDefinition[][] = [];
+  readonly messagesByCall: Message[][] = [];
   constructor(private scripts: ScriptBlock[][]) {}
 
   async *stream(
@@ -37,6 +40,8 @@ class ScriptedStreamClient implements StreamingLLMClient {
     _tools: ToolDefinition[],
     _options: StreamOptions,
   ): AsyncGenerator<StreamEvent | AssistantMessage> {
+    this.toolsByCall.push(_tools);
+    this.messagesByCall.push(_messages);
     const blocks = this.scripts[this.callCount++] ?? [];
     yield { type: 'message_start', messageId: `msg_${this.callCount}`, model: 'fake', inputTokens: 1 };
     for (let i = 0; i < blocks.length; i++) {
@@ -69,6 +74,12 @@ class ScriptedStreamClient implements StreamingLLMClient {
 function mockAskManager(): AskUserManager {
   return {
     ask: async () => ({ kind: 'submitted' as const, answers: { 'Which auth?': 'OAuth' } }),
+  } as unknown as AskUserManager;
+}
+
+function mockCancelledAskManager(): AskUserManager {
+  return {
+    ask: async () => ({ kind: 'cancelled' as const }),
   } as unknown as AskUserManager;
 }
 
@@ -224,6 +235,270 @@ describe('streamingQuery structuredOutcome 透传', () => {
 
     expect(toolResults).toHaveLength(1);
     expect(toolResults[0]?.structuredOutcome).toBeUndefined();
+  });
+});
+
+describe('AskQuestion terminal assistant prose', () => {
+  beforeEach(() => askOutcomeStore.clear());
+
+  it('continues after ask_user_question idle even when the configured turn limit is reached', async () => {
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'ask-1', name: 'ask_user_question', input: ASK_INPUT }],
+      [{ type: 'tool_use', id: 'idle-1', name: 'idle', input: {} }],
+      [{ type: 'text', text: 'OAuth will be used.' }],
+    ]);
+    const registry = new ToolRegistry();
+    const askTool = createAskUserTool(mockAskManager());
+    const idleTool = createIdleTool();
+    registry.register(askTool.definition, askTool.executor);
+    registry.register(idleTool.definition, idleTool.executor);
+
+    const events = await collectMessages(streamingQuery(client, registry, 'hi', {
+      systemPrompt: 'sys',
+      tools: [askTool.definition, idleTool.definition],
+      signal: new AbortController().signal,
+      maxTurns: 2,
+      executionRuntime: createToolExecutionRuntime({
+        channel: {
+          request: decision => Promise.resolve({
+            protocol_version: '1',
+            decision_id: decision.decision_id,
+            response: 'approved_once' as const,
+            decided_at: new Date().toISOString(),
+          }),
+        },
+      }),
+    }));
+
+    const askResultIndex = events.findIndex(
+      event => event.type === 'tool_result' && event.name === 'ask_user_question',
+    );
+    const finalTextIndex = events.findIndex(
+      event => event.type === 'assistant'
+        && event.content.some(block => block.type === 'text' && block.text === 'OAuth will be used.'),
+    );
+
+    expect(askResultIndex).toBeGreaterThanOrEqual(0);
+    expect(finalTextIndex).toBeGreaterThan(askResultIndex);
+    expect(client.toolsByCall[2]).toEqual([]);
+  });
+
+  it('persists an answered AskQuestion result before an idle from the same tool response', async () => {
+    const client = new ScriptedStreamClient([
+      [
+        { type: 'tool_use', id: 'ask-same-turn', name: 'ask_user_question', input: ASK_INPUT },
+        { type: 'tool_use', id: 'idle-same-turn', name: 'idle', input: {} },
+      ],
+      [{ type: 'text', text: 'OAuth will be used.' }],
+    ]);
+    const registry = new ToolRegistry();
+    const askTool = createAskUserTool(mockAskManager());
+    const idleTool = createIdleTool();
+    registry.register(askTool.definition, askTool.executor);
+    registry.register(idleTool.definition, idleTool.executor);
+
+    await collectMessages(streamingQuery(client, registry, 'hi', {
+      systemPrompt: 'sys',
+      tools: [askTool.definition, idleTool.definition],
+      signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime({
+        channel: {
+          request: decision => Promise.resolve({
+            protocol_version: '1',
+            decision_id: decision.decision_id,
+            response: 'approved_once' as const,
+            decided_at: new Date().toISOString(),
+          }),
+        },
+      }),
+    }));
+
+    const finalRequest = client.messagesByCall[1] ?? [];
+    const finalRequestBlocks = finalRequest.flatMap(message =>
+      Array.isArray(message.content) ? message.content : [],
+    );
+
+    expect(finalRequestBlocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'tool_use', id: 'ask-same-turn', name: 'ask_user_question' }),
+      expect.objectContaining({ type: 'tool_result', tool_use_id: 'ask-same-turn' }),
+      expect.objectContaining({ type: 'tool_result', tool_use_id: 'idle-same-turn' }),
+    ]));
+  });
+
+  it('does not force a final summary after the user cancels AskQuestion', async () => {
+    const client = new ScriptedStreamClient([
+      [
+        { type: 'tool_use', id: 'ask-cancelled', name: 'ask_user_question', input: ASK_INPUT },
+        { type: 'tool_use', id: 'idle-after-cancel', name: 'idle', input: {} },
+      ],
+    ]);
+    const registry = new ToolRegistry();
+    const askTool = createAskUserTool(mockCancelledAskManager());
+    const idleTool = createIdleTool();
+    registry.register(askTool.definition, askTool.executor);
+    registry.register(idleTool.definition, idleTool.executor);
+
+    await collectMessages(streamingQuery(client, registry, 'hi', {
+      systemPrompt: 'sys',
+      tools: [askTool.definition, idleTool.definition],
+      signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime({
+        channel: {
+          request: decision => Promise.resolve({
+            protocol_version: '1',
+            decision_id: decision.decision_id,
+            response: 'approved_once' as const,
+            decided_at: new Date().toISOString(),
+          }),
+        },
+      }),
+    }));
+
+    expect(client.toolsByCall).toHaveLength(1);
+  });
+
+  it.each([true, false])('does not execute or retry a tool returned during the forced final summary turn (%s streaming)', async (enableStreamingExecution) => {
+    const prohibitedTool = {
+      name: 'prohibited_tool',
+      description: 'must not execute during final summary',
+      parameters: { type: 'object' as const, properties: {} },
+    };
+    const prohibitedExecutor = vi.fn(async () => 'must not run');
+    const client = new ScriptedStreamClient([
+      [
+        { type: 'tool_use', id: 'ask-final-gate', name: 'ask_user_question', input: ASK_INPUT },
+        { type: 'tool_use', id: 'idle-final-gate', name: 'idle', input: {} },
+      ],
+      [{ type: 'tool_use', id: 'prohibited-final-gate', name: 'prohibited_tool', input: {} }],
+    ]);
+    const registry = new ToolRegistry();
+    const askTool = createAskUserTool(mockAskManager());
+    const idleTool = createIdleTool();
+    registry.register(askTool.definition, askTool.executor);
+    registry.register(idleTool.definition, idleTool.executor);
+    registry.register(prohibitedTool, prohibitedExecutor);
+
+    await collectMessages(streamingQuery(client, registry, 'hi', {
+      systemPrompt: 'sys',
+      tools: [askTool.definition, idleTool.definition, prohibitedTool],
+      signal: new AbortController().signal,
+      enableStreamingExecution,
+      executionRuntime: createToolExecutionRuntime({
+        rules: [{ tool: 'prohibited_tool', behavior: 'allow' }],
+        channel: {
+          request: decision => Promise.resolve({
+            protocol_version: '1',
+            decision_id: decision.decision_id,
+            response: 'approved_once' as const,
+            decided_at: new Date().toISOString(),
+          }),
+        },
+      }),
+    }));
+
+    expect(prohibitedExecutor).not.toHaveBeenCalled();
+    expect(client.toolsByCall[1]).toEqual([]);
+    expect(client.toolsByCall).toHaveLength(2);
+  });
+
+  it('emits final assistant prose after a successful follow-up tool', async () => {
+    const followUpTool = {
+      name: 'follow_up',
+      description: 'follow up',
+      parameters: { type: 'object' as const, properties: {} },
+    };
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'ask-2', name: 'ask_user_question', input: ASK_INPUT }],
+      [{ type: 'tool_use', id: 'follow-1', name: 'follow_up', input: {} }],
+      [{ type: 'tool_use', id: 'idle-2', name: 'idle', input: {} }],
+      [{ type: 'text', text: 'OAuth was configured.' }],
+    ]);
+    const registry = new ToolRegistry();
+    const askTool = createAskUserTool(mockAskManager());
+    const idleTool = createIdleTool();
+    registry.register(askTool.definition, askTool.executor);
+    registry.register(idleTool.definition, idleTool.executor);
+    registry.register(followUpTool, async () => 'configured');
+
+    const events = await collectMessages(streamingQuery(client, registry, 'hi', {
+      systemPrompt: 'sys',
+      tools: [askTool.definition, followUpTool, idleTool.definition],
+      signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime({
+        rules: [{ tool: 'follow_up', behavior: 'allow' }],
+        channel: {
+          request: decision => Promise.resolve({
+            protocol_version: '1',
+            decision_id: decision.decision_id,
+            response: 'approved_once' as const,
+            decided_at: new Date().toISOString(),
+          }),
+        },
+      }),
+    }));
+
+    const followUpResultIndex = events.findIndex(
+      event => event.type === 'tool_result' && event.name === 'follow_up',
+    );
+    const finalTextIndex = events.findIndex(
+      event => event.type === 'assistant'
+        && event.content.some(block => block.type === 'text' && block.text === 'OAuth was configured.'),
+    );
+
+    expect(followUpResultIndex).toBeGreaterThanOrEqual(0);
+    expect(finalTextIndex).toBeGreaterThan(followUpResultIndex);
+  });
+
+  it('emits final assistant prose after a denied follow-up tool', async () => {
+    const restrictedTool = {
+      name: 'restricted_action',
+      description: 'restricted',
+      parameters: { type: 'object' as const, properties: {} },
+    };
+    const restrictedExecutor = vi.fn(async () => 'must not execute');
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'ask-3', name: 'ask_user_question', input: ASK_INPUT }],
+      [{ type: 'tool_use', id: 'restricted-1', name: 'restricted_action', input: {} }],
+      [{ type: 'tool_use', id: 'idle-3', name: 'idle', input: {} }],
+      [{ type: 'text', text: 'The requested action was denied.' }],
+    ]);
+    const registry = new ToolRegistry();
+    const askTool = createAskUserTool(mockAskManager());
+    const idleTool = createIdleTool();
+    registry.register(askTool.definition, askTool.executor);
+    registry.register(idleTool.definition, idleTool.executor);
+    registry.register(restrictedTool, restrictedExecutor);
+
+    const events = await collectMessages(streamingQuery(client, registry, 'hi', {
+      systemPrompt: 'sys',
+      tools: [askTool.definition, restrictedTool, idleTool.definition],
+      signal: new AbortController().signal,
+      executionRuntime: createToolExecutionRuntime({
+        rules: [{ tool: 'restricted_action', behavior: 'deny' }],
+        channel: {
+          request: decision => Promise.resolve({
+            protocol_version: '1',
+            decision_id: decision.decision_id,
+            response: 'approved_once' as const,
+            decided_at: new Date().toISOString(),
+          }),
+        },
+      }),
+    }));
+
+    const deniedResult = events.find(
+      event => event.type === 'tool_result' && event.name === 'restricted_action',
+    );
+    const finalTextIndex = events.findIndex(
+      event => event.type === 'assistant'
+        && event.content.some(block => block.type === 'text' && block.text === 'The requested action was denied.'),
+    );
+
+    expect(deniedResult).toMatchObject({
+      executionResult: { status: 'failure', failure: { kind: 'permission_denied' } },
+    });
+    expect(restrictedExecutor).not.toHaveBeenCalled();
+    expect(finalTextIndex).toBeGreaterThanOrEqual(0);
   });
 });
 

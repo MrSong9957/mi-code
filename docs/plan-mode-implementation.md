@@ -23,7 +23,7 @@
 > - 测试：`src/__tests__/plan-mode-streaming.test.ts`。
 >
 > **拦截策略**：deny 决策拦下并返回 `[Blocked by permission] <reason>`；ask 决策保持
-> 旧行为（放行），因为流式路径暂无用户确认通道，强降级会回归 default 模式的写功能。
+> 旧行为（放行），因为流式路径暂无用户确认通道，强降级会回归 build 模式的写功能。
 
 ---
 

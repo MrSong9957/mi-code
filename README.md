@@ -38,7 +38,7 @@
 - **进程锁**：`ProcessLock` 基于 pid 的单例互斥锁
 
 ### 🔐 权限系统
-- 三级模式：`default`（交互确认）、`plan`（只读）、`auto`（全自动）
+- 三级模式：`build`（交互确认）、`plan`（只读）、`auto`（全自动）
 - 工具级权限控制
 - 模式即时切换
 
@@ -82,11 +82,11 @@ npm run build         # 编译
 mi-code/
 ├── src/
 │   ├── index.ts              # 入口：TUI 渲染 + 输入处理 + Agent 集成
-│   ├── renderer/             # 自研差量渲染引擎
+│   ├── render/               # 自研差量渲染引擎
 │   │   ├── renderer.ts       # 节点树渲染
-│   │   ├── screen-buffer.ts  # 双缓冲屏幕缓冲区
+│   │   ├── screen.ts         # 网格屏幕缓冲区
 │   │   ├── optimizer.ts      # ANSI 序列优化
-│   │   └── writer.ts         # 终端输出
+│   │   └── emit.ts           # 终端输出
 │   ├── agent/                # Agent 核心
 │   │   ├── loop.ts           # 核心循环
 │   │   ├── types.ts          # 类型定义
