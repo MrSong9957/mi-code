@@ -339,11 +339,18 @@ export function handleLanguage(cmd: Command, config: ConfigStore, ctx?: CommandC
     };
   }
 
-  const language = cmd.args[0];
-  if (!isLanguage(language)) {
+  const input = cmd.args[0];
+  const language = isLanguage(input)
+    ? input
+    : input === '中文'
+      ? 'zh-CN'
+      : input === '英文'
+        ? 'en-US'
+        : undefined;
+  if (!language) {
     return {
       message: translator.t('commands.language.unsupported', {
-        language: language ?? '',
+        language: input ?? '',
         supported,
       }),
     };

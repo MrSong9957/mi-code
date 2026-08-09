@@ -107,6 +107,23 @@ describe('i18n runtime integration (cross-layer wiring)', () => {
   // 排序不变性:handleLanguage 中 config.setLanguage 在 languageStore.setLanguage 之前,
   // 因此抛错时 translator 用旧语言生成 persistError,且 languageStore 完全不被 mutate。
   // ──────────────────────────────────────────────────────────────────────────
+  it.each([
+    ['中文', 'zh-CN'],
+    ['英文', 'en-US'],
+    ['zh-CN', 'zh-CN'],
+    ['en-US', 'en-US'],
+  ] as const)('/language %s persists and applies canonical %s', (input, language) => {
+    const configStore = new ConfigStore(tempDir);
+    const languageStore = createLanguageStore('zh-CN');
+    const translator = createTranslator(languageStore);
+    const ctx: CommandContext = { languageStore, translator };
+
+    executeCommand(languageCommand([input]), configStore, ctx);
+
+    expect(configStore.getLanguage()).toBe(language);
+    expect(languageStore.getState().language).toBe(language);
+  });
+
   it('/language persistence failure leaves React, runtime language, and next prompt unchanged (zh)', () => {
     const languageStore = createLanguageStore('zh-CN');
     const translator = createTranslator(languageStore);
