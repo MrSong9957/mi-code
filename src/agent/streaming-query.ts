@@ -676,8 +676,10 @@ export async function* streamingQuery(
               // 规格 §10.5: "Provider 返回 tool call: 拒绝执行并将 task 归类为协议失败"。
               // 这里不立即 throw —— 而是把 rejection 作为 tool_result 反馈, 给 provider
               // 一次自我修正的机会 (符合 LLM 对话的 turn-taking 语义)。
-              if (noToolActive) {
-                const rejectionContent = `[Protocol Rejection] Tool call '${(block as ToolUseBlock).name}' is not allowed: this request operates under a No-Tool Contract (${noToolContract?.no_tool_request_id ?? 'active'}). Provide a text-only response.`;
+              if (noToolActive || finalTextTurn) {
+                const rejectionContent = noToolActive
+                  ? `[Protocol Rejection] Tool call '${(block as ToolUseBlock).name}' is not allowed: this request operates under a No-Tool Contract (${noToolContract?.no_tool_request_id ?? 'active'}). Provide a text-only response.`
+                  : `[Protocol Rejection] Tool call '${(block as ToolUseBlock).name}' is not allowed during the final summary turn. Provide a text-only response.`;
                 toolResults.push({
                   type: 'tool_result',
                   tool_use_id: block.id,
@@ -805,10 +807,6 @@ export async function* streamingQuery(
             content: output,
           };
           toolResults.push(result);
-          if (tool.block.name === 'ask_user_question') {
-            hasAskUserQuestionResult = true;
-          }
-
           // idle 工具被调用 → 标记跳出（仍 emitToolResult 让 UI 显示 ⎿ 结果）
           if (tool.block.name === 'idle') {
             idleRequested = true;
@@ -820,6 +818,9 @@ export async function* streamingQuery(
           // 若返回 undefined 说明 set/take 时序异常或 toolUseId 不匹配(开发错误,非运行错误)。
           // DEBUG 门控:正常不输出(避免污染终端),调试时 DEBUG=1 可见。
           const structuredOutcome = askOutcomeStore.take(tool.id);
+          if (tool.block.name === 'ask_user_question') {
+            hasAskUserQuestionResult = structuredOutcome?.outcome.kind !== 'cancelled';
+          }
           if (!structuredOutcome && tool.block.name === 'ask_user_question' && process.env.DEBUG) {
             console.error('[streaming-query] ask_user_question outcome missing in store', { toolUseId: tool.id });
           }
@@ -860,15 +861,14 @@ export async function* streamingQuery(
           tool_use_id: block.id,
           content: output,
         });
-        if (block.name === 'ask_user_question') {
-          hasAskUserQuestionResult = true;
-        }
-
         if (block.name === 'idle') {
           idleRequested = true;
         }
 
         const structuredOutcome = askOutcomeStore.take(block.id);
+        if (block.name === 'ask_user_question') {
+          hasAskUserQuestionResult = structuredOutcome?.outcome.kind !== 'cancelled';
+        }
         if (!structuredOutcome && block.name === 'ask_user_question' && process.env.DEBUG) {
           console.error('[streaming-query] ask_user_question outcome missing in store', { toolUseId: block.id });
         }
@@ -898,12 +898,12 @@ export async function* streamingQuery(
     if (idleRequested) {
       if (hasAskUserQuestionResult && !forceFinalTextTurnAfterAsk) {
         forceFinalTextTurnAfterAsk = true;
-        continue;
+      } else {
+        // Wave B Task 11: idle 是用户主动叫停的正常收尾路径。跑 finalization 体检。
+        runFinalizationCheckpoint();
+        eventBus?.emitLoopEnd({ reason: 'idle' });
+        return;
       }
-      // Wave B Task 11: idle 是用户主动叫停的正常收尾路径。跑 finalization 体检。
-      runFinalizationCheckpoint();
-      eventBus?.emitLoopEnd({ reason: 'idle' });
-      return;
     }
 
     // ═══════ 阶段 4：更新消息历史，继续循环 ═══════
@@ -923,6 +923,14 @@ export async function* streamingQuery(
     // 是一个"已完成的消息边界"(可安全恢复的最小单元)。fail-fast:写失败 → 抛错。
     // 注意:放在 compaction 之前 —— 恢复的是"真实发生过的工作",而非 compact 后的摘要。
     if (onMessageCheckpoint) await onMessageCheckpoint(messages);
+
+    // A forced final summary gets exactly one provider continuation. A rejected
+    // tool use is persisted above, but must not bypass maxTurns again.
+    if (finalTextTurn) {
+      runFinalizationCheckpoint();
+      eventBus?.emitLoopEnd({ reason: 'final_text_tool_rejected' });
+      return;
+    }
 
     // 上下文压缩：防止消息历史无限增长
     //
