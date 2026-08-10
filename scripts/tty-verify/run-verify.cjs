@@ -33,7 +33,8 @@ function runScenario(scenario, cols = COLS) {
       cols,
       rows: ROWS,
       cwd: process.cwd(),
-      env: { ...process.env, FORCE_COLOR: '1', CI: '' },
+      // CI='false'(非空串):is-in-ci@2.x 把空串 CI='' 误判为 CI → Ink non-interactive → 活动区延迟到 unmount
+      env: { ...process.env, FORCE_COLOR: '1', CI: 'false', CONTINUOUS_INTEGRATION: 'false' },
     });
     let raw = '';
     p.onData(d => { raw += d; });

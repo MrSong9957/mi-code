@@ -16,7 +16,8 @@ function runScenario(scenario, cols = COLS) {
     const script = path.join(__dirname, 'dynamic-footer.tsx');
     const p = pty.spawn(process.execPath, ['--import', 'tsx', script, scenario, String(cols)], {
       name: 'xterm-256color', cols, rows: ROWS, cwd: process.cwd(),
-      env: { ...process.env, FORCE_COLOR: '1', CI: '' },
+      // CI='false'(非空串):is-in-ci@2.x 把空串 CI='' 误判为 CI → Ink non-interactive
+      env: { ...process.env, FORCE_COLOR: '1', CI: 'false', CONTINUOUS_INTEGRATION: 'false' },
     });
     let raw = '';
     p.onData(d => { raw += d; });
