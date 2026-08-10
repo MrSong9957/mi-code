@@ -202,11 +202,12 @@ describe('tool lifecycle visibility', () => {
   });
 });
 
-function setup(): { pipeline: BlockPipeline; store: ReturnType<typeof createMessagesStore> } {
+function setup(): { pipeline: BlockPipeline; store: ReturnType<typeof createMessagesStore>; translator: ReturnType<typeof createTranslator> } {
   const store = createMessagesStore();
   const adapter = new PipelineToStoreAdapter(store);
-  const pipeline = new BlockPipeline(adapter, createTranslator(createLanguageStore('zh-CN')));
-  return { pipeline, store };
+  const translator = createTranslator(createLanguageStore('zh-CN'));
+  const pipeline = new BlockPipeline(adapter, translator);
+  return { pipeline, store, translator };
 }
 
 describe('BlockPipeline → store 端到端', () => {
@@ -228,7 +229,7 @@ describe('BlockPipeline → store 端到端', () => {
   // 透明聚合到紧随其后的只读工具组。本测试守护:thinking_end 后无 ● Thinking… 固化项,
   // summary 进入 deferred(随后被 boundary flush 出现)。
   it('thinking_start + thinking_end → 无 ● Thinking… 固化,summary 进入 deferred(AUTO-0025-transient)', () => {
-    const { pipeline, store } = setup();
+    const { pipeline, store, translator } = setup();
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_delta', content: '思考内容' });
     pipeline.emit({ kind: 'thinking_end', durationSec: 5, filesRead: 2 });
@@ -237,7 +238,7 @@ describe('BlockPipeline → store 端到端', () => {
     // 契约 1:items 中无 pending-thinking 活动(thinking_end 已擦除临时活动)
     expect(state.items.some(i => i.kind === 'pending-thinking')).toBe(false);
     // 契约 2:summary 被 defer(等待 flush)
-    expect(state.deferredThinking.some(s => s.text.includes('Thought for 5s'))).toBe(true);
+    expect(state.deferredThinking.some(s => s.text.includes(translator.t('thinking.summary', { seconds: 5 })))).toBe(true);
   });
 
   // 防回归守护:旧 bug 中 thinking_summary 经 mapRole→'system'→appendLine,
@@ -245,7 +246,7 @@ describe('BlockPipeline → store 端到端', () => {
   // 语义模型中每个 block 都是独立 items 元素,天然杜绝续接。本测试验证:
   // flush 后 summary 作为独立 system(thinking-summary)块存在,subkind 标记区分。
   it('thinking_end → summary flush 后是独立 system(thinking-summary) 块(防 appendLine 回退)', () => {
-    const { pipeline, store } = setup();
+    const { pipeline, store, translator } = setup();
     // 真实时序:thinking_start → thinking_end(summary defer)→ 后续 boundary 触发 flush。
     pipeline.emit({ kind: 'thinking_start' });
     pipeline.emit({ kind: 'thinking_delta', content: '内部推理' });
@@ -257,7 +258,7 @@ describe('BlockPipeline → store 端到端', () => {
     const items = store.getState().model.items;
     // 契约:summary 作为独立 system(thinking-summary)块存在
     const summaryItem = items.find(i =>
-      i.kind === 'system' && i.subkind === 'thinking-summary' && i.text.includes('Thought for 1s'),
+      i.kind === 'system' && i.subkind === 'thinking-summary' && i.text.includes(translator.t('thinking.summary', { seconds: 1 })),
     );
     expect(summaryItem).toBeDefined();
     // 契约:无任何块混入空字符串 system notification(证明没被续接进空行块)

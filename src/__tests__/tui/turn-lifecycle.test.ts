@@ -22,11 +22,13 @@ import {
   type TurnLifecycle,
 } from '../../tui/turn-lifecycle.js';
 
-function createTestPipeline(messagesStore: ReturnType<typeof createMessagesStore>): BlockPipeline {
-  return new BlockPipeline(
-    new PipelineToStoreAdapter(messagesStore),
-    createTranslator(createLanguageStore('zh-CN')),
-  );
+function createTestPipeline(messagesStore: ReturnType<typeof createMessagesStore>): {
+  pipeline: BlockPipeline;
+  translator: ReturnType<typeof createTranslator>;
+} {
+  const translator = createTranslator(createLanguageStore('zh-CN'));
+  const pipeline = new BlockPipeline(new PipelineToStoreAdapter(messagesStore), translator);
+  return { pipeline, translator };
 }
 
 function makeLifecycle(
@@ -101,7 +103,7 @@ describe('turn lifecycle 集成', () => {
     try {
       const messagesStore = createMessagesStore();
       const spinnerStore = createSpinnerStore();
-      const pipeline = createTestPipeline(messagesStore);
+      const { pipeline, translator } = createTestPipeline(messagesStore);
       const { lifecycle, events } = makeLifecycle(pipeline, spinnerStore, messagesStore);
 
       spinnerStore.getState().start('thinking');
@@ -129,7 +131,7 @@ describe('turn lifecycle 集成', () => {
       expect(completion).toHaveLength(1);
       // Thought 摘要(大写)在 completion 之前
       const allLines = messages.flatMap(m => m.lines);
-      expect(allLines.findIndex(l => l.content.includes('Thought for 9s')))
+      expect(allLines.findIndex(l => l.content.includes(translator.t('thinking.summary', { seconds: 9 }))))
         .toBeLessThan(allLines.findIndex(l => l.content === '✻ Cooked for 9s'));
     } finally {
       random.mockRestore();
@@ -150,7 +152,7 @@ describe('turn lifecycle 集成', () => {
     vi.setSystemTime(0);
     try {
       const messagesStore = createMessagesStore();
-      const pipeline = createTestPipeline(messagesStore);
+      const { pipeline, translator } = createTestPipeline(messagesStore);
       const spinnerStore = createSpinnerStore();
       const { lifecycle } = makeLifecycle(pipeline, spinnerStore, messagesStore);
 
@@ -165,7 +167,7 @@ describe('turn lifecycle 集成', () => {
       // finishTurnThinking 只 emit thinking_end(不 stopSpinner),故检查 deferred。
       const deferred = messagesStore.getState().model.deferredThinking;
       // floor(1500/1000)=1,摘要显示 Thought for 1s
-      expect(deferred.some(s => s.text.includes('Thought for 1s'))).toBe(true);
+      expect(deferred.some(s => s.text.includes(translator.t('thinking.summary', { seconds: 1 })))).toBe(true);
     } finally {
       vi.useRealTimers();
     }

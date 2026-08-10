@@ -15,22 +15,23 @@ import { renderFinalizedLine } from './text-layout.js';
 function setupFullConversation() {
   const store = createMessagesStore();
   const adapter = new PipelineToStoreAdapter(store);
-  const pipeline = new BlockPipeline(adapter, createTranslator(createLanguageStore('zh-CN')));
+  const translator = createTranslator(createLanguageStore('zh-CN'));
+  const pipeline = new BlockPipeline(adapter, translator);
   pipeline.emit({ kind: 'user_input', text: '你是谁？' });
   pipeline.emit({ kind: 'thinking_start' });
   pipeline.emit({ kind: 'thinking_delta', content: '思考' });
   pipeline.emit({ kind: 'thinking_end', durationSec: 1, filesRead: 0 });
   pipeline.emit({ kind: 'assistant_text', text: '你好！', isFinal: true });
-  return store.getState().model;
+  return { model: store.getState().model, translator };
 }
 
 describe('thinking_end → final-only assistant semantic lifecycle', () => {
   it('flushes the thinking summary before creating the finalized assistant', () => {
-    const model = setupFullConversation();
+    const { model, translator } = setupFullConversation();
     const thoughtIdx = model.items.findIndex(
       item => item.kind === 'system'
         && item.subkind === 'thinking-summary'
-        && item.text === 'Thought for 1s',
+        && item.text === translator.t('thinking.summary', { seconds: 1 }),
     );
     const assistantIdx = model.items.findIndex(
       item => item.kind === 'assistant' && item.text === '你好！',
