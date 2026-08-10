@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createLanguageStore } from '../../locale/language-store.js';
 import { createTranslator } from '../../locale/translator.js';
 import type { TranslationKey } from '../../locale/types.js';
+import { zhCN } from '../../locale/resources/zh-CN.js';
+import { enUS } from '../../locale/resources/en-US.js';
 
 function createMissingKey(): TranslationKey {
   return 'agent.missingTranslation' as unknown as TranslationKey;
@@ -12,11 +14,11 @@ describe('createTranslator', () => {
     const store = createLanguageStore('zh-CN');
     const translator = createTranslator(store);
 
-    expect(translator.t('agent.responseLanguagePreference')).toBe('请始终用中文回复。');
+    expect(translator.t('agent.responseLanguagePreference')).toBe(zhCN.agent.responseLanguagePreference);
 
     store.getState().setLanguage('en-US');
 
-    expect(translator.t('agent.responseLanguagePreference')).toBe('Always respond in English.');
+    expect(translator.t('agent.responseLanguagePreference')).toBe(enUS.agent.responseLanguagePreference);
   });
 
   it('replaces known template parameters', () => {
