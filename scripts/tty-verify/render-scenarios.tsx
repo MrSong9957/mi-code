@@ -24,6 +24,8 @@ import { createSelectStore } from '../../src/tui/state/select-store.js';
 import { createOverlayStore } from '../../src/tui/state/overlay-store.js';
 import { createAskQuestionStore } from '../../src/tui/state/ask-question-store.js';
 import { createSelectionStore } from '../../src/tui/state/selection-store.js';
+import { LocaleProvider } from '../../src/locale/context.js';
+import { createLanguageStore } from '../../src/locale/language-store.js';
 
 function createStores(): InlineAppV2Stores {
   return {
@@ -43,29 +45,48 @@ function buildScenario(scenario: string, stores: InlineAppV2Stores) {
   const s = stores.messagesStore.getState();
   if (scenario === 'ask-answered') {
     // Issue 1:ask_user_question 父标题 + 子项(经真实 block-pipeline 装配)
-    // 直接用 resolvePendingTool 模拟 block-pipeline 产出的 resultLines
-    s.appendPendingTool('q1', [{ content: '● ask_user_question', style: {}, indent: 0 }]);
-    s.resolvePendingTool('q1', [
-      { content: '● Answered 2 questions', style: {}, indent: 0 },
-      { content: '  ⎿ 日志库 → winston', style: { dim: true }, indent: 2, raw: true },
-      { content: '  ⎿ 日志级别 → debug', style: { dim: true }, indent: 2, raw: true },
-    ], 'agent-completion');
+    s.finishAsk('q1', {
+      id: 'q1',
+      kind: 'ask',
+      summary: 'Answered 2 questions',
+      items: ['日志库 → winston', '日志级别 → debug'],
+    });
   } else if (scenario === 'assistant-cont') {
     // Issue 2:assistant 多段文本(含 \n),固化后走 renderFinalizedLine
-    s.appendMessage('assistant', [
-      { content: '● 第一段内容,选择了 Winston\n第二段内容,开始探索项目', style: {}, indent: 0 },
-    ]);
+    s.startAssistant('第一段内容,选择了 Winston\n第二段内容,开始探索项目');
+    s.finishAssistant();
   } else if (scenario === 'agent-spacing') {
     // Issue 3:连续 agent-completion 单行消息
-    s.appendPendingTool('a1', [{ content: '● spawn_agent', style: {}, indent: 0 }]);
-    s.resolvePendingTool('a1', [{ content: '● Agent "探索" finished · 3s', style: {}, indent: 0 }], 'agent-completion');
-    s.appendPendingTool('a2', [{ content: '● spawn_agent', style: {}, indent: 0 }]);
-    s.resolvePendingTool('a2', [{ content: '● Agent "规划" finished · 5s', style: {}, indent: 0 }], 'agent-completion');
+    s.startTool({ toolUseId: 'a1', toolName: 'spawn_agent', input: { description: '探索' } });
+    s.resolveTool('a1', {
+      toolUseId: 'a1',
+      toolName: 'spawn_agent',
+      summary: 'Agent "探索" finished · 3s',
+      details: [],
+      status: 'success',
+      layout: 'compact-completion',
+    });
+    s.startTool({ toolUseId: 'a2', toolName: 'spawn_agent', input: { description: '规划' } });
+    s.resolveTool('a2', {
+      toolUseId: 'a2',
+      toolName: 'spawn_agent',
+      summary: 'Agent "规划" finished · 5s',
+      details: [],
+      status: 'success',
+      layout: 'compact-completion',
+    });
   } else if (scenario === 'truncate') {
     // Issue 3:超长 agent 标签截断
     const longLabel = '这是一个非常长的子代理任务描述用于测试截断'.repeat(2);
-    s.appendPendingTool('a1', [{ content: '● spawn_agent', style: {}, indent: 0 }]);
-    s.resolvePendingTool('a1', [{ content: `● Agent "${longLabel}" finished · 5s`, style: {}, indent: 0 }], 'agent-completion');
+    s.startTool({ toolUseId: 'a1', toolName: 'spawn_agent', input: { description: longLabel } });
+    s.resolveTool('a1', {
+      toolUseId: 'a1',
+      toolName: 'spawn_agent',
+      summary: `Agent "${longLabel}" finished · 5s`,
+      details: [],
+      status: 'success',
+      layout: 'compact-completion',
+    });
   }
 }
 
@@ -75,17 +96,20 @@ const rows = 24;
 
 const stores = createStores();
 buildScenario(scenario, stores);
+const languageStore = createLanguageStore('en-US');
 
 // 真实 Ink render:输出到 stdout(在 ConPTY 里就是 PTY 的从机端)
 const { unmount } = render(
-  <InlineAppV2
-    messages={stores.messagesStore.getState().messages}
-    status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
-    logo={{ version: '0', dir: '/tmp' }}
-    stores={stores}
-    cols={cols}
-    rows={rows}
-  />,
+  <LocaleProvider store={languageStore}>
+    <InlineAppV2
+      messages={stores.messagesStore.getState().messages}
+      status={{ mode: 'build', model: 'sonnet', dir: '/tmp', branch: 'main', contextPct: 0 }}
+      logo={{ version: '0', dir: '/tmp' }}
+      stores={stores}
+      cols={cols}
+      rows={rows}
+    />
+  </LocaleProvider>,
   { stdout: process.stdout } as any,
 );
 
