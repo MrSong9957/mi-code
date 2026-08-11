@@ -574,3 +574,129 @@ describe('streamingQuery 子代理 checkpoint seam', () => {
     expect(client.calls).toBe(1);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// Stage 3 用户取消：父 provider 正常 EOF 后，等待/执行工具期间用户 abort。
+//
+// 物理本质：父流已经念完台词(正常 EOF, message_stop)，进入"等工具出结果"
+// 的阶段(Stage 3)。此时用户 ESC。工具(或子代理)因共享 signal 迅速 resolve，
+// 但 Stage 3 不应把这个 abort 后的结果当作成功 tool_result 发布——否则
+// index.ts 的 onToolResult 会删掉 activeToolId、block-pipeline 标记 resolved，
+// 后续 user_abort 无法再生成 cancelled ToolBlock。
+//
+// 区别于已有的"streamingQuery 用户取消"用例(那些 tools:[] / enableStreamingExecution:false
+// 只覆盖 Stage 1 中途 abort，从不进入 Stage 3)和 verify-esc-subagent.cjs(保持
+// 父连接打开，ESC 在 Stage 1)。本组覆盖 reviewer Critical：父正常 EOF + Stage 3。
+//
+// 覆盖 Stage 3 两个分支：
+//   - streaming-executor 分支 (enableStreamingExecution: true)
+//   - 传统串行分支 (enableStreamingExecution: false)
+// ════════════════════════════════════════════════════════════════════
+describe('streamingQuery Stage 3 用户取消（父 EOF 后等待工具期间 abort）', () => {
+  /** 构造一个"进入后等 signal abort 才 resolve 成功结果"的工具 executor。
+   *  模拟 spawn_agent 子代理在共享 signal abort 后以 user_abort 返回摘要文本——
+   *  返回的是正常 string(executeToolCall 不抛错)，Stage 3 若不 guard 会当成功结果发布。 */
+  function makeAbortAwaitingTool() {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>(resolve => { resolveStarted = resolve; });
+    const executor = async (_input: Record<string, unknown>, ctx?: { signal?: AbortSignal }): Promise<string> => {
+      resolveStarted();
+      await new Promise<void>(resolve => {
+        if (ctx?.signal?.aborted) resolve();
+        else ctx?.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+      return 'result produced after abort';
+    };
+    return { started, executor };
+  }
+
+  it('streaming-executor 分支：父正常 EOF 后 Stage 3 等待中 abort，不发布 abort 后的工具成功结果', async () => {
+    const tool = makeAbortAwaitingTool();
+    const registry = new ToolRegistry();
+    registry.register(
+      { name: 'slow_tool', description: 'resolves after abort', parameters: { type: 'object' } },
+      tool.executor,
+    );
+
+    // 父：单轮 tool_use + 正常 EOF(message_stop)——关键区别于 ConPTY 脚本保持连接打开
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'tool-1', name: 'slow_tool', input: {} }],
+    ]);
+
+    const eventBus = new StreamEventBus();
+    const emittedToolResults: string[] = [];
+    const loopEnds: string[] = [];
+    eventBus.onToolResult(event => emittedToolResults.push(event.toolUseId));
+    eventBus.onLoopEnd(event => loopEnds.push(event.reason));
+
+    const controller = new AbortController();
+    const running = drain(streamingQuery(client, registry, 'do work', {
+      systemPrompt: 'sys',
+      tools: registry.getDefinitions(),
+      signal: controller.signal,
+      executionRuntime: createToolExecutionRuntime({ rules: [{ tool: 'slow_tool', behavior: 'allow' }] }),
+      maxTurns: 3,
+      enableStreamingExecution: true,
+      eventBus,
+    }));
+
+    // 工具 executor 已在后台 in-flight（addTool → processQueue 已跑）。
+    await tool.started;
+    // macrotask 边界冲刷所有微任务：确保 streamingQuery 同步路径跑完
+    // (for-await 退出 → :723 signal check → Stage 3 → getRemainingResults 阻塞)。
+    // executor 在后台 microtask 中启动，需冲刷完才能确定 Stage 3 已在等待，
+    // 否则 abort 可能被 :723 拦截而不进入 Stage 3（测试就不是真 RED）。
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // 此时父已 EOF、Stage 3 在 getRemainingResults 等待 → 模拟用户 ESC
+    controller.abort();
+    const outputs = (await running) as Array<{ type: string; toolUseId?: string }>;
+
+    // 核心：abort 后的工具成功结果不得通过 eventBus 发布
+    expect(emittedToolResults, 'abort 后不应 emitToolResult').not.toContain('tool-1');
+    // 也不得作为成功 tool_result 被 yield
+    expect(outputs.filter(m => m.type === 'tool_result'), 'abort 后不应 yield tool_result').toHaveLength(0);
+    // 正常以 user_abort 收尾
+    expect(loopEnds).toEqual(['user_abort']);
+  });
+
+  it('传统串行分支：父正常 EOF 后 Stage 3 执行工具期间 abort，不发布 abort 后的工具成功结果', async () => {
+    const tool = makeAbortAwaitingTool();
+    const registry = new ToolRegistry();
+    registry.register(
+      { name: 'slow_tool', description: 'resolves after abort', parameters: { type: 'object' } },
+      tool.executor,
+    );
+
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'tool-1', name: 'slow_tool', input: {} }],
+    ]);
+
+    const eventBus = new StreamEventBus();
+    const emittedToolResults: string[] = [];
+    const loopEnds: string[] = [];
+    eventBus.onToolResult(event => emittedToolResults.push(event.toolUseId));
+    eventBus.onLoopEnd(event => loopEnds.push(event.reason));
+
+    const controller = new AbortController();
+    const running = drain(streamingQuery(client, registry, 'do work', {
+      systemPrompt: 'sys',
+      tools: registry.getDefinitions(),
+      signal: controller.signal,
+      executionRuntime: createToolExecutionRuntime({ rules: [{ tool: 'slow_tool', behavior: 'allow' }] }),
+      maxTurns: 3,
+      enableStreamingExecution: false,
+      eventBus,
+    }));
+
+    // 传统分支：executor 只在 Stage 3 executeToolCall(:861) 时才启动，
+    // 故 started resolve 必定意味着已在 Stage 3、过了 :723。
+    await tool.started;
+    controller.abort();
+    const outputs = (await running) as Array<{ type: string; toolUseId?: string }>;
+
+    expect(emittedToolResults, 'abort 后不应 emitToolResult').not.toContain('tool-1');
+    expect(outputs.filter(m => m.type === 'tool_result'), 'abort 后不应 yield tool_result').toHaveLength(0);
+    expect(loopEnds).toEqual(['user_abort']);
+  });
+});

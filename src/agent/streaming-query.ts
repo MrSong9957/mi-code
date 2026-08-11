@@ -805,6 +805,14 @@ export async function* streamingQuery(
     if (streamingExecutor) {
       // 流式执行器已经在后台执行了，这里等待结果
       for await (const batch of streamingExecutor.getRemainingResults()) {
+        // Stage 3 abort guard：父 provider 正常 EOF 后等待工具期间用户 ESC。
+        // 共享 signal 使工具(或子代理)resolve，但不得把这个 abort 后的结果当
+        // 成功 tool_result 发布——否则 onToolResult 删掉 activeToolId、
+        // block-pipeline 标记 resolved，后续 user_abort 无法生成 cancelled ToolBlock。
+        if (signal.aborted) {
+          eventBus?.emitLoopEnd({ reason: 'user_abort' });
+          return;
+        }
         for (const tool of batch) {
           const output = tool.results?.[0]?.type === 'text'
             ? (tool.results[0] as { type: 'text'; text: string }).text
@@ -864,6 +872,12 @@ export async function* streamingQuery(
           executionRuntime,
           { signal, origin, messages },
         );
+        // Stage 3 abort guard（同 streaming 分支）：工具执行期间用户 ESC，
+        // executeToolCall 已返回结果，但不得发布这个 abort 后的结果。
+        if (signal.aborted) {
+          eventBus?.emitLoopEnd({ reason: 'user_abort' });
+          return;
+        }
         const output = executionResult.output;
         toolResults.push({
           type: 'tool_result',
