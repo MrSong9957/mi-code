@@ -13,7 +13,7 @@
 - 只实现已批准的 UI 生命周期；不修改 provider、subagent、tool executor 或 `selectCommittedTranscript`。
 - `cancelled` 是用户取消，不得显示为 `error`，且不生成真实 `tool_result`。
 - 只对本轮 `activeToolIds` 内、仍 buffered 且未解析的调用生效；已解析调用不得覆盖。
-- 晚到 result 的 tombstone 仅影响 UI pipeline：命中后忽略并删除；非取消的未知 result 保持 orphan fallback。
+- 晚到 result 的 tombstone 仅影响 UI pipeline：命中后忽略并删除；普通 turn cleanup 后保留；仅真正 pipeline/session reset 清除；非取消的未知 result 保持 orphan fallback。
 - 所有行为先写最小失败测试，再写最小实现使其通过；每个任务独立提交。
 
 ---
@@ -24,7 +24,7 @@
 - `src/tui/state/transcript-reducer.ts`：维护 `ToolPresentation` 排序，新增状态必须有确定顺序。
 - `src/tui/inline-v2/ToolBlockLine.tsx`：将已固化 ToolBlock 的取消状态显示为非错误终态。
 - `src/locale/resources/en-US.ts`、`src/locale/resources/zh-CN.ts`：提供取消工具摘要的本地化文案；`CanonicalResources` 由 zh-CN 推导，两个资源结构必须一致。
-- `src/ui/block-pipeline.ts`：拥有 call/result 配对缓冲与 tombstone；这是取消显示状态的唯一写入点。
+- `src/ui/block-pipeline.ts`：拥有 call/result 配对缓冲与 tombstone；`clearTurnState()` 只清普通 turn 瞬态，`clear()` 才清 pipeline/session-reset 状态。
 - `src/index.ts`：拥有父轮次 `aborted` 与 `activeToolIds`，负责在 final feedback 前触发 pipeline 终结。
 - `src/__tests__/ui/block-pipeline.test.ts`：断言 pipeline 的 call/result 路由、tombstone 和 reset 行为。
 - `src/__tests__/tui/pipeline-integration.test.ts`：使用真实 pipeline、adapter、messages store 验证 committed transcript 的端到端连续性。
@@ -46,7 +46,7 @@ export type ToolPresentationStatus =
 public cancelPendingTools(toolUseIds: ReadonlySet<string>): void;
 ```
 
-`cancelPendingTools` 只处理在 `toolBuffer` 中且 `resolved !== true` 的 ID。每个调用仅当 `renderer.finishToolCall(id, cancelledPresentation)` 返回 `true` 时，才从 buffer 删除并加入 `cancelledToolUseIds` tombstone 集合。
+`cancelPendingTools` 只处理在 `toolBuffer` 中且 `resolved !== true` 的 ID。每个调用仅当 `renderer.finishToolCall(id, cancelledPresentation)` 返回 `true` 时，才从 buffer 删除并加入 `cancelledToolUseIds` tombstone 集合。tombstone 跨 `clearTurnState()` 保留；仅 `clear()` 清除它。
 
 ### Task 1: Add the cancelled presentation vocabulary and rendering
 
@@ -114,7 +114,7 @@ git commit -m "feat: add cancelled tool presentation"
 
 **Interfaces:**
 - Consumes: Task 1 `ToolPresentationStatus='cancelled'`, existing `PipelineRenderer.finishToolCall` boolean result, `toolBuffer` call metadata, and translator.
-- Produces: `cancelPendingTools(toolUseIds: ReadonlySet<string>): void`; private `cancelledToolUseIds: Set<string>` cleared by both `clear()` and `clearTurnState()`.
+- Produces: `cancelPendingTools(toolUseIds: ReadonlySet<string>): void`; private `cancelledToolUseIds: Set<string>` consumed by a matching late result and cleared only by `clear()`.
 
 - [ ] **Step 1: Write failing routing tests for cancellation, idempotence, late results, and reset**
 
@@ -134,7 +134,7 @@ expect(recorder.of('startToolCall')).toHaveLength(1);
 expect(recorder.of('finishToolCall')).toHaveLength(1);
 ```
 
-Also assert: an ID absent from `toolBuffer`, an already normally resolved ID, and a renderer `false` result create neither cancelled presentation nor tombstone; an unknown non-cancelled result still adds the existing orphan `startToolCall` plus `finishToolCall`; after `clearTurnState()` and separately after `clear()`, the same ID again follows that orphan path.
+Also assert: an ID absent from `toolBuffer`, an already normally resolved ID, and a renderer `false` result create neither cancelled presentation nor tombstone; an unknown non-cancelled result still adds the existing orphan `startToolCall` plus `finishToolCall`. After `clearTurnState()`, emit a late result for the cancelled ID and assert it is still suppressed with no orphan calls. In a fresh setup, call `clear()` and then emit that same ID; assert the tombstone has been reset and the existing orphan path runs.
 
 In `pipeline-integration.test.ts`, add the real reducer/store contract before implementation:
 
@@ -186,13 +186,13 @@ At the start of the explicit-ID `tool_result` branch, consume a matching tombsto
 if (block.toolUseId && this.cancelledToolUseIds.delete(block.toolUseId)) break;
 ```
 
-Clear `cancelledToolUseIds` beside `toolBuffer` in both `clear()` and `clearTurnState()`. Do not alter the existing unknown-result fallback or provider/event semantics.
+Clear `cancelledToolUseIds` only in `clear()`, beside its full message/pipeline reset. Do not clear it in `clearTurnState()`: that method is called by `commitNewTurn` for each ordinary user turn and must leave a pending late-result suppression window intact. Do not alter the existing unknown-result fallback or provider/event semantics.
 
 - [ ] **Step 3: Run the focused pipeline suite**
 
 Run: `npx vitest run src/__tests__/ui/block-pipeline.test.ts src/__tests__/ui/block-pipeline-locale.test.ts src/__tests__/tui/pipeline-integration.test.ts`
 
-Expected: PASS; it proves only successfully terminalized calls become tombstones, each tombstone consumes one late result, and reset restores normal orphan behavior.
+Expected: PASS; it proves only successfully terminalized calls become tombstones, each tombstone consumes one late result, `clearTurnState()` preserves the suppression window, and only `clear()` restores normal orphan behavior.
 
 - [ ] **Step 4: Commit the pipeline lifecycle task**
 
@@ -268,7 +268,7 @@ git commit -m "fix: finalize pending tools on parent abort"
 
 ## Plan self-review
 
-- Spec coverage: Task 1 covers the `cancelled` type, localization, ordering, and rendering; Task 2 covers successful-only finalization, idempotence, late-result suppression, non-cancelled orphan behavior, both reset paths, and committed-transcript continuity; Task 3 covers current-turn ID scope, ordering before final feedback, and every required ConPTY observation.
+- Spec coverage: Task 1 covers the `cancelled` type, localization, ordering, and rendering; Task 2 covers successful-only finalization, idempotence, late-result suppression, non-cancelled orphan behavior, `clearTurnState()` persistence, true `clear()` reset, and committed-transcript continuity; Task 3 covers current-turn ID scope, ordering before final feedback, and every required ConPTY observation.
 - Interface consistency: Task 2 defines `cancelPendingTools(ReadonlySet<string>)`; Task 3 is its only production caller. The tombstone set is private to `BlockPipeline` and is never referenced by provider, executor, or reducer code.
 - Scope: no task changes provider, subagent, tool executor, or `selectCommittedTranscript`.
 - Completeness: all test cases named in the approved spec have an explicit RED command, Green command, or final ConPTY assertion; every code path has a deterministic terminal behavior.
