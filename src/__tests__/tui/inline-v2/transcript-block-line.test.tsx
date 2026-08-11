@@ -18,6 +18,7 @@ import type {
   SystemBlock,
   TurnDurationBlock,
   AgentBlock,
+  TurnStatusBlock,
   TranscriptBlock,
 } from '../../../tui/transcript-types.js';
 
@@ -182,6 +183,74 @@ describe('TranscriptBlockLine', () => {
     };
     const frame = stripAnsi(renderTranscriptBlock(block, 100));
     expect(frame).toContain('● Agent "explore" finished · 4s');
+  });
+
+  it('renders a turn-status failed line in red', () => {
+    const block: TurnStatusBlock = {
+      id: 'ts1',
+      kind: 'turn-status',
+      status: 'failed',
+      line: '✖ Failed',
+    };
+    const raw = renderTranscriptBlock(block, 100);
+    const frame = stripAnsi(raw);
+    expect(frame).toContain('✖ Failed');
+    // failed → 红色 ANSI,无 dim
+    expect(raw).toContain('\u001b[31m');
+    expect(raw).not.toContain('\u001b[2m');
+  });
+
+  it('renders a turn-status cancelled line dim', () => {
+    const block: TurnStatusBlock = {
+      id: 'ts-cancelled',
+      kind: 'turn-status',
+      status: 'cancelled',
+      line: '○ Cancelled',
+    };
+    const raw = renderTranscriptBlock(block, 100);
+    const frame = stripAnsi(raw);
+    expect(frame).toContain('○ Cancelled');
+    // cancelled → dim,无红色
+    expect(raw).toContain('\u001b[2m');
+    expect(raw).not.toContain('\u001b[31m');
+  });
+
+  it('renders a turn-status partial line with default styling (no red/dim)', () => {
+    const block: TurnStatusBlock = {
+      id: 'ts-partial',
+      kind: 'turn-status',
+      status: 'partial',
+      line: '⚠ Partial',
+    };
+    const raw = renderTranscriptBlock(block, 100);
+    const frame = stripAnsi(raw);
+    expect(frame).toContain('⚠ Partial');
+    // partial → 默认色(既无红色也无 dim)
+    expect(raw).not.toContain('\u001b[31m');
+    expect(raw).not.toContain('\u001b[2m');
+  });
+
+  it('never renders the legacy four-field template for a turn-status block (en + zh)', () => {
+    const enBlock: TurnStatusBlock = {
+      id: 'ts2',
+      kind: 'turn-status',
+      status: 'partial',
+      line: '⚠ Partial',
+    };
+    const enFrame = stripAnsi(renderTranscriptBlock(enBlock, 100));
+    expect(enFrame).not.toMatch(/Current status/);
+    expect(enFrame).toContain('⚠ Partial');
+
+    // zh-CN 也不渲染旧四字段模板
+    const zhBlock: TurnStatusBlock = {
+      id: 'ts2-zh',
+      kind: 'turn-status',
+      status: 'failed',
+      line: '✖ 失败',
+    };
+    const zhFrame = stripAnsi(renderTranscriptBlock(zhBlock, 100, 'zh-CN'));
+    expect(zhFrame).not.toMatch(/当前状态/);
+    expect(zhFrame).toContain('✖ 失败');
   });
 
   it.each(BG_MUTED_CASES)(

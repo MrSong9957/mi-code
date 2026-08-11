@@ -410,6 +410,21 @@ describe('BlockPipeline emit 路由', () => {
     expect(blocks[0]!.block.id).toEqual(expect.stringMatching(/^hook-\d+$/));
   });
 
+  // 12. turn_status → appendTranscriptBlock({ kind:'turn-status', status, line })
+  it('turn_status → appendTranscriptBlock({ kind:"turn-status", status, line })', () => {
+    const { recorder, pipeline } = setup();
+    pipeline.emit({ kind: 'turn_status', status: 'partial', line: '⚠ Partial' });
+
+    const blocks = recorder.of('appendTranscriptBlock');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.block).toMatchObject({
+      kind: 'turn-status',
+      status: 'partial',
+      line: '⚠ Partial',
+    });
+    expect(blocks[0]!.block.id).toEqual(expect.stringMatching(/^turn-status-\d+$/));
+  });
+
   // orphan 兜底:result 无对应 call
   it('tool_result 无对应 call → 兜底 startToolCall + finishToolCall(orphan),不丢失', () => {
     const { recorder, pipeline } = setup();

@@ -391,6 +391,18 @@ export class BlockPipeline {
         break;
       }
 
+      case 'turn_status': {
+        // 回合终态兜底行:作为 turn-status transcript block 追加。
+        // 仅当 shouldEmitTurnStatus 判定为 true 时(index.ts 决策)才走到这里。
+        this.renderer.appendTranscriptBlock({
+          id: `turn-status-${++this.idCounter}`,
+          kind: 'turn-status',
+          status: block.status,
+          line: block.line,
+        });
+        break;
+      }
+
       default: {
         const _exhaustive: never = block;
         void _exhaustive;

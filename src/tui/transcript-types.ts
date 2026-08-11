@@ -124,6 +124,20 @@ export interface AgentBlock {
   durationMs?: number;
 }
 
+/**
+ * 一回合终态的兜底状态行。
+ *
+ * 物理本质:当 turn 结束且时间线里没有"可见的异常活动"(error 工具 / 非完成 agent /
+ * error 通知)来解释结局时,补一条简洁的状态行(partial / failed / cancelled),
+ * 替代旧的四字段模板。`cancelled` 只来自 `aborted`,不从 UserTurnStatus 推导。
+ */
+export interface TurnStatusBlock {
+  id: string;
+  kind: 'turn-status';
+  status: 'partial' | 'failed' | 'cancelled';
+  line: string;
+}
+
 /** 所有已固化 transcript 块的判别联合。 */
 export type TranscriptBlock =
   | UserBlock
@@ -132,7 +146,8 @@ export type TranscriptBlock =
   | AskBlock
   | SystemBlock
   | TurnDurationBlock
-  | AgentBlock;
+  | AgentBlock
+  | TurnStatusBlock;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 活动(未固化,渲染在活动区)
@@ -190,7 +205,7 @@ export type TimelineItem = TranscriptBlock | ActivityItem;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TRANSCRIPT_KINDS = new Set<string>([
-  'user', 'assistant', 'tool', 'ask', 'system', 'turn-duration', 'agent',
+  'user', 'assistant', 'tool', 'ask', 'system', 'turn-duration', 'agent', 'turn-status',
 ]);
 const ACTIVITY_KINDS = new Set<string>([
   'streaming-assistant', 'pending-tool', 'pending-thinking', 'pending-agent',

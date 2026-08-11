@@ -28,6 +28,7 @@ export function presentationChannel(block: TranscriptBlock): PresentationChannel
     case 'ask':
     case 'turn-duration':
     case 'agent':
+    case 'turn-status':
       return 'activity';
     case 'system':
       return block.subkind === 'notification' && block.tone !== 'error' ? 'diagnostics' : 'activity';

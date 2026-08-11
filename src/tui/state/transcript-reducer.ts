@@ -29,6 +29,8 @@ import {
   type ToolPresentation,
   type TranscriptBlock,
 } from '../transcript-types.js';
+// type-only:不创建运行时 cycle,符合 tui→agent 的类型导入约定。
+import type { TurnStatusCandidate } from '../../agent/turn-final-feedback.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 对外类型
@@ -514,4 +516,74 @@ export function summarizeThinking(
     return `Thought ${entries[0]!.durationMs / 1_000}s`;
   }
   return `Thought ${totalMs / 1_000}s (${entries.length} entries)`;
+}
+
+/**
+ * turn 结束时,时间线里是否已有「可见的异常活动」可解释本回合结局。
+ *
+ * 当任一条目满足以下条件时返回 true:
+ * - ToolBlock,且任一 presentation 的 status 为 'error' 或 'cancelled';
+ * - AgentBlock,且 status !== 'completed'(partial / failed / cancelled / unknown);
+ * - system notification,且 tone === 'error'。
+ *
+ * 用途:`shouldEmitTurnStatus` 据此决定是否还要补一条 turn-status 兜底行——
+ * 当时间线里已有可见的异常活动时,兜底行就是冗余的(用户已能从工具/agent 块看到结局)。
+ */
+export function hasVisibleAbnormalActivity(
+  items: readonly TimelineItem[],
+): boolean {
+  return items.some((item) => {
+    switch (item.kind) {
+      case 'tool':
+        return item.presentations.some(
+          (presentation) =>
+            presentation.status === 'error' || presentation.status === 'cancelled',
+        );
+      case 'agent':
+        return item.status !== 'completed';
+      case 'system':
+        return item.subkind === 'notification' && item.tone === 'error';
+      default:
+        return false;
+    }
+  });
+}
+
+/**
+ * 唯一的生产决策缝:是否真正 emit turn-status 兜底行。
+ *
+ * = `candidate !== null && !hasVisibleAbnormalActivity(currentTurnItems)`,
+ * 其中 currentTurnItems = items 从**最后一条** `kind === 'user'`(含)到末尾的切片。
+ *
+ * 关键(多回合正确性):时间线 items 跨回合累积,只在 rewind 时裁剪(见
+ * `rewindLastUserTurn`)。若把整条时间线喂给 hasVisibleAbnormalActivity,上一回合
+ * 残留的异常块(如 Turn 1 失败的工具)会让 Turn 2 的兜底行被错误抑制。因此这里
+ * **内部**按"最后一条 user 块"切出当前回合,只检查当前回合内是否已有可见异常活动。
+ *
+ * user 块本身不是异常活动,所以切片含它(inclusive)是安全的。若无 user 块,
+ * 切片 = 全部 items(单回合 / 无 user 边界的退化情形)。
+ *
+ * index.ts 和 Task 7 验收测试都调用同一个函数,禁止在此之外内联相同判断。
+ * 外部签名固定为 `(candidate, items) => boolean`,turn-boundary 切片是内部细节。
+ */
+export function shouldEmitTurnStatus(
+  candidate: TurnStatusCandidate | null,
+  items: readonly TimelineItem[],
+): boolean {
+  if (candidate === null) {
+    return false;
+  }
+  // 取最后一条 user 块的下标(含);无 user 块时切片 = 全部 items。
+  // 用反向循环而非 Array#findLastIndex(ES2023):本项目 tsconfig lib=ES2022,
+  // 且与 messages-store.rewindLastUserTurn 的既有 idiom 一致。
+  let lastUserIdx = -1;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (items[i]!.kind === 'user') {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  const currentTurnItems =
+    lastUserIdx === -1 ? items : items.slice(lastUserIdx);
+  return !hasVisibleAbnormalActivity(currentTurnItems);
 }

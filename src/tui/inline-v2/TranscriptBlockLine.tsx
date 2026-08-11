@@ -116,6 +116,20 @@ export function TranscriptBlockLine({ block, cols }: TranscriptBlockLineProps): 
     case 'agent':
       return <AgentBlockLine block={block} cols={cols} />;
 
+    case 'turn-status':
+      // 回合终态兜底单行:failed→红,cancelled→dim,partial→默认色。
+      // 不新建组件,直接内联单行 <Text>,替代旧的四字段模板。
+      return (
+        <Box width={cols}>
+          <Text
+            color={block.status === 'failed' ? 'red' : undefined}
+            dimColor={block.status === 'cancelled'}
+          >
+            {block.line}
+          </Text>
+        </Box>
+      );
+
     default:
       return assertNever(block);
   }

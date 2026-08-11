@@ -42,7 +42,9 @@ import {
   finalizeTurnForUser,
   commitFinalizedTurn,
   type TurnToolFact,
+  type TurnStatusCandidate,
 } from './agent/turn-final-feedback.js';
+import { shouldEmitTurnStatus } from './tui/state/transcript-reducer.js';
 import { plannerPrompt, systemPrompt as systemPromptTemplate } from './prompts/index.js';
 import { InboxManager } from './agent/inbox.js';
 import { SkillRegistry, SkillNegotiator, createLoadSkillTool } from './skills/index.js';
@@ -700,6 +702,22 @@ async function handleRewindLastTurn(): Promise<void> {
   printLine(translator.t('status.rewindNotice'));
 }
 
+/**
+ * 统一的 turn-status 兜底行 emit 决策:仅当 candidate 非空且当前回合时间线里没有
+ * 可见的异常活动时(shouldEmitTurnStatus 内部按最后一条 user 块切出当前回合),
+ * 补一条简洁的 turn-status 行(partial / failed / cancelled)。
+ *
+ * try(落盘成功)与 catch(落盘失败重算 candidate)两条路径共用此 helper,
+ * 避免重复内联 abnormal-detection + 避免 ! 非空断言(early return 收窄类型)。
+ */
+function emitTurnStatusIfApplicable(candidate: TurnStatusCandidate | null): void {
+  if (!candidate) return;
+  const items = tuiHandle?.messagesStore.getState().model.items ?? [];
+  if (shouldEmitTurnStatus(candidate, items)) {
+    pipeline.emit({ kind: 'turn_status', status: candidate.status, line: candidate.line });
+  }
+}
+
 async function handleUserSubmit(rawText: string): Promise<void> {
   const now = Date.now();
   const trimmedForDedup = rawText.trim();
@@ -1109,9 +1127,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       tuiHandle?.printStyled(`${translator.t('errors.errorPrefix')}${terminalError}`, 'error');
     }
   } finally {
-    // 统一收尾口:把本回合 finalized 后的消息 awaited 落盘 + emit 四字段状态块。
-    // 无论正常结束/错误/中断都走这一步,保证每个非后台用户回合都有恰好一个
-    // 用户可见的最终 assistant 状态块(当前状态/已获得结果/失败或受阻位置/下一步)。
+    // 统一收尾口:把本回合 finalized 后的消息 awaited 落盘(persist-only)。
+    // v1:不再 emit 四字段状态块;改为当 shouldEmitTurnStatus(candidate, items)
+    // 判定为 true 时,补一条简洁的 turn-status 兜底行(partial/failed/cancelled)。
     const baseMessages = finalMessages ?? sessionMessages;
     if (aborted) {
       pipeline.cancelPendingTools(abortedToolIds);
@@ -1125,17 +1143,18 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     }, translator);
 
     // 持久化失败用窄错误边界兜住:落盘本身失败时,用未 finalized 的 baseMessages
-    // 重新构造一个"失败"块 emit 给用户(绝不假装成功)。此异常路径无法承诺落盘
-    // (因为存储层已失败),但仍保证用户能看到明确的失败文本。
+    // 重新构造一个"失败"candidate。此异常路径无法承诺落盘(因为存储层已失败),
+    // 但仍保证用户能看到明确的失败/取消兜底行(由 shouldEmitTurnStatus 决定)。
     try {
       await commitFinalizedTurn(
         finalized,
         persistedMessageCount,
         message => sessionStore.append(sessionState.currentId, stripImagesForPersistence(message)),
-        text => pipeline.emit({ kind: 'assistant_text', text, isFinal: true }),
       );
       // 落盘成功后同步模块级会话状态(供下一回合 / resume 使用)。
       sessionMessages = finalized.messages;
+      // 仅当 candidate 非空且当前回合无可见异常活动时补兜底行(统一决策缝)。
+      emitTurnStatusIfApplicable(finalized.candidate);
     } catch (persistError) {
       const persistenceFailure = finalizeTurnForUser({
         messages: baseMessages,
@@ -1145,7 +1164,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
         aborted,
       }, translator);
       sessionMessages = persistenceFailure.messages;
-      pipeline.emit({ kind: 'assistant_text', text: persistenceFailure.feedbackText, isFinal: true });
+      // 同一条决策缝:落盘失败时也走 emitTurnStatusIfApplicable。
+      emitTurnStatusIfApplicable(persistenceFailure.candidate);
     }
 
     // AUTO-0025-transient:统一退出路径——finalizeTurnLifecycle 幂等结束 thinking + stop spinner。

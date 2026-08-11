@@ -21,6 +21,16 @@ describe('presentationChannel', () => {
     const agent: TranscriptBlock = { id: 'a1', kind: 'agent', label: 'explore', status: 'completed' };
     expect(presentationChannel(agent)).toBe('activity');
   });
+
+  it('classifies turn-status as activity', () => {
+    const turnStatus: TranscriptBlock = {
+      id: 'ts1',
+      kind: 'turn-status',
+      status: 'partial',
+      line: '⚠ Partial',
+    };
+    expect(presentationChannel(turnStatus)).toBe('activity');
+  });
 });
 
 describe('isVisibleInNormalMode', () => {

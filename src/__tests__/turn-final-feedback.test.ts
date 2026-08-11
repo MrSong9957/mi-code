@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   finalizeTurnForUser as finalizeTurnForUserWithTranslator,
   commitFinalizedTurn,
+  buildTurnStatusCandidate,
   type TurnToolFact,
+  type TurnFinalizationInput,
 } from '../agent/turn-final-feedback.js';
-import type { Message, ContentBlock } from '../agent/types.js';
+import type { Message } from '../agent/types.js';
 import { createLanguageStore, createTranslator, type Translator } from '../locale/index.js';
 
 const zhTranslator = createTranslator(createLanguageStore('zh-CN'));
@@ -48,7 +50,10 @@ function countStatusBlocks(messages: readonly Message[]): number {
 }
 
 describe('finalizeTurnForUser 分类', () => {
-  it('用户中止且没有 useful output 时归为部分完成，而不是失败', () => {
+  // 行为变更(v1):finalizeTurnForUser 不再产出四字段 feedbackText / requiresFeedback,
+  // 改为返回简洁的 candidate(partial/failed/cancelled)或 null。
+  // cancelled 只来自 aborted(无视 classified);成功→null。
+  it('用户中止且没有 useful output 时归为部分完成；candidate 为 cancelled', () => {
     const result = finalizeTurnForUser({
       messages: [],
       turnStartIndex: 0,
@@ -57,10 +62,11 @@ describe('finalizeTurnForUser 分类', () => {
     });
 
     expect(result.status).toBe('部分完成');
-    expect(result.feedbackText).toContain('当前状态：部分完成');
+    // aborted → candidate.status === 'cancelled'(cancelled 只来自 aborted)
+    expect(result.candidate?.status).toBe('cancelled');
   });
 
-  it('普通 provider error 且没有 useful output 时仍归为失败', () => {
+  it('普通 provider error 且没有 useful output 时仍归为失败；candidate 为 failed', () => {
     const result = finalizeTurnForUser({
       messages: [],
       turnStartIndex: 0,
@@ -70,7 +76,7 @@ describe('finalizeTurnForUser 分类', () => {
     });
 
     expect(result.status).toBe('失败');
-    expect(result.feedbackText).toContain('当前状态：失败');
+    expect(result.candidate?.status).toBe('failed');
   });
 
   it.each([
@@ -109,7 +115,7 @@ describe('finalizeTurnForUser 分类', () => {
       error: 'provider disconnected',
       expected: '部分完成',
     },
-  ])('$name => $expected', ({ messages, toolFacts, error, expected }) => {
+  ])('$name => status $expected', ({ messages, toolFacts, error, expected }) => {
     const result = finalizeTurnForUser({
       messages,
       turnStartIndex: 0,
@@ -118,18 +124,18 @@ describe('finalizeTurnForUser 分类', () => {
       aborted: false,
     });
     expect(result.status).toBe(expected);
-    // 正常成功路径(模型已给出终端 assistant 文本)不追加状态块:
-    // feedbackText 为空、messages 不变、requiresFeedback=false。
-    // 只有异常兜底(部分完成/失败/无终端文本的成功)才生成状态块。
-    if (result.requiresFeedback) {
-      expect(result.feedbackText).toContain(`当前状态：${expected}`);
-      expect(result.feedbackText).toContain('已获得结果：');
-      expect(result.feedbackText).toContain('失败或受阻位置：');
-      expect(result.feedbackText).toContain('下一步：');
+    // candidate 由 buildTurnStatusCandidate(aborted=false) 从 classified 映射:
+    // 成功→null,部分完成→partial,失败→failed。不再有四字段 feedbackText。
+    if (expected === '成功') {
+      expect(result.candidate).toBeNull();
+    } else if (expected === '部分完成') {
+      expect(result.candidate?.status).toBe('partial');
+    } else {
+      expect(result.candidate?.status).toBe('failed');
     }
   });
 
-  it('正常成功路径(有终端 assistant 文本)不追加状态块也不生成 feedbackText', () => {
+  it('正常成功路径(有终端 assistant 文本)candidate 为 null 且 messages 不变', () => {
     const result = finalizeTurnForUser({
       messages: [assistant('这是明确的总结回复')],
       turnStartIndex: 0,
@@ -137,34 +143,18 @@ describe('finalizeTurnForUser 分类', () => {
       aborted: false,
     });
     expect(result.status).toBe('成功');
-    expect(result.requiresFeedback).toBe(false);
-    expect(result.feedbackText).toBe('');
-    // messages 不变(未追加状态块)
+    expect(result.candidate).toBeNull();
+    // messages 不变(不再追加四字段状态块)
     expect(result.messages).toEqual([assistant('这是明确的总结回复')]);
   });
 });
 
 describe('finalizeTurnForUser 本地化', () => {
+  // 行为变更(v1):不再产出四字段本地化块;candidate.line 是单行本地化文本。
   it.each([
-    {
-      language: 'zh-CN' as const,
-      expected: [
-        '当前状态：失败',
-        '已获得结果：无',
-        '失败或受阻位置：The user rejected this action.',
-        '下一步：重试或调整方案',
-      ],
-    },
-    {
-      language: 'en-US' as const,
-      expected: [
-        'Current status: Failed',
-        'Result obtained: None',
-        'Failure or blocked at: The user rejected this action.',
-        'Next step: Retry or adjust the approach.',
-      ],
-    },
-  ])('localizes fixed failure feedback for $language while preserving the raw rejection', ({ language, expected }) => {
+    ['zh-CN' as const, '✖ 失败'],
+    ['en-US' as const, '✖ Failed'],
+  ])('localizes candidate line for failed status in %s', (language, expectedLine) => {
     const result = finalizeTurnForUser({
       messages: [],
       turnStartIndex: 0,
@@ -172,29 +162,28 @@ describe('finalizeTurnForUser 本地化', () => {
       aborted: false,
     }, createTranslator(createLanguageStore(language)));
 
-    expect(result.requiresFeedback).toBe(true);
-    for (const line of expected) expect(result.feedbackText).toContain(line);
+    expect(result.candidate?.status).toBe('failed');
+    expect(result.candidate?.line).toBe(expectedLine);
   });
 
-  it.each([
-    ['zh-CN' as const, '当前状态：失败'],
-    ['en-US' as const, 'Current status: Failed'],
-  ])('does not append a second status block already rendered in %s', (language, existingStatus) => {
-    const messages = [assistant(existingStatus)];
+  it('does not append any status block to messages (no uiOnly append)', () => {
+    // 即使输入里已有一条"当前状态"文本,v1 也不再追加第二条(不再有 appendFeedback)。
+    const messages = [assistant('当前状态：失败')];
     const result = finalizeTurnForUser({
       messages,
       turnStartIndex: 0,
       toolFacts: [tool('run_bash', 'The user rejected this action.', 'failure')],
       aborted: false,
-    }, createTranslator(createLanguageStore(language)));
+    }, zhTranslator);
 
     expect(result.messages).toEqual(messages);
+    expect(countStatusBlocks(result.messages)).toBe(1); // 只有输入里原有的那一条
   });
 });
 
-it('appends one terminal status block to the last assistant message (需要反馈场景幂等)', () => {
-  // 用"需要反馈"的场景(子代理完成但模型无 final 回复)验证幂等:
-  // 重复 finalize 仍只追加一个状态块。
+it('finalize is idempotent: messages unchanged, no status block appended', () => {
+  // 行为变更(v1):finalize 不再向 messages 追加四字段状态块。
+  // 重复 finalize 仍幂等(messages 不变,无状态块)。
   const baseMessages: Message[] = [
     { role: 'user', content: 'start' },
     {
@@ -219,83 +208,12 @@ it('appends one terminal status block to the last assistant message (需要反�
   });
 
   expect(second.messages).toEqual(first.messages);
-  expect(countStatusBlocks(second.messages)).toBe(1);
+  // 新行为:不向 messages 追加任何状态块
+  expect(countStatusBlocks(second.messages)).toBe(0);
 });
 
-// ★ uiOnly 标记:final-feedback 状态块必须独立 text block 且 uiOnly=true
-describe('appendFeedback 状态块 uiOnly 标记', () => {
-  // helper:构造一个"需要 feedback"的场景(tool-only assistant + completed subagent result)
-  function needFeedbackMessages(): Message[] {
-    return [
-      { role: 'user', content: 'start' },
-      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'task', input: {} }] },
-      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '[Subagent status=completed]\ncompleted work' }] },
-    ];
-  }
-  const tf = [tool('task', '[Subagent status=completed]\ncompleted work', 'success')];
-
-  it('array content → feedback block 为独立 text block 且 uiOnly=true', () => {
-    const result = finalizeTurnForUser({
-      messages: needFeedbackMessages(),
-      turnStartIndex: 1,
-      toolFacts: tf,
-      aborted: false,
-    });
-    // finalized 后应有新 assistant message(终端无 assistant text → push 新 message)
-    const last = result.messages.at(-1)!;
-    expect(last.role).toBe('assistant');
-    const blocks = last.content as ContentBlock[];
-    // 状态块是独立 block,uiOnly=true
-    const feedbackBlock = blocks.find(b => b.type === 'text' && (b as { uiOnly?: boolean }).uiOnly === true);
-    expect(feedbackBlock).toBeDefined();
-    expect(feedbackBlock!.type).toBe('text');
-  });
-
-  it('string content assistant → 规范化为两 block(原正文 + uiOnly feedback),不拼接', () => {
-    // 构造:string content assistant 在 tool_result 之后
-    const messages: Message[] = [
-      { role: 'user', content: 'start' },
-      { role: 'assistant', content: '正文回复' }, // string content,turnStartIndex=1
-    ];
-    // 用失败场景强制 feedback(error)
-    const result = finalizeTurnForUser({
-      messages,
-      turnStartIndex: 1,
-      toolFacts: [],
-      error: 'something failed',
-      aborted: false,
-    });
-    const last = result.messages.at(-1)!;
-    expect(last.role).toBe('assistant');
-    expect(Array.isArray(last.content)).toBe(true); // string 已规范化为 array
-    const blocks = last.content as ContentBlock[];
-    // 第一个 block 是原正文(无 uiOnly)
-    expect(blocks[0]).toEqual({ type: 'text', text: '正文回复' });
-    // 最后一个 block 是 feedback(uiOnly=true)
-    const fb = blocks.at(-1)!;
-    expect(fb.type).toBe('text');
-    expect((fb as { uiOnly?: boolean }).uiOnly).toBe(true);
-  });
-
-  it('正常正文 text block 不被标记 uiOnly', () => {
-    const messages: Message[] = [
-      { role: 'user', content: 'start' },
-      { role: 'assistant', content: [{ type: 'text', text: '正常正文' }] },
-    ];
-    const result = finalizeTurnForUser({
-      messages,
-      turnStartIndex: 1,
-      toolFacts: [],
-      error: 'fail',
-      aborted: false,
-    });
-    const last = result.messages.at(-1)!;
-    const blocks = last.content as ContentBlock[];
-    const normalBlocks = blocks.filter(b => b.type === 'text' && (b as { uiOnly?: boolean }).uiOnly !== true);
-    expect(normalBlocks.length).toBeGreaterThanOrEqual(1); // 原正文保留,未标记
-    expect(normalBlocks.some(b => (b as { text: string }).text === '正常正文')).toBe(true);
-  });
-});
+// 行为变更(v1):移除 appendFeedback / uiOnly 状态块整套逻辑。
+// 旧 describe('appendFeedback 状态块 uiOnly 标记') 已删除 —— 不再有 uiOnly 追加。
 
 it('does not count assistant prose before the last tool result as a terminal reply', () => {
   const result = finalizeTurnForUser({
@@ -316,20 +234,21 @@ it('does not count assistant prose before the last tool result as a terminal rep
   });
 
   expect(result.status).toBe('部分完成');
-  expect(result.messages.at(-1)?.role).toBe('assistant');
-  expect(countStatusBlocks(result.messages)).toBe(1);
+  expect(result.candidate?.status).toBe('partial');
+  // 新行为:不向 messages 追加状态块
+  expect(countStatusBlocks(result.messages)).toBe(0);
 });
 
 // ════════════════════════════════════════════════════════════════════
-// commitFinalizedTurn:把 finalized 快照持久化并 emit 最终反馈。
+// commitFinalizedTurn:v1 persist-only。
 //
-// 物理本质:turn 结束前的"统一交班口"。finalized messages 里新增的部分要落盘,
-// 然后才 emit 四字段状态块给用户看。落盘失败由调用方处理(视为失败回合)。
+// 行为变更:不再接收 emit 参数、不再读 requiresFeedback/feedbackText。
+// 只把 finalized messages 里新增的部分 awaited 落盘,返回新计数。
+// turn-status 兜底行的 emit 决策移到 index.ts(调用 shouldEmitTurnStatus)。
 // ════════════════════════════════════════════════════════════════════
 describe('commitFinalizedTurn', () => {
-  it('persists and emits fallback text when the stream ended after a tool-only assistant', async () => {
+  it('persists new messages and returns count (persist-only, no emit param)', async () => {
     const appended: Message[] = [];
-    const emitted: string[] = [];
     const result = finalizeTurnForUser({
       messages: [
         assistantToolUse('s1', 'task'),
@@ -339,72 +258,144 @@ describe('commitFinalizedTurn', () => {
       toolFacts: [tool('task', '[Subagent status=incomplete reason=error]\nrecovered work', 'success')],
       aborted: false,
     });
+    // v1: messages 不变(不再追加四字段状态块消息)
+    expect(result.messages.length).toBe(2);
 
     const count = await commitFinalizedTurn(
       result,
       0,
       async message => { appended.push(message); },
-      text => { emitted.push(text); },
     );
 
-    expect(count).toBe(result.messages.length);
-    expect(appended.at(-1)?.role).toBe('assistant');
-    expect(emitted).toEqual([result.feedbackText]);
-    expect(emitted[0]).toContain('当前状态：部分完成');
+    expect(count).toBe(2);
+    expect(appended).toHaveLength(2);
   });
 
-  it('awaits persistence of new messages in order and emits only after success', async () => {
-    const order: string[] = [];
-    // tool-only assistant + tool_result 场景:finalize 会新增一条 assistant 状态块消息
+  it('awaits persistence of only the new messages (slice persistedMessageCount)', async () => {
+    const appended: Message[] = [];
     const result = finalizeTurnForUser({
-      messages: [
-        assistantToolUse('s1', 'task'),
-        toolResult('s1', '[Subagent status=incomplete reason=error]\nrecovered work'),
-      ],
+      messages: [assistant('正常回复')],
       turnStartIndex: 0,
-      toolFacts: [tool('task', '[Subagent status=incomplete reason=error]\nrecovered work', 'success')],
+      toolFacts: [],
       aborted: false,
     });
-    // 已持久化 2 条(tool_use + tool_result),finalize 新增了 1 条 assistant 状态块
-    const persistedBefore = 2;
-    expect(result.messages.length).toBe(3);
-
+    // 已持久化 1 条 → 不再重复 append
     const count = await commitFinalizedTurn(
       result,
-      persistedBefore,
-      async message => { order.push(`append:${message.role}`); },
-      text => { order.push(`emit:${text.slice(2, 4)}`); },
+      1,
+      async message => { appended.push(message); },
     );
-
-    expect(count).toBe(3);
-    // 持久化(append:assistant)先于 emit(emit:状态)
-    expect(order[0]).toBe('append:assistant');
-    expect(order.at(-1)).toMatch(/^emit/);
+    expect(count).toBe(1);
+    expect(appended).toHaveLength(0);
   });
 
-  it('正常成功路径(requiresFeedback=false)持久化但不 emit 状态块', async () => {
+  it('正常成功路径也持久化全部消息(persist-only,无 emit 决策)', async () => {
     const appended: Message[] = [];
-    const emitted: string[] = [];
     const result = finalizeTurnForUser({
       messages: [assistant('明确的正常回复')],
       turnStartIndex: 0,
       toolFacts: [],
       aborted: false,
     });
-    expect(result.requiresFeedback).toBe(false);
+    expect(result.candidate).toBeNull();
 
     const count = await commitFinalizedTurn(
       result,
       0,
       async message => { appended.push(message); },
-      text => { emitted.push(text); },
     );
 
-    expect(count).toBe(result.messages.length);
-    // 仍持久化正常回复(不因跳过反馈而丢消息)
+    expect(count).toBe(1);
     expect(appended).toHaveLength(1);
     expect(appended[0].role).toBe('assistant');
-    // 关键:不 emit 任何状态块(用户不会看到四字段块)
-    expect(emitted).toEqual([]);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// buildTurnStatusCandidate / shouldEmitTurnStatus
+//
+// cancelled 映射的硬规则:cancelled 只来自 input.aborted,绝不从 UserTurnStatus
+// 推导(classifyTurn 的 '部分完成' 在 aborted 时仍映射到 cancelled,不是 partial)。
+// shouldEmitTurnStatus 是唯一的生产决策缝:candidate !== null 且无可见异常活动。
+// ════════════════════════════════════════════════════════════════════
+function makeInput(overrides: Partial<TurnFinalizationInput>): TurnFinalizationInput {
+  return {
+    messages: [],
+    turnStartIndex: 0,
+    toolFacts: [],
+    aborted: false,
+    ...overrides,
+  };
+}
+
+describe('buildTurnStatusCandidate', () => {
+  it('aborted: true -> cancelled (无论 classified 是什么)', () => {
+    // aborted 时 classifyTurn 会返回 '部分完成',但 candidate 必须是 cancelled
+    const candidate = buildTurnStatusCandidate(
+      makeInput({ aborted: true }),
+      '部分完成',
+      zhTranslator,
+    );
+    expect(candidate?.status).toBe('cancelled');
+  });
+
+  it('aborted: true 即使 classified=失败 也映射 cancelled', () => {
+    const candidate = buildTurnStatusCandidate(
+      makeInput({ aborted: true }),
+      '失败',
+      zhTranslator,
+    );
+    expect(candidate?.status).toBe('cancelled');
+  });
+
+  it('aborted: false, classified: 成功 -> null', () => {
+    const candidate = buildTurnStatusCandidate(
+      makeInput({ aborted: false }),
+      '成功',
+      zhTranslator,
+    );
+    expect(candidate).toBeNull();
+  });
+
+  it('aborted: false, classified: 部分完成 -> { status: partial }', () => {
+    const candidate = buildTurnStatusCandidate(
+      makeInput({ aborted: false }),
+      '部分完成',
+      zhTranslator,
+    );
+    expect(candidate?.status).toBe('partial');
+  });
+
+  it('aborted: false, classified: 失败 -> { status: failed }', () => {
+    const candidate = buildTurnStatusCandidate(
+      makeInput({ aborted: false }),
+      '失败',
+      zhTranslator,
+    );
+    expect(candidate?.status).toBe('failed');
+  });
+
+  it('candidate.line 来自 translator.t(status.turnFinal.*Line)', () => {
+    const partial = buildTurnStatusCandidate(
+      makeInput({ aborted: false }),
+      '部分完成',
+      createTranslator(createLanguageStore('en-US')),
+    );
+    expect(partial?.line).toBe('⚠ Partial');
+
+    const failed = buildTurnStatusCandidate(
+      makeInput({ aborted: false }),
+      '失败',
+      createTranslator(createLanguageStore('en-US')),
+    );
+    expect(failed?.line).toBe('✖ Failed');
+
+    const cancelled = buildTurnStatusCandidate(
+      makeInput({ aborted: true }),
+      '部分完成',
+      createTranslator(createLanguageStore('en-US')),
+    );
+    expect(cancelled?.line).toBe('○ Cancelled');
+  });
+});
+
