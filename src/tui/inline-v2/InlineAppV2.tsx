@@ -39,6 +39,7 @@ import type { TuiMessage, StatusBarData, LogoData } from '../types.js';
 import type { MessagesStore } from '../state/messages-store.js';
 import type { TranscriptBlock, ActivityItem } from '../transcript-types.js';
 import { selectCommittedTranscript } from '../state/transcript-reducer.js';
+import { isVisibleInNormalMode } from '../state/presentation-channel.js';
 import type { InputStore } from '../state/input-store.js';
 import type { StatusStore } from '../state/status-store.js';
 import type { SpinnerStore } from '../state/spinner-store.js';
@@ -125,7 +126,10 @@ export function InlineAppV2({ logo, stores, cols }: InlineAppV2Props): React.Rea
   const activityItems: ActivityItem[] = modelItems.slice(committedTranscript.length) as ActivityItem[];
 
   // 已固化块直接用 TranscriptBlockLine 渲染(语义,无字符串匹配)。
-  const finalized = committedTranscript;
+  // Message Presentation v1:在 normal 模式下隐藏 diagnostics-channel 块(非错误
+  // system/notification)。源头的 postToolLogger 已抑制常规 [Hook] done,这里是
+  // 安全网——任何已经进入 transcript 的 diagnostics 块都不会渲染到 <Static>。
+  const finalized = committedTranscript.filter(isVisibleInNormalMode);
 
   // pending 工具(pending-tool 活动项):运行中工具的稳定指示器。
   const pendingTools = activityItems.filter((i): i is Extract<ActivityItem, { kind: 'pending-tool' }> => i.kind === 'pending-tool');

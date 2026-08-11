@@ -141,17 +141,25 @@ describe('preToolSafetyCheck', () => {
 });
 
 describe('postToolLogger', () => {
-  it('返回 exitCode 0，message 含工具名但不重复输出内容（避免与 tool_result 块重复渲染）', () => {
+  // 常规成功无用户/诊断价值：在源头抑制（design spec §3）。
+  // 空 message → index.ts 的 `if (hookResult.message)` 门不 emit → 任何 store/channel 都不会收到。
+  it('suppresses routine success: empty message, exitCode 0', () => {
+    const r = postToolLogger({ name: 'PostToolUse', payload: { tool_name: 'memory_list', output: 'x' } });
+    expect(r.exitCode).toBe(0);
+    expect(r.message).toBe(''); // 源头抑制:曾经返回 '[Hook] memory_list done'
+  });
+
+  it('常规成功在源头抑制:message 为空,且绝不回显 output 内容(避免与 tool_result 块重复渲染)', () => {
     const event: HookEvent = {
       name: 'PostToolUse',
       payload: { tool_name: 'run_bash', output: 'hello world' },
     };
     const result = postToolLogger(event);
     expect(result.exitCode).toBe(0);
-    expect(result.message).toContain('[Hook]');
-    expect(result.message).toContain('run_bash');
-    // 关键：不再返回 output 预览——输出已由 pipeline 的 tool_result 块渲染，
-    // hook 二次输出会导致同一内容被画两遍（症状 C 根因）。
+    // 源头抑制:常规 [Hook] done 无价值,返回空 message(index.ts 的 `if (message)` 门不 emit)。
+    expect(result.message).toBe('');
+    // 关键不变量保留:绝不回显 output 预览——输出已由 pipeline 的 tool_result 块渲染,
+    // hook 二次输出会导致同一内容被画两遍(症状 C 根因)。
     expect(result.message).not.toContain('hello world');
   });
 
@@ -177,14 +185,14 @@ describe('postToolLogger', () => {
   });
 
   // Hook 是诊断输出,不能替代最终 assistant 回复。
-  // turn-final-feedback 的分类器从不把 [Hook] 文本当作终端 assistant 回复;
-  // 这里锁定 Hook message 的形态,确保它携带的是 [Hook] 标记而非 当前状态: 状态块。
-  it('Hook message 是 [Hook] 诊断输出,绝非终端状态块', () => {
+  // 源头抑制后 message 为空——比旧的 [Hook] 标记更强的保证:什么都不输出,
+  // turn-final-feedback 分类器无从把它误判为终端 assistant 回复或状态块。
+  it('常规成功被抑制:message 为空,绝不会被误判为终端状态块', () => {
     const hook = postToolLogger({
       name: 'PostToolUse',
       payload: { tool_name: 'task', output: 'work' },
     });
-    expect(hook.message).toBe('[Hook] task done');
+    expect(hook.message).toBe('');
     // 关键不变量:Hook message 绝不包含最终状态块的标记
     expect(hook.message).not.toContain('当前状态：');
   });

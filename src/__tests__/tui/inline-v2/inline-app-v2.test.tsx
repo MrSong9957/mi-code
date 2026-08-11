@@ -30,6 +30,7 @@ import { createSelectionStore } from '../../../tui/state/selection-store.js';
 import { selectSpinnerView } from '../../../tui/state/spinner-view.js';
 import { displayWidth } from '../../../tui/inline/text-layout.js';
 import { buildToolPresentation } from '../../../ui/tool-presentation.js';
+import { isVisibleInNormalMode } from '../../../tui/state/presentation-channel.js';
 import type { MessagesStore } from '../../../tui/state/messages-store.js';
 
 type TestInlineAppV2Stores = InlineAppV2Stores & {
@@ -286,6 +287,26 @@ describe('<InlineAppV2>', () => {
       />,
     );
     expect(lastFrame()).toContain('hello world');
+  });
+
+  // Message Presentation v1 Task 3:diagnostics-channel 已固化块在 normal transcript 隐藏。
+  // 非错误 system/notification(如旧的 [Hook] xxx done)由 isVisibleInNormalMode 判定为
+  // diagnostics,渲染层在 staticItems 构建时过滤掉,不进入 <Static>。
+  it('hides diagnostics-channel committed blocks from the normal transcript', () => {
+    const stores = createStores();
+    const diag = {
+      id: 'h1',
+      kind: 'system' as const,
+      subkind: 'notification' as const,
+      text: '[Hook] x done',
+      groupBoundary: 'break' as const,
+    };
+    stores.messagesStore.getState().appendTranscript(diag);
+    // 谓词层面:diagnostics 块不可见(由 Task 1 的 presentationChannel 判定)。
+    expect(isVisibleInNormalMode(diag)).toBe(false);
+    // 渲染层面:lastFrame() 不应包含被隐藏的 diagnostics 文本。
+    const { lastFrame } = render(<InlineAppV2 {...makeProps(stores)} />);
+    expect(lastFrame() ?? '').not.toContain('[Hook] x done');
   });
 });
 
