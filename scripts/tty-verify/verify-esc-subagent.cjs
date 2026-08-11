@@ -10,6 +10,8 @@ const { Screen } = require('./screen.cjs');
 const COLS = 160;
 const ROWS = 40;
 const prompt = 'Use spawn_agent only. Start one explore subagent and wait for it.';
+const spinnerVerb = 'EscSpinning';
+const postAbortInput = 'input-ready-after-abort';
 const parentOnly = process.argv.includes('--parent-only');
 const skipChild = process.argv.includes('--skip-child');
 
@@ -84,7 +86,7 @@ async function main() {
       },
     },
     permissions: { mode: 'auto', rules: [{ tool: 'spawn_agent', behavior: 'allow' }] },
-    language: 'en-US', theme: 'dark', spinnerVerbs: { mode: 'append', verbs: [] },
+    language: 'en-US', theme: 'dark', spinnerVerbs: { mode: 'replace', verbs: [spinnerVerb] },
   }));
 
   const terminal = pty.spawn(process.execPath, [path.join(process.cwd(), 'dist', 'index.js')], {
@@ -105,6 +107,7 @@ async function main() {
     } else {
       await waitFor(() => childStarted, 8_000, 'child provider request');
     }
+    await waitFor(() => screen.toString().includes(spinnerVerb), 5_000, 'active spinner before ESC');
     await sleep(100);
     const callsBeforeAbort = calls.length;
     terminal.write('\x1b');
@@ -114,6 +117,12 @@ async function main() {
       parentOnly ? 'parent provider request to close' : 'both provider requests to close',
     );
     await sleep(250);
+    terminal.write(postAbortInput);
+    await waitFor(
+      () => screen.toString().includes(`❯ ${postAbortInput}`),
+      5_000,
+      'input-capable prompt after abort',
+    );
     const visible = screen.toString();
     const result = {
       callsBeforeAbort,
@@ -129,6 +138,8 @@ async function main() {
     if (visible.includes('Current status: Failed')) throw new Error('abort rendered as Failed');
     if (!visible.includes('cancelled')) throw new Error('missing cancelled tool state');
     if (!visible.includes('Current status: Partially completed')) throw new Error('missing incomplete user-facing status');
+    if (visible.includes(spinnerVerb)) throw new Error('spinner remained active after abort');
+    if (!visible.includes(`❯ ${postAbortInput}`)) throw new Error('missing input-capable prompt after abort');
   } finally {
     try { terminal.kill(); } catch {}
     await new Promise((resolve) => server.close(resolve));
