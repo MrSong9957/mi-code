@@ -52,6 +52,8 @@ function buildSubRegistry(toolSubset: Map<string, RegisteredTool>): ToolRegistry
 }
 
 export interface SubagentOptions {
+  /** Parent-turn signal; foreground children inherit it so ESC cancels the full execution chain. */
+  signal?: AbortSignal;
   model?: string;
   maxSteps?: number;
   system?: string;
@@ -401,7 +403,7 @@ async function runSubagentWithClient(
   options: SubagentOptions,
   progress: SubagentExecutionProgress,
 ): Promise<{ text: string; toolCallCount: number; successfulToolResultCount: number; terminationReason: string; finalTurnSynthesized?: boolean }> {
-  const controller = new AbortController();
+  const signal = options.signal ?? new AbortController().signal;
   // 子代理作为有限步循环：显式 maxSteps 作为安全网（默认 10，对齐 Vercel 回退路径）
   const maxTurns = options.maxSteps || 10;
 
@@ -425,7 +427,7 @@ async function runSubagentWithClient(
     for await (const message of streamingQuery(client, subRegistry, prompt, {
     systemPrompt: system,
     tools: Array.from(toolSubset.values()).map(t => t.definition),
-    signal: controller.signal,
+    signal,
     maxTurns,
     // Intentional behavior change: child `ask` decisions use the main
     // RuntimeSecurityGate and wait for explicit approval.
@@ -530,7 +532,8 @@ function finalizeSubagentExecution(
   // AUTO-0025 Task 4:reserveFinalTextTurn 启用但 final turn 没合成文本 → incomplete。
   // 物理本质:工时耗尽前给了临时工"写总结"的机会,但他交了白卷——不算完成。
   // 即使 terminationReason 是 end_turn(模型自主结束了),没有总结文本就是没交付。
-  if (execution.finalTurnSynthesized === false) {
+  // Only a normal end-turn may be reclassified as a missing final summary.
+  if (execution.finalTurnSynthesized === false && execution.terminationReason === 'end_turn') {
     return {
       text: `[Subagent incomplete: no final summary] ${text || '(no final text)'}`,
       ...base,
@@ -657,7 +660,7 @@ export async function runSubagent(
         executionProgress,
       );
       text = exec.text;
-      terminationReason = exec.terminationReason;
+      terminationReason = options.signal?.aborted ? 'user_abort' : exec.terminationReason;
       finalTurnSynthesized = exec.finalTurnSynthesized;
     } else {
       // 回退：Vercel AI SDK（仅 Anthropic；测试路径/向后兼容）
@@ -665,10 +668,12 @@ export async function runSubagent(
         model: options.model,
         maxSteps: options.maxSteps || 10,
         system: effectiveSystem,
+        signal: options.signal,
         // E4 deferred: the Vercel fallback still consumes only the checker.
         permissionChecker: options.executionRuntime.permissionChecker,
       });
       text = result.text || '(no summary)';
+      terminationReason = options.signal?.aborted ? 'user_abort' : 'end_turn';
     }
 
     // 克隆文件读取状态到共享池
@@ -720,7 +725,7 @@ export async function runSubagent(
       {
         toolCallCount: executionProgress.toolCallCount,
         successfulToolResultCount: executionProgress.successfulToolResultCount,
-        terminationReason: 'error',
+        terminationReason: options.signal?.aborted ? 'user_abort' : 'error',
         finalTurnSynthesized,
       },
     );
@@ -756,6 +761,7 @@ async function runSubagentBackground(
         model: options.model,
         maxSteps: options.maxSteps || 10,
         system,
+        signal: options.signal,
         // E4 deferred: the Vercel fallback still consumes only the checker.
         permissionChecker: options.executionRuntime.permissionChecker,
       });

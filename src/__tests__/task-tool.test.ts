@@ -94,6 +94,19 @@ describe('createTaskTool clientProvider 接线', () => {
     expect(captured.options!.client).toBe(client);
     expect(captured.options!.cwd).toBeUndefined();
   });
+
+  it('将调用工具的取消信号传给子代理', async () => {
+    const captured: { options?: SubagentOptions } = {};
+    const tool = createTaskTool(fakeRegistry(), executionRuntime, undefined, undefined, makeSpy(captured));
+    const controller = new AbortController();
+
+    await tool.executor(
+      { prompt: 'do something' },
+      { toolUseId: 'task-1', signal: controller.signal },
+    );
+
+    expect(captured.options!.signal).toBe(controller.signal);
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════

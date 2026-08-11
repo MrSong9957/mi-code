@@ -128,8 +128,13 @@ function classifyTurn(input: TurnFinalizationInput): UserTurnStatus {
     (fact) => fact.executionStatus === 'failure',
   );
 
-  // 规则 1 & 2：异常中断（error 或 aborted）
-  if (error || aborted) {
+  // 用户主动中止不是执行失败；没有可见产出时也保留“未完成”语义。
+  if (aborted) {
+    return '部分完成';
+  }
+
+  // 规则 1：异常中断（error）
+  if (error) {
     return hasUsefulOutput ? '部分完成' : '失败';
   }
 

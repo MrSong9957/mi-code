@@ -17,6 +17,7 @@ import type {
   ContentBlock,
 } from '../agent/types.js';
 import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
+import { StreamEventBus } from '../agent/stream-event-bus.js';
 
 /**
  * 录制式流式 fake client。
@@ -320,6 +321,98 @@ describe('streamingQuery 429 限流退避', () => {
     // 非 429 错误不应触发 sleep
     expect(sleepSpy).not.toHaveBeenCalled();
     sleepSpy.mockRestore();
+  });
+});
+
+describe('streamingQuery 用户取消', () => {
+  it('provider 已开始后 abort 时以 user_abort 结束，不报告或重试 API 错误', async () => {
+    class InFlightAbortClient implements StreamingLLMClient {
+      calls = 0;
+      private resolveStarted!: () => void;
+      readonly started = new Promise<void>((resolve) => { this.resolveStarted = resolve; });
+
+      async *stream(
+        _messages: Message[],
+        _tools: ToolDefinition[],
+        options: StreamOptions,
+      ): AsyncGenerator<StreamEvent | AssistantMessage> {
+        this.calls++;
+        yield { type: 'message_start', messageId: 'in_flight', model: 'fake', inputTokens: 1 };
+        this.resolveStarted();
+        await new Promise<never>((_resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(new Error('API error: Request was aborted.')), { once: true });
+        });
+      }
+    }
+
+    const client = new InFlightAbortClient();
+    const eventBus = new StreamEventBus();
+    const errors: string[] = [];
+    const loopEnds: string[] = [];
+    eventBus.onError((event) => errors.push(event.message));
+    eventBus.onLoopEnd((event) => loopEnds.push(event.reason));
+    const controller = new AbortController();
+
+    const running = drain(streamingQuery(client, new ToolRegistry(), 'cancel me', {
+      systemPrompt: 'sys',
+      tools: [],
+      signal: controller.signal,
+      maxTurns: 3,
+      enableStreamingExecution: false,
+      eventBus,
+    }));
+    await client.started;
+    controller.abort();
+
+    await expect(running).resolves.toHaveLength(1);
+    expect(loopEnds).toEqual(['user_abort']);
+    expect(errors).toEqual([]);
+    expect(client.calls).toBe(1);
+  });
+
+  it('provider 在 abort 后正常结束 iterator 时仍以 user_abort 结束', async () => {
+    class GracefulAbortClient implements StreamingLLMClient {
+      calls = 0;
+      private resolveStarted!: () => void;
+      readonly started = new Promise<void>((resolve) => { this.resolveStarted = resolve; });
+
+      async *stream(
+        _messages: Message[],
+        _tools: ToolDefinition[],
+        options: StreamOptions,
+      ): AsyncGenerator<StreamEvent | AssistantMessage> {
+        this.calls++;
+        yield { type: 'message_start', messageId: 'graceful_abort', model: 'fake', inputTokens: 1 };
+        this.resolveStarted();
+        await new Promise<void>((resolve) => {
+          options.signal.addEventListener('abort', resolve, { once: true });
+        });
+      }
+    }
+
+    const client = new GracefulAbortClient();
+    const eventBus = new StreamEventBus();
+    const errors: string[] = [];
+    const loopEnds: string[] = [];
+    eventBus.onError((event) => errors.push(event.message));
+    eventBus.onLoopEnd((event) => loopEnds.push(event.reason));
+    const controller = new AbortController();
+
+    const running = drain(streamingQuery(client, new ToolRegistry(), 'cancel me', {
+      systemPrompt: 'sys',
+      tools: [],
+      signal: controller.signal,
+      maxTurns: 3,
+      enableStreamingExecution: false,
+      eventBus,
+    }));
+    await client.started;
+    controller.abort();
+
+    await expect(running).resolves.toHaveLength(1);
+    expect(loopEnds).toEqual(['user_abort']);
+    expect(errors).toEqual([]);
+    expect(client.calls).toBe(1);
   });
 });
 

@@ -1077,8 +1077,10 @@ async function handleUserSubmit(rawText: string): Promise<void> {
       pipeline.emit({ kind: 'assistant_text', text: assistantText, isFinal: true });
       assistantText = '';
     }
+    if (ac.signal.aborted) {
+      aborted = true;
     // 空响应检测:stream 结束但没收到任何 assistant 内容
-    if (!gotAnyResponse) {
+    } else if (!gotAnyResponse) {
       const hasImage = Array.isArray(userMessageForAgent) && userMessageForAgent.some(b => b.type === 'image');
       tuiHandle?.printStyled(
         hasImage

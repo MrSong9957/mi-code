@@ -48,6 +48,31 @@ function countStatusBlocks(messages: readonly Message[]): number {
 }
 
 describe('finalizeTurnForUser 分类', () => {
+  it('用户中止且没有 useful output 时归为部分完成，而不是失败', () => {
+    const result = finalizeTurnForUser({
+      messages: [],
+      turnStartIndex: 0,
+      toolFacts: [],
+      aborted: true,
+    });
+
+    expect(result.status).toBe('部分完成');
+    expect(result.feedbackText).toContain('当前状态：部分完成');
+  });
+
+  it('普通 provider error 且没有 useful output 时仍归为失败', () => {
+    const result = finalizeTurnForUser({
+      messages: [],
+      turnStartIndex: 0,
+      toolFacts: [],
+      error: 'provider disconnected',
+      aborted: false,
+    });
+
+    expect(result.status).toBe('失败');
+    expect(result.feedbackText).toContain('当前状态：失败');
+  });
+
   it.each([
     {
       name: 'normal final text',

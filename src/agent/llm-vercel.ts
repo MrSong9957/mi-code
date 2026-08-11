@@ -72,6 +72,8 @@ export function createAnthropicProvider(apiKey?: string) {
 }
 
 export interface VercelAIOptions {
+  /** Parent-turn cancellation signal. */
+  signal?: AbortSignal;
   model?: string;
   apiKey?: string;
   maxSteps?: number;
@@ -113,6 +115,7 @@ export async function runWithVercelAI(
     prompt: userMessage,
     tools: vercelTools,
     stopWhen: (options.maxSteps || 10) as any,
+    abortSignal: options.signal,
   });
 
   return {

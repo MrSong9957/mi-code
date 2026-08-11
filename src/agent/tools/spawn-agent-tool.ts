@@ -184,7 +184,7 @@ export function createSpawnAgentTool(
         required: ['role', 'prompt'],
       },
     },
-    executor: async (input) => {
+    executor: async (input, ctx) => {
       const role = input.role as string;
       const prompt = (input.prompt as string)?.trim();
       const allowedTools = Array.isArray(input.allowedTools) ? (input.allowedTools as string[]) : undefined;
@@ -227,6 +227,7 @@ export function createSpawnAgentTool(
           const result = await runSubagentContractedFn(prompt, childTools, {
             client: clientProvider ? clientProvider('inherit') : undefined,
             executionRuntime,
+            signal: ctx?.signal,
             maxSteps: 50,
             skillsDescription,
             forkMode: true,
@@ -240,6 +241,7 @@ export function createSpawnAgentTool(
         const result = await runSubagentFn(prompt, childTools, {
           client: clientProvider ? clientProvider('inherit') : undefined,
           executionRuntime,
+          signal: ctx?.signal,
           maxSteps: 50,  // fork 用于长任务
           skillsDescription,
           forkMode: true,
@@ -265,6 +267,7 @@ export function createSpawnAgentTool(
           role: role as Role,
           client: clientProvider ? clientProvider(modelChoice) : undefined,
           executionRuntime,
+          signal: ctx?.signal,
           maxSteps,
           skillsDescription,
           allowedTools,
@@ -277,6 +280,7 @@ export function createSpawnAgentTool(
         role: role as Role,
         client: clientProvider ? clientProvider(modelChoice) : undefined,
         executionRuntime,
+        signal: ctx?.signal,
         maxSteps,
         skillsDescription,
         journal,

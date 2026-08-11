@@ -719,7 +719,16 @@ export async function* streamingQuery(
           }
         }
       }
+
+      if (signal.aborted) {
+        eventBus?.emitLoopEnd({ reason: 'user_abort' });
+        return;
+      }
     } catch (error) {
+      if (signal.aborted) {
+        eventBus?.emitLoopEnd({ reason: 'user_abort' });
+        return;
+      }
       // 错误恢复：分类错误并决定是否重试
       const errorType = classifyError(error);
       const canRetry = handleError(

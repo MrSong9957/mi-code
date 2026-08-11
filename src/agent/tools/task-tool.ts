@@ -64,7 +64,7 @@ export function createTaskTool(
         required: ['prompt'],
       },
     },
-    executor: async (input) => {
+    executor: async (input, ctx) => {
       const prompt = input.prompt as string;
       const worktreeName = input.worktree as string | undefined;
 
@@ -86,6 +86,7 @@ export function createTaskTool(
       const result = await runSubagentFn(prompt, childTools, {
         cwd,
         executionRuntime,
+        signal: ctx?.signal,
         // task 用 general 角色（继承主模型），传 'inherit' 让 clientProvider 选主模型
         client: clientProvider ? clientProvider('inherit') : undefined,
         journal,

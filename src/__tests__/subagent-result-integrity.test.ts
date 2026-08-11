@@ -5,7 +5,8 @@
 // 或者"干到一半被叫停"（max_turns 退出）却冒充完整结果。
 // 这些测试锁定：未验证的正文被丢弃、中途退出被标记、交互工具被隔离。
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { generateText } from 'ai';
 import { runSubagent } from '../agent/subagent.js';
 import { recoverSubagentWork, type SubagentJournal } from '../agent/subagent-journal.js';
 import { streamingQuery } from '../agent/streaming-query.js';
@@ -21,6 +22,20 @@ import type {
 } from '../agent/types.js';
 import { createToolExecutionRuntime } from './helpers/tool-execution-runtime.js';
 
+vi.mock('@ai-sdk/anthropic', () => ({
+  createAnthropic: vi.fn(() => () => ({})),
+}));
+
+vi.mock('ai', async importOriginal => {
+  const actual = await importOriginal<typeof import('ai')>();
+  return { ...actual, generateText: vi.fn() };
+});
+
+afterEach(() => {
+  vi.mocked(generateText).mockReset();
+  vi.unstubAllEnvs();
+});
+
 // ════════════════════════════════════════════════════════════════════
 // ScriptedStreamClient：按剧本执行的 fake LLM 客户端
 // 复用 streaming-query.test.ts 的模式
@@ -30,6 +45,10 @@ type ScriptBlock = ContentBlock | { type: 'thinking'; thinking: string };
 class ScriptedStreamClient implements StreamingLLMClient {
   private callCount = 0;
   constructor(private scripts: ScriptBlock[][]) {}
+
+  get calls(): number {
+    return this.callCount;
+  }
 
   async *stream(
     _messages: Message[],
@@ -127,6 +146,128 @@ describe('subagent result integrity', () => {
     expect(result.status).toBe('completed');
     expect(result.evidence.successfulToolResultCount).toBe(1);
     expect(result.text).toBe('Verified modules: agent, tui, ui');
+  });
+
+  it('继承已中止的父信号并以 user_abort 结束', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const client = new ScriptedStreamClient([[{ type: 'text', text: 'must not run' }]]);
+
+    const result = await runSubagent('inspect files', makeReadRegistry(), {
+      role: 'explore',
+      client,
+      maxSteps: 2,
+      signal: controller.signal,
+      executionRuntime: createToolExecutionRuntime(),
+    });
+
+    expect(result.status).toBe('incomplete');
+    expect(result.terminationReason).toBe('user_abort');
+    expect(result.text).toContain('aborted by user');
+    expect(client.calls).toBe(0);
+  });
+
+  it('provider 正常返回后 abort 仍以 user_abort 结束', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const client: StreamingLLMClient = {
+      async *stream() {
+        calls++;
+        yield {
+          type: 'assistant',
+          content: [],
+          usage: { input_tokens: 1, output_tokens: 0 },
+          stopReason: 'end_turn',
+          uuid: 'empty-final-response',
+          timestamp: new Date().toISOString(),
+        };
+        // The provider has completed its normal response before this queued abort
+        // runs; the parent classifies the result after runSubagentWithClient returns.
+        queueMicrotask(() => controller.abort());
+      },
+    };
+
+    const result = await runSubagent('inspect files', makeReadRegistry(), {
+      role: 'explore',
+      client,
+      maxSteps: 2,
+      signal: controller.signal,
+      executionRuntime: createToolExecutionRuntime(),
+    });
+
+    expect(calls).toBe(1);
+    expect(result.status).toBe('incomplete');
+    expect(result.terminationReason).toBe('user_abort');
+    expect(result.text).toContain('aborted by user');
+    expect(result.text).not.toContain('no final summary');
+  });
+
+  it('streaming provider 已开始后取消时保留 user_abort 且不再请求', async () => {
+    const controller = new AbortController();
+    let resolveStarted!: () => void;
+    const started = new Promise<void>(resolve => { resolveStarted = resolve; });
+    let calls = 0;
+    let observedSignal: AbortSignal | undefined;
+    const client: StreamingLLMClient = {
+      async *stream(_messages, _tools, options) {
+        calls++;
+        observedSignal = options.signal;
+        resolveStarted();
+        await new Promise<void>((_resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(new Error('provider request aborted')), { once: true });
+        });
+        yield { type: 'message_start', messageId: 'unreachable', model: 'fake', inputTokens: 0 };
+      },
+    };
+
+    const resultPromise = runSubagent('inspect files', makeReadRegistry(), {
+      role: 'explore',
+      client,
+      maxSteps: 2,
+      signal: controller.signal,
+      executionRuntime: createToolExecutionRuntime(),
+    });
+    await started;
+    controller.abort();
+    const result = await resultPromise;
+
+    expect(observedSignal).toBe(controller.signal);
+    expect(calls).toBe(1);
+    expect(result.status).toBe('incomplete');
+    expect(result.terminationReason).toBe('user_abort');
+    expect(result.text).toContain('aborted by user');
+  });
+
+  it('Vercel provider 已开始后取消时保留 user_abort 且不再请求', async () => {
+    const controller = new AbortController();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key');
+    let resolveStarted!: () => void;
+    const started = new Promise<void>(resolve => { resolveStarted = resolve; });
+    let calls = 0;
+    let observedSignal: AbortSignal | undefined;
+    vi.mocked(generateText).mockImplementationOnce(options => {
+      calls++;
+      observedSignal = options.abortSignal;
+      resolveStarted();
+      return new Promise((_resolve, reject) => {
+        options.abortSignal?.addEventListener('abort', () => reject(new Error('provider request aborted')), { once: true });
+      }) as ReturnType<typeof generateText>;
+    });
+
+    const resultPromise = runSubagent('inspect files', makeReadRegistry(), {
+      maxSteps: 2,
+      signal: controller.signal,
+      executionRuntime: createToolExecutionRuntime(),
+    });
+    await started;
+    controller.abort();
+    const result = await resultPromise;
+
+    expect(observedSignal).toBe(controller.signal);
+    expect(calls).toBe(1);
+    expect(result.status).toBe('incomplete');
+    expect(result.terminationReason).toBe('user_abort');
+    expect(result.text).toContain('aborted by user');
   });
 
   it('达到 maxTurns 时不把最后一句过程文本当成完整结果', async () => {

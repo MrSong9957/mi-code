@@ -198,6 +198,24 @@ describe('createSpawnAgentTool', () => {
     expect(calls[0]).toEqual({ prompt: 'find auth code', role: 'explore' });
   });
 
+  it('将调用工具的取消信号传给子代理', async () => {
+    const registry = makeRegistry();
+    let capturedSignal: AbortSignal | undefined;
+    const mockRunner = vi.fn(async (_prompt: string, _tools: ToolRegistry, options: SubagentOptions): Promise<SubagentResult> => {
+      capturedSignal = options.signal;
+      return { text: 'cancelled', isBackground: false, status: 'incomplete', terminationReason: 'user_abort', evidence: { toolCallCount: 0, successfulToolResultCount: 0 } };
+    });
+    const { executor } = createSpawnAgentTool(registry, undefined, executionRuntime, mockRunner);
+    const controller = new AbortController();
+
+    await executor(
+      { role: 'explore', prompt: 'inspect files' },
+      { toolUseId: 'spawn-1', signal: controller.signal },
+    );
+
+    expect(capturedSignal).toBe(controller.signal);
+  });
+
   // ────────────────────────────────────────────────────────────────────
   // AUTO-0025 Task 5:spawn_agent 输出携带结构化 status,让主 agent 区分成功/失败。
   //
