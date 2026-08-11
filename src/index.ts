@@ -864,6 +864,7 @@ async function handleUserSubmit(rawText: string): Promise<void> {
   const compactClient = createStreamClient(provider, apiKey, currentSmallModel(), baseUrl);
   const eventBus = new StreamEventBus();
   const activeToolIds = new Set<string>();
+  const abortedToolIds = new Set<string>();
   // AUTO-0025-transient:用不可变 TurnThinkingState 替换原始 thinkingActive/thinkingContent/thinkingStart。
   // 所有退出路径(content_block_stop thinking、首个 assistant text、onToolCall、loop-end、finally)
   // 统一走 finishTurnThinking,幂等保证只 emit 一次 thinking_end。
@@ -899,7 +900,10 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     pipeline.emit({ kind: 'tool_result', name: d.name, output: d.output, toolUseId: d.toolUseId, durationMs: d.duration, structuredOutcome: d.structuredOutcome });
     refreshSpinnerContext();
   });
-  eventBus.onLoopEnd(() => {
+  eventBus.onLoopEnd(event => {
+    if (event.reason === 'user_abort') {
+      for (const toolUseId of activeToolIds) abortedToolIds.add(toolUseId);
+    }
     handleTurnLoopEnd(turnLifecycle);
   });
   eventBus.onError(d => {
@@ -1106,6 +1110,9 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     // 无论正常结束/错误/中断都走这一步,保证每个非后台用户回合都有恰好一个
     // 用户可见的最终 assistant 状态块(当前状态/已获得结果/失败或受阻位置/下一步)。
     const baseMessages = finalMessages ?? sessionMessages;
+    if (aborted) {
+      pipeline.cancelPendingTools(abortedToolIds);
+    }
     const finalized = finalizeTurnForUser({
       messages: baseMessages,
       turnStartIndex,

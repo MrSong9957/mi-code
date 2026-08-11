@@ -127,6 +127,7 @@ async function main() {
     if (callsBeforeAbort !== expectedCalls || calls.length !== callsBeforeAbort) throw new Error('provider calls continued after abort');
     if (visible.includes('API error') || visible.includes('Request was aborted')) throw new Error('abort rendered as API error');
     if (visible.includes('Current status: Failed')) throw new Error('abort rendered as Failed');
+    if (!visible.includes('cancelled')) throw new Error('missing cancelled tool state');
     if (!visible.includes('Current status: Partially completed')) throw new Error('missing incomplete user-facing status');
   } finally {
     try { terminal.kill(); } catch {}

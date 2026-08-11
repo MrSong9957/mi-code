@@ -7,12 +7,14 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { BlockPipeline } from '../../ui/block-pipeline.js';
+import { StreamEventBus } from '../../agent/stream-event-bus.js';
 import { createLanguageStore } from '../../locale/language-store.js';
 import { createTranslator } from '../../locale/translator.js';
 import { stopSpinnerAndAppendCompletion } from '../../tui/bootstrap.js';
 import { PipelineToStoreAdapter } from '../../tui/state/pipeline-adapter.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { createSpinnerStore } from '../../tui/state/spinner-store.js';
+import { selectCommittedTranscript } from '../../tui/state/transcript-reducer.js';
 import {
   finalizeTurnLifecycle,
   finishTurnThinking,
@@ -171,5 +173,43 @@ describe('turn lifecycle 集成', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+it('cancels the active tool from a user-abort loop end before final feedback', () => {
+  const messagesStore = createMessagesStore();
+  const { pipeline } = createTestPipeline(messagesStore);
+  const activeToolIds = new Set<string>();
+  const abortedToolIds = new Set<string>();
+  const lifecycle: TurnLifecycle = {
+    activeToolIds,
+    setSpinnerHasActiveTools: () => {},
+    emitThinkingEnd: () => {},
+    stopSpinner: () => {},
+    now: Date.now,
+  };
+  const eventBus = new StreamEventBus();
+  eventBus.onToolCall(event => {
+    activeToolIds.add(event.toolUseId);
+    pipeline.emit({ kind: 'tool_call', name: event.name, input: event.input, toolUseId: event.toolUseId });
+  });
+  eventBus.onLoopEnd(event => {
+    if (event.reason === 'user_abort') {
+      for (const toolUseId of activeToolIds) abortedToolIds.add(toolUseId);
+    }
+    handleTurnLoopEnd(lifecycle);
+  });
+
+  eventBus.emitToolCall({ toolUseId: 'spawn-1', name: 'spawn_agent', input: {}, startTime: 0 });
+  eventBus.emitLoopEnd({ reason: 'user_abort' });
+
+  expect(activeToolIds).toEqual(new Set());
+  pipeline.cancelPendingTools(abortedToolIds);
+  pipeline.emit({ kind: 'assistant_text', text: 'Current status: Partially completed', isFinal: true });
+
+  expect(selectCommittedTranscript(messagesStore.getState().model.items).map(item => item.kind))
+    .toEqual(['tool', 'assistant']);
+  expect(messagesStore.getState().model.items[0]).toMatchObject({
+    kind: 'tool', presentations: [{ toolUseId: 'spawn-1', status: 'cancelled' }],
   });
 });
