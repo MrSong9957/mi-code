@@ -124,6 +124,22 @@ function closeOrComplete(group: PendingTool): TimelineItem {
 // reducer:基础构造
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * 单一的 thinking 提交阈值:只有当汇总时长 ≥ 1s 时,thinking summary 才进入
+ * 已固化 transcript。在两个 commit boundary 上统一应用:
+ *  - `summarizeThinking`(分组聚合后的可见摘要)
+ *  - `flushDeferredThinking` / `startTool` 路径 3(独立 flush 的 standalone summary)
+ *
+ * 注意:此阈值作用于「最终形成用户可见 summary 的 commit 边界」,而不是
+ * 原始 `thinking_end` 事件——duration 始终保留,以便后续聚合到 tool 分组。
+ */
+export const THINKING_COMMIT_THRESHOLD_MS = 1_000;
+
+/** 单条 / 聚合后的 thinking 时长是否达到提交阈值。 */
+export function shouldCommitThinking(durationMs: number): boolean {
+  return durationMs >= THINKING_COMMIT_THRESHOLD_MS;
+}
+
 /** 空模型。 */
 export function emptyModel(): TranscriptModel {
   return { items: [], deferredThinking: [] };
@@ -144,13 +160,21 @@ export function deferThinking(
   };
 }
 
-/** 把所有 deferred thinking 按到达顺序追加到 items 末尾,清空队列。 */
+/**
+ * 把所有 deferred thinking 按到达顺序追加到 items 末尾,清空队列。
+ *
+ * 仅提交达到 `THINKING_COMMIT_THRESHOLD_MS`(1s)的 standalone summary;
+ * 时长 < 1s 的不进入已固化 transcript(避免出现 `Thought for 0s`)。
+ */
 export function flushDeferredThinking(model: TranscriptModel): TranscriptModel {
   if (model.deferredThinking.length === 0) {
     return model;
   }
+  const visible = model.deferredThinking.filter(summary =>
+    shouldCommitThinking(summary.durationMs),
+  );
   return {
-    items: [...model.items, ...model.deferredThinking],
+    items: [...model.items, ...visible],
     deferredThinking: [],
   };
 }
@@ -219,7 +243,7 @@ export function startTool(
     return { items: [...prefix, newGroup], deferredThinking: [] };
   }
 
-  // 路径 3:ungroupable → 先 flush deferred(独立 SystemBlock),再追加 closed 单条目
+  // 路径 3:ungroupable → 先 flush deferred(独立 SystemBlock,仅 ≥1s),再追加 closed 单条目
   const closedPending: PendingTool = {
     id: call.activityId,
     kind: 'pending-tool',
@@ -229,7 +253,11 @@ export function startTool(
     closed: true,
   };
   return {
-    items: [...prefix, ...deferred, closedPending],
+    items: [
+      ...prefix,
+      ...deferred.filter(summary => shouldCommitThinking(summary.durationMs)),
+      closedPending,
+    ],
     deferredThinking: [],
   };
 }
@@ -359,9 +387,13 @@ export function orderToolPresentations(
  * 把一组 thinking 元数据汇总成一行人类可读的摘要。
  *
  * - 空 → null
- * - 恰好 1 条且 < 2000ms → null(太短不显示)
- * - 恰好 1 条且 ≥ 2000ms → `Thought Ns`
- * - 多条 → `Thought Ns (M entries)`(不受 2000ms 阈值限制,总是显示)
+ * - 聚合总时长 < `THINKING_COMMIT_THRESHOLD_MS`(1s)→ null(太短不显示)
+ * - 单条且 ≥ 1s → `Thought Ns`
+ * - 多条且聚合 ≥ 1s → `Thought Ns (M entries)`
+ *
+ * 阈值统一作用于聚合总时长(单条 / 多条共享同一规则),不再对单条/多条分别
+ * 采用不同阈值。duration 本身仍保留在 ThinkingGroupMetadata 里,这里只决定
+ * 用户可见的 summary 是否生成。
  */
 export function summarizeThinking(
   entries: readonly ThinkingGroupMetadata[],
@@ -369,16 +401,15 @@ export function summarizeThinking(
   if (entries.length === 0) {
     return null;
   }
-  if (entries.length === 1) {
-    const only = entries[0];
-    if (only.durationMs < 2_000) {
-      return null;
-    }
-    return `Thought ${only.durationMs / 1_000}s`;
-  }
   const totalMs = entries.reduce(
     (sum, entry) => sum + entry.durationMs,
     0,
   );
+  if (!shouldCommitThinking(totalMs)) {
+    return null;
+  }
+  if (entries.length === 1) {
+    return `Thought ${entries[0]!.durationMs / 1_000}s`;
+  }
   return `Thought ${totalMs / 1_000}s (${entries.length} entries)`;
 }

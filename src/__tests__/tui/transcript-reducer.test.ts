@@ -11,10 +11,13 @@ import {
   startTool,
   resolveTool,
   deferThinking,
+  flushDeferredThinking,
   appendBoundaryBlock,
   selectCommittedTranscript,
   orderToolPresentations,
   summarizeThinking,
+  shouldCommitThinking,
+  THINKING_COMMIT_THRESHOLD_MS,
   type ThinkingSummaryBlock,
 } from '../../tui/state/transcript-reducer.js';
 
@@ -191,8 +194,10 @@ describe('tool presentation ordering', () => {
 });
 
 describe('thinking metadata summary', () => {
-  it('returns null for a single entry below 2000ms', () => {
-    expect(summarizeThinking([{ durationMs: 1_000 }])).toBeNull();
+  // Updated from "<2000ms" cutoff to "<1000ms" cutoff (Task 2 unified the
+  // threshold). Intent unchanged: a single short entry is hidden.
+  it('returns null for a single entry below 1000ms', () => {
+    expect(summarizeThinking([{ durationMs: 500 }])).toBeNull();
   });
   it('returns Thought Ns for a single entry at 2000ms', () => {
     expect(summarizeThinking([{ durationMs: 2_000 }])).toBe('Thought 2s');
@@ -202,5 +207,70 @@ describe('thinking metadata summary', () => {
   });
   it('returns null for empty', () => {
     expect(summarizeThinking([])).toBeNull();
+  });
+});
+
+describe('thinking commit threshold (single 1000ms rule)', () => {
+  it('exposes a single 1000ms threshold', () => {
+    expect(THINKING_COMMIT_THRESHOLD_MS).toBe(1000);
+    expect(shouldCommitThinking(999)).toBe(false);
+    expect(shouldCommitThinking(1000)).toBe(true);
+  });
+  it('shows a single grouped entry only at >=1s (was hidden below 2000ms)', () => {
+    expect(summarizeThinking([{ durationMs: 1_500 }])).toBe('Thought 1.5s'); // RED: old rule returned null
+    expect(summarizeThinking([{ durationMs: 500 }])).toBeNull();
+  });
+  it('gates multi-entry by aggregate total, not "always show"', () => {
+    expect(summarizeThinking([{ durationMs: 300 }, { durationMs: 400 }])).toBeNull(); // 700 < 1000
+    expect(summarizeThinking([{ durationMs: 600 }, { durationMs: 600 }])).toBe('Thought 1.2s (2 entries)');
+  });
+  it('flushDeferredThinking drops standalone summaries <1s', () => {
+    const model = {
+      ...emptyModel(),
+      deferredThinking: [thinkingSummary(300), thinkingSummary(2_000)],
+    };
+    const flushed = flushDeferredThinking(model);
+    expect(flushed.items).toHaveLength(1);
+    expect((flushed.items[0] as { durationMs: number }).durationMs).toBe(2_000);
+  });
+  // Path 3 (ungroupable tool) has its own commit/flush site — it is NOT routed
+  // through flushDeferredThinking, so it needs a direct threshold regression test.
+  it('startTool path 3 drops a <1s deferred summary before an ungroupable tool', () => {
+    let model = deferThinking(emptyModel(), thinkingSummary(300));
+    model = startTool(model, {
+      activityId: 't1', toolUseId: 'tu1', toolName: 'run_bash', input: { command: 'ls' },
+    });
+    expect(
+      model.items.filter(
+        item => item.kind === 'system' && item.subkind === 'thinking-summary',
+      ),
+    ).toEqual([]);
+    expect(model.items).toHaveLength(1);
+    expect(model.items[0]).toMatchObject({
+      kind: 'pending-tool',
+      toolName: 'run_bash',
+      closed: true,
+    });
+  });
+  it('startTool path 3 keeps a >=1s deferred summary before an ungroupable tool', () => {
+    let model = deferThinking(emptyModel(), thinkingSummary(2_000));
+    model = startTool(model, {
+      activityId: 't1', toolUseId: 'tu1', toolName: 'run_bash', input: { command: 'ls' },
+    });
+    const summaries = model.items.filter(
+      item => item.kind === 'system' && item.subkind === 'thinking-summary',
+    );
+    expect(summaries).toHaveLength(1);
+    expect((summaries[0] as { durationMs: number }).durationMs).toBe(2_000);
+    // summary emitted via path 3 is positioned before the ungroupable tool
+    const summaryIndex = model.items.findIndex(
+      item => item.kind === 'system' && item.subkind === 'thinking-summary',
+    );
+    const toolIndex = model.items.findIndex(
+      item => item.kind === 'pending-tool' && item.toolName === 'run_bash',
+    );
+    expect(summaryIndex).toBeGreaterThanOrEqual(0);
+    expect(toolIndex).toBeGreaterThanOrEqual(0);
+    expect(summaryIndex).toBeLessThan(toolIndex);
   });
 });

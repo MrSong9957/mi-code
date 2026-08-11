@@ -167,13 +167,16 @@ describe('ToolBlockLine', () => {
     expect(frame).toContain('\u001B[2m');
   });
 
-  it('omits thinking metadata when single entry below 2s', () => {
+  // Updated from "<2s" cutoff to "<1s" cutoff (Task 2 unified the thinking
+  // commit threshold to 1000ms). Intent unchanged: a single short entry is
+  // omitted from the rendered block.
+  it('omits thinking metadata when single entry below 1s', () => {
     const block: ToolBlock = {
       id: 'tg3',
       kind: 'tool',
       toolName: 'glob',
       presentations: [globPresentation('g1', '*.ts', 1)],
-      thinking: [{ durationMs: 1_000 }],
+      thinking: [{ durationMs: 500 }],
     };
     const frame = renderToolBlockLine(block);
     expect(frame).not.toContain('Thought');
