@@ -38,12 +38,23 @@ export function ToolBlockLine({ block, cols }: ToolBlockLineProps): React.ReactE
   const thinkingSummary = summarizeThinking(block.thinking);
 
   // compact-completion(spawn_agent):单行截断,不换行展示子项。
-  const isCompact = block.presentations.some(p => p.layout === 'compact-completion');
-  if (isCompact) {
-    const line = block.presentations[0]?.summary ?? title;
+  const compactPresentation = block.presentations.find(
+    p => p.layout === 'compact-completion',
+  );
+  if (compactPresentation) {
+    const line = compactPresentation.summary;
     return (
       <Box width={cols}>
-        <Text wrap="truncate-end">{'● ' + line}</Text>
+        <Text
+          wrap="truncate-end"
+          color={compactPresentation.status === 'error' ? 'red' : undefined}
+          dimColor={
+            compactPresentation.status === 'empty'
+            || compactPresentation.status === 'cancelled'
+          }
+        >
+          {'● ' + line}
+        </Text>
       </Box>
     );
   }

@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
+import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { LocaleProvider } from '../../../locale/context.js';
 import { createLanguageStore } from '../../../locale/language-store.js';
@@ -61,13 +62,14 @@ function errorGlobPresentation(
   };
 }
 
-function cancelledPresentation(toolUseId: string): ToolPresentation {
+function cancelledPresentation(toolUseId: string, compact = false): ToolPresentation {
   return {
     toolUseId,
     toolName: 'spawn_agent',
     summary: 'spawn_agent → cancelled',
     details: [],
     status: 'cancelled',
+    layout: compact ? 'compact-completion' : undefined,
   };
 }
 
@@ -78,6 +80,21 @@ function renderToolBlockLine(block: ToolBlock, language: Language = 'en-US'): st
       <ToolBlockLine block={block} cols={100} />
     </LocaleProvider>,
   ).lastFrame() ?? '');
+}
+
+function renderRawToolBlockLine(block: ToolBlock): string {
+  const previousLevel = chalk.level;
+  chalk.level = 1;
+  try {
+    const store = createLanguageStore('en-US');
+    return render(
+      <LocaleProvider store={store}>
+        <ToolBlockLine block={block} cols={100} />
+      </LocaleProvider>,
+    ).lastFrame() ?? '';
+  } finally {
+    chalk.level = previousLevel;
+  }
 }
 
 describe('ToolBlockLine', () => {
@@ -134,6 +151,20 @@ describe('ToolBlockLine', () => {
       presentations: [cancelledPresentation('cancelled')],
       thinking: [],
     })).toContain('spawn_agent → cancelled');
+  });
+
+  it('renders a compact cancelled tool dim', () => {
+    const block: ToolBlock = {
+      id: 'compact-cancelled-tool',
+      kind: 'tool',
+      toolName: 'spawn_agent',
+      presentations: [cancelledPresentation('cancelled', true)],
+      thinking: [],
+    };
+    const frame = renderRawToolBlockLine(block);
+
+    expect(stripAnsi(frame)).toContain('● spawn_agent → cancelled');
+    expect(frame).toContain('\u001B[2m');
   });
 
   it('omits thinking metadata when single entry below 2s', () => {
