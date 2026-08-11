@@ -60,6 +60,21 @@ function meaningfulLine(value: unknown): string | null {
   return null;
 }
 
+/**
+ * 从 spawn_agent 的 tool input 派生展示 label。
+ *
+ * 优先级:description(trimmed) > prompt 的有意义首行 > agentFallback(本地化)。
+ * 与 buildSubagentCompletionPresentation / buildSubagentExecutionPresentation 内部
+ * 使用的 label 逻辑一致,提取为导出函数供 block-pipeline 在 startAgent/cancelAgent
+ * 时调用(cancel 路径无 output,只有 buffered input 可用)。
+ */
+export function deriveAgentLabel(input: Record<string, unknown>, translator: Translator): string {
+  const description = typeof input.description === 'string' ? input.description.trim() : '';
+  return description
+    || meaningfulLine(input.prompt)
+    || translator.t('subagent.agentFallback');
+}
+
 /** 状态词映射:completed→finished(更口语),再经当前 Translator 本地化。 */
 function statusWord(status: EnvelopeStatus, translator: Translator): string {
   return translator.t(ENVELOPE_STATUS_KEYS[status]);
@@ -68,7 +83,7 @@ function statusWord(status: EnvelopeStatus, translator: Translator): string {
 /**
  * 格式化时长:ms → Ns 或 Nm Ms,至少 1s。无效/负数按 0。
  */
-function formatDurationFromMs(durationMs: number, translator: Translator): string {
+export function formatDurationFromMs(durationMs: number, translator: Translator): string {
   const safe = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
   const totalSec = Math.max(1, Math.round(safe / 1000));
   if (totalSec < 60) {
@@ -104,11 +119,7 @@ export function buildSubagentCompletionPresentation(
   const [, status, body] = match;
   const fullOutput = body ?? '';
 
-  // label 优先级:description > prompt 有意义行 > agentFallback(本地化)
-  const description = typeof input.description === 'string' ? input.description.trim() : '';
-  const label = description
-    || meaningfulLine(input.prompt)
-    || translator.t('subagent.agentFallback');
+  const label = deriveAgentLabel(input, translator);
 
   const line = `● ${translator.t('subagent.statusLineLabel')} "${label}" ${statusWord(status! as EnvelopeStatus, translator)} · ${formatDurationFromMs(durationMs, translator)}`;
   return { line, fullOutput };
@@ -148,11 +159,7 @@ export function buildSubagentExecutionPresentation(
   durationMs: number,
   translator: Translator,
 ): SubagentCompletionPresentation {
-  // label 优先级:description > prompt 有意义行 > agentFallback(本地化)
-  const description = typeof input.description === 'string' ? input.description.trim() : '';
-  const label = description
-    || meaningfulLine(input.prompt)
-    || translator.t('subagent.agentFallback');
+  const label = deriveAgentLabel(input, translator);
 
   const dur = formatDurationFromMs(durationMs, translator);
 

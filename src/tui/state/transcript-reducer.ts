@@ -19,6 +19,8 @@
 import {
   completeActivity,
   isActivityItem,
+  type AgentBlock,
+  type PendingAgent,
   type PendingTool,
   type SystemBlock,
   type ThinkingGroupMetadata,
@@ -38,8 +40,8 @@ export type ThinkingSummaryBlock = Extract<
   { subkind: 'thinking-summary' }
 >;
 
-/** boundary 块:所有已固化块除 ToolBlock 外(tool 通过 startTool/resolveTool 进入)。 */
-export type BoundaryBlock = Exclude<TranscriptBlock, ToolBlock>;
+/** boundary 块:所有已固化块除 ToolBlock / AgentBlock 外(tool/agent 通过专用 reducer 进入)。 */
+export type BoundaryBlock = Exclude<TranscriptBlock, ToolBlock | AgentBlock>;
 
 /** reducer 的不可变状态。 */
 export interface TranscriptModel {
@@ -56,6 +58,16 @@ export interface StartToolInput {
   toolUseId: string;
   toolName: string;
   input: Record<string, unknown>;
+}
+
+/** startAgent 的入参。 */
+export interface StartAgentInput {
+  /** PendingAgent 的 id(同时是后续 resolveAgent/cancelAgent 的查找键)。 */
+  activityId: string;
+  /** spawn_agent 的 tool_use id(与 activityId 一致,供 pipeline 层传递)。 */
+  agentUseId: string;
+  /** 展示 label(由 deriveAgentLabel 从 input 派生)。 */
+  label: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -303,6 +315,96 @@ export function resolveTool(
   if (!found) {
     return model;
   }
+  return { items: newItems, deferredThinking: model.deferredThinking };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// reducer:子代理(agent)调用归约
+//
+// spawn_agent 是一等公民:不经过 PendingTool/tool 分组逻辑,直接走 PendingAgent
+// 活动项。startAgent 是 boundary(关闭 open tool group + flush deferred thinking),
+// resolveAgent/cancelAgent 原地把 PendingAgent 替换为 AgentBlock。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 开始一个子代理调用:关闭 open tool group → flush deferred thinking → 追加 PendingAgent。
+ *
+ * Agents 永不分组(类似 ungroupable tools),每次调用都创建独立的 PendingAgent。
+ */
+export function startAgent(
+  model: TranscriptModel,
+  call: StartAgentInput,
+): TranscriptModel {
+  const closed = closeOpenToolGroup(model);
+  const flushed = flushDeferredThinking(closed);
+  const agent: PendingAgent = {
+    id: call.activityId,
+    kind: 'pending-agent',
+    label: call.label,
+  };
+  return {
+    items: [...flushed.items, agent],
+    deferredThinking: flushed.deferredThinking,
+  };
+}
+
+/**
+ * 用配对结果完成匹配的 PendingAgent,原地替换为 AgentBlock。
+ *
+ * - 未知 agentUseId(找不到 pending-agent)→ 返回原 model 不变
+ * - 命中 → 构造 AgentBlock(id 来自 PendingAgent,status/summary/durationMs 来自 block)
+ */
+export function resolveAgent(
+  model: TranscriptModel,
+  agentUseId: string,
+  block: Omit<AgentBlock, 'id' | 'kind'>,
+): TranscriptModel {
+  let found = false;
+  const newItems = model.items.map((item): TimelineItem => {
+    if (item.kind === 'pending-agent' && item.id === agentUseId) {
+      found = true;
+      const agentBlock: AgentBlock = {
+        id: item.id,
+        kind: 'agent',
+        label: block.label,
+        status: block.status,
+        ...(block.summary !== undefined ? { summary: block.summary } : {}),
+        ...(block.durationMs !== undefined ? { durationMs: block.durationMs } : {}),
+      };
+      return agentBlock;
+    }
+    return item;
+  });
+  if (!found) return model;
+  return { items: newItems, deferredThinking: model.deferredThinking };
+}
+
+/**
+ * 取消匹配的 PendingAgent,原地替换为 AgentBlock(status: cancelled)。
+ *
+ * - 未知 agentUseId → 返回原 model 不变
+ * - 命中 → 构造 AgentBlock{ status: 'cancelled', label }
+ */
+export function cancelAgent(
+  model: TranscriptModel,
+  agentUseId: string,
+  label: string,
+): TranscriptModel {
+  let found = false;
+  const newItems = model.items.map((item): TimelineItem => {
+    if (item.kind === 'pending-agent' && item.id === agentUseId) {
+      found = true;
+      const agentBlock: AgentBlock = {
+        id: item.id,
+        kind: 'agent',
+        label,
+        status: 'cancelled',
+      };
+      return agentBlock;
+    }
+    return item;
+  });
+  if (!found) return model;
   return { items: newItems, deferredThinking: model.deferredThinking };
 }
 

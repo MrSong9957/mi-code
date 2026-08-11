@@ -7,7 +7,7 @@
 // adapter 是薄桥接:不解析工具输出、不订阅 store 变化、不生成字形。
 
 import type { PipelineRenderer } from '../../ui/block-pipeline.js';
-import type { AskBlock, ToolPresentation } from '../transcript-types.js';
+import type { AgentBlock, AskBlock, ToolPresentation } from '../transcript-types.js';
 import type { BoundaryBlock, ThinkingSummaryBlock } from './transcript-reducer.js';
 import type { MessagesStore } from './messages-store.js';
 
@@ -38,6 +38,20 @@ export class PipelineToStoreAdapter implements PipelineRenderer {
 
   finishAsk(toolUseId: string, block: AskBlock): boolean {
     return this.store.getState().finishAsk(toolUseId, block);
+  }
+
+  // ── 子代理(agent)调用(语义) ──
+
+  startAgent(call: { agentUseId: string; label: string }): void {
+    this.store.getState().startAgent(call);
+  }
+
+  finishAgent(agentUseId: string, block: Omit<AgentBlock, 'id' | 'kind'>): boolean {
+    return this.store.getState().resolveAgent(agentUseId, block);
+  }
+
+  cancelAgent(agentUseId: string, label: string): boolean {
+    return this.store.getState().cancelAgent(agentUseId, label);
   }
 
   closeOpenToolGroup(): void {

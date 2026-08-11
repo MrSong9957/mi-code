@@ -107,6 +107,23 @@ export interface TurnDurationBlock {
   prependBlankLine: boolean;
 }
 
+/**
+ * 一等公民子代理块:spawn_agent 完成后的语义展示。
+ *
+ * 与 ToolBlock 区别:AgentBlock 不含 presentations/details/thinking——它是
+ * 单行语义块(label + status + 可选 summary/duration)。spawn_agent 在 pipeline
+ * 层被路由到 agent 生命周期(startAgent/finishAgent/cancelAgent),不再作为
+ * 通用 ToolBlock 处理。
+ */
+export interface AgentBlock {
+  id: string;
+  kind: 'agent';
+  label: string;
+  status: 'completed' | 'partial' | 'failed' | 'cancelled' | 'unknown';
+  summary?: string;
+  durationMs?: number;
+}
+
 /** 所有已固化 transcript 块的判别联合。 */
 export type TranscriptBlock =
   | UserBlock
@@ -114,7 +131,8 @@ export type TranscriptBlock =
   | ToolBlock
   | AskBlock
   | SystemBlock
-  | TurnDurationBlock;
+  | TurnDurationBlock
+  | AgentBlock;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 活动(未固化,渲染在活动区)
@@ -145,11 +163,24 @@ export interface PendingThinking {
   expandableId?: string;
 }
 
+/**
+ * 运行中的子代理活动项。
+ *
+ * startAgent 创建 PendingAgent;resolveAgent/cancelAgent 把它原地固化为 AgentBlock。
+ * 与 PendingTool 一样是 ActivityItem,不进入 <Static>,直到完成。
+ */
+export interface PendingAgent {
+  id: string;
+  kind: 'pending-agent';
+  label: string;
+}
+
 /** 所有活动项的判别联合。kind 集合与 TranscriptBlock 不相交。 */
 export type ActivityItem =
   | StreamingAssistant
   | PendingTool
-  | PendingThinking;
+  | PendingThinking
+  | PendingAgent;
 
 /** 完整时间线 = 已固化块 + 活动项。 */
 export type TimelineItem = TranscriptBlock | ActivityItem;
@@ -159,10 +190,10 @@ export type TimelineItem = TranscriptBlock | ActivityItem;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TRANSCRIPT_KINDS = new Set<string>([
-  'user', 'assistant', 'tool', 'ask', 'system', 'turn-duration',
+  'user', 'assistant', 'tool', 'ask', 'system', 'turn-duration', 'agent',
 ]);
 const ACTIVITY_KINDS = new Set<string>([
-  'streaming-assistant', 'pending-tool', 'pending-thinking',
+  'streaming-assistant', 'pending-tool', 'pending-thinking', 'pending-agent',
 ]);
 
 /** 判断时间线条目是否为已固化 transcript 块。 */
@@ -194,6 +225,7 @@ function assertNever(value: never): never {
 export function completeActivity(item: StreamingAssistant): AssistantBlock;
 export function completeActivity(item: PendingTool): ToolBlock;
 export function completeActivity(item: PendingThinking): SystemBlock;
+export function completeActivity(item: PendingAgent): AgentBlock;
 export function completeActivity(item: ActivityItem): TranscriptBlock {
   switch (item.kind) {
     case 'streaming-assistant':
@@ -223,6 +255,11 @@ export function completeActivity(item: ActivityItem): TranscriptBlock {
         expandableId: item.expandableId,
         groupBoundary: 'transparent',
       };
+    case 'pending-agent':
+      // Bare PendingAgent has no outcome data → default to 'unknown'.
+      // resolveAgent/cancelAgent construct the full AgentBlock directly
+      // (with real status/summary/durationMs) rather than calling this path.
+      return { id: item.id, kind: 'agent', label: item.label, status: 'unknown' };
     default:
       return assertNever(item);
   }

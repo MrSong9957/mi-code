@@ -16,6 +16,11 @@ describe('presentationChannel', () => {
     expect(presentationChannel(hookOk())).toBe('diagnostics');
     expect(presentationChannel(hookErr())).toBe('activity');
   });
+
+  it('classifies agent as activity', () => {
+    const agent: TranscriptBlock = { id: 'a1', kind: 'agent', label: 'explore', status: 'completed' };
+    expect(presentationChannel(agent)).toBe('activity');
+  });
 });
 
 describe('isVisibleInNormalMode', () => {

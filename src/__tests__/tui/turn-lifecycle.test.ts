@@ -208,8 +208,8 @@ it('cancels the active tool from a user-abort loop end before final feedback', (
   pipeline.emit({ kind: 'assistant_text', text: 'Current status: Partially completed', isFinal: true });
 
   expect(selectCommittedTranscript(messagesStore.getState().model.items).map(item => item.kind))
-    .toEqual(['tool', 'assistant']);
+    .toEqual(['agent', 'assistant']);
   expect(messagesStore.getState().model.items[0]).toMatchObject({
-    kind: 'tool', presentations: [{ toolUseId: 'spawn-1', status: 'cancelled' }],
+    kind: 'agent', id: 'spawn-1', status: 'cancelled',
   });
 });

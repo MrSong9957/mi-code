@@ -17,6 +17,7 @@ import type {
   AssistantBlock,
   SystemBlock,
   TurnDurationBlock,
+  AgentBlock,
   TranscriptBlock,
 } from '../../../tui/transcript-types.js';
 
@@ -169,6 +170,18 @@ describe('TranscriptBlockLine', () => {
     const frame = stripAnsi(renderTranscriptBlock(block, 100));
     expect(frame).toContain('Cooked');
     expect(frame).toContain('5s');
+  });
+
+  it('routes agent → AgentBlockLine', () => {
+    const block: AgentBlock = {
+      id: 'ag1',
+      kind: 'agent',
+      label: 'explore',
+      status: 'completed',
+      durationMs: 4000,
+    };
+    const frame = stripAnsi(renderTranscriptBlock(block, 100));
+    expect(frame).toContain('● Agent "explore" finished · 4s');
   });
 
   it.each(BG_MUTED_CASES)(

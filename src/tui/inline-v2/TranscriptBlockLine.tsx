@@ -24,6 +24,7 @@ import { useTheme } from '../state/theme-context.js';
 import { ToolBlockLine } from './ToolBlockLine.js';
 import { AskBlockLine } from './AskBlockLine.js';
 import { AssistantBlockLine } from './AssistantBlockLine.js';
+import { AgentBlockLine } from './AgentBlockLine.js';
 import {
   layoutUserBlockRows,
   shouldShowUserPrompt,
@@ -111,6 +112,9 @@ export function TranscriptBlockLine({ block, cols }: TranscriptBlockLineProps): 
           <Text dimColor>{'✻ ' + block.verb + ' for ' + formatSpinnerDuration(block.durationMs)}</Text>
         </Box>
       );
+
+    case 'agent':
+      return <AgentBlockLine block={block} cols={cols} />;
 
     default:
       return assertNever(block);

@@ -17,27 +17,25 @@ import { createTranslator } from '../../locale/translator.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { PipelineToStoreAdapter } from '../../tui/state/pipeline-adapter.js';
 import { selectCommittedTranscript } from '../../tui/state/transcript-reducer.js';
-import type { PendingTool, ToolBlock } from '../../tui/transcript-types.js';
+import type { AgentBlock, PendingAgent, PendingTool, ToolBlock } from '../../tui/transcript-types.js';
 
 describe('tool lifecycle visibility', () => {
-  it('\u8c03\u7528\u4e8b\u4ef6\u5355\u72ec\u5230\u8fbe\u65f6\u7acb\u5373\u663e\u793a pending tool', () => {
+  it('\u8c03\u7528\u4e8b\u4ef6\u5355\u72ec\u5230\u8fbe\u65f6\u7acb\u5373\u663e\u793a pending agent', () => {
     const { pipeline, store } = setup();
     pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: { task: 'inspect' }, toolUseId: 't1' });
 
     const items = store.getState().model.items;
+    // Task 4: spawn_agent 现在路由到 agent 生命周期 → PendingAgent(非 PendingTool)。
+    // input 无 description/prompt → label 回退到 subagent.agentFallback(zh-CN: '代理')。
     expect(items).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        kind: 'pending-tool',
-        toolName: 'spawn_agent',
-        closed: true, // spawn_agent 不可分组,reducer 立即标记 closed;entry 未解析前仍是 pending-tool
-        entries: expect.arrayContaining([
-          expect.objectContaining({ toolUseId: 't1', input: { task: 'inspect' } }),
-        ]),
+        kind: 'pending-agent',
+        id: 't1',
+        label: '代理',
       }),
     ]));
-    // 契约:entry 尚无 presentation(未配对 result)
-    const pt = items.find(i => i.kind === 'pending-tool') as PendingTool | undefined;
-    expect(pt?.entries[0]?.presentation).toBeUndefined();
+    // 契约:无 pending-tool 残留(spawn_agent 不再走 tool 路径)
+    expect(items.some(i => i.kind === 'pending-tool')).toBe(false);
   });
 
   it('\u4e24\u4e2a pending tool \u7ed3\u679c\u5012\u5e8f\u5230\u8fbe\u4ecd\u4fdd\u6301\u8c03\u7528\u987a\u5e8f', () => {
@@ -119,36 +117,36 @@ describe('tool lifecycle visibility', () => {
   // pending-tool 的 entries 只反映外层 tool_call/tool_result 配对,无子明细字段。
   // ────────────────────────────────────────────────────────────────────
 
-  it('外层 spawn_agent pending 只有 call,子代理活动不污染 presentation', () => {
+  it('外层 spawn_agent pending 只有 call,子代理活动不污染 agent block', () => {
     const { pipeline, store } = setup();
     pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: { role: 'explore' }, toolUseId: 'spawn-1' });
 
     const items = store.getState().model.items;
+    // Task 4: spawn_agent → PendingAgent(非 PendingTool)。
     const spawn1 = items.find(i =>
-      i.kind === 'pending-tool' && i.entries.some(e => e.toolUseId === 'spawn-1'),
-    ) as PendingTool | undefined;
+      i.kind === 'pending-agent' && i.id === 'spawn-1',
+    ) as PendingAgent | undefined;
     expect(spawn1).toBeDefined();
-    // 契约:spawn_agent 不可分组 → 立即 closed
-    expect(spawn1!.closed).toBe(true);
-    expect(spawn1!.toolName).toBe('spawn_agent');
-    // 契约:entry 尚未配对 presentation(无子明细)
-    expect(spawn1!.entries).toHaveLength(1);
-    expect(spawn1!.entries[0]!.presentation).toBeUndefined();
+    expect(spawn1!.label).toBe('代理'); // 无 description/prompt → fallback
+    // 契约:无 pending-tool 残留
+    expect(items.some(i => i.kind === 'pending-tool')).toBe(false);
   });
 
-  it('外层 spawn_agent 结果到达后,pending 原地固化成 ToolBlock', () => {
+  it('外层 spawn_agent 结果到达后,pending 原地固化成 AgentBlock', () => {
     const { pipeline, store } = setup();
     pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'spawn-1' });
     pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'subagent summary', toolUseId: 'spawn-1' });
 
     const items = store.getState().model.items;
-    // spawn_agent 是不可分组工具:closed + 单 entry 已解析 → 原地固化成 ToolBlock。
-    const tool = items.find(i => i.kind === 'tool') as ToolBlock | undefined;
-    expect(tool).toBeDefined();
-    expect(tool!.toolName).toBe('spawn_agent');
-    // 通用展示:summary 来自 summarizeOutput(取首个非空行),details 含完整 output。
-    expect(tool!.presentations.length).toBeGreaterThanOrEqual(1);
-    expect(tool!.presentations.some(p => p.details.some(d => 'text' in d && d.text.includes('subagent summary')))).toBe(true);
+    // Task 4: spawn_agent 结果 → AgentBlock(非 ToolBlock)。
+    // output 'subagent summary' 无 [Subagent status=...] envelope → status 'unknown'。
+    const agent = items.find(i => i.kind === 'agent') as AgentBlock | undefined;
+    expect(agent).toBeDefined();
+    expect(agent!.label).toBe('代理');
+    expect(agent!.status).toBe('unknown');
+    // 契约:无 ToolBlock / pending-agent 残留
+    expect(items.some(i => i.kind === 'tool')).toBe(false);
+    expect(items.some(i => i.kind === 'pending-agent')).toBe(false);
   });
 
   it('并行 spawn 各自独立 pending,resolve 一个不影响其余', () => {
@@ -159,18 +157,17 @@ describe('tool lifecycle visibility', () => {
     pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'one', toolUseId: 'spawn-1' });
 
     const items = store.getState().model.items;
-    // spawn-1:closed + 已解析 → ToolBlock
-    const spawn1Tool = items.find(i =>
-      i.kind === 'tool' && i.presentations.some(p => p.toolUseId === 'spawn-1'),
-    ) as ToolBlock | undefined;
-    expect(spawn1Tool).toBeDefined();
-    // spawn-2:仍是 pending-tool(closed 但未解析)
+    // spawn-1:已解析 → AgentBlock(unknown,无 envelope)
+    const spawn1Agent = items.find(i =>
+      i.kind === 'agent' && i.id === 'spawn-1',
+    ) as AgentBlock | undefined;
+    expect(spawn1Agent).toBeDefined();
+    // spawn-2:仍是 pending-agent
     const spawn2Pending = items.find(i =>
-      i.kind === 'pending-tool' && i.entries.some(e => e.toolUseId === 'spawn-2'),
-    ) as PendingTool | undefined;
+      i.kind === 'pending-agent' && i.id === 'spawn-2',
+    ) as PendingAgent | undefined;
     expect(spawn2Pending).toBeDefined();
-    expect(spawn2Pending!.toolName).toBe('spawn_agent');
-    expect(spawn2Pending!.entries[0]!.presentation).toBeUndefined();
+    expect(spawn2Pending!.label).toBe('代理');
   });
 
   it('孤儿 result 后 hook 不污染已固化工具块', () => {
@@ -202,43 +199,46 @@ describe('tool lifecycle visibility', () => {
     )).toBe(true);
   });
 
-  it('commits a cancelled tool before the final assistant response', () => {
+  it('commits a cancelled agent before the final assistant response', () => {
     const { pipeline, store } = setup();
     pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'spawn-1' });
     pipeline.cancelPendingTools(new Set(['spawn-1']));
     pipeline.emit({ kind: 'assistant_text', text: 'Current status: Partially completed', isFinal: true });
 
+    // Task 4: cancelled spawn_agent → AgentBlock(cancelled), not ToolBlock.
     expect(selectCommittedTranscript(store.getState().model.items).map(item => item.kind))
-      .toEqual(['tool', 'assistant']);
+      .toEqual(['agent', 'assistant']);
     expect(store.getState().model.items[0]).toMatchObject({
-      kind: 'tool', presentations: [{ toolUseId: 'spawn-1', status: 'cancelled' }],
+      kind: 'agent', id: 'spawn-1', status: 'cancelled',
     });
   });
 
-  it('leaves unlisted pending tools unresolved', () => {
+  it('leaves unlisted pending agents unresolved', () => {
     const { pipeline, store } = setup();
     pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'spawn-1' });
     pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'spawn-2' });
     pipeline.cancelPendingTools(new Set(['spawn-1']));
 
+    // Task 4: spawn-2 remains a pending-agent (not pending-tool).
     expect(store.getState().model.items.some(item =>
-      item.kind === 'pending-tool' && item.entries.some(entry => entry.toolUseId === 'spawn-2' && entry.presentation === undefined),
+      item.kind === 'pending-agent' && item.id === 'spawn-2',
     )).toBe(true);
   });
 
-  it('does not overwrite resolved success or error presentations', () => {
+  it('does not overwrite resolved agent presentations', () => {
     const { pipeline, store } = setup();
     pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'success-1' });
-    pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'done', toolUseId: 'success-1' });
+    pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: '[Subagent status=completed]\ndone', toolUseId: 'success-1' });
     pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'error-1' });
     pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'Error: failed', toolUseId: 'error-1' });
 
     pipeline.cancelPendingTools(new Set(['success-1', 'error-1']));
-    const presentations = store.getState().model.items
-      .filter(item => item.kind === 'tool')
-      .flatMap(item => item.presentations);
-    expect(presentations.find(presentation => presentation.toolUseId === 'success-1')?.status).toBe('success');
-    expect(presentations.find(presentation => presentation.toolUseId === 'error-1')?.status).toBe('error');
+    // Task 4: both resolved before cancel → AgentBlocks; cancel is no-op (already resolved).
+    // success-1 has envelope → completed; error-1 has no envelope → unknown.
+    const agents = store.getState().model.items
+      .filter(item => item.kind === 'agent') as AgentBlock[];
+    expect(agents.find(a => a.id === 'success-1')?.status).toBe('completed');
+    expect(agents.find(a => a.id === 'error-1')?.status).toBe('unknown');
   });
 });
 

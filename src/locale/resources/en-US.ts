@@ -321,6 +321,7 @@ export const enUS: CanonicalResources = {
         partial: 'partial',
         failed: 'failed',
         cancelled: 'cancelled',
+        unknown: 'unknown',
       },
       duration: {
         seconds: '{count}s',

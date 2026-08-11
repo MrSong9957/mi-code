@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { BlockPipeline, type PipelineRenderer } from '../../ui/block-pipeline.js';
 import { createLanguageStore } from '../../locale/language-store.js';
 import { createTranslator } from '../../locale/translator.js';
-import type { ToolPresentation, AskBlock } from '../../tui/transcript-types.js';
+import type { AgentBlock, ToolPresentation, AskBlock } from '../../tui/transcript-types.js';
 import type {
   BoundaryBlock,
   ThinkingSummaryBlock,
@@ -25,6 +25,9 @@ type RecordedCall =
   | { type: 'startToolCall'; toolUseId: string; name: string; input: Record<string, unknown> }
   | { type: 'finishToolCall'; toolUseId: string; presentation: ToolPresentation; result: boolean }
   | { type: 'finishAsk'; toolUseId: string; block: AskBlock; result: boolean }
+  | { type: 'startAgent'; agentUseId: string; label: string }
+  | { type: 'finishAgent'; agentUseId: string; block: Omit<AgentBlock, 'id' | 'kind'>; result: boolean }
+  | { type: 'cancelAgent'; agentUseId: string; label: string; result: boolean }
   | { type: 'appendStreamingMarkdown'; text: string; isFinal: boolean }
   | { type: 'sealStreaming' }
   | { type: 'startThinking'; text: string }
@@ -39,6 +42,8 @@ type RecordedCall =
 class RecordingRenderer implements PipelineRenderer {
   readonly calls: RecordedCall[] = [];
   finishToolCallResult = true;
+  finishAgentResult = true;
+  cancelAgentResult = true;
 
   startToolCall(call: {
     toolUseId: string;
@@ -61,6 +66,20 @@ class RecordingRenderer implements PipelineRenderer {
   finishAsk(toolUseId: string, block: AskBlock): boolean {
     this.calls.push({ type: 'finishAsk', toolUseId, block, result: true });
     return true;
+  }
+
+  startAgent(call: { agentUseId: string; label: string }): void {
+    this.calls.push({ type: 'startAgent', agentUseId: call.agentUseId, label: call.label });
+  }
+
+  finishAgent(agentUseId: string, block: Omit<AgentBlock, 'id' | 'kind'>): boolean {
+    this.calls.push({ type: 'finishAgent', agentUseId, block, result: this.finishAgentResult });
+    return this.finishAgentResult;
+  }
+
+  cancelAgent(agentUseId: string, label: string): boolean {
+    this.calls.push({ type: 'cancelAgent', agentUseId, label, result: this.cancelAgentResult });
+    return this.cancelAgentResult;
   }
 
   closeOpenToolGroup(): void {
@@ -313,8 +332,8 @@ describe('BlockPipeline emit 路由', () => {
     expect(finishes[1]!.toolUseId).toBe('fifo-2');
   });
 
-  // 10. tool_result spawn_agent → layout: 'compact-completion'
-  it('tool_result spawn_agent → finishToolCall 带 layout:"compact-completion" 的 presentation', () => {
+  // 10. tool_result spawn_agent → agent lifecycle (startAgent + finishAgent, NOT tool path)
+  it('routes spawn_agent through agent lifecycle via toolBuffer, not generic ToolBlock', () => {
     const { recorder, pipeline } = setup();
     pipeline.emit({
       kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
@@ -325,18 +344,39 @@ describe('BlockPipeline emit 路由', () => {
       output: '[Subagent status=completed]\nfull child result body',
     });
 
-    const finishes = recorder.of('finishToolCall');
+    // Agent lifecycle: startAgent called, finishAgent called
+    const starts = recorder.of('startAgent');
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ agentUseId: 'a1', label: '查找实现' });
+
+    const finishes = recorder.of('finishAgent');
     expect(finishes).toHaveLength(1);
-    const p = finishes[0]!.presentation;
-    expect(p.layout).toBe('compact-completion');
-    expect(p.toolName).toBe('spawn_agent');
-    expect(p.status).toBe('success');
-    // summary 来自 buildSubagentCompletionPresentation(line)
-    expect(p.summary).toContain('子代理 "查找实现"');
-    expect(p.summary).toContain('已完成');
+    expect(finishes[0]!.agentUseId).toBe('a1');
+    expect(finishes[0]!.block.status).toBe('completed');
+    expect(finishes[0]!.block.label).toBe('查找实现');
+    expect(finishes[0]!.block.summary).toContain('full child result body');
+    expect(finishes[0]!.block.durationMs).toBe(5000);
+
+    // NOT routed through generic tool path
+    expect(recorder.of('startToolCall')).toHaveLength(0);
+    expect(recorder.of('finishToolCall')).toHaveLength(0);
   });
 
-  it('spawn_agent malformed(无 envelope)→ 走通用降级,无 compact-completion layout', () => {
+  it('spawn_agent envelope incomplete → AgentBlock status partial', () => {
+    const { recorder, pipeline } = setup();
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
+      input: { description: 'task' },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'spawn_agent', toolUseId: 'a1',
+      output: '[Subagent status=incomplete reason=stopped]\npartial body',
+    });
+    const finishes = recorder.of('finishAgent');
+    expect(finishes[0]!.block.status).toBe('partial');
+  });
+
+  it('spawn_agent malformed(无 envelope)→ finishAgent status unknown, NOT finishToolCall', () => {
     const { recorder, pipeline } = setup();
     pipeline.emit({
       kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a2',
@@ -347,8 +387,11 @@ describe('BlockPipeline emit 路由', () => {
       output: 'malformed output',
     });
 
-    const finishes = recorder.of('finishToolCall');
-    expect(finishes[0]!.presentation.layout).toBeUndefined();
+    // Malformed → finishAgent with status 'unknown' (NOT finishToolCall)
+    const finishes = recorder.of('finishAgent');
+    expect(finishes).toHaveLength(1);
+    expect(finishes[0]!.block.status).toBe('unknown');
+    expect(recorder.of('finishToolCall')).toHaveLength(0);
   });
 
   // 11. hook → appendTranscriptBlock({ kind:'system', subkind:'notification' })
@@ -391,22 +434,38 @@ describe('BlockPipeline emit 路由', () => {
 describe('BlockPipeline cancellation', () => {
   it('cancels only unresolved target once and ignores one late result', () => {
     const { recorder, pipeline } = setup();
-    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'child-1' });
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: { description: 'task' }, toolUseId: 'child-1' });
 
     pipeline.cancelPendingTools(new Set(['child-1']));
-    expect(recorder.of('finishToolCall')).toMatchObject([
-      { toolUseId: 'child-1', presentation: { status: 'cancelled' } },
-    ]);
+    // spawn_agent cancel → cancelAgent (NOT finishToolCall)
+    const cancels = recorder.of('cancelAgent');
+    expect(cancels).toMatchObject([{ agentUseId: 'child-1', label: 'task' }]);
 
     pipeline.cancelPendingTools(new Set(['child-1']));
-    expect(recorder.of('finishToolCall')).toHaveLength(1);
+    expect(recorder.of('cancelAgent')).toHaveLength(1);
+    // First late result: tombstoned (cancelledToolUseIds), silently dropped — no orphan.
     pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'late', toolUseId: 'child-1' });
+    expect(recorder.of('startToolCall')).toHaveLength(0);
+    expect(recorder.of('finishToolCall')).toHaveLength(0);
+
+    // Second late result: tombstone consumed, falls through to orphan path.
+    pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'later', toolUseId: 'child-1' });
     expect(recorder.of('startToolCall')).toHaveLength(1);
     expect(recorder.of('finishToolCall')).toHaveLength(1);
+  });
 
-    pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'later', toolUseId: 'child-1' });
-    expect(recorder.of('startToolCall')).toHaveLength(2);
-    expect(recorder.of('finishToolCall')).toHaveLength(2);
+  it('cancel derives label from buffered toolBuffer input', () => {
+    const { recorder, pipeline } = setup();
+    pipeline.emit({
+      kind: 'tool_call', name: 'spawn_agent', toolUseId: 'a1',
+      input: { description: '查找实现', prompt: 'some prompt' },
+    });
+    pipeline.cancelPendingTools(new Set(['a1']));
+    const cancels = recorder.of('cancelAgent');
+    expect(cancels).toHaveLength(1);
+    // Label derived from input.description (trimmed)
+    expect(cancels[0]!.label).toBe('查找实现');
+    expect(cancels[0]!.agentUseId).toBe('a1');
   });
 
   it('does not tombstone missing, resolved, or renderer-rejected calls', () => {

@@ -300,6 +300,9 @@ function refreshSpinnerContext(): void {
 let pipeline = new BlockPipeline({
   startToolCall: () => {},
   finishToolCall: () => false,
+  startAgent: () => {},
+  finishAgent: () => false,
+  cancelAgent: () => false,
   appendStreamingMarkdown: () => {},
   sealStreaming: () => {},
   startThinking: () => '',

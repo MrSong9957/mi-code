@@ -272,6 +272,7 @@ export const zhCN = {
         partial: '部分完成',
         failed: '失败',
         cancelled: '已取消',
+        unknown: '未知',
       },
       duration: {
         seconds: '{count} 秒',

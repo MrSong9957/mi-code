@@ -1154,6 +1154,80 @@ describe('<InlineAppV2> agent-completion 单行展示', () => {
     const agentLineCount = lines.filter(l => l.includes('Agent')).length;
     expect(agentLineCount).toBe(1);
   });
+
+  it('cancelled agent renders Agent "label" cancelled, never spawn_agent → cancelled', () => {
+    const stores = createStores();
+    const s = stores.messagesStore.getState();
+    // Drive spawn_agent through the first-class agent path (startAgent + cancelAgent).
+    s.startAgent({ agentUseId: 'a1', label: 'explore' });
+    s.cancelAgent('a1', 'explore');
+
+    const { lastFrame } = render(<InlineAppV2 {...makeProps(stores)} />);
+    const frame = lastFrame() ?? '';
+    // AgentBlock renders: ● Agent "explore" cancelled
+    expect(frame).toContain('Agent "explore" cancelled');
+    // Must NOT show the old tool-path cancel text
+    expect(frame).not.toContain('spawn_agent → cancelled');
+    // store: AgentBlock exists, no pending-agent
+    const items = stores.messagesStore.getState().model.items;
+    expect(items.some(i => i.kind === 'agent')).toBe(true);
+    expect(items.some(i => i.kind === 'pending-agent')).toBe(false);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 4:pending-agent 活动行渲染(一等公民 PendingAgent)。
+//
+// 验证:运行中的子代理(spawn_agent 经 pipeline 路由到 startAgent)在活动区
+// 渲染为固定一行的闪烁指示器,完成后消失。
+// ──────────────────────────────────────────────────────────────────────────
+
+describe('<InlineAppV2> pending-agent 活动行', () => {
+  it('pending agent 在活动区可见(运行中子代理)', () => {
+    const stores = createStores();
+    const s = stores.messagesStore.getState();
+    s.startAgent({ agentUseId: 'spawn-1', label: 'explore' });
+
+    const { lastFrame } = render(<InlineAppV2 {...makeProps(stores)} />);
+    const frame = lastFrame() ?? '';
+    // PendingAgent renders: ● Agent "explore" (activity area)
+    expect(frame).toContain('Agent "explore"');
+    expect(frame).toContain('●');
+    // store: one pending-agent activity item
+    const items = stores.messagesStore.getState().model.items;
+    expect(items.filter(i => i.kind === 'pending-agent')).toHaveLength(1);
+  });
+
+  it('pending agent 完成后用 AgentBlock 固化渲染,无 pending 指示器残留', () => {
+    const stores = createStores();
+    const s = stores.messagesStore.getState();
+    s.startAgent({ agentUseId: 'a1', label: 'explore' });
+    s.resolveAgent('a1', { label: 'explore', status: 'completed', durationMs: 3000 });
+
+    const { lastFrame } = render(<InlineAppV2 {...makeProps(stores)} />);
+    const frame = lastFrame() ?? '';
+    // AgentBlock renders: ● Agent "explore" finished · 3s
+    expect(frame).toContain('Agent "explore" finished · 3s');
+    // No pending-agent in store
+    const items = stores.messagesStore.getState().model.items;
+    expect(items.some(i => i.kind === 'agent')).toBe(true);
+    expect(items.some(i => i.kind === 'pending-agent')).toBe(false);
+  });
+
+  it('pending agent + pending tool 共存时 footer 仍可见(inputRowY 计算正确)', () => {
+    const stores = createStores();
+    const s = stores.messagesStore.getState();
+    s.startAgent({ agentUseId: 'a1', label: 'explore' });
+    s.startTool({ toolUseId: 't1', toolName: 'run_bash', input: {} });
+
+    const { lastFrame } = render(<InlineAppV2 {...makeProps(stores)} cols={40} />);
+    const frame = lastFrame() ?? '';
+    // Both activity rows visible
+    expect(frame).toContain('Agent "explore"');
+    expect(frame).toContain('run_bash');
+    // footer still visible (inputRowY correct)
+    expect(frame).toContain('❯');
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────────

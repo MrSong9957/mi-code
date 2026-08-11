@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   completeActivity,
+  type AgentBlock,
   type AssistantBlock,
+  type PendingAgent,
   type PendingTool,
   type ToolBlock,
   type ToolPresentation,
@@ -10,6 +12,9 @@ import {
   emptyModel,
   startTool,
   resolveTool,
+  startAgent,
+  resolveAgent,
+  cancelAgent,
   deferThinking,
   flushDeferredThinking,
   appendBoundaryBlock,
@@ -176,6 +181,92 @@ describe('transcript reducer grouping', () => {
 
     const completed = completePendingTool(pending, [globPresentation('g1')]);
     expect(selectCommittedTranscript([completed, later])).toEqual([completed, later]);
+  });
+});
+
+describe('agent lifecycle (startAgent / resolveAgent / cancelAgent)', () => {
+  it('startAgent pushes a PendingAgent activity item and never groups', () => {
+    let model = emptyModel();
+    model = startAgent(model, { activityId: 'agent-1', agentUseId: 'a1', label: 'explore' });
+    expect(model.items).toHaveLength(1);
+    expect(model.items[0]).toMatchObject({
+      kind: 'pending-agent',
+      id: 'agent-1',
+      label: 'explore',
+    });
+
+    // A second agent does NOT group with the first — each is standalone.
+    model = startAgent(model, { activityId: 'agent-2', agentUseId: 'a2', label: 'plan' });
+    expect(model.items.filter(i => i.kind === 'pending-agent')).toHaveLength(2);
+  });
+
+  it('resolveAgent completes the matching PendingAgent to an AgentBlock with the provided status', () => {
+    let model = startAgent(emptyModel(), {
+      activityId: 'a1', agentUseId: 'a1', label: 'explore',
+    });
+    model = resolveAgent(model, 'a1', {
+      label: 'explore',
+      status: 'completed',
+      summary: 'found 3 files',
+      durationMs: 5000,
+    });
+    expect(model.items.some(i => i.kind === 'pending-agent')).toBe(false);
+    const block = model.items.find(i => i.kind === 'agent') as AgentBlock | undefined;
+    expect(block).toBeDefined();
+    expect(block!).toMatchObject({
+      kind: 'agent',
+      id: 'a1',
+      label: 'explore',
+      status: 'completed',
+      summary: 'found 3 files',
+      durationMs: 5000,
+    });
+  });
+
+  it('resolveAgent on unknown agentUseId returns model unchanged', () => {
+    const model = startAgent(emptyModel(), {
+      activityId: 'a1', agentUseId: 'a1', label: 'explore',
+    });
+    const next = resolveAgent(model, 'nonexistent', { label: 'x', status: 'completed' });
+    expect(next).toBe(model);
+  });
+
+  it('cancelAgent completes to an AgentBlock with status cancelled and the provided label', () => {
+    let model = startAgent(emptyModel(), {
+      activityId: 'a1', agentUseId: 'a1', label: 'explore',
+    });
+    model = cancelAgent(model, 'a1', 'explore');
+    expect(model.items.some(i => i.kind === 'pending-agent')).toBe(false);
+    const block = model.items.find(i => i.kind === 'agent') as AgentBlock | undefined;
+    expect(block).toBeDefined();
+    expect(block!).toMatchObject({
+      kind: 'agent',
+      id: 'a1',
+      label: 'explore',
+      status: 'cancelled',
+    });
+  });
+
+  it('startAgent closes open tool groups and flushes deferred thinking (boundary behavior)', () => {
+    let model = startTool(emptyModel(), {
+      activityId: 'tg1', toolUseId: 'g1', toolName: 'glob', input: { pattern: '*.ts' },
+    });
+    model = deferThinking(model, thinkingSummary(2_000));
+    model = startAgent(model, { activityId: 'a1', agentUseId: 'a1', label: 'explore' });
+    // Open glob group closed (still pending-tool closed), deferred thinking flushed as system block.
+    expect(model.items.some(i => i.kind === 'pending-tool' && i.closed)).toBe(true);
+    expect(model.items.some(i => i.kind === 'system' && i.subkind === 'thinking-summary')).toBe(true);
+    expect(model.items.some(i => i.kind === 'pending-agent')).toBe(true);
+    expect(model.deferredThinking).toEqual([]);
+  });
+
+  it('completeActivity(PendingAgent) returns a minimal AgentBlock (type-level completeness)', () => {
+    const pending: PendingAgent = { id: 'a1', kind: 'pending-agent', label: 'explore' };
+    const block = completeActivity(pending);
+    expect(block.kind).toBe('agent');
+    expect(block.id).toBe('a1');
+    expect(block.label).toBe('explore');
+    expect(block.status).toBe('unknown');
   });
 });
 
