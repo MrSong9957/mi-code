@@ -108,6 +108,10 @@ export function buildToolPresentation(
       return buildGlobPresentation(base, toolInput, output, errorMessage, translator);
     case 'grep':
       return buildGrepPresentation(base, toolInput, output, errorMessage, translator);
+    case 'memory_list':
+    case 'memory_search':
+    case 'memory_add':
+      return { ...base, summary: translator.t('toolPresentation.semantic.memory'), details: [] };
     case 'read_file':
       return buildReadFilePresentation(base, toolInput, output, errorMessage, translator);
     case 'spawn_agent':
@@ -262,7 +266,22 @@ function buildReadFilePresentation(
   errorMessage: string | undefined,
   translator: Translator,
 ): ToolPresentation {
-  const path = asString(toolInput.path) ?? '<invalid path>';
+  const rawPath = asString(toolInput.path);
+
+  // Only `path === '.'` (the workspace root) is deterministically a directory
+  // read. The presentation layer cannot reliably distinguish file vs directory
+  // for any other path (the structured type is lost by the time output arrives
+  // as a string), so those keep the existing read summary — no trailing-slash,
+  // extension, or other path-shape heuristics.
+  if (rawPath === '.') {
+    return {
+      ...base,
+      summary: translator.t('toolPresentation.semantic.readDirectory'),
+      details: [],
+    };
+  }
+
+  const path = rawPath ?? '<invalid path>';
 
   if (base.status === 'error') {
     return {

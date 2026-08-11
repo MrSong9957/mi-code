@@ -210,6 +210,12 @@ export const zhCN = {
         other: '运行了 {count} 个操作',
       },
     },
+    // 确定性语义摘要：仅依据工具名 + 输入推导，禁止解析命令文本或猜测路径形状。
+    // read_file 仅 path === '.'（工作区根目录）判定为目录读取；其余路径保留既有读取摘要。
+    semantic: {
+      memory: '检查了记忆',
+      readDirectory: '读取了项目结构',
+    },
     status: {
       cancelled: '{subject} → 已取消',
       failed: '{subject} → 失败：{error}',

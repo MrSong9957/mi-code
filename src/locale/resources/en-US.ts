@@ -259,6 +259,14 @@ export const enUS: CanonicalResources = {
         other: 'Ran {count} operations',
       },
     },
+    // Deterministic semantic summaries: derived only from tool name + input.
+    // No command-text parsing or path-shape guessing. For read_file only
+    // path === '.' (workspace root) counts as a directory read; every other
+    // path keeps the existing read summary.
+    semantic: {
+      memory: 'Checked memory',
+      readDirectory: 'Read project structure',
+    },
     status: {
       cancelled: '{subject} → cancelled',
       failed: '{subject} → failed: {error}',
