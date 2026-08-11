@@ -338,7 +338,7 @@ export function selectCommittedTranscript(
 }
 
 /**
- * 稳定排序工具展示:success → empty → error,组内保持原始相对顺序。
+ * 稳定排序工具展示:success → empty → error → cancelled,组内保持原始相对顺序。
  * Array.prototype.sort 在 ES2019+ 保证稳定。
  */
 export function orderToolPresentations(
@@ -348,6 +348,7 @@ export function orderToolPresentations(
     success: 0,
     empty: 1,
     error: 2,
+    cancelled: 3,
   };
   return [...presentations].sort(
     (a, b) => rank[a.status] - rank[b.status],

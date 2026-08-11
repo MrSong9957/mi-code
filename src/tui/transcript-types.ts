@@ -10,8 +10,8 @@
 import type { StructuredAskResult } from '../agent/ask-user-types.js';
 import type { TurnCompletionVerb } from './state/turn-duration-message.js';
 
-/** 工具展示状态:成功 / 空 / 错误(错误保留在分组内,不单独拆组)。 */
-export type ToolPresentationStatus = 'success' | 'empty' | 'error';
+/** 工具展示状态:成功 / 空 / 错误 / 已取消(错误保留在分组内,不单独拆组)。 */
+export type ToolPresentationStatus = 'success' | 'empty' | 'error' | 'cancelled';
 
 /**
  * 工具结果的语义明细项。

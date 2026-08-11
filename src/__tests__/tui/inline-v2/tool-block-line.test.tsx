@@ -61,6 +61,16 @@ function errorGlobPresentation(
   };
 }
 
+function cancelledPresentation(toolUseId: string): ToolPresentation {
+  return {
+    toolUseId,
+    toolName: 'spawn_agent',
+    summary: 'spawn_agent → cancelled',
+    details: [],
+    status: 'cancelled',
+  };
+}
+
 function renderToolBlockLine(block: ToolBlock, language: Language = 'en-US'): string {
   const store = createLanguageStore(language);
   return stripAnsi(render(
@@ -114,6 +124,16 @@ describe('ToolBlockLine', () => {
     expect(lines[1]).toContain('src/**/*.ts → 3 files');
     expect(lines[2]).toContain('src/**/*.spec.ts → no matches');
     expect(lines[3]).toContain('protected/** → failed: denied');
+  });
+
+  it('renders a cancelled tool summary', () => {
+    expect(renderToolBlockLine({
+      id: 'cancelled-tool',
+      kind: 'tool',
+      toolName: 'spawn_agent',
+      presentations: [cancelledPresentation('cancelled')],
+      thinking: [],
+    })).toContain('spawn_agent → cancelled');
   });
 
   it('omits thinking metadata when single entry below 2s', () => {

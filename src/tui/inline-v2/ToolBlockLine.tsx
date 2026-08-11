@@ -10,8 +10,8 @@
 // 渲染规则:
 // - ● 属于本组件(标题行)
 // - 每个可见 summary 用 `  ⎿ ` 前缀
-// - status 控制语义颜色:success=正常,empty=dim,error=red
-// - 展示按 orderToolPresentations 排序(success → empty → error)
+// - status 控制语义颜色:success=正常,empty/cancelled=dim,error=red
+// - 展示按 orderToolPresentations 排序(success → empty → error → cancelled)
 // - thinking 元数据是最后一个子行(summarizeThinking)
 // - layout:'compact-completion' 保持单行截断行为(spawn_agent)
 // - Phase 1 不展开 details,但数据仍可达(可展开注册)
@@ -56,7 +56,7 @@ export function ToolBlockLine({ block, cols }: ToolBlockLineProps): React.ReactE
         <Text
           key={p.toolUseId}
           color={p.status === 'error' ? 'red' : undefined}
-          dimColor={p.status === 'empty'}
+          dimColor={p.status === 'empty' || p.status === 'cancelled'}
         >
           {'  ⎿ ' + p.summary}
         </Text>

@@ -274,6 +274,7 @@ export const enUS: CanonicalResources = {
       },
     },
     status: {
+      cancelled: '{subject} → cancelled',
       failed: '{subject} → failed: {error}',
       noMatches: '{subject} → no matches',
       noOutput: '{subject} → no output',

@@ -177,13 +177,16 @@ describe('transcript reducer grouping', () => {
 });
 
 describe('tool presentation ordering', () => {
-  it('orders success, then empty, then error, preserving relative order within each', () => {
+  it('orders success, then empty, then error, then cancelled, preserving relative order within each', () => {
     const s1: ToolPresentation = { toolUseId: 's1', toolName: 'glob', summary: 's1', details: [], status: 'success' };
     const e1: ToolPresentation = { toolUseId: 'e1', toolName: 'glob', summary: 'e1', details: [], status: 'empty' };
     const err1: ToolPresentation = { toolUseId: 'err1', toolName: 'glob', summary: 'err1', details: [], status: 'error' };
+    const cancelled: ToolPresentation = { toolUseId: 'cancelled', toolName: 'spawn_agent', summary: 'spawn_agent → cancelled', details: [], status: 'cancelled' };
     const s2: ToolPresentation = { toolUseId: 's2', toolName: 'glob', summary: 's2', details: [], status: 'success' };
-    const ordered = orderToolPresentations([err1, s2, e1, s1]);
-    expect(ordered.map(p => p.toolUseId)).toEqual(['s2', 's1', 'e1', 'err1']);
+    const ordered = orderToolPresentations([cancelled, err1, s2, e1, s1]);
+    expect(ordered.map(p => p.toolUseId)).toEqual(['s2', 's1', 'e1', 'err1', 'cancelled']);
+    expect(orderToolPresentations([cancelled, err1, s1]).map(p => p.status))
+      .toEqual(['success', 'error', 'cancelled']);
   });
 });
 

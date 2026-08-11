@@ -225,6 +225,7 @@ export const zhCN = {
       },
     },
     status: {
+      cancelled: '{subject} → 已取消',
       failed: '{subject} → 失败：{error}',
       noMatches: '{subject} → 无匹配',
       noOutput: '{subject} → 无输出',
