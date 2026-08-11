@@ -16,6 +16,7 @@ import { createLanguageStore } from '../../locale/language-store.js';
 import { createTranslator } from '../../locale/translator.js';
 import { createMessagesStore } from '../../tui/state/messages-store.js';
 import { PipelineToStoreAdapter } from '../../tui/state/pipeline-adapter.js';
+import { selectCommittedTranscript } from '../../tui/state/transcript-reducer.js';
 import type { PendingTool, ToolBlock } from '../../tui/transcript-types.js';
 
 describe('tool lifecycle visibility', () => {
@@ -199,6 +200,45 @@ describe('tool lifecycle visibility', () => {
     expect(items.some(i =>
       i.kind === 'system' && i.subkind === 'notification' && i.text.includes('[Hook] orphan complete'),
     )).toBe(true);
+  });
+
+  it('commits a cancelled tool before the final assistant response', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'spawn-1' });
+    pipeline.cancelPendingTools(new Set(['spawn-1']));
+    pipeline.emit({ kind: 'assistant_text', text: 'Current status: Partially completed', isFinal: true });
+
+    expect(selectCommittedTranscript(store.getState().model.items).map(item => item.kind))
+      .toEqual(['tool', 'assistant']);
+    expect(store.getState().model.items[0]).toMatchObject({
+      kind: 'tool', presentations: [{ toolUseId: 'spawn-1', status: 'cancelled' }],
+    });
+  });
+
+  it('leaves unlisted pending tools unresolved', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'spawn-1' });
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'spawn-2' });
+    pipeline.cancelPendingTools(new Set(['spawn-1']));
+
+    expect(store.getState().model.items.some(item =>
+      item.kind === 'pending-tool' && item.entries.some(entry => entry.toolUseId === 'spawn-2' && entry.presentation === undefined),
+    )).toBe(true);
+  });
+
+  it('does not overwrite resolved success or error presentations', () => {
+    const { pipeline, store } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'success-1' });
+    pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'done', toolUseId: 'success-1' });
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'error-1' });
+    pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'Error: failed', toolUseId: 'error-1' });
+
+    pipeline.cancelPendingTools(new Set(['success-1', 'error-1']));
+    const presentations = store.getState().model.items
+      .filter(item => item.kind === 'tool')
+      .flatMap(item => item.presentations);
+    expect(presentations.find(presentation => presentation.toolUseId === 'success-1')?.status).toBe('success');
+    expect(presentations.find(presentation => presentation.toolUseId === 'error-1')?.status).toBe('error');
   });
 });
 

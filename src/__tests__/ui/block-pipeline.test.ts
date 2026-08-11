@@ -38,6 +38,7 @@ type RecordedCall =
 
 class RecordingRenderer implements PipelineRenderer {
   readonly calls: RecordedCall[] = [];
+  finishToolCallResult = true;
 
   startToolCall(call: {
     toolUseId: string;
@@ -53,8 +54,8 @@ class RecordingRenderer implements PipelineRenderer {
   }
 
   finishToolCall(toolUseId: string, presentation: ToolPresentation): boolean {
-    this.calls.push({ type: 'finishToolCall', toolUseId, presentation, result: true });
-    return true;
+    this.calls.push({ type: 'finishToolCall', toolUseId, presentation, result: this.finishToolCallResult });
+    return this.finishToolCallResult;
   }
 
   finishAsk(toolUseId: string, block: AskBlock): boolean {
@@ -387,6 +388,48 @@ describe('BlockPipeline emit 路由', () => {
 // 12 & 13. clear() / clearTurnState()
 // ════════════════════════════════════════════════════════════════════
 
+describe('BlockPipeline cancellation', () => {
+  it('cancels only unresolved target once and ignores one late result', () => {
+    const { recorder, pipeline } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: {}, toolUseId: 'child-1' });
+
+    pipeline.cancelPendingTools(new Set(['child-1']));
+    expect(recorder.of('finishToolCall')).toMatchObject([
+      { toolUseId: 'child-1', presentation: { status: 'cancelled' } },
+    ]);
+
+    pipeline.cancelPendingTools(new Set(['child-1']));
+    expect(recorder.of('finishToolCall')).toHaveLength(1);
+    pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'late', toolUseId: 'child-1' });
+    expect(recorder.of('startToolCall')).toHaveLength(1);
+    expect(recorder.of('finishToolCall')).toHaveLength(1);
+
+    pipeline.emit({ kind: 'tool_result', name: 'spawn_agent', output: 'later', toolUseId: 'child-1' });
+    expect(recorder.of('startToolCall')).toHaveLength(2);
+    expect(recorder.of('finishToolCall')).toHaveLength(2);
+  });
+
+  it('does not tombstone missing, resolved, or renderer-rejected calls', () => {
+    const { recorder, pipeline } = setup();
+    pipeline.cancelPendingTools(new Set(['missing']));
+    pipeline.emit({ kind: 'tool_result', name: 'run_bash', output: 'orphan', toolUseId: 'missing' });
+    expect(recorder.of('startToolCall')).toHaveLength(1);
+    expect(recorder.of('finishToolCall')).toHaveLength(1);
+
+    pipeline.emit({ kind: 'tool_call', name: 'run_bash', input: {}, toolUseId: 'resolved' });
+    pipeline.emit({ kind: 'tool_result', name: 'run_bash', output: 'done', toolUseId: 'resolved' });
+    pipeline.cancelPendingTools(new Set(['resolved']));
+    expect(recorder.of('finishToolCall')).toHaveLength(2);
+
+    pipeline.emit({ kind: 'tool_call', name: 'run_bash', input: {}, toolUseId: 'rejected' });
+    recorder.finishToolCallResult = false;
+    pipeline.cancelPendingTools(new Set(['rejected']));
+    pipeline.emit({ kind: 'tool_result', name: 'run_bash', output: 'late', toolUseId: 'rejected' });
+    expect(recorder.of('startToolCall')).toHaveLength(3);
+    expect(recorder.of('finishToolCall')).toHaveLength(4);
+  });
+});
+
 describe('BlockPipeline clear / clearTurnState', () => {
   it('clear() → closeOpenToolGroup + clearMessages(eraseThinking 不触发,因 eraseIfActive=false)', () => {
     const { recorder, pipeline } = setup();
@@ -605,6 +648,23 @@ describe('BlockPipeline 并行工具配对(按 toolUseId)', () => {
 // ════════════════════════════════════════════════════════════════════
 
 describe('BlockPipeline commit', () => {
+  it('preserves cancellation tombstones across clearTurnState but resets them in clear', () => {
+    const { recorder, pipeline } = setup();
+    pipeline.emit({ kind: 'tool_call', name: 'run_bash', input: {}, toolUseId: 'cancelled-1' });
+    pipeline.cancelPendingTools(new Set(['cancelled-1']));
+    pipeline.clearTurnState();
+    pipeline.emit({ kind: 'tool_result', name: 'run_bash', output: 'late', toolUseId: 'cancelled-1' });
+    expect(recorder.of('startToolCall')).toHaveLength(1);
+    expect(recorder.of('finishToolCall')).toHaveLength(1);
+
+    pipeline.emit({ kind: 'tool_call', name: 'run_bash', input: {}, toolUseId: 'cancelled-2' });
+    pipeline.cancelPendingTools(new Set(['cancelled-2']));
+    pipeline.clear();
+    pipeline.emit({ kind: 'tool_result', name: 'run_bash', output: 'late', toolUseId: 'cancelled-2' });
+    expect(recorder.of('startToolCall')).toHaveLength(3);
+    expect(recorder.of('finishToolCall')).toHaveLength(3);
+  });
+
   it('commit() → 调 renderer.flushNow()', () => {
     const { recorder, pipeline } = setup();
     pipeline.emit({ kind: 'user_input', text: 'hi' });

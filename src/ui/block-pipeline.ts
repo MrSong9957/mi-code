@@ -120,6 +120,7 @@ export class BlockPipeline {
    * 缓冲吸收这个时序,等配对再投递。
    */
   private toolBuffer: BufferedTool[] = [];
+  private cancelledToolUseIds = new Set<string>();
   /** thinking 文本只在内存中累积,供 ctrl+o 展开。 */
   private thinkingBuffer = '';
   /** 可折叠块存储(thinking + tool_result 的 summary/full)——ctrl+o 用 */
@@ -130,6 +131,24 @@ export class BlockPipeline {
   constructor(renderer: PipelineRenderer, translator: Translator) {
     this.renderer = renderer;
     this.translator = translator;
+  }
+
+  cancelPendingTools(toolUseIds: ReadonlySet<string>): void {
+    for (const toolUseId of toolUseIds) {
+      const index = this.toolBuffer.findIndex(item => item.toolUseId === toolUseId && !item.resolved);
+      if (index < 0) continue;
+      const item = this.toolBuffer[index]!;
+      const presentation: ToolPresentation = {
+        toolUseId,
+        toolName: item.name,
+        summary: this.translator.t('toolPresentation.status.cancelled', { subject: item.name }),
+        details: [],
+        status: 'cancelled',
+      };
+      if (!this.renderer.finishToolCall(toolUseId, presentation)) continue;
+      this.toolBuffer.splice(index, 1);
+      this.cancelledToolUseIds.add(toolUseId);
+    }
   }
 
   /**
@@ -223,6 +242,7 @@ export class BlockPipeline {
       }
 
       case 'tool_result': {
+        if (block.toolUseId && this.cancelledToolUseIds.delete(block.toolUseId)) break;
         // 配对:从缓冲区找到这个 result 对应的 call 项。
         let idx = -1;
         if (block.toolUseId) {
@@ -398,6 +418,7 @@ export class BlockPipeline {
     // 关闭未完成的 open tool group(防丢失)。
     this.renderer.closeOpenToolGroup?.();
     this.toolBuffer = [];
+    this.cancelledToolUseIds.clear();
     this.hasContent = false;
     this.resetThinkingState(false);
     this.expandable.clear();
