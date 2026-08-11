@@ -37,7 +37,11 @@
 
 ### 晚到真实结果
 
-`BlockPipeline` 现有的未知 result 路径会创建 orphan 展示，不能自然满足此不变量。因此取消终结除消耗 buffer entry 外，还必须仅为本轮已取消的 tool-use ID 保留最小 UI tombstone。若该 ID 的真实 result 晚到，pipeline 忽略它；不得重建 pending 状态、生成第二个 ToolBlock 或扰乱时间线。非取消的未知 result 继续保留现有 orphan-result 兜底。
+`BlockPipeline` 的未知 result 路径会创建 orphan 展示，不能自然满足此不变量。只有实际从 `toolBuffer` 成功终结为 `cancelled` 的 tool-use ID，才写入最小 UI tombstone。
+
+对命中 tombstone 的晚到真实 `tool_result`，pipeline 仅忽略该 UI result，并立即删除 tombstone；它不得进入 orphan-result fallback，也不得重建 pending 状态、生成第二个 ToolBlock 或扰乱时间线。非 cancelled 的未知 result 继续保留现有 orphan-result 兜底。
+
+未被晚到 result 消费的 tombstone 不在父轮次 finalization 后立即清除；它随 `BlockPipeline` / session reset 清理。tombstone 仅影响 UI pipeline，不改变 agent、provider 或 tool-result 的数据语义。
 
 ## 修改范围
 
