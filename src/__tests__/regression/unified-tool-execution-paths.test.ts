@@ -70,7 +70,10 @@ describe('ESLint enforcement of the unified execution boundary', () => {
         }),
       ]),
     );
-  });
+    // ESLint 9 flat-config 冷启动(I/O-bound,~0.8–1.3s isolated)在 full-suite singleFork 下
+    // 受 Windows Defender 实时扫描 / OS 文件缓存抖动放大;15s per-test timeout 对齐仓库
+    // I/O-heavy 先例(bootstrap-flag.test.tsx 15s、history.test.ts 30s)。
+  }, 15000);
 });
 
 // ─── Task 6: resolver 路径统一经 gate 执行 ──────────────────────────────────────
