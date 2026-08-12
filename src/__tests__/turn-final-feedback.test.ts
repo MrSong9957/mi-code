@@ -481,4 +481,3 @@ describe('production TurnStatus seam — spawn_agent cancelled case', () => {
     expect(shouldEmitTurnStatus(finalized.candidate, itemsWithAbnormal)).toBe(false);
   });
 });
-
