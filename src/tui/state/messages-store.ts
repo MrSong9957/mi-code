@@ -17,6 +17,7 @@ import type { FormattedLine } from '../../ui/types.js';
 import type { TuiMessage } from '../types.js';
 import type {
   ActivityItem,
+  AgentBlock,
   AskBlock,
   AssistantBlock,
   ToolPresentation,
@@ -29,6 +30,9 @@ import {
   flushDeferredThinking,
   resolveTool,
   startTool,
+  startAgent,
+  resolveAgent,
+  cancelAgent,
   type BoundaryBlock,
   type ThinkingSummaryBlock,
   type TranscriptModel,
@@ -109,6 +113,12 @@ export interface MessagesState {
   }): string;
   /** 解析一个工具调用的展示;返回是否命中。 */
   resolveTool(toolUseId: string, presentation: ToolPresentation): boolean;
+  /** 开始一个子代理调用,返回该 PendingAgent 的 id(= agentUseId)。 */
+  startAgent(call: { agentUseId: string; label: string }): string;
+  /** 完成一个子代理调用(原地固化为 AgentBlock);返回是否命中。 */
+  resolveAgent(agentUseId: string, block: Omit<AgentBlock, 'id' | 'kind'>): boolean;
+  /** 取消一个子代理调用(原地固化为 AgentBlock cancelled);返回是否命中。 */
+  cancelAgent(agentUseId: string, label: string): boolean;
   /** 完成 Ask,写入 AskBlock;返回是否成功。 */
   finishAsk(toolUseId: string, block: AskBlock): boolean;
   /** 开始流式 assistant,返回 id。 */
@@ -179,6 +189,37 @@ export function createMessagesStore(): MessagesStore {
       let resolved = false;
       set((s) => {
         const next = resolveTool(s.model, toolUseId, presentation);
+        if (next !== s.model) resolved = true;
+        return { model: next };
+      });
+      return resolved;
+    },
+
+    startAgent(call) {
+      set((s) => ({
+        model: startAgent(s.model, {
+          activityId: call.agentUseId,
+          agentUseId: call.agentUseId,
+          label: call.label,
+        }),
+      }));
+      return call.agentUseId;
+    },
+
+    resolveAgent(agentUseId, block) {
+      let resolved = false;
+      set((s) => {
+        const next = resolveAgent(s.model, agentUseId, block);
+        if (next !== s.model) resolved = true;
+        return { model: next };
+      });
+      return resolved;
+    },
+
+    cancelAgent(agentUseId, label) {
+      let resolved = false;
+      set((s) => {
+        const next = cancelAgent(s.model, agentUseId, label);
         if (next !== s.model) resolved = true;
         return { model: next };
       });

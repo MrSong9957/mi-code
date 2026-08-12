@@ -108,4 +108,36 @@ describe('PipelineToStoreAdapter (semantic)', () => {
     adapter.appendTranscriptBlock({ id: 'u1', kind: 'user', text: 'hello' });
     expect(store.getState().model.items.some(i => i.kind === 'user')).toBe(true);
   });
+
+  it('startAgent → store.startAgent(PendingAgent)', () => {
+    const store = createMessagesStore();
+    const adapter = new PipelineToStoreAdapter(store);
+    adapter.startAgent({ agentUseId: 'a1', label: 'explore' });
+    const items = store.getState().model.items;
+    expect(items.some(i => i.kind === 'pending-agent')).toBe(true);
+    const pa = items.find(i => i.kind === 'pending-agent');
+    expect(pa).toMatchObject({ label: 'explore' });
+  });
+
+  it('finishAgent → store.resolveAgent(AgentBlock)', () => {
+    const store = createMessagesStore();
+    const adapter = new PipelineToStoreAdapter(store);
+    adapter.startAgent({ agentUseId: 'a1', label: 'explore' });
+    const ok = adapter.finishAgent('a1', { label: 'explore', status: 'completed', summary: 'done', durationMs: 3000 });
+    expect(ok).toBe(true);
+    const items = store.getState().model.items;
+    expect(items.some(i => i.kind === 'agent')).toBe(true);
+    expect(items.some(i => i.kind === 'pending-agent')).toBe(false);
+  });
+
+  it('cancelAgent → store.cancelAgent(AgentBlock cancelled)', () => {
+    const store = createMessagesStore();
+    const adapter = new PipelineToStoreAdapter(store);
+    adapter.startAgent({ agentUseId: 'a1', label: 'explore' });
+    const ok = adapter.cancelAgent('a1', 'explore');
+    expect(ok).toBe(true);
+    const items = store.getState().model.items;
+    const block = items.find(i => i.kind === 'agent');
+    expect(block).toMatchObject({ kind: 'agent', status: 'cancelled', label: 'explore' });
+  });
 });

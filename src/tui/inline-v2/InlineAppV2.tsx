@@ -25,6 +25,7 @@ import { useStore } from 'zustand/react';
 import { useShallow } from 'zustand/react/shallow';
 import { TranscriptBlockLine } from './TranscriptBlockLine.js';
 import { PendingToolMessage } from './PendingToolMessage.js';
+import { PendingAgentMessage } from './PendingAgentMessage.js';
 import { PendingThinkingMessage } from './PendingThinkingMessage.js';
 import { SpinnerMemo } from './spinner-memo.js';
 import { FooterV2 } from './FooterV2.js';
@@ -39,6 +40,7 @@ import type { TuiMessage, StatusBarData, LogoData } from '../types.js';
 import type { MessagesStore } from '../state/messages-store.js';
 import type { TranscriptBlock, ActivityItem } from '../transcript-types.js';
 import { selectCommittedTranscript } from '../state/transcript-reducer.js';
+import { isVisibleInNormalMode } from '../state/presentation-channel.js';
 import type { InputStore } from '../state/input-store.js';
 import type { StatusStore } from '../state/status-store.js';
 import type { SpinnerStore } from '../state/spinner-store.js';
@@ -121,14 +123,25 @@ export function InlineAppV2({ logo, stores, cols }: InlineAppV2Props): React.Rea
   // 语义时间线:从 store 直接读 model.items(Task 6 切换)。
   // messages props 不再消费(渲染层已完全切到语义 TimelineItem)。
   const modelItems = useStore(stores.messagesStore, useShallow((s) => s.model.items));
+  // NOTE: committedTranscript is intentionally NOT filtered here (e.g. by
+  // isVisibleInNormalMode) — its .length is the activity-boundary slice index
+  // that separates committed blocks from pending activity items. Filtering
+  // before slicing would misalign the boundary. Visibility filtering happens
+  // separately on `finalized` below.
   const committedTranscript: TranscriptBlock[] = selectCommittedTranscript(modelItems);
   const activityItems: ActivityItem[] = modelItems.slice(committedTranscript.length) as ActivityItem[];
 
   // 已固化块直接用 TranscriptBlockLine 渲染(语义,无字符串匹配)。
-  const finalized = committedTranscript;
+  // Message Presentation v1:在 normal 模式下隐藏 diagnostics-channel 块(非错误
+  // system/notification)。源头的 postToolLogger 已抑制常规 [Hook] done,这里是
+  // 安全网——任何已经进入 transcript 的 diagnostics 块都不会渲染到 <Static>。
+  const finalized = committedTranscript.filter(isVisibleInNormalMode);
 
   // pending 工具(pending-tool 活动项):运行中工具的稳定指示器。
   const pendingTools = activityItems.filter((i): i is Extract<ActivityItem, { kind: 'pending-tool' }> => i.kind === 'pending-tool');
+
+  // pending 子代理(pending-agent 活动项):运行中 spawn_agent 的稳定指示器。
+  const pendingAgents = activityItems.filter((i): i is Extract<ActivityItem, { kind: 'pending-agent' }> => i.kind === 'pending-agent');
 
   // thinking 临时行(pending-thinking 活动项)。
   const pendingThinkingActivity = activityItems.find((i): i is Extract<ActivityItem, { kind: 'pending-thinking' }> => i.kind === 'pending-thinking');
@@ -197,15 +210,18 @@ export function InlineAppV2({ logo, stores, cols }: InlineAppV2Props): React.Rea
   // 行数 = pending 工具数量,不再用 lines.length 估算(避免子明细行导致高度抖动)。
   const pendingToolsRowCount = pendingTools.length;
 
+  // pending 子代理同样固定占一物理行(由 PendingAgentMessage 的 height={1} 保证)。
+  const pendingAgentsRowCount = pendingAgents.length;
+
   // AUTO-0025-transient:thinking 临时行固定占一物理行(0 或 1)。
   const thinkingRowCount = pendingThinkingActivity ? 1 : 0;
 
   // 有 pending 活动时,pending 区与 spinner 间留一空行分隔(视觉间距)。
-  const pendingGapRowCount = (pendingThinkingActivity || pendingToolsRowCount > 0) ? 1 : 0;
+  const pendingGapRowCount = (pendingThinkingActivity || pendingToolsRowCount > 0 || pendingAgentsRowCount > 0) ? 1 : 0;
 
   // inputRowY(活动区内坐标,<Static> 不占活动区):
-  //   流式文本 + thinking 行 + pending 工具行 + pending/spinner 间距 + spinner 行 + 上边框 1 行
-  const inputRowY = streamingRowCount + thinkingRowCount + pendingToolsRowCount + pendingGapRowCount + spinnerRowCount + 1;
+  //   流式文本 + thinking 行 + pending 工具行 + pending 子代理行 + pending/spinner 间距 + spinner 行 + 上边框 1 行
+  const inputRowY = streamingRowCount + thinkingRowCount + pendingToolsRowCount + pendingAgentsRowCount + pendingGapRowCount + spinnerRowCount + 1;
 
   // <Static> items:logo 作为首项(只写一次进 scrollback)+ 已固化语义块。
   // Task 6:已固化块用 TranscriptBlockLine 渲染(语义,无字符串匹配)。
@@ -276,9 +292,18 @@ export function InlineAppV2({ logo, stores, cols }: InlineAppV2Props): React.Rea
             spinnerStore={stores.spinnerStore}
           />
         ))}
-        {/* 有 pending 活动(thinking 或工具)时,与 spinner 留一行空行分隔,
+        {/* Task 4:pending 子代理用专用稳定指示器渲染(固定一行 + 闪烁 ●)。 */}
+        {pendingAgents.map((pa) => (
+          <PendingAgentMessage
+            key={pa.id}
+            agent={pa}
+            cols={cols}
+            spinnerStore={stores.spinnerStore}
+          />
+        ))}
+        {/* 有 pending 活动(thinking / 工具 / 子代理)时,与 spinner 留一行空行分隔,
             避免 spawn_agent 紧贴 spinner 动画行。 */}
-        {(pendingThinkingActivity || pendingTools.length > 0) && (
+        {(pendingThinkingActivity || pendingTools.length > 0 || pendingAgents.length > 0) && (
           <Box height={1}>
             <Text>{' '}</Text>
           </Box>

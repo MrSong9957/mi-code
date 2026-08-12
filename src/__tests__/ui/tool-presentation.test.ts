@@ -146,4 +146,44 @@ describe('buildToolPresentation', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
     expect(JSON.stringify(result)).not.toContain('[object Object]');
   });
+
+  it.each([
+    { language: 'zh-CN' as const, toolName: 'memory_list' },
+    { language: 'zh-CN' as const, toolName: 'memory_read' },
+    { language: 'zh-CN' as const, toolName: 'memory_write' },
+    { language: 'en-US' as const, toolName: 'memory_list' },
+    { language: 'en-US' as const, toolName: 'memory_read' },
+    { language: 'en-US' as const, toolName: 'memory_write' },
+  ])('semantic memory summary for $toolName in $language', ({ language, toolName }) => {
+    const t = translatorFor(language);
+    const p = buildToolPresentation({
+      toolUseId: 'tu1',
+      toolName,
+      input: {},
+      output: '',
+    }, t);
+    // Each real memory tool must map to the deterministic memory semantic.
+    expect(p.summary).toBe(t.t('toolPresentation.semantic.memory'));
+    // And must not fall through to the generic "Ran 1 operation" group default.
+    expect(p.summary).not.toBe(t.t('toolPresentation.group.default.one', { count: 1 }));
+  });
+
+  it.each(['zh-CN', 'en-US'] as const)('only path "." is treated as directory in %s', (language) => {
+    const t = translatorFor(language);
+    const dirP = buildToolPresentation({
+      toolUseId: 'tu2',
+      toolName: 'read_file',
+      input: { path: '.' },
+      output: '',
+    }, t);
+    expect(dirP.summary).toBe(t.t('toolPresentation.semantic.readDirectory'));
+    // any other path: NO guessing — keep existing read summary, never readDirectory
+    const otherP = buildToolPresentation({
+      toolUseId: 'tu3',
+      toolName: 'read_file',
+      input: { path: 'src/index.ts' },
+      output: '',
+    }, t);
+    expect(otherP.summary).not.toBe(t.t('toolPresentation.semantic.readDirectory'));
+  });
 });

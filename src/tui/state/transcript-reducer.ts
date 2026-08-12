@@ -19,6 +19,8 @@
 import {
   completeActivity,
   isActivityItem,
+  type AgentBlock,
+  type PendingAgent,
   type PendingTool,
   type SystemBlock,
   type ThinkingGroupMetadata,
@@ -27,6 +29,8 @@ import {
   type ToolPresentation,
   type TranscriptBlock,
 } from '../transcript-types.js';
+// type-only:不创建运行时 cycle,符合 tui→agent 的类型导入约定。
+import type { TurnStatusCandidate } from '../../agent/turn-final-feedback.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 对外类型
@@ -38,8 +42,8 @@ export type ThinkingSummaryBlock = Extract<
   { subkind: 'thinking-summary' }
 >;
 
-/** boundary 块:所有已固化块除 ToolBlock 外(tool 通过 startTool/resolveTool 进入)。 */
-export type BoundaryBlock = Exclude<TranscriptBlock, ToolBlock>;
+/** boundary 块:所有已固化块除 ToolBlock / AgentBlock 外(tool/agent 通过专用 reducer 进入)。 */
+export type BoundaryBlock = Exclude<TranscriptBlock, ToolBlock | AgentBlock>;
 
 /** reducer 的不可变状态。 */
 export interface TranscriptModel {
@@ -56,6 +60,16 @@ export interface StartToolInput {
   toolUseId: string;
   toolName: string;
   input: Record<string, unknown>;
+}
+
+/** startAgent 的入参。 */
+export interface StartAgentInput {
+  /** PendingAgent 的 id(同时是后续 resolveAgent/cancelAgent 的查找键)。 */
+  activityId: string;
+  /** spawn_agent 的 tool_use id(与 activityId 一致,供 pipeline 层传递)。 */
+  agentUseId: string;
+  /** 展示 label(由 deriveAgentLabel 从 input 派生)。 */
+  label: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -124,6 +138,22 @@ function closeOrComplete(group: PendingTool): TimelineItem {
 // reducer:基础构造
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * 单一的 thinking 提交阈值:只有当汇总时长 ≥ 1s 时,thinking summary 才进入
+ * 已固化 transcript。在两个 commit boundary 上统一应用:
+ *  - `summarizeThinking`(分组聚合后的可见摘要)
+ *  - `flushDeferredThinking` / `startTool` 路径 3(独立 flush 的 standalone summary)
+ *
+ * 注意:此阈值作用于「最终形成用户可见 summary 的 commit 边界」,而不是
+ * 原始 `thinking_end` 事件——duration 始终保留,以便后续聚合到 tool 分组。
+ */
+export const THINKING_COMMIT_THRESHOLD_MS = 1_000;
+
+/** 单条 / 聚合后的 thinking 时长是否达到提交阈值。 */
+export function shouldCommitThinking(durationMs: number): boolean {
+  return durationMs >= THINKING_COMMIT_THRESHOLD_MS;
+}
+
 /** 空模型。 */
 export function emptyModel(): TranscriptModel {
   return { items: [], deferredThinking: [] };
@@ -144,13 +174,21 @@ export function deferThinking(
   };
 }
 
-/** 把所有 deferred thinking 按到达顺序追加到 items 末尾,清空队列。 */
+/**
+ * 把所有 deferred thinking 按到达顺序追加到 items 末尾,清空队列。
+ *
+ * 仅提交达到 `THINKING_COMMIT_THRESHOLD_MS`(1s)的 standalone summary;
+ * 时长 < 1s 的不进入已固化 transcript(避免出现 `Thought for 0s`)。
+ */
 export function flushDeferredThinking(model: TranscriptModel): TranscriptModel {
   if (model.deferredThinking.length === 0) {
     return model;
   }
+  const visible = model.deferredThinking.filter(summary =>
+    shouldCommitThinking(summary.durationMs),
+  );
   return {
-    items: [...model.items, ...model.deferredThinking],
+    items: [...model.items, ...visible],
     deferredThinking: [],
   };
 }
@@ -219,7 +257,7 @@ export function startTool(
     return { items: [...prefix, newGroup], deferredThinking: [] };
   }
 
-  // 路径 3:ungroupable → 先 flush deferred(独立 SystemBlock),再追加 closed 单条目
+  // 路径 3:ungroupable → 先 flush deferred(独立 SystemBlock,仅 ≥1s),再追加 closed 单条目
   const closedPending: PendingTool = {
     id: call.activityId,
     kind: 'pending-tool',
@@ -229,7 +267,11 @@ export function startTool(
     closed: true,
   };
   return {
-    items: [...prefix, ...deferred, closedPending],
+    items: [
+      ...prefix,
+      ...deferred.filter(summary => shouldCommitThinking(summary.durationMs)),
+      closedPending,
+    ],
     deferredThinking: [],
   };
 }
@@ -275,6 +317,96 @@ export function resolveTool(
   if (!found) {
     return model;
   }
+  return { items: newItems, deferredThinking: model.deferredThinking };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// reducer:子代理(agent)调用归约
+//
+// spawn_agent 是一等公民:不经过 PendingTool/tool 分组逻辑,直接走 PendingAgent
+// 活动项。startAgent 是 boundary(关闭 open tool group + flush deferred thinking),
+// resolveAgent/cancelAgent 原地把 PendingAgent 替换为 AgentBlock。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 开始一个子代理调用:关闭 open tool group → flush deferred thinking → 追加 PendingAgent。
+ *
+ * Agents 永不分组(类似 ungroupable tools),每次调用都创建独立的 PendingAgent。
+ */
+export function startAgent(
+  model: TranscriptModel,
+  call: StartAgentInput,
+): TranscriptModel {
+  const closed = closeOpenToolGroup(model);
+  const flushed = flushDeferredThinking(closed);
+  const agent: PendingAgent = {
+    id: call.activityId,
+    kind: 'pending-agent',
+    label: call.label,
+  };
+  return {
+    items: [...flushed.items, agent],
+    deferredThinking: flushed.deferredThinking,
+  };
+}
+
+/**
+ * 用配对结果完成匹配的 PendingAgent,原地替换为 AgentBlock。
+ *
+ * - 未知 agentUseId(找不到 pending-agent)→ 返回原 model 不变
+ * - 命中 → 构造 AgentBlock(id 来自 PendingAgent,status/summary/durationMs 来自 block)
+ */
+export function resolveAgent(
+  model: TranscriptModel,
+  agentUseId: string,
+  block: Omit<AgentBlock, 'id' | 'kind'>,
+): TranscriptModel {
+  let found = false;
+  const newItems = model.items.map((item): TimelineItem => {
+    if (item.kind === 'pending-agent' && item.id === agentUseId) {
+      found = true;
+      const agentBlock: AgentBlock = {
+        id: item.id,
+        kind: 'agent',
+        label: block.label,
+        status: block.status,
+        ...(block.summary !== undefined ? { summary: block.summary } : {}),
+        ...(block.durationMs !== undefined ? { durationMs: block.durationMs } : {}),
+      };
+      return agentBlock;
+    }
+    return item;
+  });
+  if (!found) return model;
+  return { items: newItems, deferredThinking: model.deferredThinking };
+}
+
+/**
+ * 取消匹配的 PendingAgent,原地替换为 AgentBlock(status: cancelled)。
+ *
+ * - 未知 agentUseId → 返回原 model 不变
+ * - 命中 → 构造 AgentBlock{ status: 'cancelled', label }
+ */
+export function cancelAgent(
+  model: TranscriptModel,
+  agentUseId: string,
+  label: string,
+): TranscriptModel {
+  let found = false;
+  const newItems = model.items.map((item): TimelineItem => {
+    if (item.kind === 'pending-agent' && item.id === agentUseId) {
+      found = true;
+      const agentBlock: AgentBlock = {
+        id: item.id,
+        kind: 'agent',
+        label,
+        status: 'cancelled',
+      };
+      return agentBlock;
+    }
+    return item;
+  });
+  if (!found) return model;
   return { items: newItems, deferredThinking: model.deferredThinking };
 }
 
@@ -359,9 +491,13 @@ export function orderToolPresentations(
  * 把一组 thinking 元数据汇总成一行人类可读的摘要。
  *
  * - 空 → null
- * - 恰好 1 条且 < 2000ms → null(太短不显示)
- * - 恰好 1 条且 ≥ 2000ms → `Thought Ns`
- * - 多条 → `Thought Ns (M entries)`(不受 2000ms 阈值限制,总是显示)
+ * - 聚合总时长 < `THINKING_COMMIT_THRESHOLD_MS`(1s)→ null(太短不显示)
+ * - 单条且 ≥ 1s → `Thought Ns`
+ * - 多条且聚合 ≥ 1s → `Thought Ns (M entries)`
+ *
+ * 阈值统一作用于聚合总时长(单条 / 多条共享同一规则),不再对单条/多条分别
+ * 采用不同阈值。duration 本身仍保留在 ThinkingGroupMetadata 里,这里只决定
+ * 用户可见的 summary 是否生成。
  */
 export function summarizeThinking(
   entries: readonly ThinkingGroupMetadata[],
@@ -369,16 +505,85 @@ export function summarizeThinking(
   if (entries.length === 0) {
     return null;
   }
-  if (entries.length === 1) {
-    const only = entries[0];
-    if (only.durationMs < 2_000) {
-      return null;
-    }
-    return `Thought ${only.durationMs / 1_000}s`;
-  }
   const totalMs = entries.reduce(
     (sum, entry) => sum + entry.durationMs,
     0,
   );
+  if (!shouldCommitThinking(totalMs)) {
+    return null;
+  }
+  if (entries.length === 1) {
+    return `Thought ${entries[0]!.durationMs / 1_000}s`;
+  }
   return `Thought ${totalMs / 1_000}s (${entries.length} entries)`;
+}
+
+/**
+ * turn 结束时,时间线里是否已有「可见的异常活动」可解释本回合结局。
+ *
+ * 当任一条目满足以下条件时返回 true:
+ * - ToolBlock,且任一 presentation 的 status 为 'error' 或 'cancelled';
+ * - AgentBlock,且 status !== 'completed'(partial / failed / cancelled / unknown);
+ * - system notification,且 tone === 'error'。
+ *
+ * 用途:`shouldEmitTurnStatus` 据此决定是否还要补一条 turn-status 兜底行——
+ * 当时间线里已有可见的异常活动时,兜底行就是冗余的(用户已能从工具/agent 块看到结局)。
+ */
+export function hasVisibleAbnormalActivity(
+  items: readonly TimelineItem[],
+): boolean {
+  return items.some((item) => {
+    switch (item.kind) {
+      case 'tool':
+        return item.presentations.some(
+          (presentation) =>
+            presentation.status === 'error' || presentation.status === 'cancelled',
+        );
+      case 'agent':
+        return item.status !== 'completed';
+      case 'system':
+        return item.subkind === 'notification' && item.tone === 'error';
+      default:
+        return false;
+    }
+  });
+}
+
+/**
+ * 唯一的生产决策缝:是否真正 emit turn-status 兜底行。
+ *
+ * = `candidate !== null && !hasVisibleAbnormalActivity(currentTurnItems)`,
+ * 其中 currentTurnItems = items 从**最后一条** `kind === 'user'`(含)到末尾的切片。
+ *
+ * 关键(多回合正确性):时间线 items 跨回合累积,只在 rewind 时裁剪(见
+ * `rewindLastUserTurn`)。若把整条时间线喂给 hasVisibleAbnormalActivity,上一回合
+ * 残留的异常块(如 Turn 1 失败的工具)会让 Turn 2 的兜底行被错误抑制。因此这里
+ * **内部**按"最后一条 user 块"切出当前回合,只检查当前回合内是否已有可见异常活动。
+ *
+ * user 块本身不是异常活动,所以切片含它(inclusive)是安全的。若无 user 块,
+ * 切片 = 全部 items(单回合 / 无 user 边界的退化情形)。
+ *
+ * index.ts 和 Task 7 验收测试都调用同一个函数,禁止在此之外内联相同判断。
+ * 外部签名固定为 `(candidate, items) => boolean`,turn-boundary 切片是内部细节。
+ */
+export function shouldEmitTurnStatus(
+  candidate: TurnStatusCandidate | null,
+  items: readonly TimelineItem[],
+): boolean {
+  if (candidate === null) {
+    return false;
+  }
+  // 取最后一条 user 块的下标(含);无 user 块时切片 = 全部 items。
+  // 用反向循环而非 Array#findLastIndex(ES2023):本项目 tsconfig lib=ES2022,
+  // 且与 messages-store.rewindLastUserTurn 的既有 idiom 一致。
+  let lastUserIdx = -1;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (items[i]!.kind === 'user') {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  const currentTurnItems =
+    lastUserIdx === -1 ? items : items.slice(lastUserIdx);
+  return !hasVisibleAbnormalActivity(currentTurnItems);
 }

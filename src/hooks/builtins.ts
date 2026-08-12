@@ -23,15 +23,16 @@ export function preToolSafetyCheck(event: HookEvent): HookResult {
   return { exitCode: 0, message: '' };
 }
 
-/** PostToolUse：记录工具执行元信息（把日志作为 message 返回，由调用方决定如何展示）
+/** PostToolUse：常规成功在源头抑制（design spec §3）。
  *
- *  注意：**只返回工具名 + 完成标记，绝不返回 output 预览**。
- *  输出内容已由 BlockPipeline 的 tool_result 块统一渲染（带 ⎿ 前缀、摘要、ctrl+o 折叠），
- *  若 hook 再把同一份 output 输出一次，会导致内容被画两遍（症状 C 根因）。
- *  不直接写终端——在备用屏画布渲染下，所有输出必须经渲染器，否则会冲乱布局。 */
+ *  常规 `[Hook] xxx done` 没有用户价值也没有未来诊断价值：返回空 message,
+ *  index.ts 的 `if (hookResult.message)` 门不会 emit,任何 store/channel 都收不到。
+ *  仍绝不返回 output 预览——输出内容已由 BlockPipeline 的 tool_result 块统一渲染
+ *  (带 ⎿ 前缀、摘要、ctrl+o 折叠);hook 二次输出会导致同一内容被画两遍(症状 C 根因)。
+ *  不直接写终端——在备用屏画布渲染下,所有输出必须经渲染器,否则会冲乱布局。 */
 export function postToolLogger(event: HookEvent): HookResult {
-  const toolName = event.payload.tool_name as string;
-  return { exitCode: 0, message: `[Hook] ${toolName} done` };
+  void event;
+  return { exitCode: 0, message: '' };
 }
 
 /** SessionStart：记录会话开始（把日志作为 message 返回，由调用方决定如何展示） */

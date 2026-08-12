@@ -115,23 +115,9 @@ export const enUS: CanonicalResources = {
     overlayTitleThinking: 'Thinking',
     overlayTitleToolResult: 'Tool result',
     turnFinal: {
-    currentStatus: 'Current status',
-    obtainedResult: 'Result obtained',
-    blockedAt: 'Failure or blocked at',
-    nextStep: 'Next step',
-    separator: ': ',
-      success: 'Succeeded',
-      partial: 'Partially completed',
-      failure: 'Failed',
-      none: 'None',
-      taskComplete: 'Task completed',
-      partialToolResultsObtained: 'Some tool results were obtained',
-      partialResultsObtained: 'Some results were obtained',
-      partialStepsIncomplete: 'Some steps were not completed',
-      subagentIncomplete: 'Subagent incomplete: {reason}',
-      retryFailedStep: 'Retry the failed step or provide missing information',
-      noUsefulOutput: 'No useful output',
-      retryOrAdjust: 'Retry or adjust the approach.',
+      partialLine: '⚠ Partial',
+      failedLine: '✖ Failed',
+      cancelledLine: '○ Cancelled',
     },
   },
   spinner: {
@@ -273,6 +259,14 @@ export const enUS: CanonicalResources = {
         other: 'Ran {count} operations',
       },
     },
+    // Deterministic semantic summaries: derived only from tool name + input.
+    // No command-text parsing or path-shape guessing. For read_file only
+    // path === '.' (workspace root) counts as a directory read; every other
+    // path keeps the existing read summary.
+    semantic: {
+      memory: 'Checked memory',
+      readDirectory: 'Read project structure',
+    },
     status: {
       cancelled: '{subject} → cancelled',
       failed: '{subject} → failed: {error}',
@@ -321,6 +315,7 @@ export const enUS: CanonicalResources = {
         partial: 'partial',
         failed: 'failed',
         cancelled: 'cancelled',
+        unknown: 'unknown',
       },
       duration: {
         seconds: '{count}s',

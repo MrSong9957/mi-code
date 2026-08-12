@@ -113,23 +113,9 @@ export const zhCN = {
     overlayTitleThinking: '思考',
     overlayTitleToolResult: '工具结果',
     turnFinal: {
-    currentStatus: '当前状态',
-    obtainedResult: '已获得结果',
-    blockedAt: '失败或受阻位置',
-    nextStep: '下一步',
-    separator: '：',
-      success: '成功',
-      partial: '部分完成',
-      failure: '失败',
-      none: '无',
-      taskComplete: '任务完成',
-      partialToolResultsObtained: '部分工具结果已获得',
-      partialResultsObtained: '部分结果已获得',
-      partialStepsIncomplete: '部分步骤未完成',
-      subagentIncomplete: '子代理未完成：{reason}',
-      retryFailedStep: '重试失败步骤或补充缺失信息',
-      noUsefulOutput: '无有效输出',
-      retryOrAdjust: '重试或调整方案',
+      partialLine: '⚠ 部分完成',
+      failedLine: '✖ 失败',
+      cancelledLine: '○ 已取消',
     },
   },
   spinner: {
@@ -224,6 +210,12 @@ export const zhCN = {
         other: '运行了 {count} 个操作',
       },
     },
+    // 确定性语义摘要：仅依据工具名 + 输入推导，禁止解析命令文本或猜测路径形状。
+    // read_file 仅 path === '.'（工作区根目录）判定为目录读取；其余路径保留既有读取摘要。
+    semantic: {
+      memory: '检查了记忆',
+      readDirectory: '读取了项目结构',
+    },
     status: {
       cancelled: '{subject} → 已取消',
       failed: '{subject} → 失败：{error}',
@@ -272,6 +264,7 @@ export const zhCN = {
         partial: '部分完成',
         failed: '失败',
         cancelled: '已取消',
+        unknown: '未知',
       },
       duration: {
         seconds: '{count} 秒',

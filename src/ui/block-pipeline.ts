@@ -21,10 +21,12 @@ import { buildAskBlock } from './ask-user-presentation.js';
 import { buildToolPresentation } from './tool-presentation.js';
 import type { Translator } from '../locale/types.js';
 import type {
+  AgentBlock,
   AskBlock,
   ToolPresentation,
 } from '../tui/transcript-types.js';
 import type { BoundaryBlock, ThinkingSummaryBlock } from '../tui/state/transcript-reducer.js';
+import { buildSubagentCompletionPresentation, deriveAgentLabel } from './subagent-presentation.js';
 
 /**
  * PipelineRenderer:pipeline 依赖的下游语义投递接口。
@@ -43,6 +45,11 @@ export interface PipelineRenderer {
   finishToolCall(toolUseId: string, presentation: ToolPresentation): boolean;
   finishAsk?(toolUseId: string, block: AskBlock): boolean;
   closeOpenToolGroup?(): void;
+
+  // ── 子代理(agent,语义) ──
+  startAgent(call: { agentUseId: string; label: string }): void;
+  finishAgent(agentUseId: string, block: Omit<AgentBlock, 'id' | 'kind'>): boolean;
+  cancelAgent(agentUseId: string, label: string): boolean;
 
   // ── assistant 流式(语义) ──
   appendStreamingMarkdown(
@@ -74,6 +81,12 @@ const ASSISTANT_FORMAT = {
   firstLinePrefix: '● ',
   firstLineStyle: { fg: 'brand' } as UIMessageStyle,
 };
+
+/**
+ * spawn_agent 输出信封状态提取正则(用于 AgentBlock status 映射)。
+ * 与 subagent-presentation.ENVELOPE 的 status 捕获组对齐,但更轻量——只提取状态词。
+ */
+const ENVELOPE_STATUS_RE = /\[Subagent status=(completed|incomplete|unverified)/;
 
 /**
  * 工具块缓冲项:一个 tool_call 等待它的 result 的"配对货架格子"。
@@ -138,14 +151,19 @@ export class BlockPipeline {
       const index = this.toolBuffer.findIndex(item => item.toolUseId === toolUseId && !item.resolved);
       if (index < 0) continue;
       const item = this.toolBuffer[index]!;
-      const presentation: ToolPresentation = {
-        toolUseId,
-        toolName: item.name,
-        summary: this.translator.t('toolPresentation.status.cancelled', { subject: item.name }),
-        details: [],
-        status: 'cancelled',
-      };
-      if (!this.renderer.finishToolCall(toolUseId, presentation)) continue;
+      // 路由:spawn_agent → cancelAgent(label 从 buffered input 派生);其它 → finishToolCall(cancelled)。
+      if (item.name === 'spawn_agent') {
+        if (!this.renderer.cancelAgent(toolUseId, deriveAgentLabel(item.input, this.translator))) continue;
+      } else {
+        const presentation: ToolPresentation = {
+          toolUseId,
+          toolName: item.name,
+          summary: this.translator.t('toolPresentation.status.cancelled', { subject: item.name }),
+          details: [],
+          status: 'cancelled',
+        };
+        if (!this.renderer.finishToolCall(toolUseId, presentation)) continue;
+      }
       this.toolBuffer.splice(index, 1);
       this.cancelledToolUseIds.add(toolUseId);
     }
@@ -225,18 +243,26 @@ export class BlockPipeline {
       }
 
       case 'tool_call': {
-        // 进缓冲区等 result。立即调 startToolCall 让 reducer 建 PendingTool。
+        // 进缓冲区等 result。spawn_agent 与普通工具共用同一个 toolBuffer(无 agentBuffer)。
         const toolUseId = block.toolUseId ?? `auto-${this.idCounter++}-${block.name}`;
-        this.renderer.startToolCall({
-          toolUseId,
-          name: block.name,
-          input: block.input,
-        });
         this.toolBuffer.push({
           toolUseId,
           name: block.name,
           input: block.input,
         });
+        // 路由:spawn_agent → agent 生命周期;其它 → tool 生命周期。
+        if (block.name === 'spawn_agent') {
+          this.renderer.startAgent({
+            agentUseId: toolUseId,
+            label: deriveAgentLabel(block.input, this.translator),
+          });
+        } else {
+          this.renderer.startToolCall({
+            toolUseId,
+            name: block.name,
+            input: block.input,
+          });
+        }
         this.hasContent = true;
         break;
       }
@@ -287,7 +313,40 @@ export class BlockPipeline {
           }
         }
 
-        // 通用路径:spawn_agent 由 buildToolPresentation 内部复用 buildSubagentCompletionPresentation。
+        // spawn_agent → agent 生命周期(finishAgent)。复用 toolBuffer 配对,
+        // 但不走通用 ToolPresentation 路径。
+        if (item.name === 'spawn_agent') {
+          const pres = buildSubagentCompletionPresentation(
+            input,
+            block.output,
+            block.durationMs ?? 0,
+            this.translator,
+          );
+          // envelope status → AgentBlock status:
+          // completed→completed, incomplete→partial, unverified→partial, malformed/null→unknown
+          let status: AgentBlock['status'];
+          if (!pres) {
+            status = 'unknown';
+          } else {
+            // Re-derive envelope status from output (pres.line 已含本地化词,不便反推)。
+            const match = block.output.match(ENVELOPE_STATUS_RE);
+            const env = match ? match[1] : null;
+            status = env === 'completed' ? 'completed'
+              : (env === 'incomplete' || env === 'unverified') ? 'partial'
+              : 'unknown';
+          }
+          this.renderer.finishAgent(toolUseId, {
+            label: deriveAgentLabel(input, this.translator),
+            status,
+            ...(pres ? { summary: pres.fullOutput } : {}),
+            ...(block.durationMs !== undefined ? { durationMs: block.durationMs } : {}),
+          });
+          this.toolBuffer.splice(idx, 1);
+          this.hasContent = true;
+          break;
+        }
+
+        // 通用路径:其它工具由 buildToolPresentation 构建展示。
         const presentation = this.buildPresentationSafely(
           toolUseId,
           item.name,
@@ -328,6 +387,18 @@ export class BlockPipeline {
           subkind: 'notification',
           text: block.text,
           groupBoundary: 'break',
+        });
+        break;
+      }
+
+      case 'turn_status': {
+        // 回合终态兜底行:作为 turn-status transcript block 追加。
+        // 仅当 shouldEmitTurnStatus 判定为 true 时(index.ts 决策)才走到这里。
+        this.renderer.appendTranscriptBlock({
+          id: `turn-status-${++this.idCounter}`,
+          kind: 'turn-status',
+          status: block.status,
+          line: block.line,
         });
         break;
       }
