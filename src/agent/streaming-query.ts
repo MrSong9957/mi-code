@@ -651,6 +651,9 @@ export async function* streamingQuery(
       }
     }
 
+    // idle 检测标志(提前到 try 之前:phase 1 streaming dispatch 与 phase 3/4 都需访问,
+    // 而它们分处 try 内 / try-catch 之后,故声明在外层作用域)。
+    let idleRequested = false;
     try {
       for await (const message of engine.submit(messages, queryOptions)) {
         // 透传流式事件给 UI
@@ -703,6 +706,15 @@ export async function* streamingQuery(
 
               toolUseBlocks.push(block as ToolUseBlock);
               needsFollowUp = true;
+
+              // idle 是内部控制信号:不走 streaming dispatch —— 不 addTool(不执行)、
+              // 不 emitToolCall(否则 block-pipeline 创建永不 resolve 的 PendingTool,
+              // 且 activeToolIds.add 后因 emitToolResult 被抑制而永不 delete → 泄漏)。
+              // phase 3 结果循环也有 idle 守卫(防御性)。
+              if ((block as ToolUseBlock).name === 'idle') {
+                idleRequested = true;
+                continue;
+              }
 
               // 流式执行：AI 还在输出时就开始执行工具
               if (streamingExecutor) {
@@ -800,7 +812,7 @@ export async function* streamingQuery(
     // idle 检测：若本轮工具调用里出现 idle，收集完结果后跳出循环，
     // 不把 IDLE_REQUESTED 写回 messages（否则下一轮 LLM 收到无意义反馈，
     // 会重新生成一遍刚说过的内容——这是"一条消息回复两次"的根因）。
-    let idleRequested = false;
+    // idleRequested 在阶段 1 之前声明(streaming dispatch 阶段就需识别 idle)。
 
     if (streamingExecutor) {
       // 流式执行器已经在后台执行了，这里等待结果
@@ -814,6 +826,14 @@ export async function* streamingQuery(
           return;
         }
         for (const tool of batch) {
+          // idle 是内部控制信号,不作为普通 tool_result 发射:
+          // 不 emit(避免 UI 渲染 ● Ran 1 operation / ⎿ IDLE_REQUESTED)、
+          // 不 yield(避免进 toolFacts 误判 Partial/Failed)、不进 toolResults(避免写回 messages)。
+          // 控制语义来自 tool_use 名本身;executor 已被 streaming executor 无害预跑,结果丢弃。
+          if (tool.block.name === 'idle') {
+            idleRequested = true;
+            continue;
+          }
           const output = tool.results?.[0]?.type === 'text'
             ? (tool.results[0] as { type: 'text'; text: string }).text
             : tool.error || '[No output]';
@@ -824,10 +844,6 @@ export async function* streamingQuery(
             content: output,
           };
           toolResults.push(result);
-          // idle 工具被调用 → 标记跳出（仍 emitToolResult 让 UI 显示 ⎿ 结果）
-          if (tool.block.name === 'idle') {
-            idleRequested = true;
-          }
 
           // AUTO-0025 Phase B (Task 11):meta 旁路消费端。
           // 从 outcome store take 出结构化结果(ask_user_question executor 在 Task 9 写入)。
@@ -863,6 +879,12 @@ export async function* streamingQuery(
     } else {
       // 传统方式：串行执行所有工具
       for (const block of toolUseBlocks) {
+        // idle 是内部控制信号:不执行(executor 无副作用)、不发射、不进 toolResults。
+        // 控制语义来自 tool_use 名本身,非 executor 输出。
+        if (block.name === 'idle') {
+          idleRequested = true;
+          continue;
+        }
         if (!executionRuntime) {
           throw new Error('streamingQuery invariant violation: tool call received without executionRuntime');
         }
@@ -884,9 +906,6 @@ export async function* streamingQuery(
           tool_use_id: block.id,
           content: output,
         });
-        if (block.name === 'idle') {
-          idleRequested = true;
-        }
 
         const structuredOutcome = askOutcomeStore.take(block.id);
         if (block.name === 'ask_user_question') {
@@ -916,12 +935,24 @@ export async function* streamingQuery(
     }
 
     // idle 跳出：本轮调用了 idle 工具，不再继续循环。
-    // 关键：不进入阶段 4（不把 IDLE_REQUESTED 写回 messages），
-    // 否则下一轮 LLM 收到无意义反馈会重复生成。
+    // 关键：idle 是控制信号 —— 不把 IDLE_REQUESTED / idle tool_use 写回 messages
+    // (避免下一轮 LLM 收到无意义反馈循环 / 未配对 tool_use 触发 API 错误)。
+    // 但本轮 assistant 正文必须保留:让 classifyTurn 能看到 terminal text → 成功(非 Partial/Failed)。
     if (idleRequested) {
       if (hasAskUserQuestionResult && !forceFinalTextTurnAfterAsk) {
         forceFinalTextTurnAfterAsk = true;
       } else {
+        // 收窄的 phase-4:剥除 idle tool_use,保留 text / 其他配对 tool_use + 对应 tool_result。
+        const preserved = assistantMessages
+          .flatMap(m => m.content)
+          .filter(block => !(block.type === 'tool_use' && block.name === 'idle'));
+        if (preserved.length > 0) {
+          messages = [...messages, { role: 'assistant', content: preserved }];
+          if (toolResults.length > 0) {
+            messages = [...messages, { role: 'user', content: toolResults }];
+          }
+          if (onMessageCheckpoint) await onMessageCheckpoint(messages);
+        }
         // Wave B Task 11: idle 是用户主动叫停的正常收尾路径。跑 finalization 体检。
         runFinalizationCheckpoint();
         eventBus?.emitLoopEnd({ reason: 'idle' });
@@ -930,16 +961,18 @@ export async function* streamingQuery(
     }
 
     // ═══════ 阶段 4：更新消息历史，继续循环 ═══════
-    messages = [
-      ...messages,
-      // assistant 消息（包含 tool_use 块）
-      {
-        role: 'assistant',
-        content: assistantMessages.flatMap(m => m.content),
-      },
-      // tool_result 消息
-      { role: 'user', content: toolResults },
-    ];
+    // idle tool_use 无配对 tool_result(控制信号已在阶段3抑制)→ 从 assistant 内容剥除,
+    // 避免 force-final 路径(ask+idle 同轮)产生未配对 tool_use 触发下一轮 API 错误。
+    // 非 idle 轮此 filter 为 no-op。idle-only 轮剥除后内容为空 → 跳过合并(不写空消息)。
+    const phase4Assistant = assistantMessages
+      .flatMap(m => m.content)
+      .filter(block => !(block.type === 'tool_use' && block.name === 'idle'));
+    if (phase4Assistant.length > 0) {
+      messages = [...messages, { role: 'assistant', content: phase4Assistant }];
+    }
+    if (toolResults.length > 0) {
+      messages = [...messages, { role: 'user', content: toolResults }];
+    }
 
     // 子代理工作日志:工具轮配对完成后 awaited checkpoint 一次。
     // 此时本轮 assistant(tool_use) + user(tool_result) 已合并进 messages,

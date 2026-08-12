@@ -321,8 +321,13 @@ describe('AskQuestion terminal assistant prose', () => {
     expect(finalRequestBlocks).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'tool_use', id: 'ask-same-turn', name: 'ask_user_question' }),
       expect.objectContaining({ type: 'tool_result', tool_use_id: 'ask-same-turn' }),
-      expect.objectContaining({ type: 'tool_result', tool_use_id: 'idle-same-turn' }),
     ]));
+    // idle 是控制信号:不残留 tool_use / tool_result / IDLE_REQUESTED 进后续 LLM 上下文
+    const idleResidue = finalRequestBlocks.some(b =>
+      (b.type === 'tool_use' && (b as { name?: string }).name === 'idle')
+      || (b.type === 'tool_result' && (b as { tool_use_id?: string }).tool_use_id === 'idle-same-turn'),
+    );
+    expect(idleResidue, 'idle 控制信号不应残留进 messages').toBe(false);
   });
 
   it('does not force a final summary after the user cancels AskQuestion', async () => {
