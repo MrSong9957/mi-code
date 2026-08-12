@@ -4,11 +4,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 describe('clipboard 三级回退', () => {
-  let originalEnv: NodeJS.ProcessEnv;
+  // clipboard 只可能读这 3 个 env；按 key 保存/恢复，绝不整体替换 process.env。
+  // 整体 `process.env = {...}` 会销毁 Windows 大小写不敏感 Proxy，污染后续文件
+  // (run-bash-tool / child-process-env-scrub) 的 'SystemRoot'/'ComSpec' in 检查。
+  const ENV_KEYS = ['SSH_CONNECTION', 'SSH_TTY', 'TMUX'] as const;
+  let savedEnv: Record<string, string | undefined>;
   let writeMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    originalEnv = { ...process.env };
+    savedEnv = Object.fromEntries(
+      ENV_KEYS.map(k => [k, process.env[k]]),
+    ) as Record<string, string | undefined>;
     writeMock = vi.fn();
     // 清模块缓存：每个测试内 vi.doMock + 动态 import 都拿到重新求值的 clipboard.ts，
     // 使其顶层 `import { spawn }` 绑定到本测试自己的 spawnMock（否则首个 import 的绑定被缓存）。
@@ -16,7 +22,10 @@ describe('clipboard 三级回退', () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(writeMock);
   });
   afterEach(() => {
-    process.env = originalEnv;
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k]!;
+    }
     vi.restoreAllMocks();
   });
 
