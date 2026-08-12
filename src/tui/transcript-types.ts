@@ -32,6 +32,16 @@ export interface ToolPresentation {
   status: ToolPresentationStatus;
   errorMessage?: string;
   layout?: 'standard' | 'compact-completion';
+  /**
+   * 标记 summary 为"活动级语义":它描述的是工具活动本身(如 "Checked memory"、
+   * "Read project structure"),而非每条结果的子行数据。
+   *
+   * singleton ToolBlock 渲染时把 summary 提升为 `●` 标题,并跳过重复的 `⎿ summary`
+   * 子行。用于 memory_* 与 read_file(path='.') 这类无 per-result 内容的活动。
+   *
+   * 仅在 presentations.length === 1 时生效,避免影响 glob/grep 等真正的分组工具。
+   */
+  semanticActivity?: boolean;
 }
 
 /** 工具分组里挂载的 thinking 元数据(透明聚合到分组尾部)。 */

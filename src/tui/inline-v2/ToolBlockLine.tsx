@@ -33,7 +33,6 @@ export interface ToolBlockLineProps {
 
 export function ToolBlockLine({ block, cols }: ToolBlockLineProps): React.ReactElement {
   const { t } = useLocale();
-  const title = buildToolGroupTitle(block.toolName, block.presentations.length, { t });
   const ordered = orderToolPresentations(block.presentations);
   const thinkingSummary = summarizeThinking(block.thinking);
 
@@ -58,6 +57,31 @@ export function ToolBlockLine({ block, cols }: ToolBlockLineProps): React.ReactE
       </Box>
     );
   }
+
+  // semantic-activity singleton(memory_* / read_file path='.'):
+  // summary 描述活动本身,提升为 ● 标题,不输出重复的 ⎿ summary 子行。
+  // 仅 singleton 生效,避免影响 glob/grep 等真正的分组工具。
+  const singlePresentation = ordered.length === 1 ? ordered[0] : null;
+  if (singlePresentation?.semanticActivity) {
+    return (
+      <Box flexDirection="column" width={cols}>
+        <Text
+          color={singlePresentation.status === 'error' ? 'red' : undefined}
+          dimColor={
+            singlePresentation.status === 'empty'
+            || singlePresentation.status === 'cancelled'
+          }
+        >
+          {'● ' + singlePresentation.summary}
+        </Text>
+        {thinkingSummary && (
+          <Text dimColor>{'  ⎿ ' + thinkingSummary}</Text>
+        )}
+      </Box>
+    );
+  }
+
+  const title = buildToolGroupTitle(block.toolName, block.presentations.length, { t });
 
   // 用 Box flexDirection="column" 让每行自然换行,避免手动 \n 导致末尾空行。
   return (

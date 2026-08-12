@@ -166,6 +166,8 @@ describe('buildToolPresentation', () => {
     expect(p.summary).toBe(t.t('toolPresentation.semantic.memory'));
     // And must not fall through to the generic "Ran 1 operation" group default.
     expect(p.summary).not.toBe(t.t('toolPresentation.group.default.one', { count: 1 }));
+    // summary 是活动级语义,必须标记以提升为 ● 标题(而非重复 ⎿ 子行)。
+    expect(p.semanticActivity).toBe(true);
   });
 
   it.each(['zh-CN', 'en-US'] as const)('only path "." is treated as directory in %s', (language) => {
@@ -177,6 +179,8 @@ describe('buildToolPresentation', () => {
       output: '',
     }, t);
     expect(dirP.summary).toBe(t.t('toolPresentation.semantic.readDirectory'));
+    // 目录读 summary 是活动级语义,标记以提升为 ● 标题。
+    expect(dirP.semanticActivity).toBe(true);
     // any other path: NO guessing — keep existing read summary, never readDirectory
     const otherP = buildToolPresentation({
       toolUseId: 'tu3',
@@ -185,5 +189,7 @@ describe('buildToolPresentation', () => {
       output: '',
     }, t);
     expect(otherP.summary).not.toBe(t.t('toolPresentation.semantic.readDirectory'));
+    // 普通文件读不是活动级语义,不能带 semanticActivity。
+    expect(otherP.semanticActivity).toBeUndefined();
   });
 });

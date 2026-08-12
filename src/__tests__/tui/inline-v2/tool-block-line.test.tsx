@@ -215,4 +215,62 @@ describe('ToolBlockLine', () => {
     expect(frame).toContain('⎿ src/**/*.ts → 3 files');
     expect(frame).toContain('⎿ src/**/*.spec.ts → no matches');
   });
+
+  // ── semantic-activity 标题提升 ──
+  // memory_* / read_file(path='.') 的 summary 描述活动本身,应成为 ● 标题,
+  // 而非重复输出为 ⎿ 子行(否则出现 "● Ran 1 operation / ⎿ Checked memory")。
+
+  it('promotes singleton memory_list semantic to the title line', () => {
+    const block: ToolBlock = {
+      id: 'mem-singleton',
+      kind: 'tool',
+      toolName: 'memory_list',
+      presentations: [
+        {
+          toolUseId: 'm1',
+          toolName: 'memory_list',
+          summary: 'Checked memory',
+          details: [],
+          status: 'success',
+          semanticActivity: true,
+        },
+      ],
+      thinking: [],
+    };
+    const frame = renderToolBlockLine(block);
+    const lines = frame.split('\n');
+    // 标题即 semantic 活动
+    expect(lines[0]).toBe('● Checked memory');
+    // 不出现 generic 分组标题
+    expect(frame).not.toContain('Ran 1 operation');
+    // 不重复输出 ⎿ semantic 子行
+    expect(frame).not.toContain('⎿ Checked memory');
+    // singleton 语义块只有标题一行
+    expect(lines).toHaveLength(1);
+  });
+
+  it('promotes singleton read_file(path=".") semantic to the title line', () => {
+    const block: ToolBlock = {
+      id: 'dir-singleton',
+      kind: 'tool',
+      toolName: 'read_file',
+      presentations: [
+        {
+          toolUseId: 'd1',
+          toolName: 'read_file',
+          summary: 'Read project structure',
+          details: [],
+          status: 'success',
+          semanticActivity: true,
+        },
+      ],
+      thinking: [],
+    };
+    const frame = renderToolBlockLine(block);
+    const lines = frame.split('\n');
+    expect(lines[0]).toBe('● Read project structure');
+    expect(frame).not.toContain('Read 1 item');
+    expect(frame).not.toContain('⎿ Read project structure');
+    expect(lines).toHaveLength(1);
+  });
 });

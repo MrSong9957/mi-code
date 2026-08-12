@@ -111,7 +111,13 @@ export function buildToolPresentation(
     case 'memory_list':
     case 'memory_read':
     case 'memory_write':
-      return { ...base, summary: translator.t('toolPresentation.semantic.memory'), details: [] };
+      return {
+        ...base,
+        summary: translator.t('toolPresentation.semantic.memory'),
+        details: [],
+        // summary 描述活动本身(非 per-result 子行)→ singleton 提升为 ● 标题。
+        semanticActivity: true,
+      };
     case 'read_file':
       return buildReadFilePresentation(base, toolInput, output, errorMessage, translator);
     case 'spawn_agent':
@@ -278,6 +284,8 @@ function buildReadFilePresentation(
       ...base,
       summary: translator.t('toolPresentation.semantic.readDirectory'),
       details: [],
+      // summary 描述活动本身(非 per-result 子行)→ singleton 提升为 ● 标题。
+      semanticActivity: true,
     };
   }
 
