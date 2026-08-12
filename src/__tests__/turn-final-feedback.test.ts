@@ -8,6 +8,8 @@ import {
 } from '../agent/turn-final-feedback.js';
 import type { Message } from '../agent/types.js';
 import { createLanguageStore, createTranslator, type Translator } from '../locale/index.js';
+import { shouldEmitTurnStatus } from '../tui/state/transcript-reducer.js';
+import type { AgentBlock } from '../tui/transcript-types.js';
 
 const zhTranslator = createTranslator(createLanguageStore('zh-CN'));
 
@@ -396,6 +398,87 @@ describe('buildTurnStatusCandidate', () => {
       createTranslator(createLanguageStore('en-US')),
     );
     expect(cancelled?.line).toBe('○ Cancelled');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════
+// Task 7 — 生产决策缝验收(production TurnStatus seam)
+//
+// 驱动真实的 finalizeTurnForUser(classifyTurn + buildTurnStatusCandidate)+ 真实的
+// shouldEmitTurnStatus(transcript-reducer 的唯一决策缝)。这是能在生产 bug 上真正
+// 变红的测试:既验证 outcome 终态分类(aborted→cancelled / rule-7 部分完成),也验证
+// emit 决策(可见异常活动抑制兜底行 / 无可见异常时真正 emit)。
+//
+// 关键:不在此处复制任何决策逻辑。candidate 来自真实 finalizer,items 直接喂给真实
+// shouldEmitTurnStatus。每个用例都带「right-reason guard」证明决策在做真正的判别
+// (而非恒 true / 恒 false 的假阳性)。
+// ════════════════════════════════════════════════════════════════════
+describe('production TurnStatus seam — spawn_agent cancelled case', () => {
+  it('aborted turn with an Agent cancelled already visible -> no duplicate TurnStatus', () => {
+    // 真实生产 finalizer 处理一个 aborted fixture。
+    // abortedMessages 刻画「用户要求 spawn_agent,assistant 已发出 call,回合被中止」:
+    // toolFacts 为空(spawn_agent 未返回 result 事实),aborted=true。
+    const abortedMessages: Message[] = [
+      { role: 'user', content: '启动子代理调查项目' },
+      assistantToolUse('a1', 'spawn_agent'),
+    ];
+    const finalized = finalizeTurnForUser(
+      {
+        messages: abortedMessages,
+        turnStartIndex: 0,
+        toolFacts: [],
+        error: undefined,
+        aborted: true,
+      },
+      zhTranslator,
+    );
+    // candidate 来自 aborted 硬规则:cancelled 只从 input.aborted 来(无视 classified)。
+    // classifyTurn 在 aborted 时返回 '部分完成',但 candidate 必须是 cancelled。
+    expect(finalized.candidate?.status).toBe('cancelled');
+
+    // items 反映用户已看到的内容:一个已由 Task 4 固化的 AgentBlock(cancelled)。
+    const itemsWithCancelledAgent: AgentBlock[] = [
+      { id: 'a1', kind: 'agent', label: '调查项目', status: 'cancelled' },
+    ];
+    // 可见的 cancelled AgentBlock 解释了本回合结局 -> 不再补冗余 TurnStatus。
+    expect(shouldEmitTurnStatus(finalized.candidate, itemsWithCancelledAgent)).toBe(false);
+
+    // right-reason guard:同一个 cancelled candidate,若无可见异常活动,
+    // 则「会」emit。证明抑制来自 agent 块的可见性,而非恒 false 的假阳性。
+    expect(shouldEmitTurnStatus(finalized.candidate, [])).toBe(true);
+  });
+
+  it('partial turn with NO visible abnormal activity -> emits TurnStatus', () => {
+    // 构造一个真实分类为「部分完成」的 fixture(rule 7:最后 tool_result 之后无终端
+    // assistant 文本 + 存在成功工具事实),且不含任何会在时间线上解释结局的异常活动。
+    // assistantToolUse 仅含 tool_use 块无文本 -> getTerminalAssistantText 返回 ''；
+    // toolFacts 的 memory_list 成功 -> rule 7 走 hasSuccessfulTool 分支返回「部分完成」。
+    const partialNoAbnormalMessages: Message[] = [
+      assistantToolUse('t1', 'memory_list'),
+      toolResult('t1', 'No memories'),
+    ];
+    const finalized = finalizeTurnForUser(
+      {
+        messages: partialNoAbnormalMessages,
+        turnStartIndex: 0,
+        toolFacts: [tool('memory_list', 'No memories', 'success')],
+        error: undefined,
+        aborted: false,
+      },
+      zhTranslator,
+    );
+    // 真实 rule-7 分类(非 aborted / 非 error / 无失败事实 / 无终端文本 + 成功工具)。
+    expect(finalized.status).toBe('部分完成');
+    expect(finalized.candidate?.status).toBe('partial');
+    // 时间线无可见项 -> 无异常活动 -> 真正的兜底 emit。
+    expect(shouldEmitTurnStatus(finalized.candidate, [])).toBe(true);
+
+    // right-reason guard:若时间线里出现可见异常活动(如一个失败工具),
+    // 则「不会」emit。证明 emit 决策在做真正的判别,而非恒 true 的假阳性。
+    const itemsWithAbnormal: AgentBlock[] = [
+      { id: 'x1', kind: 'agent', label: '子任务', status: 'partial' },
+    ];
+    expect(shouldEmitTurnStatus(finalized.candidate, itemsWithAbnormal)).toBe(false);
   });
 });
 

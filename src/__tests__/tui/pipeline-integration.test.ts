@@ -398,3 +398,57 @@ describe('BlockPipeline → store 端到端', () => {
     expect(store.getState().model.items).toEqual([]);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// Task 7 — 消息呈现 v1 整案验收(compact transcript)
+//
+// 一条覆盖 memory_list + read_file + spawn_agent(cancelled) 的紧凑时间线,
+// 验证 Tasks 1–6 的呈现规则在真实 pipeline 端到端叠加后仍成立:
+//  - <1s thinking 的 summary 在提交边界被丢弃(Task 2);
+//  - 常规 post-tool hook 在源头被抑制 -> 不产生 system/notification(Task 3);
+//  - spawn_agent 取消后固化为 AgentBlock(cancelled, label=description)(Task 4)。
+//
+// 注意:本用例只驱动 pipeline,不调用 finalize/index.ts,故 turn-status 的
+// emit 决策不在本用例验证范围内(pipeline 本身不会自发 emit turn-status)。
+// 真正的 turn-status 决策缝由 turn-final-feedback.test.ts 的 production-seam 用例证明。
+// ════════════════════════════════════════════════════════════════════
+describe('message presentation v1 — full case', () => {
+  it('compact transcript for memory+read+spawn_agent(cancelled)+partial', () => {
+    const { pipeline, store, translator } = setup();
+    pipeline.emit({ kind: 'user_input', text: '启动子代理调查项目' });
+    pipeline.emit({ kind: 'assistant_text', text: '我来启动…', isFinal: true });
+    pipeline.emit({ kind: 'thinking_start' });
+    // durationSec=0 -> <1s,deferred summary 在提交边界被丢弃(不进 committed transcript)。
+    pipeline.emit({ kind: 'thinking_end', durationSec: 0, filesRead: 0 });
+    pipeline.emit({ kind: 'tool_call', name: 'memory_list', input: {}, toolUseId: 't1' });
+    pipeline.emit({ kind: 'tool_result', name: 'memory_list', output: 'No memories', toolUseId: 't1' });
+    // 常规 post-tool hook 在源头被抑制(postToolLogger 返回 '')-> 这里不发 hook 事件。
+    pipeline.emit({ kind: 'tool_call', name: 'read_file', input: { path: '.' }, toolUseId: 't2' });
+    pipeline.emit({ kind: 'tool_result', name: 'read_file', output: '.', toolUseId: 't2' });
+    pipeline.emit({ kind: 'assistant_text', text: '现在启动…', isFinal: true });
+    pipeline.emit({ kind: 'tool_call', name: 'spawn_agent', input: { description: '调查项目' }, toolUseId: 'a1' });
+    pipeline.cancelPendingTools(new Set(['a1']));
+    const items = selectCommittedTranscript(store.getState().model.items);
+
+    // 存在:用户输入、两段 assistant、两个语义化的工具块、一个取消的 agent 块。
+    expect(items.some(i => i.kind === 'user')).toBe(true);
+    expect(items.filter(i => i.kind === 'assistant')).toHaveLength(2);
+    // memory_list -> 本地化语义摘要「检查了记忆」。
+    expect(items.some(i =>
+      i.kind === 'tool' && i.presentations.some(p => p.summary === translator.t('toolPresentation.semantic.memory')),
+    )).toBe(true);
+    // read_file(path='.') -> 本地化语义摘要「读取了项目结构」。
+    expect(items.some(i =>
+      i.kind === 'tool' && i.presentations.some(p => p.summary === translator.t('toolPresentation.semantic.readDirectory')),
+    )).toBe(true);
+    // spawn_agent 取消 -> AgentBlock(status=cancelled, label=description)。
+    expect(items.some(i =>
+      i.kind === 'agent' && i.status === 'cancelled' && i.label === '调查项目',
+    )).toBe(true);
+
+    // 缺席:<1s thinking 不进 committed transcript(提交边界丢弃)。
+    expect(items.some(i => i.kind === 'system' && i.subkind === 'thinking-summary')).toBe(false);
+    // 缺席:无 hook 事件 -> 无 system/notification 噪声。
+    expect(items.some(i => i.kind === 'system' && i.subkind === 'notification')).toBe(false);
+  });
+});
