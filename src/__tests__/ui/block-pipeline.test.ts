@@ -394,6 +394,54 @@ describe('BlockPipeline emit 路由', () => {
     expect(recorder.of('finishToolCall')).toHaveLength(0);
   });
 
+  // 10b. task 与 spawn_agent 同属前台子代理 → 共享 agent lifecycle(非 generic ToolBlock)
+  // task 无 description 字段,label 由 deriveAgentLabel 的 prompt fallback 派生。
+  it('routes task through agent lifecycle via toolBuffer, not generic ToolBlock', () => {
+    const { recorder, pipeline } = setup();
+    pipeline.emit({
+      kind: 'tool_call', name: 'task', toolUseId: 'k1',
+      input: { prompt: '调查依赖关系' },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'task', toolUseId: 'k1', durationMs: 5000,
+      output: '[Subagent status=completed]\nfull child result body',
+    });
+
+    // Agent lifecycle: startAgent called, label 来自 task.prompt(无 description)
+    const starts = recorder.of('startAgent');
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ agentUseId: 'k1', label: '调查依赖关系' });
+
+    const finishes = recorder.of('finishAgent');
+    expect(finishes).toHaveLength(1);
+    expect(finishes[0]!.agentUseId).toBe('k1');
+    expect(finishes[0]!.block.status).toBe('completed');
+    expect(finishes[0]!.block.label).toBe('调查依赖关系');
+    // envelope 已剥离,summary 是正文(不泄漏 [Subagent status=completed])
+    expect(finishes[0]!.block.summary).toContain('full child result body');
+    expect(finishes[0]!.block.durationMs).toBe(5000);
+
+    // NOT routed through generic tool path(否则渲染 ● Ran 1 operation / ⎿ [Subagent status=completed])
+    expect(recorder.of('startToolCall')).toHaveLength(0);
+    expect(recorder.of('finishToolCall')).toHaveLength(0);
+  });
+
+  it('task envelope incomplete → AgentBlock status partial', () => {
+    const { recorder, pipeline } = setup();
+    pipeline.emit({
+      kind: 'tool_call', name: 'task', toolUseId: 'k2',
+      input: { prompt: '调查模块A' },
+    });
+    pipeline.emit({
+      kind: 'tool_result', name: 'task', toolUseId: 'k2',
+      output: '[Subagent status=incomplete reason=stopped]\npartial body',
+    });
+    const finishes = recorder.of('finishAgent');
+    expect(finishes).toHaveLength(1);
+    expect(finishes[0]!.block.status).toBe('partial');
+    expect(recorder.of('finishToolCall')).toHaveLength(0);
+  });
+
   // 11. hook → appendTranscriptBlock({ kind:'system', subkind:'notification' })
   it('hook → appendTranscriptBlock({ kind:"system", subkind:"notification" })', () => {
     const { recorder, pipeline } = setup();
@@ -481,6 +529,22 @@ describe('BlockPipeline cancellation', () => {
     // Label derived from input.description (trimmed)
     expect(cancels[0]!.label).toBe('查找实现');
     expect(cancels[0]!.agentUseId).toBe('a1');
+  });
+
+  it('task cancel → cancelAgent with label from prompt (NOT finishToolCall)', () => {
+    const { recorder, pipeline } = setup();
+    pipeline.emit({
+      kind: 'tool_call', name: 'task', toolUseId: 'k1',
+      input: { prompt: '调查模块B' },
+    });
+    pipeline.cancelPendingTools(new Set(['k1']));
+    const cancels = recorder.of('cancelAgent');
+    expect(cancels).toHaveLength(1);
+    // Label 来自 task.prompt(deriveAgentLabel 的 prompt fallback)
+    expect(cancels[0]!.label).toBe('调查模块B');
+    expect(cancels[0]!.agentUseId).toBe('k1');
+    // NOT generic cancelled tool path(否则渲染 task → cancelled)
+    expect(recorder.of('finishToolCall')).toHaveLength(0);
   });
 
   it('does not tombstone missing, resolved, or renderer-rejected calls', () => {

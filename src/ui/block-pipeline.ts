@@ -89,6 +89,20 @@ const ASSISTANT_FORMAT = {
 const ENVELOPE_STATUS_RE = /\[Subagent status=(completed|incomplete|unverified)/;
 
 /**
+ * 前台子代理工具判定:走 agent 生命周期(startAgent/finishAgent/cancelAgent),
+ * 而非通用 ToolBlock。它们共享同一 subagent runtime 与 [Subagent status=…] envelope。
+ *
+ * - spawn_agent:显式 description/role 的委派工具。
+ * - task:spawn_agent 的轻量别名(无 description,label 由 prompt 派生)。
+ *
+ * spawn_self_organizing 是 fire-and-forget 后台工具(无 envelope、不 await),
+ * 不属于前台子代理,不纳入。
+ */
+function isForegroundSubagentTool(name: string): boolean {
+  return name === 'spawn_agent' || name === 'task';
+}
+
+/**
  * 工具块缓冲项:一个 tool_call 等待它的 result 的"配对货架格子"。
  *
  * call 进缓冲区时只存身份(name/input/toolUseId);result 到达时配对,
@@ -151,8 +165,8 @@ export class BlockPipeline {
       const index = this.toolBuffer.findIndex(item => item.toolUseId === toolUseId && !item.resolved);
       if (index < 0) continue;
       const item = this.toolBuffer[index]!;
-      // 路由:spawn_agent → cancelAgent(label 从 buffered input 派生);其它 → finishToolCall(cancelled)。
-      if (item.name === 'spawn_agent') {
+      // 路由:前台子代理(spawn_agent/task)→ cancelAgent(label 从 buffered input 派生);其它 → finishToolCall(cancelled)。
+      if (isForegroundSubagentTool(item.name)) {
         if (!this.renderer.cancelAgent(toolUseId, deriveAgentLabel(item.input, this.translator))) continue;
       } else {
         const presentation: ToolPresentation = {
@@ -250,8 +264,8 @@ export class BlockPipeline {
           name: block.name,
           input: block.input,
         });
-        // 路由:spawn_agent → agent 生命周期;其它 → tool 生命周期。
-        if (block.name === 'spawn_agent') {
+        // 路由:前台子代理(spawn_agent/task)→ agent 生命周期;其它 → tool 生命周期。
+        if (isForegroundSubagentTool(block.name)) {
           this.renderer.startAgent({
             agentUseId: toolUseId,
             label: deriveAgentLabel(block.input, this.translator),
@@ -313,9 +327,9 @@ export class BlockPipeline {
           }
         }
 
-        // spawn_agent → agent 生命周期(finishAgent)。复用 toolBuffer 配对,
+        // 前台子代理(spawn_agent/task)→ agent 生命周期(finishAgent)。复用 toolBuffer 配对,
         // 但不走通用 ToolPresentation 路径。
-        if (item.name === 'spawn_agent') {
+        if (isForegroundSubagentTool(item.name)) {
           const pres = buildSubagentCompletionPresentation(
             input,
             block.output,
