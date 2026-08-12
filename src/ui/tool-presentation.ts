@@ -109,8 +109,8 @@ export function buildToolPresentation(
     case 'grep':
       return buildGrepPresentation(base, toolInput, output, errorMessage, translator);
     case 'memory_list':
-    case 'memory_search':
-    case 'memory_add':
+    case 'memory_read':
+    case 'memory_write':
       return { ...base, summary: translator.t('toolPresentation.semantic.memory'), details: [] };
     case 'read_file':
       return buildReadFilePresentation(base, toolInput, output, errorMessage, translator);

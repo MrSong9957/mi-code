@@ -147,15 +147,25 @@ describe('buildToolPresentation', () => {
     expect(JSON.stringify(result)).not.toContain('[object Object]');
   });
 
-  it.each(['zh-CN', 'en-US'] as const)('semantic memory summary in %s', (language) => {
+  it.each([
+    { language: 'zh-CN' as const, toolName: 'memory_list' },
+    { language: 'zh-CN' as const, toolName: 'memory_read' },
+    { language: 'zh-CN' as const, toolName: 'memory_write' },
+    { language: 'en-US' as const, toolName: 'memory_list' },
+    { language: 'en-US' as const, toolName: 'memory_read' },
+    { language: 'en-US' as const, toolName: 'memory_write' },
+  ])('semantic memory summary for $toolName in $language', ({ language, toolName }) => {
     const t = translatorFor(language);
     const p = buildToolPresentation({
       toolUseId: 'tu1',
-      toolName: 'memory_list',
+      toolName,
       input: {},
       output: '',
     }, t);
+    // Each real memory tool must map to the deterministic memory semantic.
     expect(p.summary).toBe(t.t('toolPresentation.semantic.memory'));
+    // And must not fall through to the generic "Ran 1 operation" group default.
+    expect(p.summary).not.toBe(t.t('toolPresentation.group.default.one', { count: 1 }));
   });
 
   it.each(['zh-CN', 'en-US'] as const)('only path "." is treated as directory in %s', (language) => {
