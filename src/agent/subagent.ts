@@ -395,6 +395,17 @@ interface SubagentExecutionProgress {
   successfulToolResultCount: number;
 }
 
+/**
+ * 检测"伪 tool-call 文本":某些模型(GLM/MiMo)在 reserveFinalTextTurn 把 tool_use
+ * 以原始 XML 文本形式输出(如 `<tool_call><function=read_file>...`),而非结构化
+ * tool_use 块。这种文本虽非空,但不是有效分析——不得视为已合成。
+ *
+ * 仅覆盖已有真实证据的伪工具调用形态,不做通用 XML 解析。
+ */
+function looksLikePseudoToolCall(text: string): boolean {
+  return /<tool_call>/.test(text) && /<function=/.test(text);
+}
+
 async function runSubagentWithClient(
   client: StreamingLLMClient,
   toolSubset: Map<string, RegisteredTool>,
@@ -487,7 +498,7 @@ async function runSubagentWithClient(
   // 此时 finalTurnSynthesized 为 undefined,不影响既有的 terminationReason 判定。
   const finalTurnWasActive = reserveFinalTextTurn && maxTurns >= 2;
   const finalTurnSynthesized = finalTurnWasActive
-    ? (terminationReason === 'end_turn' && resultText.trim().length > 0)
+    ? (terminationReason === 'end_turn' && resultText.trim().length > 0 && !looksLikePseudoToolCall(resultText))
     : undefined;
 
   // 模型可能只调工具不输出文字（某些 GLM/MiMo 行为），用工具调用信息兜底。

@@ -286,6 +286,35 @@ describe('subagent result integrity', () => {
     expect(result.text).toContain('Now let me check the test files...');
   });
 
+  it('final turn 输出伪 tool-call 文本(<tool_call><function=...>)→ incomplete,不当 completed 分析', async () => {
+    // 真实证据:某些模型(GLM/MiMo)在 reserveFinalTextTurn 把 tool_use 以原始 XML 文本输出,
+    // 而非结构化 tool_use 块。这种文本虽非空,但不是有效分析——不得标记为 completed。
+    const client = new ScriptedStreamClient([
+      // turn 1:真实工具调用(积累证据)
+      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } }],
+      // turn 2(reserveFinalTextTurn):伪 tool-call XML 文本(非结构化 tool_use)
+      [{ type: 'text', text: '<tool_call>\n<function=read_file>\n<parameter=path>src/agent/loop.ts</parameter>\n</function>\n</tool_call>' }],
+    ]);
+    const result = await runSubagent('inspect architecture', makeReadRegistry(), {
+      role: 'explore', client, maxSteps: 2,
+      executionRuntime: createToolExecutionRuntime(),
+    });
+    expect(result.status, '伪 tool-call 文本不是有效分析 → incomplete').toBe('incomplete');
+    expect(result.text).toContain('[Subagent incomplete');
+  });
+
+  it('final turn 输出正常分析文本 → completed(不破坏现有行为)', async () => {
+    const client = new ScriptedStreamClient([
+      [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src' } }],
+      [{ type: 'text', text: '架构分析完成:agent 模块包含循环、工具执行、流式查询等核心组件,建议重构 loop.ts 的错误恢复逻辑。' }],
+    ]);
+    const result = await runSubagent('inspect architecture', makeReadRegistry(), {
+      role: 'explore', client, maxSteps: 2,
+      executionRuntime: createToolExecutionRuntime(),
+    });
+    expect(result.status, '正常分析文本 → completed').toBe('completed');
+  });
+
   it('provider 抛普通对象时返回 incomplete/error 而不是 reject', async () => {
     const client: StreamingLLMClient = {
       // 模拟 provider 在产出任何流事件前就抛出普通对象异常。

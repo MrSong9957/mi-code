@@ -38,6 +38,7 @@ import { createTaskTool } from './agent/tools/task-tool.js';
 import { createSpawnAgentTool } from './agent/tools/spawn-agent-tool.js';
 import { createSpawnSelfOrganizingTool } from './agent/tools/spawn-self-organizing-tool.js';
 import { runSubagent } from './agent/subagent.js';
+import { buildRuntimeEnvironmentInfo } from './agent/runtime-environment.js';
 import {
   finalizeTurnForUser,
   commitFinalizedTurn,
@@ -860,6 +861,8 @@ async function handleUserSubmit(rawText: string): Promise<void> {
     planModeInstruction,
     // Task 8 i18n:每回合注入响应语言偏好,随运行时语言切换刷新;fork 子代理经 lastSystemPrompt 继承。
     getResponseLanguagePreference(translator),
+    // R2:运行时环境信息——让模型知道当前 OS/platform,避免发出平台不兼容命令。
+    buildRuntimeEnvironmentInfo(),
   ].join('\n');
 
   // 记录最近一轮的 system prompt，供 fork 子代理继承
