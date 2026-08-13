@@ -91,6 +91,15 @@ export interface DefaultPermissionAskResolverOptions {
   readonly evaluateWithMode: ResolverEvaluator;
   readonly hooks: readonly PermissionRequestHook[];
   readonly denialState: { readonly consecutive: number; readonly total: number };
+  /**
+   * classifier 最大等待时间（ms）。到达 deadline 后 resolver 自行结束等待，
+   * 走现有 classifier failure → deny 路径，并 abort 底层 controller。
+   *
+   * 防御非流式 provider 调用（completeText / messages.create stream:false）无 timeout
+   * 导致的永久挂起（scenario-2 run_bash 挂起根因）。无论 provider 是否响应 abort，
+   * deadline 到达后 resolve() 必须返回。
+   */
+  readonly classifierDeadlineMs?: number;
   /** Task 7：main-origin dialog 函数（经 resolveInteractiveAsk 竞速）；未提供时 main 走原 classifier 直等 */
   readonly dialogProvider?: (input: import('./interactive-ask.js').InteractiveAskInput) => Promise<import('./interactive-ask.js').DialogResult>;
   /** Task 7：dialog 创建延迟 ms（竞速窗口） */
@@ -124,6 +133,18 @@ const DENIAL_FALLBACK_CONSECUTIVE = 3;
 const DENIAL_FALLBACK_TOTAL = 20;
 
 /**
+ * classifier 默认 deadline（ms）。
+ *
+ * 防御非流式 provider 调用（completeText / messages.create stream:false）无 timeout
+ * 导致的永久挂起：provider（含第三方中转）不响应时，classifier 到达 deadline 后
+ * resolver 自行结束等待并走 classifier failure → deny。
+ *
+ * 选值依据：classifier 是一次轻量 ALLOW/DENY 判定，正常应在数秒内完成。
+ * 30s 是保守上限，远超正常响应时间，足以区分"慢"与"永久挂起"。
+ */
+const DEFAULT_CLASSIFIER_DEADLINE_MS = 30_000;
+
+/**
  * 默认 resolver（设计 §6 固定顺序）。
  */
 export class DefaultPermissionAskResolver implements PermissionAskResolver {
@@ -136,6 +157,8 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
   private readonly onSessionAllow?: (toolName: string, input: Record<string, unknown>) => void;
   private readonly onPersistRule?: (update: { type: 'addRules'; destination: string; rule: unknown }) => void;
   private readonly recheck?: (toolName: string, input: Record<string, unknown>) => SecurityDecision;
+  /** classifier 最大等待时间（ms）；默认 30s（DEFAULT_CLASSIFIER_DEADLINE_MS）。 */
+  private readonly classifierDeadlineMs: number;
 
   constructor(opts: DefaultPermissionAskResolverOptions) {
     this.classifier = opts.classifier;
@@ -144,6 +167,7 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
     this.denialState = opts.denialState;
     this.dialogProvider = opts.dialogProvider;
     this.dialogDelayMs = opts.dialogDelayMs ?? 2000;
+    this.classifierDeadlineMs = opts.classifierDeadlineMs ?? DEFAULT_CLASSIFIER_DEADLINE_MS;
     this.onSessionAllow = opts.onSessionAllow;
     this.onPersistRule = opts.onPersistRule;
     this.recheck = opts.recheck;
@@ -237,19 +261,26 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
     const controller = new AbortController();
     request.registerAbort?.(() => controller.abort());
 
+    // classifier 决策归一化：allow/deny/failure 三态 → SecurityDecision。
+    const toDecision = (d: ClassifierDecision): SecurityDecision =>
+      d.behavior === 'allow'
+        ? this.allow('permission.classifier_resolved_allow')
+        : this.deny('permission.classifier_resolved_deny');
+    const failureDecision = (): SecurityDecision => this.deny('permission.classifier_failure');
+
     const classifyPromise = this.classifier
       .classify(input, controller.signal)
-      .then((d: ClassifierDecision) =>
-        d.behavior === 'allow'
-          ? this.allow('permission.classifier_resolved_allow')
-          : this.deny('permission.classifier_resolved_deny'),
-      )
-      .catch(() => this.deny('permission.classifier_failure'));
+      .then(toDecision)
+      .catch(failureDecision);
+
+    // deadline 包装：无论 provider 是否响应 abort，deadline 到达后 resolver 自行结束。
+    // 同时 abort 底层 controller（释放 provider 请求）。正常完成时清理 timer。
+    const withDeadline = this.applyClassifierDeadline(classifyPromise, controller);
 
     // main-origin + dialogProvider → resolveInteractiveAsk 竞速
     if (request.origin === 'main' && this.dialogProvider) {
       const automatic: PendingAutomaticDecision = {
-        promise: classifyPromise,
+        promise: withDeadline,
         abort: () => controller.abort(),
       };
       const interactiveInput: InteractiveAskInput = {
@@ -271,7 +302,34 @@ export class DefaultPermissionAskResolver implements PermissionAskResolver {
     }
 
     // subagent / 无 dialog → 直等 classifier
-    return classifyPromise;
+    return withDeadline;
+  }
+
+  /**
+   * 给 classifier promise 加 deadline。
+   *
+   * 关键不变量（scenario-2 run_bash 挂起根因的修复）：
+   * 1. deadline 到达时 resolver 自行结束等待（返回 classifier failure → deny），
+   *    **不依赖** provider Promise 响应 AbortSignal——provider 可能完全忽略 abort。
+   * 2. deadline 到达时同步 abort 底层 controller（释放 provider 请求资源）。
+   * 3. classifier 正常 resolve/reject 时清理 timer，不遗留 dangling timer。
+   */
+  private applyClassifierDeadline(
+    classifyPromise: Promise<SecurityDecision>,
+    controller: AbortController,
+  ): Promise<SecurityDecision> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<SecurityDecision>((resolve) => {
+      timer = setTimeout(() => {
+        // abort 底层请求（即使 provider 忽略，resolver 也会自行结束）
+        controller.abort();
+        resolve(this.deny('permission.classifier_failure'));
+      }, this.classifierDeadlineMs);
+    });
+
+    return Promise.race([classifyPromise, deadline]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
   }
 
   private allow(reasonCode: string): SecurityDecision {

@@ -269,3 +269,49 @@ describe('[§6.4] enforced+auto canonical run_bash 必经 classifier', () => {
     expectClassifierNotInvoked(spy);           // checker allow → resolver 不触发 → candidate 不跑
   });
 });
+
+// ─── scenario-2 run_bash 挂起根因回归：hanging classifier + deadline → tool 必须返回 ──
+//
+// 真实根因（ConPTY 边界取证确认）：classifier 非流式 completeText 无 timeout，
+// provider 不响应时 resolver.resolve 永久 pending → 父 turn 挂死。
+// 修复：resolver 到达 deadline 后自行结束 → classifier failure → deny。
+// 本集成断言证明：enforced+auto+run_bash + 永不响应的 classifier + 短 deadline
+// → executeToolCall 必须返回（permission_denied），而非永久挂起。
+
+/** classifier provider 永不响应（复刻真实 provider 挂起，即使 abort 也不 reject）。 */
+class HangingClassifierClient implements StreamingLLMClient {
+  async completeText(): Promise<string> {
+    return new Promise<string>(() => { /* never resolves/rejects */ });
+  }
+  async *stream(): AsyncGenerator<StreamEvent | AssistantMessage> {
+    yield { type: 'message_start', messageId: 'm', model: 'f', inputTokens: 1 };
+    yield { type: 'message_stop' };
+  }
+}
+
+describe('[scenario-2 fix] hanging classifier + deadline → executeToolCall 必须返回', () => {
+  test('enforced+auto run_bash + 永不响应 classifier + 默认 30s deadline → permission_denied, executor=0', async () => {
+    // 用 fake timers 走真实默认 30s deadline（不扩大生产 API 注入短 deadline）。
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      const deps = makeDeps({
+        streamClient: new HangingClassifierClient() as unknown as StreamingLLMClient,
+      });
+      const runtime = createExecutionRuntimeForTurn(deps);
+      const executor = vi.fn().mockResolvedValue('done');
+      const resultP = executeToolCall(bashRegistry(executor), runBashCall('echo hi'), runtime, {
+        messages: [{ role: 'user', content: 'run echo hi', authoredByUser: true }],
+      });
+      // 推进到默认 deadline（30s）之后，触发 resolver 自结束
+      await vi.advanceTimersByTimeAsync(30_001);
+      const result = await resultP;
+      // 关键契约：deadline 到达 → classifier failure → permission_denied，而非永久挂起
+      expect(result.status).toBe('failure');
+      expect(result.failure?.kind).toBe('permission_denied');
+      // executor 从未调用（classifier deny 在 gate 之前，不到 executor）
+      expect(executor).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
